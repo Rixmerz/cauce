@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -153,6 +154,49 @@ def test_session_start_copies_plugin_options(store, tmp_path):
     env = {"CAUCE_HOME": str(tmp_path / "h"), "CLAUDE_PLUGIN_OPTION_LIVESPEC": "false"}
     hooks.session_start({"session_id": "s"}, store, tmp_path / "h", env, adapters=[])
     assert config.load(env)["livespec"] is False
+
+
+def test_session_start_puts_cauce_on_the_sessions_path(store, tmp_path):
+    plugin = tmp_path / "plugin"
+    (plugin / "bin").mkdir(parents=True)
+    (plugin / "bin" / "cauce").write_text("#!/bin/sh\n")
+    (plugin / "bin" / "cauce").chmod(0o755)
+    env_file = tmp_path / "session.env"
+    env = {"CLAUDE_PLUGIN_ROOT": str(plugin), "PATH": "/usr/bin", "CLAUDE_ENV_FILE": str(env_file)}
+    assert hooks.session_start({"session_id": "s"}, store, tmp_path / "h", env, adapters=[]) is None
+    line = env_file.read_text()
+    assert line.startswith("export PATH=") and str(plugin / "bin") in line and line.endswith(':"$PATH"\n')
+    # Already resolvable: nothing written twice.
+    on_path = {**env, "PATH": str(plugin / "bin")}
+    hooks.session_start({"session_id": "s"}, store, tmp_path / "h", on_path, adapters=[])
+    assert env_file.read_text() == line
+    # No env file: the model is given the full path.
+    bare = {"CLAUDE_PLUGIN_ROOT": str(plugin), "PATH": "/usr/bin"}
+    context = hooks.session_start({"session_id": "s"}, store, tmp_path / "h", bare, adapters=[])
+    assert str(plugin / "bin" / "cauce") in context["hookSpecificOutput"]["additionalContext"]
+    unwritable = {**bare, "CLAUDE_ENV_FILE": str(tmp_path / "missing" / "x.env")}
+    context = hooks.session_start({"session_id": "s"}, store, tmp_path / "h", unwritable, adapters=[])
+    assert "not on PATH" in context["hookSpecificOutput"]["additionalContext"]
+    # Not a plugin run, or a plugin without the launcher: nothing to do.
+    assert hooks.session_start({"session_id": "s"}, store, tmp_path / "h", {"PATH": "/usr/bin"}, adapters=[]) is None
+    hollow = {**bare, "CLAUDE_PLUGIN_ROOT": str(tmp_path)}
+    assert hooks.session_start({"session_id": "s"}, store, tmp_path / "h", hollow, adapters=[]) is None
+
+
+def test_the_launcher_follows_a_symlink_and_names_a_missing_python(tmp_path):
+    link = tmp_path / "cauce"
+    link.symlink_to(ROOT / "bin" / "cauce")
+    env = {**os.environ, "CAUCE_HOME": str(tmp_path / "h")}
+    proc = subprocess.run([str(link), "matrix"], capture_output=True, text=True, env=env, check=False)
+    assert proc.returncode == 0 and proc.stdout
+    proc = subprocess.run([str(link), "matrix"], capture_output=True, text=True, check=False,
+                          env={**env, "CAUCE_PYTHON": "no-such-python3"})
+    assert proc.returncode == 127 and "no-such-python3 not found" in proc.stderr
+    old = shutil.which("python3.10")
+    if old:  # an interpreter too old for cauce says so in one line, not an import traceback
+        proc = subprocess.run([str(link), "matrix"], capture_output=True, text=True, check=False,
+                              env={**env, "CAUCE_PYTHON": old})
+        assert proc.returncode == 1 and "needs Python 3.11+" in proc.stderr and "Traceback" not in proc.stderr
 
 
 def test_double_plus_queues_without_a_turn(store: Store, git_repo):

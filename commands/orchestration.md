@@ -25,7 +25,10 @@ Request: $ARGUMENTS
    ```
 
    `cauce` is on the Bash tool's PATH while the plugin is enabled (it ships in
-   the plugin's `bin/`); `${CLAUDE_PLUGIN_ROOT}/bin/cauce` is the same command.
+   the plugin's `bin/`). Its full path is `${CLAUDE_PLUGIN_ROOT}/bin/cauce`:
+   when `cauce` alone is not found (exit 127 — an older Claude Code, or a
+   session opened before the plugin was installed), call it by that path. Never
+   do the work by hand because the command did not resolve.
 
    Write the task in full: the worker sees nothing of this conversation. Add
    `--verify` whenever the repository has a command that proves the work — a

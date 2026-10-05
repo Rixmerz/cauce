@@ -2,7 +2,18 @@
 # The one launcher the plugin's hooks and commands go through. Standard library
 # only, so any python3 >= 3.11 on PATH runs it; no virtualenv to build.
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Follow symlinks, so `ln -s .../bin/cauce ~/.local/bin/cauce` works too.
+SRC="${BASH_SOURCE[0]}"
+while [ -L "${SRC}" ]; do
+  DIR="$(cd "$(dirname "${SRC}")" && pwd)"
+  SRC="$(readlink "${SRC}")"
+  [[ "${SRC}" == /* ]] || SRC="${DIR}/${SRC}"
+done
+ROOT="$(cd "$(dirname "${SRC}")/.." && pwd)"
 PY="${CAUCE_PYTHON:-python3}"
+if ! command -v "${PY}" >/dev/null 2>&1; then
+  echo "cauce: ${PY} not found; install Python 3.11+ or set CAUCE_PYTHON to one" >&2
+  exit 127
+fi
 export PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
 exec "${PY}" -m cauce "$@"

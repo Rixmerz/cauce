@@ -99,6 +99,12 @@
   and a "database is locked" during setup is retried: switching to WAL and
   altering a table could be refused at once instead of waiting, when a hook,
   the dispatcher and the UI opened the file in the same instant.
+- `cauce` not found (exit 127) in a session of an older Claude Code, or one
+  opened before the plugin was installed: `SessionStart` puts the plugin's
+  `bin/` on the session's PATH through `CLAUDE_ENV_FILE`, or names the full
+  path when it cannot, and the commands fall back to the full path too. The
+  launcher follows symlinks and says so when no Python is found; an older
+  Python than 3.11 gets one line saying so instead of an import traceback.
 
 ### Added — livespec is built in
 

@@ -159,6 +159,11 @@ To work on a clone, `claude plugin marketplace add /path/to/cauce` and
 `claude plugin install cauce@cauce-dev` install it from the checkout instead.
 
 The plugin ships `bin/cauce`, which Claude Code puts on the Bash tool's `PATH`.
+Where it does not — an older Claude Code, or a session opened before the plugin
+was installed — the `SessionStart` hook adds it for the session, and the
+commands fall back to the full path. Restart a session that was open during the
+install. For a terminal, link it: `ln -s <plugin>/bin/cauce ~/.local/bin/cauce`
+(the launcher follows the link).
 (claude.ai and Cowork do not install plugins with a `bin/` directory; use
 Claude Code.)
 

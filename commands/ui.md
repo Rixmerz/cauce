@@ -11,6 +11,8 @@ cauce ui --open
 Run it with `run_in_background`, so the session stays usable; it serves until
 the session ends or the user stops it. It listens on `127.0.0.1:8790` only. If
 that port is taken, run `cauce ui --port <another> --open` instead.
+When `cauce` alone is not found (exit 127), it is
+`${CLAUDE_PLUGIN_ROOT}/bin/cauce`; call it by that path.
 
 Then say, in one line, the address it printed. Do not read the board yourself:
 the page is for the user, and `cauce board --json` gives the counts if one is

@@ -10,7 +10,8 @@
   Code fires no Stop for those, so they are marked interrupted now.
 - **StopFailure** — the turn died; its task failed.
 - **SessionStart** — on resume or compaction, the unfinished tasks of the
-  session; always, the recent dead ends of this repository.
+  session; always, the recent dead ends of this repository. When `cauce` does
+  not resolve on PATH, it is put there for the session's commands.
 
 Hooks fail open: an exception never reaches Claude Code, because a hook that
 raises takes the user's session down. But failing open is not failing silently
@@ -20,6 +21,8 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
+import shutil
 import traceback
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -223,6 +226,9 @@ def session_start(
     key = repo.key(cwd) if cwd else None
     store.touch_session(session_id, cwd, key)
     blocks: list[str] = []
+    reach = _reach(env)
+    if reach:
+        blocks.append(reach)
     errors = _drain_errors(root)
     if errors:
         blocks.append(f"cauce: {errors} hook error(s) since the last session were swallowed so the session "
@@ -239,6 +245,33 @@ def session_start(
         if dead:
             blocks.append(_dead_end_text(dead, "cauce memory: recent fixes in this repository that did not work."))
     return _context("SessionStart", "\n\n".join(blocks)) if blocks else None
+
+
+def _reach(env: Mapping[str, str]) -> str | None:
+    """Make `cauce` resolve in the session's Bash commands.
+
+    The commands call it by name. Claude Code puts a plugin's `bin/` on the Bash
+    tool's PATH, but older versions do not, and neither does a session opened
+    before the plugin was installed. A SessionStart hook can extend the session's
+    environment through `CLAUDE_ENV_FILE`; without one, the model is told the full
+    path instead of finding out from an exit 127.
+    """
+    plugin_root = env.get("CLAUDE_PLUGIN_ROOT")
+    if not plugin_root:
+        return None
+    bin_dir = Path(plugin_root) / "bin"
+    if not (bin_dir / "cauce").is_file() or shutil.which("cauce", path=env.get("PATH", "")):
+        return None
+    env_file = env.get("CLAUDE_ENV_FILE")
+    if env_file:
+        try:
+            with open(env_file, "a", encoding="utf-8") as out:
+                out.write(f'export PATH={shlex.quote(str(bin_dir))}:"$PATH"\n')
+            return None
+        except OSError:
+            pass
+    return (f"cauce: the `cauce` command is not on PATH in this session; "
+            f"run it as {shlex.quote(str(bin_dir / 'cauce'))}.")
 
 
 def _freshen(cwd: Path, root: Path, env: Mapping[str, str], adapters: list | None) -> list[str]:
