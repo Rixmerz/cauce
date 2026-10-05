@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from cauce import flow, habits, usage
+from cauce import flow, habits, project, usage
 from cauce.matrix import LADDERS
 from cauce.store import Store
 
@@ -197,24 +197,42 @@ def memory(store: Store, query: str = "", limit: int = 40, repos: set[str] | Non
     return store.recent_problems(repos=repos, limit=limit)
 
 
-def projects(store: Store) -> list[dict[str, Any]]:
-    """Every repository cauce has worked in, at the top of the checkout it was last used from."""
+def projects(store: Store, enrolled_only: bool = True) -> list[dict[str, Any]]:
+    """Every repository cauce has worked in, at the top of the checkout it was last used from.
+    Only enrolled ones (a `.cauce/` folder) unless asked: the plugin being on is not using cauce."""
     from cauce import repo as repo_mod
 
     out = []
     for p in store.projects():
         where = Path(p["cwd"]) if p["cwd"] else None
         top = repo_mod.toplevel(where) if where is not None and where.is_dir() else None
-        out.append({**p, "dir": str(top or where or ""), "exists": bool(where and where.is_dir())})
+        enrolled = project.find(where) is not None if where is not None else False
+        if enrolled_only and not enrolled:
+            continue
+        out.append({**p, "dir": str(top or where or ""), "exists": bool(where and where.is_dir()),
+                    "enrolled": enrolled})
     return out
 
 
 def sessions(store: Store, repos: set[str] | None = None, limit: int = 100) -> list[dict[str, Any]]:
-    """Claude Code sessions cauce has seen, with the command that resumes each where it ran."""
+    """Claude Code sessions in enrolled projects — those with a `.cauce/` folder in the session's
+    directory or the checkout above it — with their name and the command that resumes each."""
     import shlex
 
-    return [{**s, "resume": f"cd {shlex.quote(s['cwd'] or '.')} && claude --resume {s['id']}"}
-            for s in store.sessions(repos=repos, limit=limit)]
+    out, names = [], {}
+    for s in store.sessions(repos=repos, limit=limit * 5):
+        folder = project.find(s["cwd"])
+        if folder is None:
+            continue
+        if folder not in names:
+            names[folder] = project.names(folder)
+        entry = names[folder].get(s["id"])
+        name = str((entry or {}).get("name") or "").strip() or None
+        out.append({**s, "resume": f"cd {shlex.quote(s['cwd'] or '.')} && claude --resume {s['id']}",
+                    "name": name, "named_by": ("you" if project.person_named(entry) else "haiku") if name else None})
+        if len(out) >= limit:
+            break
+    return out
 
 
 SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")

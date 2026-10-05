@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -31,6 +31,12 @@
       "type": "boolean",
       "title": "Start queued work at once",
       "description": "A task queued with ++ starts the repository's dispatcher right away, so it runs in a worker without anyone typing cauce work. Off: queued work waits for cauce work.",
+      "default": true
+    },
+    "names": {
+      "type": "boolean",
+      "title": "Haiku names sessions",
+      "description": "Haiku names each session of an enrolled project after what it has been asked, in .cauce/sessions.json. A name you edit there is kept.",
       "default": true
     }
   }

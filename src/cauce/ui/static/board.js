@@ -40,7 +40,7 @@ export async function renderBoard(ctx) {
   const picker = h("select", { "aria-label": "session", onchange: (e) => { sessionFilter.set(ctx.project, e.target.value); ctx.refresh(); } },
     h("option", { value: "" }, "every session of this project"),
     ...sessions.map((s) => h("option", { value: s.id, selected: s.id === chosen },
-      `${short(s.last_prompt || s.id, 60)} · ${when(s.last_seen_at)}`)));
+      `${short(s.name || s.last_prompt || s.id, 60)} · ${when(s.last_seen_at)}`)));
 
   const lanes = b.queued.map((lane) => h("div", { class: "lane" },
     h("div", { class: "lane-head" },
@@ -65,8 +65,7 @@ export async function renderBoard(ctx) {
   const running = b.running.filter(keep);
   const answering = chosen ? b.answering.filter(keep).length : b.counts.answering;
   return h("div", {},
-    h("div", { class: "toolbar" }, picker,
-      h("span", { class: "hint" }, "Work is asked for in a Claude Code session: ++ <task> queues it, /orchestration runs it.")),
+    h("div", { class: "toolbar" }, picker),
     h("div", { class: "columns" },
       column("Needs you", needs.length, needs.map((t) => card(t, ctx.openTask, [h("span", { class: `status-${t.status}` }, t.status)]))),
       column("Running", running.length, [

@@ -252,6 +252,17 @@ repository's cards at once.
 Work is never typed into the page: it is asked for in a session, where it has
 the session's context and its record.
 
+**Enrolled projects only.** A project shows in the UI when it has a `.cauce/`
+folder — at the top of its checkout, or where the session runs. cauce creates
+it the first time work is queued or run there (`++`, `cauce queue add`, `cauce
+run`); `cauce init` does it by hand. The folder ignores itself in git. Having
+the plugin on while chatting somewhere does not list that place.
+
+**Session names.** Haiku names each session of an enrolled project after what
+it has been asked, in `.cauce/sessions.json`, after its first prompt and again
+every ten (`names`, on by default). Change a `name` there by hand and it is
+yours: Haiku never renames that session again.
+
 It reads the SQLite file every other part of cauce writes and owns no state of
 its own. It binds `127.0.0.1` only, checks the `Host` header, and takes
 mutations only as JSON with a token kept in a `0600` file in cauce's home —

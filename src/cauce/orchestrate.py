@@ -9,6 +9,7 @@ last word on a claimed pass, and the failure kind is read against the ladder by
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
@@ -16,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from cauce import capabilities as caps
-from cauce import config, habits, isolate, launch, repo
+from cauce import config, habits, isolate, launch, project, repo
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify
 from cauce.escalate import Attempt, Decision, Failure, Move, decide
@@ -252,6 +253,8 @@ def run(
     the_plan = plan(text, repo_dir, store, options, registry, classifier=classifier, adapters=adapters)
     if options.dry_run:
         return Report(None, "dry run", the_plan)
+    with contextlib.suppress(OSError):
+        project.enroll(repo_dir)  # work run here: the project is cauce's
 
     key = repo.key(repo_dir)
     c = the_plan.classification

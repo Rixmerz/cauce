@@ -27,6 +27,8 @@ DEFAULTS: dict[str, Any] = {
     # A task queued with `++` starts a dispatcher for its repository at once.
     # Off: queued work waits for `cauce work`.
     "autowork": True,
+    # Haiku names each session of an enrolled project in `.cauce/sessions.json`.
+    "names": True,
 }
 
 _TRUE = {"1", "true", "on", "yes"}

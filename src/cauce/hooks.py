@@ -19,6 +19,7 @@ raises takes the user's session down. But failing open is not failing silently
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -93,6 +94,8 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
         if not queued:
             return {"decision": "block", "reason": f'cauce: "{QUEUE_PREFIX} <task>" queues a task for a worker'}
         task = store.enqueue(queued, repo=key, cwd=cwd, session_id=session_id)
+        if cwd:
+            _enroll(cwd)
         # Blocked: queuing costs no turn. The reason is what the person sees.
         return {"decision": "block", "reason": f"cauce: queued #{task['id']} — {task['title']}. "
                 + _dispatch(cwd, key, os.environ)}
@@ -156,7 +159,18 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
         # What this session's turns cost, by the model that served them.
         usage.ingest(store, event["transcript_path"], session_id=session_id,
                      task_id=target["id"] if target else None, repo=target["repo"] if target else None)
+    from cauce import naming
+
+    naming.maybe_start(store, session_id, home(), os.environ)
     return None
+
+
+def _enroll(cwd: str) -> None:
+    """Using cauce in a project enrolls it: it gets its `.cauce/` folder."""
+    from cauce import project
+
+    with contextlib.suppress(OSError):
+        project.enroll(cwd)
 
 
 def pre_tool_use(event: Mapping[str, Any], store: Store) -> dict | None:

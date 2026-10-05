@@ -120,7 +120,9 @@ def test_a_session_s_own_task_list_its_work_and_its_turns(store: Store, tmp_path
                                                     "activeForm": "building", "description": "d"}))
     (plan / "10.json").write_text(json.dumps({"id": "10", "subject": "later", "status": "pending"}))
     (plan / ".lock").write_text("")
-    store.touch_session("s1", "/x", "r")
+    work = tmp_path / "work"
+    (work / ".cauce").mkdir(parents=True)
+    store.touch_session("s1", str(work), "r")
     store.create_task("make the importer faster", status="done", source="hook", session_id="s1", repo="r")
     sent = store.enqueue("rewrite the importer", repo="r", cwd="/x", session_id="s1")
     store.set_parallel(sent["id"], False, "touches the importer")

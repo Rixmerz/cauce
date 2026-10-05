@@ -19,6 +19,10 @@ state of its own, so the CLI, the hooks and the page never disagree.
 | **Memory** | problems and fixes across repositories, dead ends first, recurring problems flagged, what worked instead | record a fix |
 | **Habits** | mined sequences with their gates and score; proposals awaiting approval | none in the page: installing a hook is a CLI command a person types |
 
+Only enrolled projects — a `.cauce/` folder in the checkout or the session's
+directory — and their sessions are listed; each session under the name Haiku
+gave it in `.cauce/sessions.json`, or the one a person wrote there instead.
+
 No screen takes a task. Work is asked for in a session (`++ <task>`,
 `/orchestration`), where it has that session's context and is recorded as its
 work; a form in the page was a second way in with neither.

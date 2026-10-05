@@ -276,6 +276,10 @@ class Store:
             (session_id, cwd, repo, stamp, stamp),
         )
 
+    def get_session(self, session_id: str) -> dict | None:
+        row = self._conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        return dict(row) if row else None
+
     def sessions(self, *, repos: Iterable[str] | None = None, limit: int = 100) -> list[dict]:
         """Claude Code sessions cauce has seen, latest first, each with how many prompts it
         took, the last one, and whether one is still running."""

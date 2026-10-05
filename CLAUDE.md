@@ -16,7 +16,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/launch.py` | one attempt as `claude -p`: argv, the result contract, parsing, git-read changes |
 | `src/cauce/capabilities.py` | which MCP servers a worker gets, from the user-level registry |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, all on/off), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, all on/off), copied from plugin options by SessionStart |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
 | `src/cauce/habits.py` | mining sequences, recipes for the brief, and approval-gated habit hooks |
@@ -24,6 +24,8 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, the stale sweep |
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes |
+| `src/cauce/project.py` | a project's `.cauce/` folder: enrollment (only enrolled projects show in the UI) and `sessions.json`, the session names; stdlib, no git call |
+| `src/cauce/naming.py` | Haiku names a session, started detached by the Stop hook; a name a person wrote is never replaced |
 | `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
 | `src/cauce/isolate.py` | one git worktree per writing task |
@@ -88,8 +90,10 @@ cannot run yields the default kind, not a guess.
   test that wants livespec builds the fixture index in `tests/livespec_fixture.py`.
 - A dispatch decision fails closed: no answer from Haiku means the task
   waits. It is made once and kept on the task with its reason. Tests run with
-  `CAUCE_PARALLEL=off` and `CAUCE_AUTOWORK=off`; a test that wants them passes
-  a fake `decide` or `start`.
+  `CAUCE_PARALLEL=off`, `CAUCE_AUTOWORK=off` and `CAUCE_NAMES=off`; a test
+  that wants them passes a fake `decide`, `start` or `popen`.
+- `.cauce/sessions.json` belongs to the person as much as to Haiku: a `name`
+  that differs from `haiku_name` is theirs, and nothing in cauce overwrites it.
 - The UI shows one project at a time and takes no task: work is asked for in
   a session. Claude Code's own task files are read, never written.
 - A lane pauses only on a task the dispatcher started; a person's own

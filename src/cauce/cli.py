@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from cauce import __version__, capabilities, config, flow, habits, hooks, orchestrate, repo, usage
+from cauce import __version__, capabilities, config, flow, habits, hooks, orchestrate, project, repo, usage
 from cauce.adapters import default_adapters
 from cauce.classify import classify
 from cauce.matrix import KINDS, LADDERS, Cell
@@ -205,14 +205,14 @@ def cmd_projects(args: argparse.Namespace) -> int:
 
     store = Store.open()
     try:
-        found = api.projects(store)
+        found = api.projects(store, enrolled_only=not args.all)
     finally:
         store.close()
     if args.json:
         print(json.dumps(found, ensure_ascii=False, default=str))
         return 0
     for p in found:
-        mark = "" if p["exists"] else "  (gone)"
+        mark = ("" if p["exists"] else "  (gone)") + ("" if p["enrolled"] else "  (not enrolled: cauce init)")
         print(f"{p['dir'] or p['repo']}  {p['sessions']} session(s), last {p['last_seen']}{mark}")
     return 0
 
@@ -337,6 +337,8 @@ def cmd_queue(args: argparse.Namespace) -> int:
                                          "start": args.start}.items() if v is not None}
             task = store.enqueue(_text(args.text), repo=repo.key(where), cwd=str(where), options=options,
                                  session_id=os.environ.get("CAUCE_SESSION_ID"))
+            with contextlib.suppress(OSError):
+                project.enroll(where)
             if args.json:
                 print(json.dumps({k: task[k] for k in ("id", "title", "status", "repo", "cwd")}, ensure_ascii=False))
             else:
@@ -389,6 +391,32 @@ def cmd_work(args: argparse.Namespace) -> int:
             store.close()
     print(report.text())
     return 0 if all(r.status == "done" for r in report.ran) else 1
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    where = Path(args.dir or os.getcwd()).resolve()
+    if not where.is_dir():
+        print(f"no such directory: {where}", file=sys.stderr)
+        return 1
+    folder = project.enroll(where)
+    print(f"enrolled: {folder} — this project and its sessions now show in the UI")
+    return 0
+
+
+def cmd_name_session(args: argparse.Namespace) -> int:
+    """Run detached by the Stop hook: Haiku names one session."""
+    from cauce import dispatch, naming
+
+    with dispatch.hold(home(), f"name:{args.id}") as mine:
+        if not mine:
+            return 0
+        store = Store.open()
+        try:
+            name = naming.name_session(store, args.id, cwd=home())
+        finally:
+            store.close()
+    print(name or "unchanged")
+    return 0
 
 
 def cmd_run_queued(args: argparse.Namespace) -> int:
@@ -615,6 +643,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-model", action="store_true")
     p.set_defaults(func=cmd_work)
 
+    p = sub.add_parser("init", help="enroll a project: its .cauce/ folder, so it and its sessions show in the UI")
+    p.add_argument("dir", nargs="?", help="a directory in the project (default: here)")
+    p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("name-session", help=argparse.SUPPRESS)
+    p.add_argument("id")
+    p.set_defaults(func=cmd_name_session)
+
     p = sub.add_parser("run-queued", help=argparse.SUPPRESS)
     p.add_argument("id", type=int)
     p.add_argument("--no-model", action="store_true")
@@ -725,8 +761,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", action="append", help="only this repository (repeatable)")
     p.set_defaults(func=cmd_board)
 
-    p = sub.add_parser("projects", help="every repository cauce has worked in")
+    p = sub.add_parser("projects", help="the enrolled projects (a .cauce/ folder) cauce has worked in")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--all", action="store_true", help="also the ones not enrolled")
     p.set_defaults(func=cmd_projects)
 
     p = sub.add_parser("sessions", help="the Claude Code sessions cauce saw, and how to resume each")

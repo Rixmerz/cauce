@@ -88,7 +88,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .project select { max-width: 260px; }
 .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: var(--gap); }
 .toolbar select { max-width: 420px; }
-.hint { color: var(--muted); font-size: 12px; }
 .live-note { color: var(--ok); }
 .chip.ok { color: var(--ok); } .chip.wait { color: var(--warn); }
 .reason { color: var(--muted); font-size: 12px; margin-top: 4px; }

@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-05
+
+### Added
+
+- **Enrolled projects.** A project is cauce's when it has a `.cauce/` folder,
+  at the top of its checkout or where the session runs. Only enrolled projects
+  and their sessions show in the UI and in `cauce projects` / `cauce sessions`
+  (`--all` lists the rest). cauce enrolls a project the first time work is
+  queued or run there; `cauce init` does it by hand. The folder ignores itself
+  in git.
+- **Session names.** Haiku names each session of an enrolled project in
+  `.cauce/sessions.json`, after its first prompt and every ten after, started
+  detached from the Stop hook (`names`, on by default, a plugin option). A
+  name a person edits there is theirs and is never replaced. The UIs show the
+  name, with the last prompt under it.
+
+### Changed
+
+- The board no longer carries a line explaining where work is asked for.
+
 ## [0.2.0] - 2026-10-05
 
 ### Changed — who decides what waits

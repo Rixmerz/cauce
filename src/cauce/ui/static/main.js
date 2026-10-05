@@ -44,7 +44,7 @@ export async function show(name = current) {
   picker.disabled = !scoped.has(name);
   if (scoped.has(name) && !project) {
     main.replaceChildren(h("div", { class: "empty" },
-      "cauce has not worked in any repository yet. Open Claude Code in one with the plugin on, and it appears here."));
+      "No project is enrolled yet. A project enrolls when work is queued or run in it through cauce, or with cauce init; it gets a .cauce/ folder."));
     return;
   }
   try {

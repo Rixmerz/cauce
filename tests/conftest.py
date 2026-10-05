@@ -23,6 +23,7 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # a test that wants them turns them on with a fake.
     monkeypatch.setenv("CAUCE_PARALLEL", "off")
     monkeypatch.setenv("CAUCE_AUTOWORK", "off")
+    monkeypatch.setenv("CAUCE_NAMES", "off")
     monkeypatch.delenv("CAUCE_SESSION_ID", raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     for var, value in {

@@ -269,19 +269,31 @@ def test_projects_sessions_and_memory_as_json(capsys, git_repo):
     store.add_fix(q, "retry", "failed", repo="github.com/o/other")
     store.close()
 
+    # Only an enrolled project (a .cauce/ folder) is listed; --all shows the rest.
+    assert cli.main(["projects", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
+    assert cli.main(["init", str(git_repo)]) == 0 and "enrolled" in capsys.readouterr().out
+    assert (git_repo / ".cauce" / ".gitignore").read_text().endswith("*\n")
+    assert cli.main(["init", str(git_repo / "nope")]) == 1
     assert cli.main(["projects", "--json"]) == 0
     projects = {x["repo"]: x for x in json.loads(capsys.readouterr().out)}
+    assert list(projects) == [key] and projects[key]["enrolled"]
     assert projects[key]["dir"] == str(git_repo.resolve()) and projects[key]["exists"]
     assert projects[key]["sessions"] == 1 and projects[key]["tasks"] == {"queued": 1}
-    assert projects["github.com/o/other"]["exists"] is False
-    assert cli.main(["projects"]) == 0 and "(gone)" in capsys.readouterr().out
+    assert cli.main(["projects", "--json", "--all"]) == 0
+    projects = {x["repo"]: x for x in json.loads(capsys.readouterr().out)}
+    assert projects["github.com/o/other"]["exists"] is False and not projects["github.com/o/other"]["enrolled"]
+    assert cli.main(["projects", "--all"]) == 0
+    out = capsys.readouterr().out
+    assert "(gone)" in out and "not enrolled" in out
 
     assert cli.main(["sessions", "--json", "--repo", str(git_repo)]) == 0
     sessions = json.loads(capsys.readouterr().out)
     assert [x["id"] for x in sessions] == ["s-1"]
     assert sessions[0]["prompts"] == 1 and sessions[0]["last_prompt"] == "fix the cart total"
     assert sessions[0]["resume"].endswith("&& claude --resume s-1")
-    assert cli.main(["sessions"]) == 0 and "claude --resume s-2" in capsys.readouterr().out
+    out = (cli.main(["sessions"]), capsys.readouterr().out)[1]
+    assert "claude --resume s-1" in out and "s-2" not in out  # /elsewhere is not enrolled
 
     assert cli.main(["memory", "list", "--json"]) == 0
     assert {x["title"] for x in json.loads(capsys.readouterr().out)} == {"cart total off by one", "flaky login test"}

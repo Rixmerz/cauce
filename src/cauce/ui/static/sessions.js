@@ -19,12 +19,13 @@ function progress(plan) {
 export async function renderSessions(ctx) {
   const list = await get(`/api/sessions?repo=${encodeURIComponent(ctx.project)}`);
   if (!list.length) {
-    return h("div", { class: "empty" }, "No Claude Code session with cauce on has worked in this project yet.");
+    return h("div", { class: "empty" }, "No session in this project yet.");
   }
   return h("div", { class: "sessions" }, list.map((s) => h("div", {
     class: "card session", tabindex: 0, onclick: () => openSession(s.id, ctx),
     onkeydown: (e) => { if (e.key === "Enter") openSession(s.id, ctx); } },
-  h("div", { class: "title" }, short(s.last_prompt || "(no prompt yet)", 140)),
+  h("div", { class: "title" }, short(s.name || s.last_prompt || "(no prompt yet)", 140)),
+  s.name && s.last_prompt ? h("div", { class: "reason" }, `last: ${short(s.last_prompt, 120)}`) : null,
   h("div", { class: "meta" },
     s.running ? h("span", { class: "chip ok" }, `${s.running} running`) : null,
     progress(s.plan),
@@ -53,8 +54,11 @@ export async function openSession(id, ctx) {
   el.replaceChildren(
     h("header", {},
       h("div", {},
-        h("h1", {}, short(s.last_prompt || s.id, 120)),
-        h("div", { class: "meta row" }, h("span", {}, `${s.prompts} prompts`), h("span", {}, usd(s.cost_usd)),
+        h("h1", {}, short(s.name || s.last_prompt || s.id, 120)),
+        h("div", { class: "meta row" },
+          s.name ? h("span", { class: "chip", title: "edit it in .cauce/sessions.json; a name you set is kept" },
+            s.named_by === "you" ? "named by you" : "named by Haiku") : null,
+          h("span", {}, `${s.prompts} prompt${s.prompts === 1 ? "" : "s"}`), h("span", {}, usd(s.cost_usd)),
           h("span", {}, `last seen ${when(s.last_seen_at)}`), h("code", {}, s.id))),
       h("div", { class: "row" }, copy(s.resume, ctx), h("button", { onclick: close, "aria-label": "close" }, "✕"))),
     h("div", { class: "section" }, h("h2", {}, "Its task list"), planList(d.plan)),
