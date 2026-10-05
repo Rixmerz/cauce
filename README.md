@@ -75,6 +75,29 @@ complexity — and higher still when history says so: when half of the last
 tasks of the same kind in this repository (or across all of them) passed at a
 higher cell, the next one starts there instead of failing its way up again.
 
+### livespec is built in
+
+cauce adopts [livespec](https://github.com/Rixmerz/livespec) — it does not list
+it as one more plugin. With the `livespec` setting on (the default), the code
+index takes part in every step, at no token cost:
+
+| Step | What livespec contributes |
+|---|---|
+| before routing | a task whose code implements a critical spec, or whose symbol is called from everywhere, starts one rung up; a review of such code is reviewed as critical |
+| before the worker starts | a code map at the top of its prompt: the symbols the request is about, where they are, how many callers, the specs they implement, the tests that exercise them |
+| during the work | the worker gets livespec's tools, with a hint for its kind of work and the `workspace` every call needs |
+| after a pass | the specs the change touched, and the files outside the change that call what it changed |
+| between sessions | an index missing or older than the last commit is (re)built in the background at session start |
+
+cauce reads the index (`.mcp-docs/docs.db`) directly with `sqlite3`, read-only,
+and drives livespec through its own CLI. livespec is not installed separately:
+cauce runs an installed livespec plugin if there is one, a `livespec` on `PATH`
+otherwise, and the pinned release through `uvx` as the last resort.
+
+Switch it off from the plugin settings (`livespec`), with `cauce config
+livespec off`, `CAUCE_LIVESPEC=off`, or `--no-livespec` for one task.
+`cauce neighbours` shows what cauce sees.
+
 ### Memory
 
 One SQLite file in `$CAUCE_HOME` (default `~/.local/share/cauce`):

@@ -25,7 +25,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from cauce import repo
+from cauce import config, repo
+from cauce.adapters import ABSENT, Adapter, default_adapters
 from cauce.store import Store, home
 from cauce.text import fold, words
 
@@ -120,10 +121,18 @@ def stop_failure(event: Mapping[str, Any], store: Store) -> dict | None:
     return None
 
 
-def session_start(event: Mapping[str, Any], store: Store, root: Path) -> dict | None:
+def session_start(
+    event: Mapping[str, Any],
+    store: Store,
+    root: Path,
+    env: Mapping[str, str] | None = None,
+    adapters: list[Adapter] | None = None,
+) -> dict | None:
     session_id = event.get("session_id")
     if not session_id:
         return None
+    env = env or {}
+    config.sync_plugin_options(env)
     cwd = event.get("cwd")
     key = repo.key(cwd) if cwd else None
     store.touch_session(session_id, cwd, key)
@@ -137,11 +146,28 @@ def session_start(event: Mapping[str, Any], store: Store, root: Path) -> dict | 
         if unfinished:
             blocks.append("cauce: unfinished tasks in this session (context only, do not restart them unasked):\n"
                           + "\n".join(f"#{t['id']} [{t['status']}] {t['title']}" for t in unfinished))
+    if cwd and repo.toplevel(Path(cwd)) is not None:
+        blocks += _freshen(Path(cwd), root, env, adapters)
     if key:
         dead = store.dead_ends(repo=key, limit=5)
         if dead:
             blocks.append(_dead_end_text(dead, "cauce memory: recent fixes in this repository that did not work."))
     return _context("SessionStart", "\n\n".join(blocks)) if blocks else None
+
+
+def _freshen(cwd: Path, root: Path, env: Mapping[str, str], adapters: list[Adapter] | None) -> list[str]:
+    """Start a background index for an adopted neighbour whose index is missing
+    or older than the last commit, so it is current by the time work starts."""
+    if adapters is None:
+        adapters = default_adapters() if config.enabled("livespec", env) else []
+    notes = []
+    for adapter in adapters:
+        status = adapter.inspect(cwd)
+        missing = status.state == ABSENT and adapter.server() is not None
+        if (missing or status.stale) and adapter.refresh_in_background(cwd, root / f"{adapter.name}-index.log"):
+            notes.append(f"cauce: {'indexing' if missing else 'refreshing'} this repository with "
+                         f"{adapter.name} in the background.")
+    return notes
 
 
 HANDLERS = {
@@ -151,9 +177,11 @@ HANDLERS = {
 }
 
 
-def handle(event_name: str, event: Mapping[str, Any], store: Store, root: Path) -> dict | None:
+def handle(
+    event_name: str, event: Mapping[str, Any], store: Store, root: Path, env: Mapping[str, str] | None = None
+) -> dict | None:
     if event_name == "SessionStart":
-        return session_start(event, store, root)
+        return session_start(event, store, root, env)
     handler = HANDLERS.get(event_name)
     return handler(event, store) if handler else None
 
@@ -169,7 +197,7 @@ def main(event_name: str, stdin: TextIO, stdout: TextIO, env: Mapping[str, str])
             return 0
         store = Store(root / "cauce.db")
         try:
-            answer = handle(event_name, event, store, root)
+            answer = handle(event_name, event, store, root, env)
         finally:
             store.close()
         if answer:

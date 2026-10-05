@@ -236,3 +236,87 @@ def test_options_pin_and_launch_dir_and_dry_run(git_repo, store, tmp_path):
 def test_rules_only_classification(git_repo, store):
     plan = orchestrate.plan("haz commit y push", Path(git_repo), store, Options(use_model_classifier=False), {})
     assert plan.kind == "docs" and plan.start == Cell("haiku")
+
+
+# --- livespec, adopted ---------------------------------------------------------
+
+def _livespec(tmp_path, *, runner=None):
+    import subprocess as sp
+
+    from cauce.adapters.livespec import Livespec
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    (bindir / "uvx").write_text("#!/bin/sh\n")
+    (bindir / "uvx").chmod(0o755)
+    env = {"PATH": str(bindir), "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path / "cc")}
+    return Livespec(env=env, runner=runner or (lambda argv, **kw: sp.CompletedProcess(argv, 0, "", "")))
+
+
+def test_livespec_runs_through_the_whole_flow(git_repo, store, tmp_path):
+    from .livespec_fixture import build
+
+    build(git_repo)  # dated in the future, so never older than the last commit
+    script = Script(ok("fixed"))
+
+    def launcher(spec):
+        (spec.target_dir / "src").mkdir(exist_ok=True)
+        (spec.target_dir / "src" / "billing.py").write_text("fixed\n")
+        script(spec)
+        return WorkerResult(True, None, "fixed", "1 passed", ("src/billing.py",), 0.1)
+
+    report = run("charge_card charges twice on retry", git_repo, store, registry={}, launcher=launcher,
+                 classifier=kind("implement"), adapters=[_livespec(tmp_path)])
+    spec = script.specs[0]
+    # routing: a critical spec moves the start one rung up
+    assert report.cells == ["sonnet/high"]
+    assert any("critical spec" in r for r in report.plan.reasons)
+    # briefing: the code map opens the worker's prompt
+    assert "Code map from livespec" in spec.prompt and "SPEC-7" in spec.prompt
+    # the worker gets livespec's server and a hint naming the workspace
+    assert spec.mcp_servers["livespec"]["command"] == "uvx"
+    assert f'workspace="{git_repo.resolve()}"' in spec.append_system_prompt
+    assert "livespec" in report.plan.capabilities
+    # after the pass: what the change touched
+    assert any("SPEC-7" in line for line in report.impact)
+    assert "livespec: present" in report.text()
+
+
+def test_an_unindexed_repo_is_indexed_first_and_a_dry_run_only_says_so(git_repo, store, tmp_path):
+    from .livespec_fixture import build
+
+    def indexer(argv, **kw):
+        import subprocess as sp
+        build(git_repo)
+        return sp.CompletedProcess(argv, 0, "", "")
+
+    dry = run("parse_amount rounds wrong", git_repo, store, Options(dry_run=True), registry={},
+              classifier=kind("implement"), adapters=[_livespec(tmp_path, runner=indexer)])
+    assert "livespec: would index first" in dry.plan.reasons
+    assert not (git_repo / ".mcp-docs").exists()
+    script = Script(ok())
+    report = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"), adapters=[_livespec(tmp_path, runner=indexer)])
+    assert "livespec: livespec index refreshed" in report.plan.reasons
+    assert "22 caller(s)" in script.specs[0].prompt
+
+
+def test_review_of_critical_code_is_reviewed_as_critical(git_repo, store, tmp_path):
+    from .livespec_fixture import build
+
+    build(git_repo)
+    report = run("review the charge_card change", git_repo, store, Options(dry_run=True), registry={},
+                 classifier=kind("review-routine"), adapters=[_livespec(tmp_path)])
+    assert report.plan.kind == "review-critical"
+    assert "Code map from livespec" in report.text()
+
+
+def test_the_switch_turns_livespec_off_everywhere(git_repo, store, monkeypatch):
+    from cauce import orchestrate as o
+
+    monkeypatch.setenv("CAUCE_LIVESPEC", "on")
+    assert [a.name for a in o.adopted(Options(), None)] == ["livespec"]
+    assert o.adopted(Options(livespec=False), None) == []
+    monkeypatch.setenv("CAUCE_LIVESPEC", "off")
+    assert o.adopted(Options(), None) == []
+    assert [a.name for a in o.adopted(Options(livespec=True), None)] == ["livespec"]

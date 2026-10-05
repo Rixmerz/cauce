@@ -7,7 +7,8 @@ import os
 import sys
 from pathlib import Path
 
-from cauce import __version__, capabilities, hooks, orchestrate, repo
+from cauce import __version__, capabilities, config, hooks, orchestrate, repo
+from cauce.adapters import default_adapters
 from cauce.classify import classify
 from cauce.matrix import KINDS, LADDERS, Cell
 from cauce.store import FIX_OUTCOMES, Store, home
@@ -36,6 +37,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         kind=args.kind,
         start=Cell.parse(args.start) if args.start else None,
         dry_run=args.dry_run,
+        livespec=args.livespec,
     )
     store = Store.open()
     try:
@@ -141,6 +143,38 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_config(args: argparse.Namespace) -> int:
+    if args.key is None:
+        for key, value in sorted(config.load().items()):
+            print(f"{key} = {json.dumps(value)}")
+        return 0
+    if args.key not in config.DEFAULTS:
+        print(f"unknown setting {args.key!r}; known: {', '.join(config.DEFAULTS)}", file=sys.stderr)
+        return 1
+    if args.value is None:
+        print(json.dumps(config.load()[args.key]))
+        return 0
+    value = config._bool(args.value)
+    if value is None:
+        print("expected on or off", file=sys.stderr)
+        return 1
+    config.save({args.key: value})
+    print(f"{args.key} = {json.dumps(value)}")
+    return 0
+
+
+def cmd_neighbours(args: argparse.Namespace) -> int:
+    where = Path(args.repo or os.getcwd())
+    on = config.enabled("livespec", os.environ)
+    print(f"livespec setting: {'on' if on else 'off'}")
+    for adapter in default_adapters():
+        status = adapter.inspect(where)
+        print(status.line())
+        server = adapter.server()
+        print(f"  runs as: {' '.join([server['command'], *server.get('args', [])]) if server else 'nothing found'}")
+    return 0
+
+
 def cmd_hook(args: argparse.Namespace) -> int:
     return hooks.main(args.event, sys.stdin, sys.stdout, os.environ)
 
@@ -163,6 +197,11 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--allow-approval", action="store_true", help="allow cells that need approval (Fable)")
         p.add_argument("--no-isolate", action="store_true", help="work in the checkout, not a worktree")
         p.add_argument("--no-model", action="store_true", help="classify with the rules only")
+        switch = p.add_mutually_exclusive_group()
+        switch.add_argument("--livespec", dest="livespec", action="store_true", default=None,
+                            help="use livespec for this task even if the setting is off")
+        switch.add_argument("--no-livespec", dest="livespec", action="store_false",
+                            help="leave livespec out of this task")
 
     p = sub.add_parser("run", help="run a task: classify, attempt, escalate, remember")
     run_args(p)
@@ -213,6 +252,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("capabilities", help="the MCP servers the core hands to workers")
     p.add_argument("--example", action="store_true")
     p.set_defaults(func=cmd_capabilities)
+
+    p = sub.add_parser("config", help="show or change a setting: cauce config livespec off")
+    p.add_argument("key", nargs="?")
+    p.add_argument("value", nargs="?")
+    p.set_defaults(func=cmd_config)
+
+    p = sub.add_parser("neighbours", help="what cauce sees of the neighbours it adopts")
+    p.add_argument("--repo")
+    p.set_defaults(func=cmd_neighbours)
 
     p = sub.add_parser("hook", help="Claude Code hook entry point (reads the event on stdin)")
     p.add_argument("event")

@@ -65,3 +65,16 @@ def test_capabilities(capsys, _isolated_home):
     assert cli.main(["capabilities"]) == 0
     out = capsys.readouterr().out
     assert "livespec" in out and "after a failed implement" in out
+
+
+def test_config_and_neighbours(capsys, git_repo):
+    assert cli.main(["config"]) == 0
+    assert "livespec = true" in capsys.readouterr().out
+    assert cli.main(["config", "livespec", "off"]) == 0
+    assert cli.main(["config", "livespec"]) == 0
+    assert capsys.readouterr().out.strip().endswith("false")
+    assert cli.main(["config", "nope"]) == 1
+    assert cli.main(["config", "livespec", "maybe"]) == 1
+    assert cli.main(["neighbours", "--repo", str(git_repo)]) == 0
+    out = capsys.readouterr().out
+    assert "livespec setting: off" in out and "livespec: absent" in out

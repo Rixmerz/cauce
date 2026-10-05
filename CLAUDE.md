@@ -15,6 +15,8 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/escalate.py` | failure kind → move (retry, more effort, next model, more turns, replan) |
 | `src/cauce/launch.py` | one attempt as `claude -p`: argv, the result contract, parsing, git-read changes |
 | `src/cauce/capabilities.py` | which MCP servers a worker gets, from the user-level registry |
+| `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first |
+| `src/cauce/config.py` | cauce's settings (`livespec` on/off), copied from plugin options by SessionStart |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
@@ -68,5 +70,13 @@ cannot run yields the default kind, not a guess.
 - The model's stated confidence about its own work is not an input.
 - History may raise where a task starts, never lower it below its ladder.
 - Fable needs a person: `#fable` or `--allow-approval`.
+- An adopted neighbour is read, never written: the livespec index is opened
+  `mode=ro`, and the index is built only through livespec's own CLI. Absent
+  and unreadable are different states and neither stops a run.
+- Every livespec tool a hint names is in `adapters/livespec.TOOLS`, checked
+  against the release in `MINIMUM_VERSION`. Check a name against livespec
+  before adding it, and bump `PINNED` only after checking the new release.
+- Tests run with `CAUCE_LIVESPEC=off` and an empty `CLAUDE_CONFIG_DIR`; a
+  test that wants livespec builds the fixture index in `tests/livespec_fixture.py`.
 - The capability registry is read from the user's cauce home only. A
   repository must never be able to add an MCP server by committing a file.

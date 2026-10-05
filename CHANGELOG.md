@@ -28,3 +28,19 @@
   folds into the turn it pushes, a matching dead end reaches the model before
   it starts. Hooks fail open and report what they swallowed.
 - **`/orchestration`**, the one entry point; the `cauce` CLI for everything else.
+
+### Added — livespec is built in
+
+- **Adapters**: neighbours the core adopts rather than lists. The livespec
+  adapter reads the code index read-only with `sqlite3` and takes part in
+  routing (critical specs and widely called symbols raise the start; a review
+  of critical code is reviewed as critical), briefing (a code map at the top of
+  every worker's prompt), the work (livespec's server with a per-kind hint and
+  the `workspace`) and the report (specs touched, callers outside the change).
+- An unindexed or stale repository is indexed through livespec's own CLI before
+  a run, and in the background at session start.
+- livespec needs no separate install: an installed plugin, a `livespec` on
+  `PATH`, or the pinned `livespec@0.32.0` through `uvx`.
+- **The `livespec` switch**, on by default: plugin option, `cauce config
+  livespec off`, `CAUCE_LIVESPEC`, `--no-livespec`. `cauce neighbours` shows
+  what cauce sees.

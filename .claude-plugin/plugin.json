@@ -12,5 +12,13 @@
     "memory",
     "escalation",
     "workers"
-  ]
+  ],
+  "userConfig": {
+    "livespec": {
+      "type": "boolean",
+      "title": "livespec code index",
+      "description": "Use livespec throughout the flow: index the repository, route on what the index shows, brief every worker with a code map, give workers livespec's tools, and report what a change touched. On by default; runs the pinned release through uvx when livespec is not installed.",
+      "default": true
+    }
+  }
 }

@@ -8,3 +8,5 @@ dist/
 .ruff_cache/
 .coverage
 .coverage.*
+# livespec's index of this repository (cauce adopts livespec; the index is local state)
+.mcp-docs/

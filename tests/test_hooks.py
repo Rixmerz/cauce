@@ -114,3 +114,42 @@ def test_the_launcher_runs_a_hook_as_its_own_process(tmp_path):
     store = Store(tmp_path / "h" / "cauce.db")
     assert store.list_tasks()[0]["title"] == "add a cache layer to the api"
     store.close()
+
+
+def test_session_start_freshens_an_adopted_index_in_the_background(store, git_repo, tmp_path):
+    from cauce.adapters import ABSENT, PRESENT, Status
+
+    class Fake:
+        name = "livespec"
+
+        def __init__(self, state, stale=False):
+            self.state, self.stale, self.started = state, stale, []
+
+        def inspect(self, repo_dir):
+            return Status(self.name, self.state, stale=self.stale)
+
+        def server(self):
+            return {"command": "livespec"}
+
+        def refresh_in_background(self, repo_dir, log):
+            self.started.append(log)
+            return True
+
+    root = tmp_path / "root"
+    event = {"session_id": "s", "cwd": str(git_repo), "source": "startup"}
+    for fake, word in ((Fake(ABSENT), "indexing"), (Fake(PRESENT, stale=True), "refreshing")):
+        answer = hooks.session_start(event, store, root, {}, adapters=[fake])
+        assert word in answer["hookSpecificOutput"]["additionalContext"] and fake.started
+    quiet = Fake(PRESENT)
+    assert hooks.session_start(event, store, root, {}, adapters=[quiet]) is None and not quiet.started
+    outside = Fake(ABSENT)
+    hooks.session_start({**event, "cwd": str(tmp_path)}, store, root, {}, adapters=[outside])
+    assert not outside.started  # never index a directory that is not a repository
+
+
+def test_session_start_copies_plugin_options(store, tmp_path):
+    from cauce import config
+
+    env = {"CAUCE_HOME": str(tmp_path / "h"), "CLAUDE_PLUGIN_OPTION_LIVESPEC": "false"}
+    hooks.session_start({"session_id": "s"}, store, tmp_path / "h", env, adapters=[])
+    assert config.load(env)["livespec"] is False

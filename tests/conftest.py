@@ -15,6 +15,11 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "cauce-home"
     monkeypatch.setenv("CAUCE_HOME", str(home))
     monkeypatch.delenv("CAUCE_HOOKS_OFF", raising=False)
+    # livespec is on by default in real use. Here it is off unless a test turns
+    # it on with a fake: a real `uvx livespec index` in a unit test is minutes
+    # of network and indexing nobody asked for.
+    monkeypatch.setenv("CAUCE_LIVESPEC", "off")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     for var, value in {
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
         "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),

@@ -17,6 +17,20 @@ could only *name* them. With one-shot workers that stops mattering: the core
 does not call them, it gives them to the worker (`--mcp-config`,
 `--strict-mcp-config`).
 
+## Adopted, not listed
+
+A capability is a server handed to a worker; the core knows nothing of what it
+says. An adapter is a neighbour the core *understands*: it reads the
+neighbour's data and uses it where the core decides — routing, the brief, the
+report — and still hands the worker the server. livespec is the first, and it
+is on by default: a code index consulted at every step is the difference
+between a worker that starts by searching and one that starts by working.
+
+Its code is not copied into cauce. livespec is AGPL-3.0 and depends on
+tree-sitter, fastmcp and networkx; cauce's hooks run on every prompt and must
+import with the standard library alone. So cauce reads livespec's SQLite index
+read-only and drives its CLI, and pins the release it was checked against.
+
 ## Why one-shot workers, not subagents
 
 | | subagent | one-shot `claude -p` |

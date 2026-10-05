@@ -9,13 +9,15 @@ last word on a claimed pass, and the failure kind is read against the ladder by
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from cauce import capabilities as caps
-from cauce import isolate, launch, repo
+from cauce import config, isolate, launch, repo
+from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify
 from cauce.escalate import Attempt, Decision, Failure, Move, decide
 from cauce.matrix import READ_ONLY_KINDS, Cell, ladder_for
@@ -54,6 +56,8 @@ class Options:
     kind: str | None = None
     start: Cell | None = None
     dry_run: bool = False
+    #: None reads the `livespec` setting (on by default).
+    livespec: bool | None = None
 
 
 @dataclass
@@ -64,6 +68,11 @@ class Plan:
     start: Cell
     reasons: list[str]
     capabilities: tuple[str, ...]
+    #: What adopted neighbours said before the first attempt, for the brief.
+    context: tuple[str, ...] = ()
+    neighbours: tuple[Status, ...] = ()
+    #: The adopted neighbours that are present, with their status.
+    active: tuple[tuple[Adapter, Status], ...] = ()
 
 
 @dataclass
@@ -77,6 +86,7 @@ class Report:
     cost_usd: float = 0.0
     branch: str | None = None
     summary: str = ""
+    impact: list[str] = field(default_factory=list)
 
     def text(self) -> str:
         lines = [
@@ -85,6 +95,10 @@ class Report:
             f"ladder {' → '.join(c.label for c in self.plan.ladder)}",
             f"start {self.plan.start.label}" + "".join(f"\n  · {r}" for r in self.plan.reasons),
         ]
+        lines += [status.line() for status in self.plan.neighbours]
+        if self.task_id is None:
+            # A dry run shows what the first worker would be handed.
+            lines += self.plan.context
         if self.plan.capabilities:
             lines.append(f"capabilities {', '.join(self.plan.capabilities)}")
         for i, (cell, move) in enumerate(zip(self.cells, [*self.moves, ""], strict=False), 1):
@@ -95,6 +109,7 @@ class Report:
             lines.append(f"cost ${self.cost_usd:.2f}")
         if self.branch:
             lines.append(f"branch {self.branch} — review it, then merge it")
+        lines += self.impact
         if self.summary:
             lines.append(self.summary)
         return "\n".join(lines)
@@ -138,8 +153,17 @@ def _index_of(ladder: Sequence[Cell], cell: Cell) -> int:
     return below[-1] if below else 0
 
 
+def adopted(options: Options, adapters: Sequence[Adapter] | None) -> list[Adapter]:
+    if adapters is not None:
+        return list(adapters)
+    if not config.enabled("livespec", os.environ, options.livespec):
+        return []
+    return default_adapters()
+
+
 def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Mapping[str, caps.Capability],
-         *, classifier: Callable[[str], Classification] | None = None) -> Plan:
+         *, classifier: Callable[[str], Classification] | None = None,
+         adapters: Sequence[Adapter] | None = None) -> Plan:
     if options.kind:
         classification = Classification(options.kind, "medium", "rule", "chosen by the caller")
     elif classifier is not None:
@@ -147,6 +171,34 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     else:
         classification = classify(text, use_model=options.use_model_classifier, cwd=home())
     kind = classification.kind
+
+    neighbour_notes: list[str] = []
+    statuses: list[Status] = []
+    active: list[tuple[Adapter, Status]] = []
+    context: list[str] = []
+    raise_rungs, critical = 0, False
+    for adapter in adopted(options, adapters):
+        status = adapter.inspect(repo_dir)
+        runnable_absent = status.state == ABSENT and adapter.server() is not None
+        if runnable_absent or status.stale:
+            if options.dry_run:
+                neighbour_notes.append(f"{adapter.name}: would {'index' if runnable_absent else 'refresh'} first")
+            else:
+                neighbour_notes.append(f"{adapter.name}: {adapter.refresh(repo_dir)}")
+                status = adapter.inspect(repo_dir)
+        statuses.append(status)
+        if not status.present:
+            continue
+        active.append((adapter, status))
+        briefing = adapter.brief(text, repo_dir, status)
+        context += briefing.lines
+        raise_rungs = max(raise_rungs, briefing.raise_rungs)
+        critical = critical or briefing.critical
+        neighbour_notes += briefing.reasons
+
+    if critical and kind == "review-routine":
+        kind = "review-critical"
+        neighbour_notes.append("the code under review implements a critical spec: reviewed as critical")
     ladder = ladder_for(kind)
     if options.start is not None:
         start, reasons = options.start, ["pinned by the caller"]
@@ -157,8 +209,15 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
             store.landings(kind, repo=key) if key else [],
             store.landings(kind),
         )
+        if raise_rungs:
+            raised = min(_index_of(ladder, start) + raise_rungs, len(ladder) - 1)
+            if ladder[raised] != start:
+                start = ladder[raised]
+                reasons.append(f"one rung up for what the code index found ({start.label})")
     selected = caps.select(registry, kind, workdir=repo_dir)
-    return Plan(kind, classification, ladder, start, reasons, selected.names)
+    names = tuple(dict.fromkeys([*selected.names, *(a.name for a, _ in active)]))
+    return Plan(kind, classification, ladder, start, reasons + neighbour_notes, names,
+                tuple(context), tuple(statuses), tuple(active))
 
 
 def run(
@@ -170,12 +229,13 @@ def run(
     registry: Mapping[str, caps.Capability] | None = None,
     launcher: Launcher | None = None,
     classifier: Callable[[str], Classification] | None = None,
+    adapters: Sequence[Adapter] | None = None,
 ) -> Report:
     options = options or Options()
     registry = registry if registry is not None else caps.load(home() / "capabilities.json")
     launcher = launcher or launch.run
     repo_dir = repo_dir.resolve()
-    the_plan = plan(text, repo_dir, store, options, registry, classifier=classifier)
+    the_plan = plan(text, repo_dir, store, options, registry, classifier=classifier, adapters=adapters)
     if options.dry_run:
         return Report(None, "dry run", the_plan)
 
@@ -208,9 +268,11 @@ def run(
             if len(attempts) >= options.max_attempts:
                 report.status, report.summary = "failed", f"{options.max_attempts} attempts without a pass"
                 break
-            selection = caps.select(registry, the_plan.kind, failed_before=bool(attempts), workdir=workdir)
+            selection = _equip(caps.select(registry, the_plan.kind, failed_before=bool(attempts), workdir=workdir),
+                               the_plan, repo_dir, workdir)
             spec = launch.LaunchSpec(
-                prompt=brief(text, the_plan.kind, workdir, attempts, dead, options.verify, writes),
+                prompt=brief(text, the_plan.kind, workdir, attempts, dead, options.verify, writes,
+                             the_plan.context),
                 cell=cell,
                 launch_dir=launch_dir,
                 workdir=workdir if workdir != launch_dir else None,
@@ -237,6 +299,8 @@ def run(
             attempts.append(attempt)
             if result.passed:
                 report.status, report.final_cell, report.summary = "done", cell.label, result.summary
+                for adapter, status in the_plan.active:
+                    report.impact += adapter.assess(result.changed_paths, repo_dir, status)
                 if len(attempts) > 1:
                     _remember(store, task, key, attempt, "worked", result)
                 break
@@ -276,8 +340,11 @@ def brief(
     dead_ends: Sequence[dict],
     verify: str | None,
     writes: bool,
+    context: Sequence[str] = (),
 ) -> str:
     parts = [f"Task ({kind}):\n{text}", f"Work in: {workdir}"]
+    if context:
+        parts.append("\n".join(context))
     if not writes:
         parts.append("This task is read-only: find out and report. Do not change files.")
     if verify:
@@ -299,6 +366,22 @@ def brief(
             lines.append(f"  attempt {i} [{a.cell.label}, {a.failure or 'no verdict'}] {a.summary[:300]}")
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
+
+
+def _equip(selection: caps.Selection, the_plan: Plan, repo_dir: Path, workdir: Path) -> caps.Selection:
+    """The registry's selection plus every adopted neighbour, each with its hint.
+    A registry entry of the same name wins: a person who configured it chose it."""
+    servers = dict(selection.servers)
+    hints = list(selection.hints)
+    names = list(selection.names)
+    for adapter, _ in the_plan.active:
+        server = adapter.server()
+        if server is None or adapter.name in servers:
+            continue
+        servers[adapter.name] = server
+        hints.append(f"{adapter.name}: {adapter.hint(the_plan.kind, repo_dir, workdir)}")
+        names.append(adapter.name)
+    return caps.Selection(servers, tuple(hints), tuple(names))
 
 
 def _verified(result: launch.WorkerResult, command: str, workdir: Path) -> launch.WorkerResult:
