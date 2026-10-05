@@ -24,20 +24,26 @@ Checked against livespec 0.32.0. Every tool named here exists in that release;
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
+import hashlib
 import json
 import os
 import re
 import shutil
 import sqlite3
 import subprocess
+import sys
+import time
 import tomllib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from cauce import repo
 from cauce.adapters import ABSENT, PRESENT, UNREADABLE, Briefing, Status
+from cauce.store import home
 from cauce.text import words
 
 MINIMUM_VERSION = (0, 32, 0)
@@ -206,32 +212,62 @@ class Livespec:
         root = (repo.toplevel(repo_dir) or repo_dir).resolve()
         return [str(server["command"]), *[str(a) for a in server.get("args", [])], "index", str(root)]
 
-    def refresh(self, repo_dir: Path) -> str:
+    def lock_path(self, repo_dir: Path) -> Path:
+        """One lock per index file: two `livespec index` runs on the same file
+        collide ("database is locked"), and a shared group index is one file for
+        several repositories."""
+        root = (repo.toplevel(repo_dir) or repo_dir).resolve()
+        digest = hashlib.sha256(str(self.db_path(root)).encode()).hexdigest()[:16]
+        return home(self.env) / "work" / f"livespec-index-{digest}.lock"
+
+    def indexing(self, repo_dir: Path) -> bool:
+        """Whether a refresh cauce started holds this index now."""
+        with _lock(self.lock_path(repo_dir), wait_s=0) as (got, _):
+            return not got
+
+    def refresh(self, repo_dir: Path, *, wait_s: float = INDEX_TIMEOUT_S) -> str:
         """`livespec index` through livespec's own CLI: a first index, or an
-        incremental one. Costs time, never tokens."""
+        incremental one. Costs time, never tokens.
+
+        Never two at once on one index. The session-start refresh, and parallel
+        tasks each planning in the same repository, would otherwise start one
+        apiece and all but one fail. A refresh that finds another running waits
+        for it, and then runs only if the index is still behind.
+        """
         argv = self._index_argv(repo_dir)
         if argv is None:
             return "livespec cannot run here; the index stays as it is"
-        try:
-            proc = self.runner(argv, capture_output=True, text=True, timeout=INDEX_TIMEOUT_S, check=False,
-                               env={**self.env, "CAUCE_HOOKS_OFF": "1"})
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return f"livespec index did not run: {exc}"
+        with _lock(self.lock_path(repo_dir), wait_s=wait_s) as (got, waited):
+            if not got:
+                return "another livespec index is still running; the index stays as it is for this task"
+            if waited:
+                status = self.inspect(repo_dir)
+                if status.present and not status.stale:
+                    return "livespec index refreshed by the run this one waited for"
+            try:
+                proc = self.runner(argv, capture_output=True, text=True, timeout=INDEX_TIMEOUT_S, check=False,
+                                   env={**self.env, "CAUCE_HOOKS_OFF": "1"})
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return f"livespec index did not run: {exc}"
         if proc.returncode != 0:
             return f"livespec index failed: {(proc.stderr or proc.stdout or '').strip()[:200]}"
         return "livespec index refreshed"
 
     def refresh_in_background(self, repo_dir: Path, log: Path) -> bool:
         """Start an index refresh and return at once — for a hook, which must not
-        wait minutes on a large repository."""
-        argv = self._index_argv(repo_dir)
-        if argv is None:
+        wait minutes on a large repository. It runs as `cauce index-livespec`, so
+        it holds the same lock as every other refresh; none starts while one runs."""
+        if self._index_argv(repo_dir) is None or self.indexing(repo_dir):
             return False
+        from cauce import dispatch
+
+        root = (repo.toplevel(repo_dir) or repo_dir).resolve()
         try:
             log.parent.mkdir(parents=True, exist_ok=True)
             with log.open("a", encoding="utf-8") as out:
-                self.popen(argv, stdout=out, stderr=out, stdin=subprocess.DEVNULL,
-                           env={**self.env, "CAUCE_HOOKS_OFF": "1"}, start_new_session=True)
+                self.popen([sys.executable, "-m", "cauce", "index-livespec", str(root)], stdout=out, stderr=out,
+                           stdin=subprocess.DEVNULL, env={**dispatch.child_env(self.env), "CAUCE_HOOKS_OFF": "1"},
+                           start_new_session=True)
         except OSError:
             return False
         return True
@@ -320,6 +356,29 @@ class Livespec:
 
 
 # --- queries ------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _lock(path: Path, *, wait_s: float, pause: Callable[[float], None] = time.sleep,
+          clock: Callable[[], float] = time.monotonic) -> Iterator[tuple[bool, bool]]:
+    """Yields (held, waited): an exclusive lock on `path`, waiting up to `wait_s`."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline, waited = clock() + wait_s, False
+    with open(path, "a") as fh:
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if clock() >= deadline:
+                    yield False, waited
+                    return
+                waited = True
+                pause(1.0)
+        try:
+            yield True, waited
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def _connect(db: Path) -> sqlite3.Connection:

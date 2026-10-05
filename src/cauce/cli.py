@@ -393,6 +393,14 @@ def cmd_work(args: argparse.Namespace) -> int:
     return 0 if all(r.status == "done" for r in report.ran) else 1
 
 
+def cmd_index_livespec(args: argparse.Namespace) -> int:
+    """A background refresh, run detached by SessionStart under the index's lock."""
+    from cauce.adapters.livespec import Livespec
+
+    print(Livespec().refresh(Path(args.dir)))
+    return 0
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     where = Path(args.dir or os.getcwd()).resolve()
     if not where.is_dir():
@@ -646,6 +654,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("init", help="enroll a project: its .cauce/ folder, so it and its sessions show in the UI")
     p.add_argument("dir", nargs="?", help="a directory in the project (default: here)")
     p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("index-livespec", help=argparse.SUPPRESS)
+    p.add_argument("dir")
+    p.set_defaults(func=cmd_index_livespec)
 
     p = sub.add_parser("name-session", help=argparse.SUPPRESS)
     p.add_argument("id")

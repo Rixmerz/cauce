@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-05
+
+### Fixed
+
+- A task failed with livespec's "database is locked". Several refreshes of one
+  livespec index could run at once — the session-start refresh, and since
+  0.2.0 every parallel task planning in the same repository — and livespec
+  lets only one through. Refreshes of one index file are now serialized under
+  a lock in cauce's home: a refresh that finds another running waits for it and
+  then indexes only if the index is still behind; the session-start refresh
+  runs as `cauce index-livespec` under the same lock and is not started while
+  one runs. Reproduced with three real refreshes on a fresh repository: one
+  failed before, none after.
+
 ## [0.3.1] - 2026-10-05
 
 ### Fixed

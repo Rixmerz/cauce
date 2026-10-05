@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import subprocess
 from pathlib import Path
 
-from cauce.adapters import ABSENT, PRESENT, UNREADABLE
+from cauce.adapters import ABSENT, PRESENT, UNREADABLE, Status
+from cauce.adapters import livespec as livespec_mod
 from cauce.adapters.livespec import _HINTS, PINNED, TOOLS, Livespec, is_test_path
+from cauce.adapters.livespec import _lock as lock
 
 from .livespec_fixture import build
 
 
 def adapter(tmp_path: Path, path: str = "", **kw) -> Livespec:
-    env = {"HOME": str(tmp_path / "home"), "PATH": path, "CLAUDE_CONFIG_DIR": str(tmp_path / "cc")}
+    env = {"HOME": str(tmp_path / "home"), "PATH": path, "CLAUDE_CONFIG_DIR": str(tmp_path / "cc"),
+           "CAUCE_HOME": str(tmp_path / "cauce")}
     return Livespec(env=env, **kw)
 
 
@@ -122,13 +126,55 @@ def test_refresh_uses_livespecs_own_cli(tmp_path, git_repo):
     assert "cannot run" in adapter(tmp_path).refresh(git_repo)
 
 
+def test_two_refreshes_of_one_index_never_run_at_once(tmp_path, git_repo, monkeypatch):
+    """Parallel tasks in one repository each plan, and each would refresh a stale
+    index: livespec then fails with "database is locked" in all but one."""
+    calls = []
+
+    def runner(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "{}", "")
+
+    a = adapter(tmp_path, tool(tmp_path, "uvx"), runner=runner)
+    with lock(a.lock_path(git_repo), wait_s=0):
+        assert "still running" in a.refresh(git_repo, wait_s=0)
+    assert calls == []
+    # One that waited, and finds the index current, does not index again.
+    fresh = Status("livespec", PRESENT, "indexed now", PINNED, stale=False)
+    monkeypatch.setattr(a, "inspect", lambda repo_dir: fresh)
+    waits = iter([(True, True)])
+    monkeypatch.setattr(livespec_mod, "_lock", lambda path, wait_s: _fixed(next(waits)))
+    assert "the run this one waited for" in a.refresh(git_repo)
+    assert calls == []
+    # The lock is per index file: a repository whose index is another file has its own.
+    other = git_repo.parent / "other"
+    other.mkdir()
+    assert a.lock_path(other) != a.lock_path(git_repo)
+
+
+@contextlib.contextmanager
+def _fixed(value):
+    yield value
+
+
+def test_the_lock_waits_then_gives_up(tmp_path):
+    path = tmp_path / "x.lock"
+    ticks = iter([0.0, 0.5, 2.0])
+    with lock(path, wait_s=0), lock(path, wait_s=1.0, pause=lambda s: None, clock=lambda: next(ticks)) as got:
+        assert got == (False, True)
+
+
 def test_background_refresh_never_waits(tmp_path, git_repo):
     started = []
     a = adapter(tmp_path, tool(tmp_path, "uvx"), popen=lambda argv, **kw: started.append((argv, kw)))
     assert a.refresh_in_background(git_repo, tmp_path / "logs" / "livespec.log")
     argv, kw = started[0]
-    assert argv[-2:] == ["index", str(git_repo.resolve())] and kw["start_new_session"]
+    # Through cauce, so the refresh holds the same lock as every other one.
+    assert argv[1:] == ["-m", "cauce", "index-livespec", str(git_repo.resolve())] and kw["start_new_session"]
     assert kw["env"]["CAUCE_HOOKS_OFF"] == "1"
+    with lock(a.lock_path(git_repo), wait_s=0):
+        assert a.indexing(git_repo) and not a.refresh_in_background(git_repo, tmp_path / "logs" / "livespec.log")
+    assert len(started) == 1 and not a.indexing(git_repo)
     assert not adapter(tmp_path).refresh_in_background(git_repo, tmp_path / "x.log")
 
     def broken(*a, **k):
