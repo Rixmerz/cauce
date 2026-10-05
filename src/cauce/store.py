@@ -133,6 +133,10 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         # Set when the dispatcher, not a person, started the run: only those
         # pause their lane when they fail.
         "dispatched": "INTEGER NOT NULL DEFAULT 0",
+        # Whether a queued task may start beside the work already going in its
+        # repository (1) or waits its turn (0), and why. NULL: not decided yet.
+        "parallel": "INTEGER",
+        "parallel_reason": "TEXT",
     },
     "problems": {
         "first_seen": "TEXT",
@@ -479,21 +483,21 @@ class Store:
         return self.create_task(body, status="queued", source="queue", repo=repo, cwd=cwd,
                                 session_id=session_id, options=json.dumps(options or {}))
 
-    def next_queued(self, repo: str | None = None) -> dict | None:
-        """The oldest queued task in a lane that is neither paused nor busy.
+    def queued_in(self, repo: str | None) -> list[dict]:
+        """A lane's queued tasks, oldest first."""
+        rows = self._conn.execute(
+            "SELECT * FROM tasks WHERE status = 'queued' AND repo IS ? ORDER BY id", (repo,)).fetchall()
+        return [dict(r) for r in rows]
 
-        A lane is serial: while one of its tasks runs from the dispatcher, the
-        next waits, so it never starts on a state the last one left half done.
-        """
-        scope, params = ("AND t.repo = ?", [repo]) if repo is not None else ("", [])
-        row = self._conn.execute(
-            "SELECT t.* FROM tasks t LEFT JOIN lanes l ON l.repo = t.repo "  # noqa: S608
-            f"WHERE t.status = 'queued' {scope} AND COALESCE(l.paused, 0) = 0 "
-            "AND NOT EXISTS (SELECT 1 FROM tasks r WHERE r.repo IS t.repo AND r.status = 'running' "
-            "AND r.dispatched = 1) ORDER BY t.id LIMIT 1",
-            params,
-        ).fetchone()
-        return dict(row) if row else None
+    def dispatched_running(self, repo: str | None) -> list[dict]:
+        """What the dispatcher has running in a lane now."""
+        rows = self._conn.execute(
+            "SELECT * FROM tasks WHERE status = 'running' AND dispatched = 1 AND repo IS ? ORDER BY id",
+            (repo,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_parallel(self, task_id: int, parallel: bool, reason: str) -> None:
+        self.update_task(task_id, parallel=int(parallel), parallel_reason=reason)
 
     def claim(self, task_id: int) -> bool:
         """Move a queued task to running, once: two dispatchers never run one task."""

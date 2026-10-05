@@ -164,12 +164,13 @@ def test_session_start_puts_cauce_on_the_sessions_path(store, tmp_path):
     env_file = tmp_path / "session.env"
     env = {"CLAUDE_PLUGIN_ROOT": str(plugin), "PATH": "/usr/bin", "CLAUDE_ENV_FILE": str(env_file)}
     assert hooks.session_start({"session_id": "s"}, store, tmp_path / "h", env, adapters=[]) is None
-    line = env_file.read_text()
+    first, line = env_file.read_text().splitlines(keepends=True)
+    assert first == "export CAUCE_SESSION_ID=s\n"  # `cauce run` typed in the session is that session's
     assert line.startswith("export PATH=") and str(plugin / "bin") in line and line.endswith(':"$PATH"\n')
-    # Already resolvable: nothing written twice.
+    # Already resolvable: the path is not written twice.
     on_path = {**env, "PATH": str(plugin / "bin")}
     hooks.session_start({"session_id": "s"}, store, tmp_path / "h", on_path, adapters=[])
-    assert env_file.read_text() == line
+    assert env_file.read_text().count("export PATH=") == 1
     # No env file: the model is given the full path.
     bare = {"CLAUDE_PLUGIN_ROOT": str(plugin), "PATH": "/usr/bin"}
     context = hooks.session_start({"session_id": "s"}, store, tmp_path / "h", bare, adapters=[])

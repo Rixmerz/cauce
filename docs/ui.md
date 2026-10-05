@@ -11,12 +11,17 @@ state of its own, so the CLI, the hooks and the page never disagree.
 
 | Screen | Shows | Actions |
 |---|---|---|
-| **Board** | columns that are states of attention — *Needs you* (failed, blocked, replan, needs approval, awaiting merge), *Running* (live cell, attempt n, cost so far), *Queued* per repository lane, *Done* as a diary by day — across repositories, filterable by repo and cell | queue a task, cancel, unpause a lane |
+| **Board** | one project, picked at the top — never every repository at once. Columns that are states of attention — *Needs you* (failed, blocked, replan, needs approval, awaiting merge), *Running* (live cell, attempt n, cost so far), *Queued* with Haiku's call on each task (runs beside the others, or waits, and why), *Done* as a diary by day — narrowable to one session | cancel, unpause a lane, start its dispatcher |
+| **Sessions** | the project's Claude Code sessions: last prompt, prompts, cost, how far its own task list got, the resume command. One session: its task list as Claude Code keeps it (`<config>/tasks/<session>/*.json`, read only; absent and unreadable are told apart), the work it gave cauce, its recent turns | copy the resume command |
 | **Task** | the attempt timeline: cell, turns, cost, outcome, the move and its reason; the plan's reasons and neighbours; messages; changed files; the branch; impact lines from livespec; dead ends shown to it | cancel; re-run pinned at a cell; copy the merge command |
 | **Spend** | tokens and dollars by day, repository, model and cell; escalation rate and what escalations cost | — |
 | **Routing** | the model × effort grid: per kind, where tasks started, where they passed, how often each cell escalated | — (the table is code; this screen is the evidence for changing it) |
 | **Memory** | problems and fixes across repositories, dead ends first, recurring problems flagged, what worked instead | record a fix |
 | **Habits** | mined sequences with their gates and score; proposals awaiting approval | none in the page: installing a hook is a CLI command a person types |
+
+No screen takes a task. Work is asked for in a session (`++ <task>`,
+`/orchestration`), where it has that session's context and is recorded as its
+work; a form in the page was a second way in with neither.
 
 ## Live updates
 

@@ -1,18 +1,26 @@
 import { get, post } from "./net.js";
-import { h, repoName, short, usd, when } from "./util.js";
+import { h, short, usd, when } from "./util.js";
+
+// Where a queued task stands with the dispatcher: Haiku's call on whether it may
+// start beside the running work, with its reason.
+function decision(task) {
+  if (task.parallel === null || task.parallel === undefined) return null;
+  return h("span", { class: task.parallel ? "chip ok" : "chip wait", title: task.parallel_reason || "" },
+    task.parallel ? "runs beside others" : "waits its turn");
+}
 
 function card(task, openTask, extra = []) {
   return h("div", { class: "card", onclick: () => openTask(task.id), tabindex: 0,
                     onkeydown: (e) => { if (e.key === "Enter") openTask(task.id); } },
     h("div", { class: "title" }, short(task.title, 120)),
     h("div", { class: "meta" },
-      h("span", {}, repoName(task.repo)),
       task.kind ? h("span", { class: "chip" }, task.kind) : null,
       task.current_cell || task.final_cell || task.start_cell
         ? h("span", { class: "chip" }, task.current_cell || task.final_cell || task.start_cell) : null,
       task.cost_usd ? h("span", {}, usd(task.cost_usd)) : null,
       ...extra),
-    task.asks ? h("div", { class: "asks" }, task.asks) : null);
+    task.asks ? h("div", { class: "asks" }, task.asks) : null,
+    task.status === "queued" && task.parallel_reason ? h("div", { class: "reason" }, short(task.parallel_reason, 160)) : null);
 }
 
 function column(title, count, children) {
@@ -21,51 +29,49 @@ function column(title, count, children) {
     children.length ? children : h("div", { class: "empty" }, "nothing here"));
 }
 
-function queueForm(ctx) {
-  const text = h("input", { placeholder: "Queue a task for a worker…", "aria-label": "task" });
-  const repo = h("input", { placeholder: "/path/to/repository", "aria-label": "repository" });
-  const verify = h("input", { placeholder: "verify command (optional)", "aria-label": "verify" });
-  const kind = h("select", { "aria-label": "kind" }, h("option", { value: "" }, "kind: auto"),
-    ...["implement", "debug-repro", "debug-unclear", "feature", "refactor", "ui", "test", "docs", "explore",
-        "review-routine", "review-critical", "plan"].map((k) => h("option", { value: k }, k)));
-  const submit = async (e) => {
-    e.preventDefault();
-    try {
-      const res = await post("/api/queue", { text: text.value, repo_dir: repo.value, verify: verify.value, kind: kind.value });
-      ctx.toast(`queued #${res.id}`);
-      text.value = "";
-      ctx.refresh();
-    } catch (err) { ctx.toast(err.message); }
-  };
-  return h("form", { class: "queue-form", onsubmit: submit }, text, repo, verify, kind,
-    h("button", { class: "primary", type: "submit" }, "Queue"));
-}
+// The session filter is kept per project while the page is open.
+const sessionFilter = new Map();
 
 export async function renderBoard(ctx) {
-  const b = await get("/api/board");
+  const q = encodeURIComponent(ctx.project);
+  const [b, sessions] = await Promise.all([get(`/api/board?repo=${q}`), get(`/api/sessions?repo=${q}`).catch(() => [])]);
+  const chosen = sessionFilter.get(ctx.project) || "";
+  const keep = (t) => !chosen || t.session_id === chosen;
+  const picker = h("select", { "aria-label": "session", onchange: (e) => { sessionFilter.set(ctx.project, e.target.value); ctx.refresh(); } },
+    h("option", { value: "" }, "every session of this project"),
+    ...sessions.map((s) => h("option", { value: s.id, selected: s.id === chosen },
+      `${short(s.last_prompt || s.id, 60)} · ${when(s.last_seen_at)}`)));
+
   const lanes = b.queued.map((lane) => h("div", { class: "lane" },
     h("div", { class: "lane-head" },
-      h("span", {}, repoName(lane.repo)),
       lane.paused
         ? h("span", { class: "paused" }, "paused ",
-            h("button", { onclick: async (e) => { e.stopPropagation(); await post("/api/lanes/unpause", { repo: lane.repo }); ctx.refresh(); } }, "Unpause"))
-        : h("button", { onclick: async () => { await post("/api/work", { repo_dir: lane.tasks[0]?.cwd }); ctx.toast("worker started"); } }, "Run lane")),
+            h("button", { onclick: async (e) => { e.stopPropagation(); await post("/api/lanes/unpause", { repo: lane.repo }); ctx.toast("lane unpaused"); ctx.refresh(); } }, "Unpause"))
+        : lane.dispatching
+          ? h("span", { class: "live-note" }, "dispatcher running")
+          : lane.tasks.length
+            ? h("button", { onclick: async () => { try { await post("/api/work", { repo: lane.repo }); ctx.toast("dispatcher started"); } catch (err) { ctx.toast(err.message); } } }, "Start")
+            : null),
     lane.paused && lane.reason ? h("div", { class: "asks" }, short(lane.reason, 160)) : null,
-    lane.tasks.map((t) => card(t, ctx.openTask))));
+    lane.tasks.filter(keep).map((t) => card(t, ctx.openTask, [decision(t)]))));
   const days = new Map();
-  for (const t of b.done) {
+  for (const t of b.done.filter(keep)) {
     const day = (t.updated_at || "").slice(0, 10);
     if (!days.has(day)) days.set(day, []);
     days.get(day).push(card(t, ctx.openTask, t.branch ? [h("span", { class: "chip" }, t.branch)] : []));
   }
   const diary = [...days.entries()].map(([day, cards]) => [h("div", { class: "lane-head" }, day), cards]);
+  const needs = b.needs_you.filter(keep);
+  const running = b.running.filter(keep);
+  const answering = chosen ? b.answering.filter(keep).length : b.counts.answering;
   return h("div", {},
-    queueForm(ctx),
+    h("div", { class: "toolbar" }, picker,
+      h("span", { class: "hint" }, "Work is asked for in a Claude Code session: ++ <task> queues it, /orchestration runs it.")),
     h("div", { class: "columns" },
-      column("Needs you", b.counts.needs_you, b.needs_you.map((t) => card(t, ctx.openTask, [h("span", { class: `status-${t.status}` }, t.status)]))),
-      column("Running", b.counts.running, [
-        ...b.running.map((t) => card(t, ctx.openTask, [h("span", {}, `attempt ${t.attempt ?? 1}`), h("span", {}, when(t.updated_at))])),
-        ...(b.counts.answering ? [h("div", { class: "empty" }, `${b.counts.answering} session${b.counts.answering === 1 ? "" : "s"} answering a prompt now`)] : [])]),
-      column("Queued", b.counts.queued, lanes),
-      column("Done", b.counts.done, diary)));
+      column("Needs you", needs.length, needs.map((t) => card(t, ctx.openTask, [h("span", { class: `status-${t.status}` }, t.status)]))),
+      column("Running", running.length, [
+        ...running.map((t) => card(t, ctx.openTask, [h("span", {}, `attempt ${t.attempt ?? 1}`), h("span", {}, when(t.updated_at))])),
+        ...(answering ? [h("div", { class: "empty" }, `${answering} session${answering === 1 ? "" : "s"} answering a prompt now`)] : [])]),
+      column("Queued", b.queued.reduce((n, lane) => n + lane.tasks.filter(keep).length, 0), lanes.length ? lanes : []),
+      column("Done", b.done.filter(keep).length, diary)));
 }

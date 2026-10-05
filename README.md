@@ -197,14 +197,29 @@ directory (its settings and instructions) while it works in the repository.
 
 Work arrives faster than it runs. Type `++ <task>` in a session and it is
 queued without spending a turn; `cauce queue add "<task>" --verify "<cmd>"`
-does the same from a shell. `cauce work` drains the queue in workers, never in
-the session's context.
+does the same from a shell. Either way the task stays the session's: it shows
+under that session in the UI.
 
-Each repository is one **serial lane**: its tasks run one after another, and a
-task that ends in anything but a pass **pauses the lane**, so the next one never
-starts on a state the last left broken. `cauce lanes` shows them;
-`cauce lanes --unpause .` reopens one. `--max` bounds how many tasks one
-unattended `cauce work` runs.
+A `++` also starts the repository's dispatcher (`autowork`, on by default), so
+queued work runs at once in workers, never in the session's context; `cauce
+work` starts it by hand. One dispatcher runs per repository, and each task it
+starts is its own `cauce run` process.
+
+Whether a task waits is **Haiku's call** (`parallel`, on by default). The first
+task of an idle repository starts. One queued behind running work starts beside
+it only when Haiku, reading it against everything running and queued ahead,
+finds it independent — it needs nothing those produce and is unlikely to change
+the same code. Each task can run in its own worktree, so this decision is about
+whether the results will merge, not about sharing a checkout. The decision and
+its reason stay on the task, it is made once, and up to three tasks run at once
+per repository. When Haiku cannot be asked, the task waits: waiting costs
+time, a wrong "parallel" costs a broken merge. `cauce config parallel off`
+makes every repository one serial lane.
+
+A task that ends in anything but a pass **pauses its repository's lane**, so
+nothing new starts on a state it may have left broken. `cauce lanes` shows
+them; `cauce lanes --unpause .` reopens one. `--max` bounds how many tasks one
+unattended `cauce work` starts.
 
 A run whose process died leaves no task stuck in `running`: a sweep (at session
 start and before every `cauce work`) marks it interrupted and pauses its lane.
@@ -219,14 +234,23 @@ never counts as evidence for where the router should start.
 `cauce ui` (or `/cauce:ui` in a session) serves a local page (`http://127.0.0.1:8790/`, `--open` opens it)
 for someone running many tasks across many repositories. It answers, in order:
 what needs me, what is running and what it costs, and whether the router is
-choosing well.
+choosing well. It shows one project at a time, picked at the top: never every
+repository's cards at once.
 
 - **Board** — *Needs you* (failed, blocked, replan, waiting on approval, a
-  branch to merge), *Running* with the live cell, *Queued* per lane, *Done* by
-  day. Queue a task, cancel one, reopen a lane, start the dispatcher.
+  branch to merge), *Running* with the live cell, *Queued* with whether each
+  task runs beside the others or waits and why, *Done* by day. Narrow it to one
+  session. Cancel a task, reopen a lane, start a lane's dispatcher.
+- **Sessions** — every Claude Code session cauce saw in the project, with the
+  command that resumes it. Open one to review it: its own task list as Claude
+  Code keeps it (read from `~/.claude/tasks/<session>/`, never written), the
+  work it gave cauce, and its recent turns.
 - **Task** — the attempt timeline with every move and its reason, the plan,
   the coupled messages, the branch and the merge command.
 - **Spend**, **Routing**, **Memory**, **Habits** — the same numbers as the CLI.
+
+Work is never typed into the page: it is asked for in a session, where it has
+the session's context and its record.
 
 It reads the SQLite file every other part of cauce writes and owns no state of
 its own. It binds `127.0.0.1` only, checks the `Host` header, and takes

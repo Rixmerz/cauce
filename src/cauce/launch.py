@@ -297,6 +297,7 @@ def _int(value: Any) -> int:
 def worker_env() -> dict[str, str]:
     env = dict(os.environ)
     env["CAUCE_HOOKS_OFF"] = "1"
+    env.pop("CAUCE_SESSION_ID", None)  # the worker's work is the task's, not that session's turn
     return env
 
 

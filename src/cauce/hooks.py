@@ -20,6 +20,7 @@ raises takes the user's session down. But failing open is not failing silently
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import shutil
@@ -94,7 +95,7 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
         task = store.enqueue(queued, repo=key, cwd=cwd, session_id=session_id)
         # Blocked: queuing costs no turn. The reason is what the person sees.
         return {"decision": "block", "reason": f"cauce: queued #{task['id']} — {task['title']}. "
-                f"`cauce work` runs the queue in workers."}
+                + _dispatch(cwd, key, os.environ)}
 
     running = store.running_task(session_id, prompt_id) if prompt_id else None
     if running is not None:
@@ -118,6 +119,20 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
     return _context("UserPromptSubmit", _dead_end_text(
         dead, "cauce memory: fixes already tried against problems like this one, and they did not work. "
         "Before applying one again, say so and check why it failed."))
+
+
+def _dispatch(cwd: str | None, key: str | None, env: Mapping[str, str]) -> str:
+    """Start the repository's dispatcher (the `autowork` setting), and say what happens next."""
+    if not cwd or not config.enabled("autowork", env):
+        return "`cauce work` runs the queue in workers."
+    from cauce import dispatch
+
+    root = home(dict(env))
+    if dispatch.held(root, key or "*") or dispatch.start(Path(cwd), root, key or "*"):
+        if config.enabled("parallel", env):
+            return "A worker takes it now, beside the running ones if Haiku finds it independent, or after them."
+        return "A worker takes it when the tasks ahead of it are done."
+    return "Starting a worker failed; `cauce work` runs the queue."
 
 
 def stop(event: Mapping[str, Any], store: Store) -> dict | None:
@@ -226,6 +241,7 @@ def session_start(
     key = repo.key(cwd) if cwd else None
     store.touch_session(session_id, cwd, key)
     blocks: list[str] = []
+    _export(env, "CAUCE_SESSION_ID", str(session_id))
     reach = _reach(env)
     if reach:
         blocks.append(reach)
@@ -245,6 +261,21 @@ def session_start(
         if dead:
             blocks.append(_dead_end_text(dead, "cauce memory: recent fixes in this repository that did not work."))
     return _context("SessionStart", "\n\n".join(blocks)) if blocks else None
+
+
+def _export(env: Mapping[str, str], name: str, value: str) -> bool:
+    """Set a variable for the session's Bash commands, through `CLAUDE_ENV_FILE`.
+    `CAUCE_SESSION_ID` is how a `cauce run` or `cauce queue add` typed in a
+    session is recorded as that session's."""
+    env_file = env.get("CLAUDE_ENV_FILE")
+    if not env_file:
+        return False
+    try:
+        with open(env_file, "a", encoding="utf-8") as out:
+            out.write(f"export {name}={shlex.quote(value)}\n")
+        return True
+    except OSError:
+        return False
 
 
 def _reach(env: Mapping[str, str]) -> str | None:

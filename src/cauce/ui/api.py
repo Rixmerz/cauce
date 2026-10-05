@@ -3,15 +3,19 @@ against a store, and the server only turns these into JSON."""
 from __future__ import annotations
 
 import json
+import os
+import re
 from collections import Counter, defaultdict
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from cauce import flow, habits, usage
 from cauce.matrix import LADDERS
 from cauce.store import Store
 
-#: States that are waiting on a person, and what each one asks of them.
 TASK_SOURCES = ("cauce", "queue")  # what the board shows: work cauce runs or holds
+#: States that are waiting on a person, and what each one asks of them.
 NEEDS_YOU = {
     "failed": "every cell on its ladder failed: read the attempts",
     "blocked": "the environment or the budget stopped it",
@@ -27,7 +31,8 @@ BODY_CHARS = 800
 
 def _brief(task: dict[str, Any]) -> dict[str, Any]:
     keys = ("id", "title", "status", "kind", "repo", "cwd", "start_cell", "final_cell", "current_cell",
-            "cost_usd", "source", "created_at", "updated_at", "result", "pinned", "session_id")
+            "cost_usd", "source", "created_at", "updated_at", "result", "pinned", "session_id",
+            "parallel", "parallel_reason")
     body = task.get("body") or ""
     return {**{k: task.get(k) for k in keys},
             "body": body if len(body) <= BODY_CHARS else body[:BODY_CHARS - 1] + "…"}
@@ -101,6 +106,10 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
     for repo, lane in lanes.items():
         if lane["paused"] and repo not in queued and (repos is None or repo in repos):
             queued[repo] = {"repo": repo, "paused": True, "reason": lane["reason"], "tasks": []}
+    from cauce import dispatch
+
+    for lane in queued.values():
+        lane["dispatching"] = dispatch.held(store.path.parent, lane["repo"] or "*")
     return {
         "counts": {"needs_you": len(needs), "running": len(running),
                    "workers": sum(1 for r in running if r.get("worker")),
@@ -190,8 +199,6 @@ def memory(store: Store, query: str = "", limit: int = 40, repos: set[str] | Non
 
 def projects(store: Store) -> list[dict[str, Any]]:
     """Every repository cauce has worked in, at the top of the checkout it was last used from."""
-    from pathlib import Path
-
     from cauce import repo as repo_mod
 
     out = []
@@ -208,6 +215,70 @@ def sessions(store: Store, repos: set[str] | None = None, limit: int = 100) -> l
 
     return [{**s, "resume": f"cd {shlex.quote(s['cwd'] or '.')} && claude --resume {s['id']}"}
             for s in store.sessions(repos=repos, limit=limit)]
+
+
+SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def claude_tasks(session_id: str, env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """The session's own task list, as Claude Code keeps it: one JSON file per task
+    under `<config>/tasks/<session>/` (older versions: one todo file under `todos/`).
+
+    Read only, and read defensively: the layout is Claude Code's, not a contract
+    cauce owns. `state` says which of absent, read and unreadable it was — "no
+    plan" and "could not read the plan" are different answers.
+    """
+    env = os.environ if env is None else env
+    if not SESSION_ID.match(session_id or ""):
+        return {"state": "absent", "tasks": []}
+    config_dir = Path(env.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    folder = config_dir / "tasks" / session_id
+    try:
+        if folder.is_dir():
+            tasks = []
+            for f in folder.glob("*.json"):
+                item = json.loads(f.read_text(encoding="utf-8"))
+                if isinstance(item, dict) and item.get("subject"):
+                    tasks.append({k: item.get(k) for k in
+                                  ("id", "subject", "description", "status", "activeForm", "blockedBy")})
+            tasks.sort(key=lambda t: (len(str(t["id"])), str(t["id"])))
+            return {"state": "read", "tasks": tasks}
+        todos = sorted((config_dir / "todos").glob(f"{session_id}-agent-*.json"))
+        if todos:
+            items = json.loads(todos[-1].read_text(encoding="utf-8"))
+            tasks = [{"id": str(i + 1), "subject": t.get("content"), "description": None, "status": t.get("status"),
+                      "activeForm": t.get("activeForm"), "blockedBy": []}
+                     for i, t in enumerate(items if isinstance(items, list) else []) if isinstance(t, dict)]
+            return {"state": "read", "tasks": tasks}
+    except (OSError, ValueError):
+        return {"state": "unreadable", "tasks": []}
+    return {"state": "absent", "tasks": []}
+
+
+def _plan_counts(session_id: str) -> dict[str, int] | None:
+    plan = claude_tasks(session_id)
+    if not plan["tasks"]:
+        return None
+    return {"done": sum(1 for t in plan["tasks"] if t["status"] == "completed"), "total": len(plan["tasks"])}
+
+
+def session_list(store: Store, repos: set[str] | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    """`sessions`, each with how far its own task list got."""
+    return [{**s, "plan": _plan_counts(s["id"])} for s in sessions(store, repos, limit)]
+
+
+def session_detail(store: Store, session_id: str, turns: int = 60) -> dict[str, Any] | None:
+    """One session: its own task list, the work it handed to cauce, and its recent turns."""
+    found = [s for s in sessions(store, limit=100000) if s["id"] == session_id]
+    if not found:
+        return None
+    mine = store.list_tasks(session_id=session_id, limit=500)
+    return {
+        "session": found[0],
+        "plan": claude_tasks(session_id),
+        "tasks": [_brief(t) for t in mine if t["source"] in TASK_SOURCES],
+        "turns": [{**_brief(t), "result": (t["result"] or "")[:400]} for t in mine if t["source"] == "hook"][:turns],
+    }
 
 
 def habit_view(store: Store, days: int = 30) -> dict[str, Any]:

@@ -109,6 +109,54 @@ def test_task_detail_spend_routing_memory_habits(store: Store):
     assert view["candidates"][0]["steps"] == ["edit:.py", "bash:pytest"] and view["installed"] == []
 
 
+def test_a_session_s_own_task_list_its_work_and_its_turns(store: Store, tmp_path, monkeypatch):
+    config = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    plan = config / "tasks" / "s1"
+    plan.mkdir(parents=True)
+    for i, (subject, status) in enumerate((("write the plan", "completed"), ("build it", "in_progress"),
+                                           ("ship it", "pending")), start=1):
+        (plan / f"{i}.json").write_text(json.dumps({"id": str(i), "subject": subject, "status": status,
+                                                    "activeForm": "building", "description": "d"}))
+    (plan / "10.json").write_text(json.dumps({"id": "10", "subject": "later", "status": "pending"}))
+    (plan / ".lock").write_text("")
+    store.touch_session("s1", "/x", "r")
+    store.create_task("make the importer faster", status="done", source="hook", session_id="s1", repo="r")
+    sent = store.enqueue("rewrite the importer", repo="r", cwd="/x", session_id="s1")
+    store.set_parallel(sent["id"], False, "touches the importer")
+
+    got = api.claude_tasks("s1")
+    assert got["state"] == "read" and [t["id"] for t in got["tasks"]] == ["1", "2", "3", "10"]
+    listed = api.session_list(store, {"r"})
+    assert listed[0]["plan"] == {"done": 1, "total": 4}
+    detail = api.session_detail(store, "s1")
+    assert [t["title"] for t in detail["tasks"]] == ["rewrite the importer"]
+    assert detail["tasks"][0]["parallel_reason"] == "touches the importer"
+    assert [t["title"] for t in detail["turns"]] == ["make the importer faster"]
+    assert api.session_detail(store, "nobody") is None
+
+    # Older Claude Code: one todo file per session.
+    todos = config / "todos"
+    todos.mkdir()
+    (todos / "s2-agent-s2.json").write_text(json.dumps([{"content": "a", "status": "completed"},
+                                                        {"content": "b", "status": "pending"}]))
+    assert [t["subject"] for t in api.claude_tasks("s2")["tasks"]] == ["a", "b"]
+    assert api.claude_tasks("none") == {"state": "absent", "tasks": []}
+    assert api.claude_tasks("../etc") == {"state": "absent", "tasks": []}  # never a path out of the folder
+    (plan / "4.json").write_text("{broken")
+    assert api.claude_tasks("s1")["state"] == "unreadable"
+    assert api.session_list(store, {"r"})[0]["plan"] is None
+
+
+def test_a_lane_says_whether_its_dispatcher_runs(store: Store):
+    from cauce import dispatch
+
+    store.enqueue("x", repo="r", cwd="/x")
+    assert api.board(store, {"r"})["queued"][0]["dispatching"] is False
+    with dispatch.hold(store.path.parent, "r"):
+        assert api.board(store, {"r"})["queued"][0]["dispatching"] is True
+
+
 # --- the server and its envelope --------------------------------------------------------
 
 @pytest.fixture
@@ -149,12 +197,19 @@ def test_pages_and_reads(ui):
     assert res.getheader("X-Content-Type-Options") == "nosniff"
     res, data = call(ui, "GET", "/static/board.js")
     assert res.status == 200 and res.getheader("Content-Type").startswith("text/javascript")
-    for path in ("/api/board", "/api/spend?days=3", "/api/routing", "/api/memory?q=x", "/api/habits",
-                 "/api/events?after=0"):
+    for path in ("/api/board?repo=r", "/api/sessions?repo=r", "/api/projects", "/api/spend?days=3",
+                 "/api/routing", "/api/memory?q=x", "/api/habits", "/api/events?after=0", "/static/sessions.js"):
         res, data = call(ui, "GET", path)
         assert res.status == 200, path
-        json.loads(data)
+        if path.startswith("/api/"):
+            json.loads(data)
+    # One project at a time: there is no board of every repository.
+    for path in ("/api/board", "/api/sessions"):
+        res, data = call(ui, "GET", path)
+        assert res.status == 400 and b"pick a project" in data
     assert call(ui, "GET", "/api/tasks/99")[0].status == 404
+    assert call(ui, "GET", "/api/sessions/nope")[0].status == 404
+    assert call(ui, "GET", "/api/sessions/../../etc")[0].status == 404
     assert call(ui, "GET", "/api/nope")[0].status == 404
     assert call(ui, "HEAD", "/")[0].status == 200
 
@@ -166,41 +221,41 @@ def test_static_files_are_a_closed_list(ui, path):
 
 def test_a_foreign_host_is_refused(ui):
     # A DNS-rebinding page reaches 127.0.0.1 under its own name.
-    assert call(ui, "GET", "/api/board", host="evil.example:80")[0].status == 421
+    assert call(ui, "GET", "/api/board?repo=r", host="evil.example:80")[0].status == 421
     assert call(ui, "GET", "/", host="localhost:1")[0].status == 421
     port = ui.server_address[1]
-    assert call(ui, "GET", "/api/board", host=f"localhost:{port}")[0].status == 200
+    assert call(ui, "GET", "/api/board?repo=r", host=f"localhost:{port}")[0].status == 200
 
 
-def test_the_token_is_only_for_the_page_and_every_write_needs_it(ui, git_repo):
+def test_the_token_is_only_for_the_page_and_every_write_needs_it(ui):
     assert call(ui, "GET", "/api/token")[0].status == 403
     assert call(ui, "GET", "/api/token", headers={"Sec-Fetch-Site": "cross-site"})[0].status == 403
     key = token(ui)
     assert len(key) == 64
-    assert call(ui, "OPTIONS", "/api/queue")[0].status == 403
-    body = {"text": "write docs", "repo_dir": str(git_repo)}
-    assert call(ui, "POST", "/api/queue", body)[0].status == 403
-    assert call(ui, "POST", "/api/queue", body, headers={"X-Cauce-Token": "wrong"})[0].status == 403
-    res, data = call(ui, "POST", "/api/queue", body, headers={"X-Cauce-Token": key})
-    assert res.status == 201 and json.loads(data)["title"] == "write docs"
-    form = call(ui, "POST", "/api/queue", b"text=x", headers={"X-Cauce-Token": key,
-                                                               "Content-Type": "application/x-www-form-urlencoded"})
+    assert call(ui, "OPTIONS", "/api/lanes/unpause")[0].status == 403
+    body = {"repo": "r"}
+    assert call(ui, "POST", "/api/lanes/unpause", body)[0].status == 403
+    assert call(ui, "POST", "/api/lanes/unpause", body, headers={"X-Cauce-Token": "wrong"})[0].status == 403
+    assert call(ui, "POST", "/api/lanes/unpause", body, headers={"X-Cauce-Token": key})[0].status == 200
+    form = call(ui, "POST", "/api/lanes/unpause", b"repo=r",
+                headers={"X-Cauce-Token": key, "Content-Type": "application/x-www-form-urlencoded"})
     assert form[0].status == 415
-    assert call(ui, "POST", "/api/queue", b"{bad", headers={"X-Cauce-Token": key})[0].status == 400
-    assert call(ui, "POST", "/api/queue", b"[1]", headers={"X-Cauce-Token": key})[0].status == 400
-    assert call(ui, "POST", "/api/queue", {"text": "x", "repo_dir": "/no/such/dir"},
-                headers={"X-Cauce-Token": key})[0].status == 400
+    assert call(ui, "POST", "/api/lanes/unpause", b"{bad", headers={"X-Cauce-Token": key})[0].status == 400
+    assert call(ui, "POST", "/api/lanes/unpause", b"[1]", headers={"X-Cauce-Token": key})[0].status == 400
     # Refused on the declared length, before a byte of it is read. Sending the
     # whole body would race the refusal: the server closes while the client writes.
     big = {"X-Cauce-Token": key, "Content-Length": str(server.MAX_BODY + 1)}
-    assert call(ui, "POST", "/api/queue", b"{}", headers=big)[0].status == 413
+    assert call(ui, "POST", "/api/lanes/unpause", b"{}", headers=big)[0].status == 413
+    # Work is asked for in a session, never typed into the page.
+    assert call(ui, "POST", "/api/queue", {"text": "x", "repo_dir": "/tmp"},
+                headers={"X-Cauce-Token": key})[0].status == 404
 
     # deleting the token file revokes every open tab
     server.token_path(ui.root).unlink()
-    assert call(ui, "POST", "/api/queue", body, headers={"X-Cauce-Token": key})[0].status == 403
+    assert call(ui, "POST", "/api/lanes/unpause", body, headers={"X-Cauce-Token": key})[0].status == 403
 
 
-def test_cancel_unpause_and_work(ui, git_repo, monkeypatch):
+def test_cancel_unpause_and_start(ui, git_repo, monkeypatch):
     key = {"X-Cauce-Token": token(ui)}
     store = Store(ui.root / "cauce.db")
     queued = store.enqueue("x", repo="r", cwd=str(git_repo))
@@ -210,13 +265,17 @@ def test_cancel_unpause_and_work(ui, git_repo, monkeypatch):
     assert call(ui, "POST", f"/api/tasks/{running['id']}/cancel", {}, headers=key)[0].status == 200
     assert call(ui, "POST", "/api/tasks/999/cancel", {}, headers=key)[0].status == 404
     assert store.get_task(queued["id"])["status"] == "cancelled" and store.cancel_requested(running["id"])
-    assert call(ui, "POST", "/api/lanes/unpause", {"repo": "r"}, headers=key)[0].status == 200
-    assert not store.lanes()[0]["paused"]
     started = []
-    monkeypatch.setattr(server.subprocess, "Popen", lambda argv, **kw: started.append(argv))
-    assert call(ui, "POST", "/api/work", {"repo_dir": str(git_repo)}, headers=key)[0].status == 202
-    assert call(ui, "POST", "/api/work", {}, headers=key)[0].status == 202
-    assert started[0][-3:] == ["work", "--repo", str(git_repo)] and started[1][-2:] == ["work", "--all"]
+    monkeypatch.setattr(server.dispatch, "start", lambda where, root, scope: started.append((where, scope)) or True)
+    store.enqueue("z", repo="r", cwd=str(git_repo))
+    res, data = call(ui, "POST", "/api/lanes/unpause", {"repo": "r"}, headers=key)
+    assert res.status == 200 and json.loads(data)["started"] is False and not started  # autowork is off here
+    assert not store.lanes()[0]["paused"]
+    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    assert json.loads(call(ui, "POST", "/api/lanes/unpause", {"repo": "r"}, headers=key)[1])["started"] is True
+    assert call(ui, "POST", "/api/work", {"repo": "r"}, headers=key)[0].status == 202
+    assert started == [(git_repo, "r"), (git_repo, "r")]
+    assert call(ui, "POST", "/api/work", {"repo": "empty"}, headers=key)[0].status == 409
     assert call(ui, "POST", "/api/nope", {}, headers=key)[0].status == 404
     store.close()
 
@@ -240,11 +299,11 @@ def test_the_stream_sends_events_and_is_bounded(ui, monkeypatch):
 
 
 def test_a_crash_is_a_bare_500_and_a_logged_trace(ui, monkeypatch):
-    def boom(store):
+    def boom(store, repos):
         raise RuntimeError("secret detail")
 
     monkeypatch.setattr(api, "board", boom)
-    res, data = call(ui, "GET", "/api/board")
+    res, data = call(ui, "GET", "/api/board?repo=r")
     assert res.status == 500 and b"secret detail" not in data
     assert "secret detail" in (ui.root / "ui-errors.log").read_text()
 

@@ -243,6 +243,7 @@ def run(
     classifier: Callable[[str], Classification] | None = None,
     adapters: Sequence[Adapter] | None = None,
     task_id: int | None = None,
+    session_id: str | None = None,
 ) -> Report:
     options = options or Options()
     registry = registry if registry is not None else caps.load(home() / "capabilities.json")
@@ -264,7 +265,8 @@ def run(
         store.update_task(task_id, status="running", source="cauce", cost_usd=c.cost_usd, **fields)
         task = store.get_task(task_id)
     else:
-        task = store.create_task(text, status="running", source="cauce", cost_usd=c.cost_usd, **fields)
+        task = store.create_task(text, status="running", source="cauce", cost_usd=c.cost_usd,
+                                 session_id=session_id, **fields)
     report = Report(task["id"], "running", the_plan, cost_usd=c.cost_usd)
     store.update_task(task["id"], pid=os.getpid())
     store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from cauce import flow
+from cauce import dispatch, flow
 from cauce.escalate import Failure
 from cauce.launch import WorkerResult
 from cauce.orchestrate import Options, run
@@ -52,16 +52,86 @@ def test_the_unattended_limit_and_a_vanished_directory(git_repo, store: Store, t
     assert any(lane["repo"] == "elsewhere" and lane["paused"] for lane in store.lanes())
 
 
+def _never(task, ahead):
+    raise AssertionError("nothing should be decided here")
+
+
 def test_a_busy_lane_waits_and_a_claim_happens_once(store: Store):
     a = store.enqueue("a", repo="r", cwd="/x")
     b = store.enqueue("b", repo="r", cwd="/x")
     other = store.enqueue("c", repo="other", cwd="/x")
-    assert store.next_queued()["id"] == a["id"]
+    ids = lambda **kw: [t["id"] for t in flow.runnable(store, parallel=False, decide=_never, **kw)]  # noqa: E731
+    assert ids(repo=None) == [other["id"], a["id"]]
     assert store.claim(a["id"]) and not store.claim(a["id"])
-    assert store.next_queued("r") is None  # serial: a is running from the dispatcher
-    assert store.next_queued()["id"] == other["id"]
+    assert ids(repo="r") == []  # serial: a is running from the dispatcher
+    assert ids(repo=None) == [other["id"]]
     store.update_task(a["id"], status="done")
-    assert store.next_queued("r")["id"] == b["id"]
+    assert ids(repo="r") == [b["id"]]
+
+
+def test_haiku_lets_independent_work_start_beside_running_work(store: Store):
+    running = store.enqueue("rewrite the importer", repo="r", cwd="/x")
+    store.claim(running["id"])
+    same = store.enqueue("add a flag to the importer", repo="r", cwd="/x")
+    docs = store.enqueue("fix a typo in the README", repo="r", cwd="/x")
+    asked = []
+
+    def decide(task, ahead):
+        asked.append((task["id"], [t["id"] for t in ahead]))
+        if task["id"] == same["id"]:
+            return dispatch.Decision(False, "touches the importer #1 rewrites", 0.002)
+        return dispatch.Decision(True, "only the README", 0.001)
+
+    assert [t["id"] for t in flow.runnable(store, "r", parallel=True, decide=decide)] == [docs["id"]]
+    # Each one was judged against everything running and queued ahead of it.
+    assert asked == [(same["id"], [running["id"]]), (docs["id"], [running["id"], same["id"]])]
+    waiting = store.get_task(same["id"])
+    assert waiting["parallel"] == 0 and "importer" in waiting["parallel_reason"] and waiting["cost_usd"] == 0.002
+    # Judged once: the next look asks nothing.
+    store.claim(docs["id"])
+    assert flow.runnable(store, "r", parallel=True, decide=_never) == []
+    # Once the lane is idle, the task that waited is first and starts.
+    for t in (running, docs):
+        store.update_task(t["id"], status="done")
+    assert [t["id"] for t in flow.runnable(store, "r", parallel=True, decide=_never)] == [same["id"]]
+
+
+def test_never_more_than_the_parallel_cap(store: Store, monkeypatch):
+    monkeypatch.setattr(flow, "MAX_PARALLEL", 2)
+    for i in range(4):
+        store.enqueue(f"read file {i}", repo="r", cwd="/x")
+    yes = lambda task, ahead: dispatch.Decision(True, "read only")  # noqa: E731
+    assert len(flow.runnable(store, "r", parallel=True, decide=yes)) == 2
+
+
+def test_the_dispatcher_runs_parallel_work_and_waits_for_it(git_repo, store: Store):
+    """Handles that finish on the dispatcher's own clock: two start together,
+    the third waits for a slot, and the report holds all three."""
+    key = str(git_repo.resolve())
+    for text in ("a", "b", "c"):
+        store.enqueue(text, repo=key, cwd=str(git_repo))
+    live, ticks = [], []
+
+    class Slow:
+        def __init__(self, task_id):
+            self.task_id, self.left = task_id, 2
+
+        def poll(self):
+            self.left -= 1
+            if self.left > 0:
+                return None
+            store.update_task(self.task_id, status="done")
+            return "done"
+
+    def start(task, where):
+        live.append(task["id"])
+        return Slow(task["id"])
+
+    report = flow.work(store, parallel=True, start=start, pause=lambda: ticks.append(1),
+                       decide=lambda task, ahead: dispatch.Decision(True, "independent"))
+    assert sorted(r.task_id for r in report.ran) == sorted(live) and len(live) == 3
+    assert {r.status for r in report.ran} == {"done"} and "nothing runnable" in report.stopped_because
+    assert ticks  # it waited on work in flight instead of returning early
 
 
 def test_queued_options_reach_the_run():

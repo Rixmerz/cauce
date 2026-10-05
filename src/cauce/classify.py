@@ -156,14 +156,17 @@ SCHEMA = {
 }
 
 
-def by_model(
+def ask_haiku(
+    system_prompt: str,
+    schema: Mapping[str, object],
     text: str,
     *,
     runner: Runner = subprocess.run,
     claude_bin: str = "claude",
     cwd: str | Path | None = None,
-) -> Classification:
-    """Haiku's reading of the request. Never raises: a failure is the default kind."""
+) -> tuple[dict | None, float, str]:
+    """One question to Haiku with a JSON schema and no tools: (answer, cost, why there is none).
+    Never raises; a failure is (None, cost so far, the reason)."""
     argv = [
         claude_bin, "-p",
         "--model", "haiku",
@@ -171,8 +174,8 @@ def by_model(
         "--strict-mcp-config",
         "--no-session-persistence",
         "--output-format", "json",
-        "--system-prompt", SYSTEM_PROMPT,
-        "--json-schema", json.dumps(SCHEMA),
+        "--system-prompt", system_prompt,
+        "--json-schema", json.dumps(schema),
     ]
     try:
         if cwd:
@@ -190,19 +193,27 @@ def by_model(
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return Classification(DEFAULT_KIND, reason=f"the classifier did not run: {exc}")
+        return None, 0.0, f"the model did not run: {exc}"
     try:
         reply = json.loads(proc.stdout or "")
     except ValueError:
         detail = (proc.stderr or proc.stdout or "").strip()[:200]
-        return Classification(DEFAULT_KIND, reason=f"the classifier returned no JSON: {detail}")
+        return None, 0.0, f"the model returned no JSON: {detail}"
     if not isinstance(reply, dict):
-        return Classification(DEFAULT_KIND, reason="the classifier returned no JSON object")
+        return None, 0.0, "the model returned no JSON object"
     cost = reply.get("total_cost_usd")
     cost = float(cost) if isinstance(cost, (int, float)) else 0.0
     out = reply.get("structured_output")
     if reply.get("is_error") or not isinstance(out, dict):
-        return Classification(DEFAULT_KIND, reason="the classifier gave no decision", cost_usd=cost)
+        return None, cost, "the model gave no decision"
+    return out, cost, ""
+
+
+def by_model(text: str, **haiku_kwargs) -> Classification:
+    """Haiku's reading of the request. Never raises: a failure is the default kind."""
+    out, cost, failure = ask_haiku(SYSTEM_PROMPT, SCHEMA, text, **haiku_kwargs)
+    if out is None:
+        return Classification(DEFAULT_KIND, reason=failure.replace("the model", "the classifier"), cost_usd=cost)
     kind, complexity = out.get("kind"), out.get("complexity")
     confidence = out.get("confidence")
     if kind not in _KIND_HELP or complexity not in COMPLEXITIES:

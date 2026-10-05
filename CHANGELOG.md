@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-05
+
+### Changed — who decides what waits
+
+- **Haiku decides whether a queued task runs in parallel or waits its turn**
+  (`parallel`, on by default). The first task of an idle repository starts;
+  one queued behind running work starts beside it only when Haiku, reading it
+  against everything running and queued ahead, finds it independent. The
+  decision is made once, kept on the task with its reason, and fails closed:
+  no answer means waiting. Up to three tasks run at once per repository.
+  `parallel off` keeps one serial lane per repository.
+- **The dispatcher runs each task as its own process** (`cauce run-queued`),
+  so a task's pid, its cancel and the sweep are its own, and it watches several
+  at once. One dispatcher per repository, held by a lock file; a second
+  `cauce work` for the same repository says so and exits.
+- **`++` starts the dispatcher** (`autowork`, on by default): queued work runs
+  without anyone typing `cauce work`. Unpausing a lane in the UI resumes it.
+- **Work typed in a session is that session's.** SessionStart exports
+  `CAUCE_SESSION_ID` to the session's commands, so `cauce run` and `cauce queue
+  add` record it; workers and the dispatcher never inherit it.
+- Both new settings are plugin options, like `livespec`.
+
+### Changed — the UI
+
+- **One project at a time, always.** A project picker at the top; the board and
+  the sessions are that project's, and `/api/board` and `/api/sessions` refuse
+  a request without one. The board narrows further to one session.
+- **Sessions** screen: every session cauce saw in the project with its resume
+  command; opening one shows its own task list as Claude Code keeps it (read
+  from `<config>/tasks/<session>/`, or the older `todos/` file — never
+  written; absent and unreadable told apart), the work it gave cauce, and its
+  recent turns.
+- **No task is typed into the page.** The queue form and `POST /api/queue` are
+  gone: work is asked for in a session, where it has the session's context and
+  record. Queued cards show Haiku's call and its reason.
+
 ## [0.1.2] - 2026-10-05
 
 ### Fixed

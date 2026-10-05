@@ -36,7 +36,10 @@ Request: $ARGUMENTS
    bounds the task; `--kind` skips classification when you already know it.
 
    For work that can wait, queue it instead — `cauce queue add "<task>"` — and
-   start `cauce work` (in the background) to drain the repository's lane.
+   start `cauce work` (in the background); if a dispatcher already runs for the
+   repository, it says so and the running one picks the task up. Whether a
+   queued task runs beside the others or waits its turn is decided there, not
+   here.
 
 4. **Read the report and act on its status:**
    - `done` with a branch — show the user the summary and `git diff HEAD...<branch>`;

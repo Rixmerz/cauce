@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -19,6 +19,18 @@
       "type": "boolean",
       "title": "livespec code index",
       "description": "Use livespec throughout the flow: index the repository, route on what the index shows, brief every worker with a code map, give workers livespec's tools, and report what a change touched. On by default; runs the pinned release through uvx when livespec is not installed.",
+      "default": true
+    },
+    "parallel": {
+      "type": "boolean",
+      "title": "Haiku decides what runs in parallel",
+      "description": "A task queued behind running work starts beside it when Haiku finds it independent of everything running and queued ahead; otherwise it waits its turn. Off: one task at a time per repository.",
+      "default": true
+    },
+    "autowork": {
+      "type": "boolean",
+      "title": "Start queued work at once",
+      "description": "A task queued with ++ starts the repository's dispatcher right away, so it runs in a worker without anyone typing cauce work. Off: queued work waits for cauce work.",
       "default": true
     }
   }

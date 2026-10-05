@@ -16,12 +16,13 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/launch.py` | one attempt as `claude -p`: argv, the result contract, parsing, git-read changes |
 | `src/cauce/capabilities.py` | which MCP servers a worker gets, from the user-level registry |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first |
-| `src/cauce/config.py` | cauce's settings (`livespec` on/off), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, all on/off), copied from plugin options by SessionStart |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
 | `src/cauce/habits.py` | mining sequences, recipes for the brief, and approval-gated habit hooks |
 | `src/cauce/usage.py` | tokens per model from session transcripts, and spend by model and cell |
-| `src/cauce/flow.py` | the queue's dispatcher (`cauce work`), serial lanes per repository, the stale sweep |
+| `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, the stale sweep |
+| `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes |
 | `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
@@ -85,6 +86,12 @@ cannot run yields the default kind, not a guess.
   before adding it, and bump `PINNED` only after checking the new release.
 - Tests run with `CAUCE_LIVESPEC=off` and an empty `CLAUDE_CONFIG_DIR`; a
   test that wants livespec builds the fixture index in `tests/livespec_fixture.py`.
+- A dispatch decision fails closed: no answer from Haiku means the task
+  waits. It is made once and kept on the task with its reason. Tests run with
+  `CAUCE_PARALLEL=off` and `CAUCE_AUTOWORK=off`; a test that wants them passes
+  a fake `decide` or `start`.
+- The UI shows one project at a time and takes no task: work is asked for in
+  a session. Claude Code's own task files are read, never written.
 - A lane pauses only on a task the dispatcher started; a person's own
   `cauce run` never blocks the queue. A GET in the UI never starts work or
   sweeps — housekeeping runs in hooks, the dispatcher and the server thread.

@@ -21,6 +21,12 @@ from cauce.store import home
 DEFAULTS: dict[str, Any] = {
     # livespec is part of the base: on unless someone turns it off.
     "livespec": True,
+    # Haiku decides whether a queued task can start beside the ones running in
+    # its repository. Off: one task at a time per repository.
+    "parallel": True,
+    # A task queued with `++` starts a dispatcher for its repository at once.
+    # Off: queued work waits for `cauce work`.
+    "autowork": True,
 }
 
 _TRUE = {"1", "true", "on", "yes"}

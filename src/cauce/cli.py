@@ -45,7 +45,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     store = Store.open()
     previous = _cancel_on_sigterm()
     try:
-        report = orchestrate.run(_text(args.text), Path(args.repo or os.getcwd()), store, options)
+        report = orchestrate.run(_text(args.text), Path(args.repo or os.getcwd()), store, options,
+                                 session_id=os.environ.get("CAUCE_SESSION_ID"))
     finally:
         signal.signal(signal.SIGTERM, previous)
         store.close()
@@ -334,7 +335,8 @@ def cmd_queue(args: argparse.Namespace) -> int:
             where = Path(args.repo or os.getcwd()).resolve()
             options = {k: v for k, v in {"budget_usd": args.budget, "verify": args.verify, "kind": args.kind,
                                          "start": args.start}.items() if v is not None}
-            task = store.enqueue(_text(args.text), repo=repo.key(where), cwd=str(where), options=options)
+            task = store.enqueue(_text(args.text), repo=repo.key(where), cwd=str(where), options=options,
+                                 session_id=os.environ.get("CAUCE_SESSION_ID"))
             if args.json:
                 print(json.dumps({k: task[k] for k in ("id", "title", "status", "repo", "cwd")}, ensure_ascii=False))
             else:
@@ -372,17 +374,39 @@ def cmd_lanes(args: argparse.Namespace) -> int:
 
 
 def cmd_work(args: argparse.Namespace) -> int:
+    from cauce import dispatch
+
+    key = None if args.all else repo.key(Path(args.repo or os.getcwd()).resolve())
+    with dispatch.hold(home(), key or "*") as mine:
+        if not mine:
+            print(f"a dispatcher already runs {key or 'every repository'}; it picks this up")
+            return 0
+        store = Store.open()
+        try:
+            report = flow.work(store, repo=key, max_tasks=args.max,
+                               defaults=orchestrate.Options(use_model_classifier=not args.no_model))
+        finally:
+            store.close()
+    print(report.text())
+    return 0 if all(r.status == "done" for r in report.ran) else 1
+
+
+def cmd_run_queued(args: argparse.Namespace) -> int:
+    """One task the dispatcher claimed, in its own process."""
     store = Store.open()
     previous = _cancel_on_sigterm()
     try:
-        key = None if args.all else repo.key(Path(args.repo or os.getcwd()).resolve())
-        report = flow.work(store, repo=key, max_tasks=args.max,
-                           defaults=orchestrate.Options(use_model_classifier=not args.no_model))
+        task = store.get_task(args.id)
+        if task is None or task["status"] != "running" or not task["dispatched"]:
+            print(f"#{args.id} is not a task the dispatcher claimed", file=sys.stderr)
+            return 1
+        options = flow.queued_options(task, orchestrate.Options(use_model_classifier=not args.no_model))
+        report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=task["id"])
     finally:
         signal.signal(signal.SIGTERM, previous)
         store.close()
     print(report.text())
-    return 0 if all(r.status == "done" for r in report.ran) else 1
+    return 0 if report.status == "done" else 1
 
 
 def _candidates(store: Store, days: int) -> list[habits.Candidate]:
@@ -590,6 +614,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max", type=int, default=flow.DEFAULT_MAX_TASKS, help="stop after this many tasks")
     p.add_argument("--no-model", action="store_true")
     p.set_defaults(func=cmd_work)
+
+    p = sub.add_parser("run-queued", help=argparse.SUPPRESS)
+    p.add_argument("id", type=int)
+    p.add_argument("--no-model", action="store_true")
+    p.set_defaults(func=cmd_run_queued)
 
     p = sub.add_parser("cancel", help="stop a running or queued task")
     p.add_argument("id", type=int)

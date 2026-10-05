@@ -27,7 +27,6 @@ import os
 import re
 import secrets
 import signal
-import subprocess
 import threading
 import time
 import traceback
@@ -38,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from cauce import flow, repo
+from cauce import config, dispatch, flow
 from cauce.store import Store, home
 from cauce.ui import api
 
@@ -53,6 +52,7 @@ CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' 
 _STATIC_NAME = re.compile(r"^[a-z0-9_-]+\.(js|css|html|svg)$")
 _TASK_ROUTE = re.compile(r"^/api/tasks/(\d+)$")
 _CANCEL_ROUTE = re.compile(r"^/api/tasks/(\d+)/cancel$")
+_SESSION_ROUTE = re.compile(r"^/api/sessions/([A-Za-z0-9_-]{1,128})$")
 
 
 def token_path(root: Path) -> Path:
@@ -217,8 +217,23 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get("Sec-Fetch-Site") != "same-origin":
                 return self._error(HTTPStatus.FORBIDDEN, "same-origin only")
             return self._json(HTTPStatus.OK, {"token": ensure_token(self.server.root)})
+        if path == "/api/projects":
+            return self._json(HTTPStatus.OK, api.projects(store))
         if path == "/api/board":
-            return self._json(HTTPStatus.OK, api.board(store))
+            # One project at a time, always: every repository's cards at once is
+            # a wall nobody reads.
+            repo_key = (query.get("repo") or [""])[0]
+            if not repo_key:
+                return self._error(HTTPStatus.BAD_REQUEST, "pick a project: /api/board?repo=<key>")
+            return self._json(HTTPStatus.OK, api.board(store, {repo_key}))
+        if path == "/api/sessions":
+            repo_key = (query.get("repo") or [""])[0]
+            if not repo_key:
+                return self._error(HTTPStatus.BAD_REQUEST, "pick a project: /api/sessions?repo=<key>")
+            return self._json(HTTPStatus.OK, api.session_list(store, {repo_key}))
+        if match := _SESSION_ROUTE.match(path):
+            detail = api.session_detail(store, match.group(1))
+            return self._json(HTTPStatus.OK, detail) if detail else self._error(HTTPStatus.NOT_FOUND, "no such session")
         if match := _TASK_ROUTE.match(path):
             detail = api.task_detail(store, int(match.group(1)))
             return self._json(HTTPStatus.OK, detail) if detail else self._error(HTTPStatus.NOT_FOUND, "no such task")
@@ -277,14 +292,6 @@ class Handler(BaseHTTPRequestHandler):
             return None
         store = self.server.store()
         path = urlparse(self.path).path
-        if path == "/api/queue":
-            where = Path(str(data.get("repo_dir") or "")).expanduser()
-            text = str(data.get("text") or "").strip()
-            if not text or not where.is_dir():
-                return self._error(HTTPStatus.BAD_REQUEST, "a task text and an existing repository directory")
-            options = {k: data[k] for k in ("verify", "kind", "budget_usd", "start") if data.get(k)}
-            task = store.enqueue(text, repo=repo.key(where.resolve()), cwd=str(where.resolve()), options=options)
-            return self._json(HTTPStatus.CREATED, {"id": task["id"], "title": task["title"]})
         if match := _CANCEL_ROUTE.match(path):
             task = store.get_task(int(match.group(1)))
             if task is None:
@@ -298,17 +305,25 @@ class Handler(BaseHTTPRequestHandler):
                         os.kill(int(task["pid"]), signal.SIGTERM)
             return self._json(HTTPStatus.OK, {"id": task["id"], "cancel": True})
         if path == "/api/lanes/unpause":
-            store.unpause_lane(str(data.get("repo") or ""))
-            return self._json(HTTPStatus.OK, {"unpaused": data.get("repo")})
+            repo_key = str(data.get("repo") or "")
+            store.unpause_lane(repo_key)
+            # Unpausing is the person saying "go on": the lane's dispatcher resumes.
+            started = config.enabled("autowork", os.environ) and self._start_lane(store, repo_key)
+            return self._json(HTTPStatus.OK, {"unpaused": repo_key, "started": bool(started)})
         if path == "/api/work":
             # Intent only: a detached `cauce work` does the work, not this thread.
-            argv = [str(Path(__file__).resolve().parents[3] / "bin" / "cauce"), "work"]
-            argv += ["--repo", str(data["repo_dir"])] if data.get("repo_dir") else ["--all"]
-            log = (self.server.root / "work.log").open("a", encoding="utf-8")
-            subprocess.Popen(argv, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True,
-                             env={**os.environ, "CAUCE_HOME": str(self.server.root)})
+            if not self._start_lane(store, str(data.get("repo") or "")):
+                return self._error(HTTPStatus.CONFLICT, "nothing to start: no directory for that lane, or it runs")
             return self._json(HTTPStatus.ACCEPTED, {"started": True})
         return self._error(HTTPStatus.NOT_FOUND, "not found")
+
+
+    def _start_lane(self, store: Store, repo_key: str) -> bool:
+        queued = store.queued_in(repo_key or None)
+        where = Path(queued[0]["cwd"]) if queued and queued[0]["cwd"] else None
+        if where is None or not where.is_dir():
+            return False
+        return dispatch.start(where, self.server.root, repo_key or "*")
 
 
 def _int(query: dict[str, list[str]], key: str, default: int, low: int, high: int) -> int:

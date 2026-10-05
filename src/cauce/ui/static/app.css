@@ -46,7 +46,6 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: v
 .lane { margin-bottom: 10px; } .lane-head { display: flex; justify-content: space-between; gap: 8px; font-size: 12px;
          color: var(--muted); margin-bottom: 4px; overflow-wrap: anywhere; }
 .paused { color: var(--warn); }
-.queue-form { display: grid; grid-template-columns: 1fr 220px 180px 120px auto; gap: 8px; margin-bottom: var(--gap); }
 @media (max-width: 900px) { .queue-form { grid-template-columns: 1fr; } }
 .empty { color: var(--muted); font-size: 13px; padding: 6px 2px; }
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(720px, 100vw); background: var(--panel);
@@ -85,3 +84,22 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg);
          padding: 8px 14px; border-radius: 8px; z-index: 4; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.project { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.project select { max-width: 260px; }
+.toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: var(--gap); }
+.toolbar select { max-width: 420px; }
+.hint { color: var(--muted); font-size: 12px; }
+.live-note { color: var(--ok); }
+.chip.ok { color: var(--ok); } .chip.wait { color: var(--warn); }
+.reason { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.sessions { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: var(--gap); }
+.resume { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.resume code, .drawer code { font-family: var(--mono); font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.plan { list-style: none; margin: 0; padding: 0; }
+.plan li { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.plan .mark-box { font-size: 16px; line-height: 1.2; }
+.plan-completed .subject { color: var(--muted); text-decoration: line-through; }
+.plan-in_progress .mark-box { color: var(--accent); }
+.turn { padding: 8px 0; border-bottom: 1px solid var(--line); }
+@media (max-width: 700px) { .project select { max-width: 150px; } .sessions { grid-template-columns: 1fr; } }
+.turn .meta { display: flex; gap: 8px; font-size: 12px; } .turn .subject { margin: 2px 0 4px; }
