@@ -151,9 +151,12 @@ way of every call.
 Requires Python 3.11+ and Claude Code. The core is standard library only.
 
 ```sh
-claude plugin marketplace add /path/to/cauce
-claude plugin install cauce@cauce-dev
+claude plugin marketplace add Rixmerz/claude-plugins
+claude plugin install cauce@rixmerz
 ```
+
+To work on a clone, `claude plugin marketplace add /path/to/cauce` and
+`claude plugin install cauce@cauce-dev` install it from the checkout instead.
 
 The plugin ships `bin/cauce`, which Claude Code puts on the Bash tool's `PATH`.
 (claude.ai and Cowork do not install plugins with a `bin/` directory; use
