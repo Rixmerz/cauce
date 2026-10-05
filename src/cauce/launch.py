@@ -14,9 +14,12 @@ give:
 - **It runs where it is told.** It is launched from one directory (whose
   settings and instructions it loads) and works in another (`--add-dir`).
 
-Two things it never takes from the model. Changed files come from git, not the
-worker's report — the party being checked does not supply the evidence. And a
-missing or ambiguous verdict is *inconclusive*, never a pass.
+Three things it never takes from the model. Changed files come from git, not
+the worker's report — the party being checked does not supply the evidence. A
+missing or ambiguous verdict is *inconclusive*, never a pass. And what the
+permission settings refused comes from the CLI's own `permission_denials`: a
+worker that could not run `npm run build` is blocked on a setting, whatever it
+says about the code.
 """
 from __future__ import annotations
 
@@ -31,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from cauce.escalate import Failure
+from cauce.escalate import REPLAN, Failure
 from cauce.matrix import Cell
 
 RESULT_FENCE = "cauce-result"
@@ -68,6 +71,10 @@ When you are done, end your reply with exactly one fenced block:
   (the direction was wrong), `spec_bug` (the task as written cannot be done),
   `architecture_bug` (the design prevents it), `environment` (a tool or service
   was missing or down).
+- `summary` says what the files now show, nothing more. Never describe a change
+  you did not make or could not save; if you changed nothing, say so.
+- If a command you needed was refused, name it in `summary`; the verdict is
+  `inconclusive`. The work you did stays: it is kept for a person to see.
 - Do not list the files you changed; they are read from git.
 """.strip()
 
@@ -84,12 +91,18 @@ class LaunchSpec:
     launch_dir: Path
     #: Where the work happens, when that is not the launch directory.
     workdir: Path | None = None
+    #: Directories outside it the worker may read: the checkout's dependency
+    #: folders a worktree links to, which otherwise resolve outside its reach.
+    extra_dirs: tuple[Path, ...] = ()
     max_turns: int = DEFAULT_MAX_TURNS
     max_budget_usd: float | None = None
     timeout_s: int = DEFAULT_TIMEOUT_S
     #: None leaves the built-in tool set alone; a tuple names the only ones.
     tools: tuple[str, ...] | None = None
     disallowed_tools: tuple[str, ...] = ()
+    #: Permission rules a person granted for this task, e.g. `Bash(npm run build)`:
+    #: without them a one-shot worker is refused anything its settings do not allow.
+    allowed_tools: tuple[str, ...] = ()
     #: The MCP servers this worker gets, as an `mcpServers` mapping. Always
     #: strict: a worker sees only what its task was given.
     mcp_servers: Mapping[str, Any] = field(default_factory=dict)
@@ -118,6 +131,10 @@ class WorkerResult:
     turns: int = 0
     duration_s: float = 0.0
     raw: str = ""
+    #: What the worker's own block said: pass, fail, inconclusive, or "" for none.
+    verdict: str = ""
+    #: The tool calls the permission settings refused, from the CLI, not the worker.
+    denied: tuple[str, ...] = ()
 
 
 def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path: Path | None = None) -> list[str]:
@@ -137,8 +154,12 @@ def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path:
         argv += ["--tools", ",".join(spec.tools)]
     if spec.disallowed_tools:
         argv += ["--disallowedTools", ",".join(spec.disallowed_tools)]
+    if spec.allowed_tools:
+        argv += ["--allowedTools", *spec.allowed_tools]
     if spec.workdir is not None and spec.workdir != spec.launch_dir:
         argv += ["--add-dir", str(spec.workdir)]
+    for extra in spec.extra_dirs:
+        argv += ["--add-dir", str(extra)]
     if mcp_config_path is not None:
         argv += ["--mcp-config", str(mcp_config_path)]
     if spec.append_system_prompt:
@@ -206,7 +227,8 @@ def parse(
 ) -> WorkerResult:
     envelope = _json(proc.stdout)
     usage = _usage(envelope)
-    common = dict(changed_paths=changed, duration_s=duration_s, **usage)
+    denied = denials(envelope)
+    common = dict(changed_paths=changed, duration_s=duration_s, denied=denied, **usage)
     if envelope is None:
         detail = (proc.stderr or "").strip()[:300]
         return WorkerResult(False, Failure.ENVIRONMENT,
@@ -224,18 +246,42 @@ def parse(
                             f"the session errored: {subtype or text[:200]}", raw=text, **common)
     block = result_block(text)
     if block is None:
-        return WorkerResult(False, Failure.INCONCLUSIVE,
+        return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
                             "the worker did not answer with exactly one result block", raw=text, **common)
     verdict = str(block.get("verdict") or "").lower()
     summary = str(block.get("summary") or "")[:1000]
     evidence = str(block.get("evidence") or "")[:4000]
     if verdict == "pass":
         if not evidence.strip():
-            return WorkerResult(False, Failure.INCONCLUSIVE,
-                                "claimed a pass with no evidence: " + summary, raw=text, **common)
-        return WorkerResult(True, None, summary, evidence, raw=text, **common)
-    failure = _failure(block.get("failure"), verdict)
-    return WorkerResult(False, failure, summary, evidence, raw=text, **common)
+            return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
+                                "claimed a pass with no evidence: " + summary, raw=text, verdict=verdict, **common)
+        return WorkerResult(True, None, summary, evidence, raw=text, verdict=verdict, **common)
+    failure = _refused(_failure(block.get("failure"), verdict), denied)
+    return WorkerResult(False, failure, summary, evidence, raw=text, verdict=verdict, **common)
+
+
+def _refused(failure: Failure, denied: Sequence[str]) -> Failure:
+    """A refusal decides where an unfinished attempt stands, unless the worker found
+    the task itself wrong: no model gets past a setting, and a stronger one sent
+    into the same refusal only costs more."""
+    return Failure.PERMISSION if denied and failure not in REPLAN else failure
+
+
+def denials(envelope: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """What the permission settings refused, as the rules a person would allow:
+    `Bash(npm run build)`, `Write(src/app.ts)`, or the bare tool name."""
+    found: list[str] = []
+    for entry in (envelope or {}).get("permission_denials") or ():
+        if not isinstance(entry, dict) or not entry.get("tool_name"):
+            continue
+        name = str(entry["tool_name"])
+        given = entry.get("tool_input") if isinstance(entry.get("tool_input"), dict) else {}
+        target = given.get("command") or given.get("file_path") or given.get("url") or ""
+        target = " ".join(str(target).split())
+        rule = f"{name}({target[:117] + '...' if len(target) > 120 else target})" if target else name
+        if rule not in found:
+            found.append(rule)
+    return tuple(found)
 
 
 def result_block(text: str) -> dict[str, Any] | None:

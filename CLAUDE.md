@@ -28,7 +28,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/naming.py` | Haiku names a session, started detached by the Stop hook; a name a person wrote is never replaced |
 | `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
-| `src/cauce/isolate.py` | one git worktree per writing task |
+| `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified |
 | `commands/orchestration.md` | the one entry point a user types |
 | `bin/cauce` | the launcher every hook and command goes through |
 | `src/cauce/interpreter.py` | which Python runs cauce; imported before the version check, so it must run on any python3 |
@@ -68,15 +68,23 @@ the next `SessionStart` reports. Failing open is not failing silently.
 
 **Verdicts fail closed.** A worker with no result block, two blocks, or a pass
 without evidence is `inconclusive`, never a pass. Changed files come from git,
-never from the worker. `--verify` overrides a claimed pass. A classifier that
-cannot run yields the default kind, not a guess.
+never from the worker, and every report prints them beside the worker's
+summary. `--verify` overrides a claimed pass; it is the only thing that can
+pass an attempt whose worker was refused its own check. Refusals come from the
+CLI's `permission_denials`, never from the worker. A classifier that cannot run
+yields the default kind, not a guess.
 
 ## Rules the router keeps
 
 - Effort and model are different dials. Shallow work climbs effort; a wrong
   approach or a repeated answer changes model. Do not collapse them into one
   ladder walk.
-- A retry is for work that never ran; it is never an escalation.
+- A retry is for work that never ran; it is never an escalation. A refused
+  command is neither: it blocks at once, because it is a setting.
+- A request that opens with a verb of change is never read as a read-only
+  kind unless a tag or `--kind` says so.
+- Work that stopped for a person (blocked, needs approval) is kept on its
+  branch, unverified; only `failed`, `replan` and `cancelled` drop it.
 - The model's stated confidence about its own work is not an input.
 - History may raise where a task starts, never lower it below its ladder.
 - Fable needs a person: `#fable` or `--allow-approval`.

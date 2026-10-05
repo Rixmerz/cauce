@@ -15,6 +15,9 @@ circles:
   does not clear on its own; it is raised once, then the task is split.
 - **Replan** — the spec or the architecture is wrong. No model fixes a task that
   should not exist; the run stops and says so.
+- **Blocked** — a person has to act: the environment failed twice, or the
+  worker was refused a command (a refusal is a setting, so retrying it, or
+  sending a stronger model into it, gets the same refusal).
 
 Deliberately absent from the inputs: the model's stated confidence. A model's
 opinion of its own output is not evidence about the output.
@@ -37,6 +40,7 @@ class Failure(StrEnum):
     SPEC_BUG = "spec_bug"  # the task as written cannot be done
     ARCHITECTURE_BUG = "architecture_bug"
     ENVIRONMENT = "environment"  # never attempted: timeout, missing tool, transport
+    PERMISSION = "permission"  # a tool call the worker needed was refused by the permission settings
     TURNS_EXHAUSTED = "turns_exhausted"
     BUDGET_EXHAUSTED = "budget_exhausted"  # the attempt's own spending cap
 
@@ -70,6 +74,8 @@ class Attempt:
     passed: bool
     failure: Failure | None = None
     summary: str = ""
+    #: The tool calls the permission settings refused, as `Bash(npm run build)`.
+    denied: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -138,6 +144,11 @@ def decide(
 
     if failure in REPLAN:
         return Decision(Move.REPLAN, reason=f"{failure}: the task, not the work, is wrong")
+
+    if failure is Failure.PERMISSION:
+        more = len(last.denied) - 3
+        refused = (", ".join(last.denied[:3]) + (f" and {more} more" if more > 0 else "")) or "a tool call"
+        return Decision(Move.BLOCKED, reason=f"the worker was refused {refused}; allow it (`--allow`), then resume")
 
     if failure is Failure.ENVIRONMENT:
         retries = sum(1 for a in attempts if a.failure is Failure.ENVIRONMENT)

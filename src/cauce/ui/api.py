@@ -18,7 +18,7 @@ TASK_SOURCES = ("cauce", "queue")  # what the board shows: work cauce runs or ho
 #: States that are waiting on a person, and what each one asks of them.
 NEEDS_YOU = {
     "failed": "every cell on its ladder failed: read the attempts",
-    "blocked": "the environment or the budget stopped it",
+    "blocked": "a refused command, the environment or the budget stopped it: clear it, then `cauce resume`",
     "replan": "the task as written cannot be done: rewrite or split it",
     "needs_approval": "the next cell needs your approval",
     "interrupted": "it stopped with no sign of life",

@@ -328,3 +328,60 @@ def test_ui_command_serves_until_interrupted(monkeypatch, capsys):
     monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
     assert cli.main(["ui", "--open"]) == 0
     assert "http://127.0.0.1:4321/" in capsys.readouterr().out and opened
+
+
+def test_resume_continues_a_stopped_task_with_what_it_was_refused_granted(capsys, git_repo, monkeypatch):
+    calls = []
+
+    def fake_run(text, repo_dir, store, options, **kw):
+        calls.append((text, repo_dir, options, kw))
+        return orchestrate.Report(kw.get("task_id"), "done", None)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(orchestrate.Report, "text", lambda self: f"task #{self.task_id}: {self.status}")
+    store = Store.open()
+    t = store.create_task("create the routes", status="blocked", source="cauce", repo="r", cwd=str(git_repo),
+                          kind="implement", dispatched=1, cancel_requested=1,
+                          options=json.dumps({"verify": "npm test", "allow_tools": ["Bash(npm run build)"]}))
+    store.add_attempt(t["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="permission", summary="refused")
+    approval = store.create_task("plan it", status="needs_approval", source="cauce", repo="r", cwd=str(git_repo),
+                                 kind="plan")
+    store.add_event(approval["id"], "moved", move="needs_approval", next_cell="fable/high")
+    hook = store.create_task("a prompt", status="interrupted", source="hook", repo="r", cwd=str(git_repo))
+    done = store.create_task("finished", status="done", source="cauce", repo="r", cwd=str(git_repo))
+    odd = store.create_task("odd", status="failed", source="cauce", repo="r", cwd=str(git_repo), kind="implement")
+    store.add_attempt(odd["id"], cell="sonnet/high", max_turns=30, passed=0, failure="no-such-failure")
+    store.close()
+    monkeypatch.setattr(orchestrate, "run", fake_run)
+
+    assert cli.main(["resume", str(t["id"]), "--allow", "Bash(node:*)", "--no-model"]) == 0
+    text, repo_dir, options, kw = calls[-1]
+    assert text == "create the routes" and repo_dir == git_repo
+    assert options.allow_tools == ("Bash(npm run build)", "Bash(node:*)") and options.verify == "npm test"
+    assert options.kind == "implement" and options.start.label == "sonnet/medium"
+    assert kw["task_id"] == t["id"] and kw["history"][0].failure.value == "permission"
+    store = Store.open()
+    row = store.get_task(t["id"])
+    assert row["dispatched"] == 0 and row["cancel_requested"] == 0
+    assert json.loads(row["options"])["allow_tools"] == ["Bash(npm run build)", "Bash(node:*)"]
+    store.close()
+
+    assert cli.main(["resume", str(approval["id"])]) == 1
+    assert "--allow-approval" in capsys.readouterr().err
+    assert cli.main(["resume", str(approval["id"]), "--allow-approval"]) == 0
+    assert calls[-1][2].start.label == "fable/high" and calls[-1][2].allow_approval
+    assert cli.main(["resume", str(odd["id"]), "--verify", "true", "--budget", "2"]) == 0
+    assert calls[-1][3]["history"][0].failure is None and calls[-1][2].budget_usd == 2
+    for refused in (hook["id"], done["id"], 999):
+        assert cli.main(["resume", str(refused)]) == 1
+    assert "only a task that stopped" in capsys.readouterr().err
+
+
+def test_queue_add_keeps_the_rules_a_person_granted(capsys, git_repo):
+    assert cli.main(["queue", "add", "build it", "--repo", str(git_repo), "--allow", "Bash(npm run build)",
+                     "--json"]) == 0
+    task_id = json.loads(capsys.readouterr().out)["id"]
+    store = Store.open()
+    task = store.get_task(task_id)
+    store.close()
+    from cauce import flow
+    assert flow.queued_options(task, orchestrate.Options()).allow_tools == ("Bash(npm run build)",)

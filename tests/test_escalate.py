@@ -88,3 +88,12 @@ def test_decide_needs_a_failure():
     with pytest.raises(ValueError):
         decide(IMPLEMENT, [Attempt(Cell("sonnet", "medium"), 30, True)])
     assert decide(IMPLEMENT, [Attempt(Cell("sonnet", "medium"), 30, False)]).move is Move.MORE_EFFORT
+
+
+def test_a_refused_command_blocks_at_once_and_names_what_to_allow():
+    refused = Attempt(Cell("haiku"), 30, False, Failure.PERMISSION, "build refused",
+                      ("Bash(npm run build)", "Bash(node server.js)", "Bash(ls)", "Read(x)", "Read(y)"))
+    d = decide(LADDERS["implement"], [refused])
+    assert d.move is Move.BLOCKED and not d.continues
+    assert "Bash(npm run build), Bash(node server.js), Bash(ls) and 2 more" in d.reason and "--allow" in d.reason
+    assert "a tool call" in decide(LADDERS["implement"], [Attempt(Cell("haiku"), 30, False, Failure.PERMISSION)]).reason
