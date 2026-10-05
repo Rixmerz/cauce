@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cauce</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+  <script type="module" src="/static/main.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>cauce</div>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-view="board" aria-selected="true">Board</button>
+      <button role="tab" data-view="spend">Spend</button>
+      <button role="tab" data-view="routing">Routing</button>
+      <button role="tab" data-view="memory">Memory</button>
+      <button role="tab" data-view="habits">Habits</button>
+    </nav>
+    <div class="live" id="live" title="live updates">●</div>
+  </header>
+  <main id="view" aria-live="polite"></main>
+  <aside id="drawer" class="drawer" hidden></aside>
+  <div id="toast" class="toast" hidden></div>
+</body>
+</html>

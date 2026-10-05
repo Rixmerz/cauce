@@ -23,6 +23,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/usage.py` | tokens per model from session transcripts, and spend by model and cell |
 | `src/cauce/flow.py` | the queue's dispatcher (`cauce work`), serial lanes per repository, the stale sweep |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes |
+| `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
 | `src/cauce/isolate.py` | one git worktree per writing task |
 | `commands/orchestration.md` | the one entry point a user types |
@@ -85,6 +86,9 @@ cannot run yields the default kind, not a guess.
 - A lane pauses only on a task the dispatcher started; a person's own
   `cauce run` never blocks the queue. A GET in the UI never starts work or
   sweeps — housekeeping runs in hooks, the dispatcher and the server thread.
+- The UI builds every node with `textContent` (`h()` in `static/util.js`),
+  never `innerHTML`: task text and worker summaries are untrusted. The token
+  never goes in a URL, and every mutation needs it in a header.
 - `PostToolUse` runs on every tool call: its fast path in `__main__.py`
   imports only `cauce.signature` and appends one line. Do not add a database
   write, a git call or an orchestrator import to it.

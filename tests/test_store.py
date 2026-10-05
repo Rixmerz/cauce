@@ -146,3 +146,31 @@ def test_invalidating_a_fix_by_hand(store: Store):
     store.add_fix(p, "raise the server timeout", "worked", repo="r")
     assert store.dead_ends("flaky upload")[0]["worked_instead"] == "raise the server timeout"
     store.set_fix_commit(999, "x")  # no fix for that task: nothing happens
+
+
+def test_many_openers_at_once_migrate_without_tripping(tmp_path):
+    import sqlite3
+    import threading
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL "
+                 "DEFAULT '', status TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL, "
+                 "updated_at TEXT NOT NULL, session_id TEXT, repo TEXT, kind TEXT, final_cell TEXT, "
+                 "cost_usd REAL NOT NULL DEFAULT 0)")
+    conn.commit()
+    conn.close()
+    errors = []
+
+    def open_it():
+        try:
+            Store(path).close()
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=open_it) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []

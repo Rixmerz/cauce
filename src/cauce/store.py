@@ -180,8 +180,15 @@ class Store:
         for table, columns in _ADDED_COLUMNS.items():
             have = {row[1] for row in self._conn.execute(f"PRAGMA table_info({table})")}
             for column, decl in columns.items():
-                if column not in have:
+                if column in have:
+                    continue
+                try:
                     self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+                except sqlite3.OperationalError as exc:
+                    # Another process or thread opened the file at the same moment
+                    # and added it first: the column is there, which is the point.
+                    if "duplicate column" not in str(exc):
+                        raise
 
     @classmethod
     def open(cls, env: dict[str, str] | None = None) -> Store:
@@ -461,6 +468,34 @@ class Store:
             f"WHERE a.created_at >= ? {scope} GROUP BY a.cell ORDER BY usd DESC",
             [_days_ago(days), *params]).fetchall()
         return [dict(r) for r in rows]
+
+    def spend_by_day(self, *, days: int = 14) -> list[dict]:
+        """Per day: session usage per model family and worker dollars."""
+        sessions = self._conn.execute(
+            "SELECT substr(ts, 1, 10) AS day, model, sum(input_tokens) AS input_tokens, "
+            "sum(output_tokens) AS output_tokens, sum(cache_read) AS cache_read, sum(cache_write) AS cache_write "
+            "FROM usage WHERE ts >= ? GROUP BY day, model ORDER BY day", (_days_ago(days),)).fetchall()
+        workers = self._conn.execute(
+            "SELECT substr(created_at, 1, 10) AS day, round(sum(cost_usd), 4) AS usd, count(*) AS attempts "
+            "FROM attempts WHERE created_at >= ? GROUP BY day ORDER BY day", (_days_ago(days),)).fetchall()
+        return [{"kind": "session", **dict(r)} for r in sessions] + [{"kind": "worker", **dict(r)} for r in workers]
+
+    def routing_stats(self) -> list[dict]:
+        """Per kind of task: how many ran, where they started and passed, how often
+        they had to climb, and what they cost. The evidence for changing a ladder."""
+        rows = self._conn.execute(
+            "SELECT t.kind, t.start_cell, t.final_cell, t.status, t.cost_usd, t.pinned, "
+            "(SELECT count(*) FROM attempts a WHERE a.task_id = t.id) AS attempts "
+            "FROM tasks t WHERE t.source = 'cauce' AND t.kind IS NOT NULL").fetchall()
+        return [dict(r) for r in rows]
+
+    def last_event(self, task_id: int, kind: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM events WHERE task_id = ? AND kind = ? ORDER BY id DESC LIMIT 1", (task_id, kind)).fetchone()
+        return {**dict(row), "data": json.loads(row["data"])} if row else None
+
+    def last_event_id(self) -> int:
+        return int(self._conn.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()[0])
 
     def expected_cost(self, kind: str, *, repo: str | None = None, limit: int = 20) -> tuple[float, int] | None:
         """The average cost of the last finished tasks of a kind, and how many."""

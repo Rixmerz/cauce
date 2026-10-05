@@ -211,3 +211,37 @@ def test_habits_commands(capsys, tmp_path, monkeypatch):
     store._conn.execute("DELETE FROM tool_events")
     store.close()
     assert cli.main(["habits", "list", "--days", "1"]) == 0
+
+
+def test_board_counts_for_a_status_line(capsys):
+    store = Store.open()
+    store.create_task("x", status="failed", source="cauce")
+    store.enqueue("y", repo="r", cwd="/x")
+    store.close()
+    assert cli.main(["board", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"needs_you": 1, "running": 0, "queued": 1, "done": 0}
+    assert cli.main(["board"]) == 0
+    assert capsys.readouterr().out.strip() == "cauce ⚠1 ▶0 ⏸1"
+
+
+def test_ui_command_serves_until_interrupted(monkeypatch, capsys):
+    from cauce.ui import server
+
+    class Fake:
+        server_address = ("127.0.0.1", 4321)
+
+        def __init__(self):
+            import threading
+            self.stop_event = threading.Event()
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr(server, "serve", lambda port: Fake())
+    opened = []
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
+    assert cli.main(["ui", "--open"]) == 0
+    assert "http://127.0.0.1:4321/" in capsys.readouterr().out and opened

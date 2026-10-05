@@ -66,6 +66,22 @@
   background ones included (closed by their task notification).
 - Pinned cells are recorded and never teach the router.
 
+### Added — the UI
+
+- `cauce ui`: a local page with a board (needs you, running, queued per lane,
+  done by day), a task drawer with the attempt timeline, and spend, routing,
+  memory and habits screens. Live through server-sent events from the event
+  trail, with a polling fallback.
+- Queue, cancel, reopen a lane and start `cauce work` from the page. Loopback
+  only, `Host` allowlist, token header on every mutation, strict CSP, 1 MiB
+  body cap; housekeeping in a server thread, never in a GET.
+- `cauce board --json` for status lines.
+
+### Fixed
+
+- Two processes opening an old database at once no longer fail on a column
+  the other one just added.
+
 ### Added — livespec is built in
 
 - **Adapters**: neighbours the core adopts rather than lists. The livespec

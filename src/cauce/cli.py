@@ -381,6 +381,43 @@ def cmd_habit_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    from cauce.ui import server
+
+    ui = server.serve(args.port)
+    url = f"http://127.0.0.1:{ui.server_address[1]}/"
+    print(f"cauce UI at {url} (Ctrl-C stops it)", flush=True)
+    if args.open:
+        import webbrowser
+
+        webbrowser.open(url)
+    try:
+        ui.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        ui.stop_event.set()
+        ui.server_close()
+    return 0
+
+
+def cmd_board(args: argparse.Namespace) -> int:
+    """The board's counts as typed JSON: a status line reads fields, never a sentence."""
+    from cauce.ui import api
+
+    store = Store.open()
+    try:
+        board = api.board(store)
+    finally:
+        store.close()
+    if args.json:
+        print(json.dumps(board["counts"]))
+    else:
+        c = board["counts"]
+        print(f"cauce ⚠{c['needs_you']} ▶{c['running']} ⏸{c['queued']}")
+    return 0
+
+
 def cmd_hook(args: argparse.Namespace) -> int:
     return hooks.main(args.event, sys.stdin, sys.stdout, os.environ)
 
@@ -543,6 +580,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("habit-run", help=argparse.SUPPRESS)
     p.add_argument("habit_id", type=int)
     p.set_defaults(func=cmd_habit_run)
+
+    p = sub.add_parser("ui", help="the local web UI")
+    p.add_argument("--port", type=int, default=8790)
+    p.add_argument("--open", action="store_true", help="open it in the browser")
+    p.set_defaults(func=cmd_ui)
+
+    p = sub.add_parser("board", help="needs-you, running and queued counts, for a status line")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_board)
 
     p = sub.add_parser("hook", help="Claude Code hook entry point (reads the event on stdin)")
     p.add_argument("event")

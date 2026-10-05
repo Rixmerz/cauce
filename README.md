@@ -199,6 +199,27 @@ A turn that delegated to a subagent is not done while the subagent still runs,
 including one started in the background. A cell a person pinned (`--start`)
 never counts as evidence for where the router should start.
 
+### The UI
+
+`cauce ui` serves a local page (`http://127.0.0.1:8790/`, `--open` opens it)
+for someone running many tasks across many repositories. It answers, in order:
+what needs me, what is running and what it costs, and whether the router is
+choosing well.
+
+- **Board** — *Needs you* (failed, blocked, replan, waiting on approval, a
+  branch to merge), *Running* with the live cell, *Queued* per lane, *Done* by
+  day. Queue a task, cancel one, reopen a lane, start the dispatcher.
+- **Task** — the attempt timeline with every move and its reason, the plan,
+  the coupled messages, the branch and the merge command.
+- **Spend**, **Routing**, **Memory**, **Habits** — the same numbers as the CLI.
+
+It reads the SQLite file every other part of cauce writes and owns no state of
+its own. It binds `127.0.0.1` only, checks the `Host` header, and takes
+mutations only as JSON with a token kept in a `0600` file in cauce's home —
+delete the file and every open tab loses its write access. A GET never starts
+work. `cauce board --json` prints the board's counts as typed JSON for a status
+line. [docs/ui.md](docs/ui.md) has the design.
+
 ### Capabilities
 
 `$CAUCE_HOME/capabilities.json` — user-level only, never read from a
