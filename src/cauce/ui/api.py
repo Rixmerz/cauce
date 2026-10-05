@@ -28,11 +28,12 @@ def _brief(task: dict[str, Any]) -> dict[str, Any]:
     return {k: task.get(k) for k in keys}
 
 
-def board(store: Store) -> dict[str, Any]:
+def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
+    """Every lane's state; with `repos`, only those repositories' tasks and lanes."""
     tasks = store.list_tasks(limit=500)
     needs, running, done = [], [], []
     for t in tasks:
-        if t["source"] == "delegation":
+        if t["source"] == "delegation" or (repos is not None and t["repo"] not in repos):
             continue
         item = _brief(t)
         if t["status"] in NEEDS_YOU and t["source"] in ("cauce", "queue"):
@@ -51,13 +52,15 @@ def board(store: Store) -> dict[str, Any]:
     lanes = {lane["repo"]: lane for lane in store.lanes()}
     queued: dict[str, dict[str, Any]] = defaultdict(lambda: {"tasks": []})
     for t in reversed(store.list_tasks(status=["queued"], limit=500)):
+        if repos is not None and t["repo"] not in repos:
+            continue
         lane = queued[t["repo"] or ""]
         lane["repo"] = t["repo"] or ""
         lane["paused"] = bool(lanes.get(t["repo"] or "", {}).get("paused"))
         lane["reason"] = lanes.get(t["repo"] or "", {}).get("reason")
         lane["tasks"].append(_brief(t))
     for repo, lane in lanes.items():
-        if lane["paused"] and repo not in queued:
+        if lane["paused"] and repo not in queued and (repos is None or repo in repos):
             queued[repo] = {"repo": repo, "paused": True, "reason": lane["reason"], "tasks": []}
     return {
         "counts": {"needs_you": len(needs), "running": len(running),

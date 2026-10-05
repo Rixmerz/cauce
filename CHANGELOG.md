@@ -76,6 +76,9 @@
   only, `Host` allowlist, token header on every mutation, strict CSP, 1 MiB
   body cap; housekeeping in a server thread, never in a GET.
 - `cauce board --json` for status lines.
+- `/cauce:ui` opens the page from a session. `cauce board --full [--repo DIR]…`,
+  `cauce show <id> --json` and `cauce queue add … --json` give another program
+  the board scoped to some repositories, a task, and what it queued.
 
 ### Fixed
 

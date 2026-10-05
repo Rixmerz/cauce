@@ -224,6 +224,31 @@ def test_board_counts_for_a_status_line(capsys):
     assert capsys.readouterr().out.strip() == "cauce ⚠1 ▶0 ⏸1"
 
 
+def test_the_json_surface_a_page_reads(capsys, git_repo):
+    """What another program reads: the board scoped to some repositories, a task, a queued task."""
+    from cauce import repo
+
+    assert cli.main(["queue", "add", "write the docs", "--repo", str(git_repo), "--json"]) == 0
+    queued = json.loads(capsys.readouterr().out)
+    assert queued["status"] == "queued" and queued["cwd"] == str(git_repo.resolve())
+    store = Store.open()
+    store.create_task("elsewhere", status="failed", source="cauce", repo="github.com/o/other")
+    store.close()
+
+    assert cli.main(["board", "--full", "--repo", str(git_repo)]) == 0
+    board = json.loads(capsys.readouterr().out)
+    assert board["repos"] == {str(git_repo): repo.key(git_repo.resolve())}
+    assert board["counts"] == {"needs_you": 0, "running": 0, "queued": 1, "done": 0}
+    assert board["queued"][0]["tasks"][0]["id"] == queued["id"]
+    assert cli.main(["board", "--full"]) == 0
+    assert json.loads(capsys.readouterr().out)["counts"]["needs_you"] == 1
+
+    assert cli.main(["show", str(queued["id"]), "--json"]) == 0
+    detail = json.loads(capsys.readouterr().out)
+    assert detail["task"]["title"] == "write the docs" and detail["attempts"] == []
+    assert cli.main(["show", "999", "--json"]) == 1
+
+
 def test_ui_command_serves_until_interrupted(monkeypatch, capsys):
     from cauce.ui import server
 

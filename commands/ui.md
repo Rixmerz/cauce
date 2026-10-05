@@ -1,0 +1,17 @@
+---
+description: Open cauce's board — what needs you, what is running and what it costs, the queue per repository — in a local web page
+---
+
+Start the board in the background and tell the user where it is:
+
+```bash
+cauce ui --open
+```
+
+Run it with `run_in_background`, so the session stays usable; it serves until
+the session ends or the user stops it. It listens on `127.0.0.1:8790` only. If
+that port is taken, run `cauce ui --port <another> --open` instead.
+
+Then say, in one line, the address it printed. Do not read the board yourself:
+the page is for the user, and `cauce board --json` gives the counts if one is
+needed here.

@@ -140,6 +140,11 @@ def cmd_show(args: argparse.Namespace) -> int:
         if task is None:
             print(f"no task #{args.id}", file=sys.stderr)
             return 1
+        if args.json:
+            from cauce.ui import api
+
+            print(json.dumps(api.task_detail(store, args.id), ensure_ascii=False, default=str))
+            return 0
         print(f"#{task['id']} [{task['status']}] {task['title']}")
         print(f"repo {task['repo']}  kind {task['kind']} ({task['class_source']}: {task['class_reason']})")
         print(f"cost ${task['cost_usd']:.2f}  start {task['start_cell']}  final {task['final_cell']}")
@@ -274,7 +279,10 @@ def cmd_queue(args: argparse.Namespace) -> int:
             options = {k: v for k, v in {"budget_usd": args.budget, "verify": args.verify, "kind": args.kind,
                                          "start": args.start}.items() if v is not None}
             task = store.enqueue(_text(args.text), repo=repo.key(where), cwd=str(where), options=options)
-            print(f"queued #{task['id']} — {task['title']}")
+            if args.json:
+                print(json.dumps({k: task[k] for k in ("id", "title", "status", "repo", "cwd")}, ensure_ascii=False))
+            else:
+                print(f"queued #{task['id']} — {task['title']}")
             return 0
         if args.queue_command == "rm":
             task = store.get_task(args.id)
@@ -402,15 +410,22 @@ def cmd_ui(args: argparse.Namespace) -> int:
 
 
 def cmd_board(args: argparse.Namespace) -> int:
-    """The board's counts as typed JSON: a status line reads fields, never a sentence."""
+    """The board as typed JSON: a status line or a mod reads fields, never a sentence.
+
+    `--json` prints the counts; `--full` the whole board. `--repo DIR` (repeatable)
+    keeps only those repositories, and the output names the key each directory has.
+    """
     from cauce.ui import api
 
+    keys = {d: repo.key(Path(d).resolve()) for d in args.repo or []}
     store = Store.open()
     try:
-        board = api.board(store)
+        board = api.board(store, repos=set(keys.values()) if args.repo else None)
     finally:
         store.close()
-    if args.json:
+    if args.full:
+        print(json.dumps({**board, "repos": keys}, ensure_ascii=False, default=str))
+    elif args.json:
         print(json.dumps(board["counts"]))
     else:
         c = board["counts"]
@@ -479,6 +494,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--verify")
     p.add_argument("--kind", choices=KINDS)
     p.add_argument("--start")
+    p.add_argument("--json", action="store_true", help="print the queued task as JSON")
     p.set_defaults(func=cmd_queue)
     p = qsub.add_parser("list", help="what is waiting (this repository; --all for every one)")
     p.add_argument("--repo")
@@ -512,6 +528,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("show", help="one task: its attempts and its messages")
     p.add_argument("id", type=int)
+    p.add_argument("--json", action="store_true", help="everything the UI's task view shows, as JSON")
     p.set_defaults(func=cmd_show)
 
     mem = sub.add_parser("memory", help="problems and the fixes tried against them").add_subparsers(
@@ -587,7 +604,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_ui)
 
     p = sub.add_parser("board", help="needs-you, running and queued counts, for a status line")
-    p.add_argument("--json", action="store_true")
+    p.add_argument("--json", action="store_true", help="the counts as JSON")
+    p.add_argument("--full", action="store_true", help="the whole board as JSON")
+    p.add_argument("--repo", action="append", help="only this repository (repeatable)")
     p.set_defaults(func=cmd_board)
 
     p = sub.add_parser("hook", help="Claude Code hook entry point (reads the event on stdin)")

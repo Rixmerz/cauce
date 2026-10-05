@@ -204,7 +204,7 @@ never counts as evidence for where the router should start.
 
 ### The UI
 
-`cauce ui` serves a local page (`http://127.0.0.1:8790/`, `--open` opens it)
+`cauce ui` (or `/cauce:ui` in a session) serves a local page (`http://127.0.0.1:8790/`, `--open` opens it)
 for someone running many tasks across many repositories. It answers, in order:
 what needs me, what is running and what it costs, and whether the router is
 choosing well.
@@ -221,7 +221,8 @@ its own. It binds `127.0.0.1` only, checks the `Host` header, and takes
 mutations only as JSON with a token kept in a `0600` file in cauce's home —
 delete the file and every open tab loses its write access. A GET never starts
 work. `cauce board --json` prints the board's counts as typed JSON for a status
-line. [docs/ui.md](docs/ui.md) has the design.
+line; `cauce board --full --repo <dir>`, `cauce show <id> --json` and
+`cauce queue add … --json` are the surface another program builds on. [docs/ui.md](docs/ui.md) has the design.
 
 ### Capabilities
 
