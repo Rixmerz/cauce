@@ -1,0 +1,143 @@
+"""Model x effort: the two dimensions a task is routed on.
+
+The **model** decides how well the work *notices* things — that a green test
+pins a bug, that the spec is wrong, that the obvious fix is the one that
+failed last week. The **effort** decides how *thorough* the same model is:
+how much it thinks, how many tools it calls, whether it checks itself before
+it says it is done. They are different dials, and a router that treats them as
+one ladder spends the top tier on work that only needed a second look.
+
+Every effort level has a purpose. None of them is a rung that exists only to
+be climbed past:
+
+==========  ===================================================================
+``low``     Direct answers, few tool calls, no preamble. Chat, explanations,
+            commit messages, trivial edits. It drops self-checks, which is fine
+            where there is nothing to check and wrong anywhere else.
+``medium``  Saving where quality holds. The starting point for agentic coding on
+            Sonnet: implementing from a clear plan, tests, refactors, docs.
+``high``    The floor for work that needs judgment: debugging with a repro, UI,
+            integration, routine review. Usually the best balance.
+``xhigh``   Most agentic coding and long-horizon work: a feature that crosses
+            several parts, a bug with no clear cause, a hard plan.
+``max``     Correctness over cost. Only where the level below showed headroom,
+            or the change is critical.
+==========  ===================================================================
+
+Haiku has no effort dial at all; Fable is reserved for work a person asked for.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+EFFORTS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+
+
+@dataclass(frozen=True)
+class Model:
+    alias: str
+    input_usd_per_mtok: float
+    output_usd_per_mtok: float
+    has_effort: bool
+    #: A model nothing routes to without a person saying so.
+    needs_approval: bool = False
+
+
+#: Cheapest first. Prices are first-party API rates per million tokens; on a
+#: subscription they are a proxy for how much of the plan a call uses.
+MODELS: dict[str, Model] = {
+    "haiku": Model("haiku", 1.0, 5.0, has_effort=False),
+    "sonnet": Model("sonnet", 2.0, 10.0, has_effort=True),
+    "opus": Model("opus", 4.0, 20.0, has_effort=True),
+    "fable": Model("fable", 10.0, 50.0, has_effort=True, needs_approval=True),
+}
+
+MODEL_ORDER: tuple[str, ...] = tuple(MODELS)
+
+
+@dataclass(frozen=True)
+class Cell:
+    """One point of the matrix: a model, and an effort where it has one."""
+
+    model: str
+    effort: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.model not in MODELS:
+            raise ValueError(f"unknown model {self.model!r}")
+        if MODELS[self.model].has_effort:
+            if self.effort not in EFFORTS:
+                raise ValueError(f"{self.model} needs an effort, one of {EFFORTS}")
+        elif self.effort is not None:
+            # Passing `--effort` to a model without the dial reaches nothing, and
+            # the run would report an effort that never applied.
+            raise ValueError(f"{self.model} has no effort dial")
+
+    @property
+    def label(self) -> str:
+        return self.model if self.effort is None else f"{self.model}/{self.effort}"
+
+    @property
+    def needs_approval(self) -> bool:
+        return MODELS[self.model].needs_approval
+
+    def model_rank(self) -> int:
+        return MODEL_ORDER.index(self.model)
+
+    def sort_key(self) -> tuple[int, int]:
+        """Cheaper model first, then lower effort. Not alphabetical: `fable` < `haiku`
+        as strings, and a ladder sorted that way would start at the top."""
+        return (self.model_rank(), EFFORTS.index(self.effort) if self.effort else -1)
+
+    @classmethod
+    def parse(cls, text: str) -> Cell:
+        model, _, effort = text.strip().partition("/")
+        return cls(model, effort or None)
+
+
+def ladder(*labels: str) -> tuple[Cell, ...]:
+    return tuple(Cell.parse(label) for label in labels)
+
+
+#: The kinds of work the router knows, each with the cells it climbs, cheapest
+#: start first. A ladder is *where escalation may go*, not a path every task
+#: walks: the failure decides whether the next attempt moves along effort or
+#: jumps to the next model (see ``escalate``).
+LADDERS: dict[str, tuple[Cell, ...]] = {
+    "chat": ladder("sonnet/low", "sonnet/medium"),
+    "classify": ladder("haiku", "sonnet/low"),
+    "explore": ladder("haiku", "sonnet/low", "sonnet/medium"),
+    "docs": ladder("haiku", "sonnet/low", "sonnet/medium"),
+    "test": ladder("sonnet/medium", "sonnet/high", "opus/high"),
+    "refactor": ladder("sonnet/medium", "sonnet/high", "opus/high"),
+    "implement": ladder("sonnet/medium", "sonnet/high", "sonnet/xhigh", "opus/high"),
+    "ui": ladder("sonnet/high", "sonnet/xhigh", "opus/high"),
+    "feature": ladder("sonnet/xhigh", "opus/high", "opus/xhigh"),
+    "debug-repro": ladder("sonnet/high", "sonnet/xhigh", "opus/high", "opus/xhigh"),
+    "debug-unclear": ladder("opus/high", "opus/xhigh", "opus/max"),
+    "review-routine": ladder("sonnet/medium", "sonnet/high", "opus/high"),
+    "review-critical": ladder("opus/high", "opus/xhigh", "opus/max"),
+    "plan": ladder("opus/xhigh", "opus/max", "fable/high"),
+    "frontier": ladder("fable/high", "fable/xhigh", "fable/max"),
+}
+
+#: What a task nothing recognised runs on: the middle of the matrix, with room
+#: to climb both ways it can fail.
+DEFAULT_KIND = "implement"
+
+KINDS: tuple[str, ...] = tuple(LADDERS)
+
+#: Kinds whose work is reading, not writing. Their workers get no edit tools,
+#: and they never need an isolated checkout.
+READ_ONLY_KINDS = frozenset({"chat", "classify", "explore", "review-routine", "review-critical", "plan"})
+
+
+def ladder_for(kind: str) -> tuple[Cell, ...]:
+    return LADDERS.get(kind, LADDERS[DEFAULT_KIND])
+
+
+def estimate_usd(cell: Cell, input_tokens: int, output_tokens: int) -> float:
+    model = MODELS[cell.model]
+    return (
+        input_tokens * model.input_usd_per_mtok + output_tokens * model.output_usd_per_mtok
+    ) / 1_000_000

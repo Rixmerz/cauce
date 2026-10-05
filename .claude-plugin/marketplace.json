@@ -1,0 +1,15 @@
+{
+  "name": "cauce-dev",
+  "description": "Local development marketplace for a clone of cauce.",
+  "owner": {
+    "name": "Rixmerz"
+  },
+  "plugins": [
+    {
+      "name": "cauce",
+      "source": "./",
+      "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
+      "version": "0.1.0"
+    }
+  ]
+}
