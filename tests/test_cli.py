@@ -180,3 +180,34 @@ def test_spend_and_invalidate(capsys):
     assert cli.main(["memory", "invalidate", "999", "--why", "x"]) == 1
     assert cli.main(["memory", "record", "--problem", "q", "--fix", "g", "--outcome", "worked",
                      "--commit", "abc"]) == 0
+
+
+def test_habits_commands(capsys, tmp_path, monkeypatch):
+    store = Store.open()
+    for s in range(3):
+        for sig in ("edit:.py", "bash:ruff-format"):
+            store.add_tool_event(session_id=f"s{s}", tool="x", sig=sig, arg_hash="h", ok=1)
+    store.close()
+    assert cli.main(["habits"]) == 0
+    line = capsys.readouterr().out.strip()
+    cid = line.split()[0]
+    repo_dir = tmp_path / "r"
+    repo_dir.mkdir()
+    assert cli.main(["habits", "install", cid, "--command", "true", "--repo", str(repo_dir)]) == 0
+    assert "installed habit #1" in capsys.readouterr().out
+    assert cli.main(["habits", "install", "nope", "--command", "true", "--repo", str(repo_dir)]) == 1
+    assert cli.main(["habits", "status"]) == 0
+    assert "edit:.py → bash:ruff-format" in capsys.readouterr().out
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps({"tool_input": {"file_path": "a.py"}})))
+    assert cli.main(["habit-run", "1"]) == 0
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("garbage"))
+    assert cli.main(["habit-run", "1"]) == 0
+    assert cli.main(["habits", "uninstall", "1"]) == 0
+    assert cli.main(["habits", "uninstall", "1"]) == 0  # already removed from settings: still fine
+    assert cli.main(["habits", "uninstall", "99"]) == 1
+    (repo_dir / ".claude" / "settings.local.json").write_text("{broken")
+    assert cli.main(["habits", "install", cid, "--command", "true", "--repo", str(repo_dir)]) == 1
+    store = Store.open()
+    store._conn.execute("DELETE FROM tool_events")
+    store.close()
+    assert cli.main(["habits", "list", "--days", "1"]) == 0

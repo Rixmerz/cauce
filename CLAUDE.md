@@ -18,6 +18,8 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first |
 | `src/cauce/config.py` | cauce's settings (`livespec` on/off), copied from plugin options by SessionStart |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
+| `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
+| `src/cauce/habits.py` | mining sequences, recipes for the brief, and approval-gated habit hooks |
 | `src/cauce/usage.py` | tokens per model from session transcripts, and spend by model and cell |
 | `src/cauce/flow.py` | the queue's dispatcher (`cauce work`), serial lanes per repository, the stale sweep |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes |
@@ -83,5 +85,12 @@ cannot run yields the default kind, not a guess.
 - A lane pauses only on a task the dispatcher started; a person's own
   `cauce run` never blocks the queue. A GET in the UI never starts work or
   sweeps — housekeeping runs in hooks, the dispatcher and the server thread.
+- `PostToolUse` runs on every tool call: its fast path in `__main__.py`
+  imports only `cauce.signature` and appends one line. Do not add a database
+  write, a git call or an orchestrator import to it.
+- A signature never holds an argument. The final `[a-z0-9:._-]` filter stays
+  last, after the semantic scrubbing.
+- Nothing in cauce writes to a settings file except `cauce habits install`,
+  run by a person.
 - The capability registry is read from the user's cauce home only. A
   repository must never be able to add an MCP server by committing a file.

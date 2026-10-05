@@ -83,6 +83,18 @@ CREATE TABLE IF NOT EXISTS usage (
 );
 CREATE INDEX IF NOT EXISTS usage_ts ON usage (ts);
 CREATE TABLE IF NOT EXISTS transcript_offsets (path TEXT PRIMARY KEY, offset INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS tool_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, task_id INTEGER, attempt INTEGER, ts TEXT NOT NULL,
+  tool TEXT, sig TEXT NOT NULL, arg_hash TEXT NOT NULL, ok INTEGER NOT NULL, cwd TEXT
+);
+CREATE INDEX IF NOT EXISTS tool_events_ts ON tool_events (ts);
+CREATE INDEX IF NOT EXISTS tool_events_task ON tool_events (task_id, attempt);
+CREATE TABLE IF NOT EXISTS habits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, candidate TEXT, steps TEXT NOT NULL, command TEXT NOT NULL,
+  trigger_suffix TEXT NOT NULL, settings_path TEXT NOT NULL, installed_at TEXT NOT NULL,
+  runs INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0, disabled_at TEXT,
+  removed INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS lanes (
   repo TEXT PRIMARY KEY, paused INTEGER NOT NULL DEFAULT 0, reason TEXT, updated_at TEXT NOT NULL
 );
@@ -459,6 +471,56 @@ class Store:
         if not rows:
             return None
         return sum(r[0] for r in rows) / len(rows), len(rows)
+
+    # --- habits ------------------------------------------------------------------
+
+    def add_tool_event(self, **record: Any) -> None:
+        record = {"ts": now(), **record}
+        cols = ", ".join(record)
+        self._conn.execute(f"INSERT INTO tool_events ({cols}) VALUES ({', '.join('?' for _ in record)})",  # noqa: S608
+                           list(record.values()))
+
+    def tool_events(self, *, days: int = 30, limit: int = 50_000) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM tool_events WHERE ts >= ? ORDER BY id LIMIT ?", (_days_ago(days), limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def passed_attempt_events(self, kind: str, *, repo: str | None = None, limit: int = 20_000) -> list[dict]:
+        """Tool events recorded inside worker attempts that passed, for one kind."""
+        scope, params = ("AND t.repo = ?", [repo]) if repo is not None else ("", [])
+        rows = self._conn.execute(
+            "SELECT e.* FROM tool_events e JOIN tasks t ON t.id = e.task_id "  # noqa: S608
+            "JOIN attempts a ON a.task_id = e.task_id AND a.seq = e.attempt AND a.passed = 1 "
+            f"WHERE t.kind = ? {scope} ORDER BY e.id LIMIT ?", [kind, *params, limit]).fetchall()
+        return [dict(r) for r in rows]
+
+    def add_habit(self, *, steps: list[str], command: str, trigger_suffix: str, settings_path: str,
+                  candidate: str) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO habits (candidate, steps, command, trigger_suffix, settings_path, installed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)", (candidate, json.dumps(steps), command, trigger_suffix, settings_path, now()))
+        return int(cur.lastrowid)
+
+    def habit(self, habit_id: int) -> dict | None:
+        row = self._conn.execute("SELECT * FROM habits WHERE id = ?", (habit_id,)).fetchone()
+        return dict(row) if row else None
+
+    def habits(self) -> list[dict]:
+        return [dict(r) for r in self._conn.execute("SELECT * FROM habits WHERE removed = 0 ORDER BY id")]
+
+    def update_habit(self, habit_id: int, **fields: Any) -> None:
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        self._conn.execute(f"UPDATE habits SET {sets} WHERE id = ?", [*fields.values(), habit_id])  # noqa: S608
+
+    def habit_ran(self, habit_id: int, *, ok: bool, max_failures: int) -> None:
+        """Count a run; reset the streak on success, turn the habit off on the third failure."""
+        if ok:
+            self._conn.execute("UPDATE habits SET runs = runs + 1, failures = 0 WHERE id = ?", (habit_id,))
+            return
+        self._conn.execute(
+            "UPDATE habits SET runs = runs + 1, failures = failures + 1, "
+            "disabled_at = CASE WHEN failures + 1 >= ? THEN ? ELSE disabled_at END WHERE id = ?",
+            (max_failures, now(), habit_id))
 
     # --- events: what a watcher reads ---------------------------------------
 

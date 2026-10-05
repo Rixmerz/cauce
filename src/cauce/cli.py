@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from cauce import __version__, capabilities, config, flow, hooks, orchestrate, repo, usage
+from cauce import __version__, capabilities, config, flow, habits, hooks, orchestrate, repo, usage
 from cauce.adapters import default_adapters
 from cauce.classify import classify
 from cauce.matrix import KINDS, LADDERS, Cell
@@ -321,6 +321,66 @@ def cmd_work(args: argparse.Namespace) -> int:
     return 0 if all(r.status == "done" for r in report.ran) else 1
 
 
+def _candidates(store: Store, days: int) -> list[habits.Candidate]:
+    habits.load_events(store)
+    return habits.candidates(store.tool_events(days=days))
+
+
+def cmd_habits(args: argparse.Namespace) -> int:
+    store = Store.open()
+    try:
+        if args.habits_command == "install":
+            found = {c.id: c for c in _candidates(store, args.days)}
+            if args.candidate not in found:
+                print(f"no candidate {args.candidate} passes the gates now; see `cauce habits`", file=sys.stderr)
+                return 1
+            try:
+                habit_id = habits.install(store, found[args.candidate], command=args.command,
+                                          repo_dir=Path(args.repo or os.getcwd()).resolve())
+            except habits.HabitError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            print(f"installed habit #{habit_id}: after {found[args.candidate].steps[0]}, run `{args.command}`. "
+                  f"`cauce habits uninstall {habit_id}` removes it.")
+            return 0
+        if args.habits_command == "uninstall":
+            if not habits.uninstall(store, args.habit_id):
+                print(f"no habit #{args.habit_id}", file=sys.stderr)
+                return 1
+            print(f"removed habit #{args.habit_id}")
+            return 0
+        if args.habits_command == "status":
+            for h in store.habits():
+                state = f"off since {h['disabled_at']} after {h['failures']} failures" if h["disabled_at"] else "on"
+                print(f"#{h['id']} {' → '.join(json.loads(h['steps']))}: `{h['command']}` "
+                      f"({h['runs']} runs) {state}")
+            return 0
+        found = _candidates(store, args.days)
+        if not found:
+            print("no repeated sequence passes the gates yet")
+        for c in found[: args.limit]:
+            print(c.line())
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_habit_run(args: argparse.Namespace) -> int:
+    """The body of an installed habit's hook. Fails open, prints nothing."""
+    try:
+        event = json.loads(sys.stdin.read() or "{}")
+        store = Store.open()
+        try:
+            habits.run_habit(store, args.habit_id, event)
+        finally:
+            store.close()
+    except Exception:  # a hook never takes the session down, and says when it failed
+        from cauce import signature
+
+        signature.note_error(os.environ)
+    return 0
+
+
 def cmd_hook(args: argparse.Namespace) -> int:
     return hooks.main(args.event, sys.stdin, sys.stdout, os.environ)
 
@@ -461,6 +521,28 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("neighbours", help="what cauce sees of the neighbours it adopts")
     p.add_argument("--repo")
     p.set_defaults(func=cmd_neighbours)
+
+    hb = sub.add_parser("habits", help="repeated tool sequences, and the hooks a person installs from them")
+    hb.set_defaults(func=cmd_habits, habits_command="list", days=30, limit=20)
+    hsub = hb.add_subparsers(dest="habits_command")
+    p = hsub.add_parser("list", help="sequences that pass the gates, best first")
+    p.add_argument("--days", type=int, default=30)
+    p.add_argument("--limit", type=int, default=20)
+    p.set_defaults(func=cmd_habits)
+    p = hsub.add_parser("install", help="run a command after the edit that starts a habit (you approve it here)")
+    p.add_argument("candidate")
+    p.add_argument("--command", required=True, help="what to run, e.g. \"ruff format\"")
+    p.add_argument("--repo")
+    p.add_argument("--days", type=int, default=30)
+    p.set_defaults(func=cmd_habits)
+    p = hsub.add_parser("uninstall", help="the kill switch")
+    p.add_argument("habit_id", type=int)
+    p.set_defaults(func=cmd_habits)
+    hsub.add_parser("status", help="installed habits, runs and failures").set_defaults(func=cmd_habits)
+
+    p = sub.add_parser("habit-run", help=argparse.SUPPRESS)
+    p.add_argument("habit_id", type=int)
+    p.set_defaults(func=cmd_habit_run)
 
     p = sub.add_parser("hook", help="Claude Code hook entry point (reads the event on stdin)")
     p.add_argument("event")

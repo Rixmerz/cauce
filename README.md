@@ -126,6 +126,26 @@ again it is **recurring** and that fix is marked disproved — the most useful
 dead end there is, because it looked solved. `cauce memory invalidate <fix>
 --why "..."` does the same by hand.
 
+### Habits
+
+Every tool call — in sessions and in workers — is recorded as a **signature**:
+`bash:pytest`, `edit:.py`, `git-commit`. Never the arguments, the file
+contents, the output or the prompt; a final filter keeps a signature to
+`[a-z0-9:._-]`. The hook only appends a line to a file, so it stays out of the
+way of every call.
+
+- `cauce habits` lists sequences that repeat, past boolean gates (enough
+  occurrences, in enough sessions, nearly always succeeding, nothing
+  destructive); the score only ranks what passed.
+- Per kind of task, the steps that came before passing worker attempts go into
+  the next worker's brief, so it does not spend turns finding them again.
+- `cauce habits install <id> --command "ruff format"` turns a habit that starts
+  with an edit into a `PostToolUse` hook in the repository's
+  `.claude/settings.local.json`. **Only that command installs one**: nothing in
+  cauce does it by itself. A habit that fails three times in a row turns itself
+  off; `cauce habits uninstall <id>` removes it; `cauce habits status` shows
+  runs and failures.
+
 ## Install
 
 Requires Python 3.11+ and Claude Code. The core is standard library only.

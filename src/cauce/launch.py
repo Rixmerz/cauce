@@ -96,6 +96,9 @@ class LaunchSpec:
     permission_mode: str = "acceptEdits"
     append_system_prompt: str = ""
     persist_session: bool = False
+    #: Extra environment for the worker: which task and attempt it is, so its
+    #: tool calls are recorded against them.
+    env: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def target_dir(self) -> Path:
@@ -171,7 +174,7 @@ def run(
             capture_output=True,
             text=True,
             timeout=spec.timeout_s,
-            env=worker_env(),
+            env={**worker_env(), **spec.env},
             check=False,
         )
     except subprocess.TimeoutExpired:

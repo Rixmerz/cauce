@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from cauce import capabilities as caps
-from cauce import config, isolate, launch, repo
+from cauce import config, habits, isolate, launch, repo
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify
 from cauce.escalate import Attempt, Decision, Failure, Move, decide
@@ -218,6 +218,11 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
             if ladder[raised] != start:
                 start = ladder[raised]
                 reasons.append(f"one rung up for what the code index found ({start.label})")
+    habits.load_events(store)
+    learned = habits.recipes(store, kind, repo=repo.key(repo_dir))
+    if learned:
+        context.append("Steps that came before passing attempts on this kind of task here: "
+                       + "; ".join(learned) + ". Use them unless the task says otherwise.")
     expected = store.expected_cost(kind, repo=repo.key(repo_dir)) or store.expected_cost(kind)
     if expected:
         neighbour_notes.append(f"finished {kind} tasks cost ${expected[0]:.2f} on average (last {expected[1]})")
@@ -301,6 +306,7 @@ def run(
                 disallowed_tools=() if writes else launch.WRITE_TOOLS,
                 mcp_servers=selection.servers,
                 append_system_prompt=selection.system_prompt(),
+                env={"CAUCE_WORKER_TASK": str(task["id"]), "CAUCE_WORKER_ATTEMPT": str(len(attempts) + 1)},
             )
             store.update_task(task["id"], current_cell=cell.label)
             store.add_event(task["id"], "attempt_started", seq=len(attempts) + 1, cell=cell.label,

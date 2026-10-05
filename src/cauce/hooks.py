@@ -26,8 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from cauce import config, flow, repo, usage
-from cauce.adapters import ABSENT, Adapter, default_adapters
+from cauce import config, repo
 from cauce.store import Store, home
 from cauce.text import fold, words
 
@@ -134,6 +133,8 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
             store.add_message(target["id"], "assistant", message)
     store.interrupt_running(session_id, exclude=[target["id"]] if target else [])
     if event.get("transcript_path"):
+        from cauce import usage
+
         # What this session's turns cost, by the model that served them.
         usage.ingest(store, event["transcript_path"], session_id=session_id,
                      task_id=target["id"] if target else None, repo=target["repo"] if target else None)
@@ -155,9 +156,10 @@ def pre_tool_use(event: Mapping[str, Any], store: Store) -> dict | None:
 
 
 def post_tool_use(event: Mapping[str, Any], store: Store) -> dict | None:
-    """The delegation returned. When it was the last child of a turn that already
-    answered, the turn is done now."""
-    if event.get("tool_name") not in DELEGATION_TOOLS or not event.get("session_id"):
+    """A delegation that returned closes its child task, and the turn too when it
+    was the last child. (Every tool call's signature is logged before this, by the
+    fast path in `cauce.__main__`.)"""
+    if not event.get("session_id") or event.get("tool_name") not in DELEGATION_TOOLS:
         return None
     child = store.delegation(event["session_id"], event.get("tool_use_id"))
     if child is None:
@@ -207,13 +209,15 @@ def session_start(
     store: Store,
     root: Path,
     env: Mapping[str, str] | None = None,
-    adapters: list[Adapter] | None = None,
+    adapters: list | None = None,
 ) -> dict | None:
     session_id = event.get("session_id")
     if not session_id:
         return None
     env = env or {}
     config.sync_plugin_options(env)
+    from cauce import flow  # imported here: it pulls in the orchestrator
+
     flow.sweep(store)
     cwd = event.get("cwd")
     key = repo.key(cwd) if cwd else None
@@ -237,9 +241,11 @@ def session_start(
     return _context("SessionStart", "\n\n".join(blocks)) if blocks else None
 
 
-def _freshen(cwd: Path, root: Path, env: Mapping[str, str], adapters: list[Adapter] | None) -> list[str]:
+def _freshen(cwd: Path, root: Path, env: Mapping[str, str], adapters: list | None) -> list[str]:
     """Start a background index for an adopted neighbour whose index is missing
     or older than the last commit, so it is current by the time work starts."""
+    from cauce.adapters import ABSENT, default_adapters
+
     if adapters is None:
         adapters = default_adapters() if config.enabled("livespec", env) else []
     notes = []
@@ -272,9 +278,9 @@ def handle(
 
 def main(event_name: str, stdin: TextIO, stdout: TextIO, env: Mapping[str, str]) -> int:
     """Always exits 0 and never writes anything but a hook answer to stdout."""
+    root = home(dict(env))
     if env.get("CAUCE_HOOKS_OFF") == "1":
         return 0
-    root = home(dict(env))
     try:
         event = json.load(stdin)
         if not isinstance(event, dict):

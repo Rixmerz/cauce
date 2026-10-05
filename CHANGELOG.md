@@ -29,6 +29,19 @@
   it starts. Hooks fail open and report what they swallowed.
 - **`/orchestration`**, the one entry point; the `cauce` CLI for everything else.
 
+### Added — habits
+
+- Every tool call, in sessions and workers, is logged as a signature plus an
+  argument hash — never arguments, contents, output or prompts — by a hook
+  fast path that appends one line to a file (about 50 ms with the launcher).
+- `cauce habits`: repeated sequences past boolean gates, ranked by score.
+- Recipes: the steps before passing worker attempts of a kind go into the
+  next worker's brief.
+- `cauce habits install|uninstall|status`: a habit becomes a `PostToolUse`
+  hook only by that command; three failures in a row turn it off.
+- The classifier on a local Laya model was not taken: rules and Haiku already
+  route, and Laya needs a 1–3 GB install.
+
 ### Added — memory that remembers being wrong, and real spend
 
 - Fixes carry `believed_from` and `invalidated_on`; a solved problem that
