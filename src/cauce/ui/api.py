@@ -11,6 +11,7 @@ from cauce.matrix import LADDERS
 from cauce.store import Store
 
 #: States that are waiting on a person, and what each one asks of them.
+TASK_SOURCES = ("cauce", "queue")  # what the board shows: work cauce runs or holds
 NEEDS_YOU = {
     "failed": "every cell on its ladder failed: read the attempts",
     "blocked": "the environment or the budget stopped it",
@@ -59,15 +60,15 @@ def worker_of(store: Store, task: dict[str, Any], steps: int) -> dict[str, Any] 
 
 def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
     """Every lane's state; with `repos`, only those repositories' tasks and lanes."""
-    tasks = store.list_tasks(limit=500)
+    tasks = store.list_tasks(limit=500, source=TASK_SOURCES)
     needs, running, done = [], [], []
     for t in tasks:
-        if t["source"] == "delegation" or (repos is not None and t["repo"] not in repos):
+        if repos is not None and t["repo"] not in repos:
             continue
         item = _brief(t)
-        if t["source"] in ("cauce", "queue") and (t["status"] in NEEDS_YOU or t["status"] in ("running", "done")):
+        if t["status"] in NEEDS_YOU or t["status"] in ("running", "done"):
             item["flow"] = flow_of(store, t["id"])
-        if t["status"] in NEEDS_YOU and t["source"] in ("cauce", "queue"):
+        if t["status"] in NEEDS_YOU:
             needs.append({**item, "asks": NEEDS_YOU[t["status"]]})
         elif t["status"] == "running":
             started = store.last_event(t["id"], "attempt_started")
@@ -82,6 +83,11 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
             done.append(item)
             if branch and t["updated_at"] >= _days_ago_iso(REVIEW_DAYS):
                 needs.append({**item, "asks": f"review branch {branch}, then merge it"})
+    # A prompt answered in a session is recorded as a task too (it carries the
+    # session's follow-ups and result), but it is not work on the board: every
+    # turn would be a card. The sessions answering right now are listed apart.
+    answering = [_brief(t) for t in store.list_tasks(status=["running"], limit=100, source=("hook",))
+                 if repos is None or t["repo"] in repos]
     lanes = {lane["repo"]: lane for lane in store.lanes()}
     queued: dict[str, dict[str, Any]] = defaultdict(lambda: {"tasks": []})
     for t in reversed(store.list_tasks(status=["queued"], limit=500)):
@@ -98,9 +104,11 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
     return {
         "counts": {"needs_you": len(needs), "running": len(running),
                    "workers": sum(1 for r in running if r.get("worker")),
-                   "queued": sum(len(v["tasks"]) for v in queued.values()), "done": len(done)},
+                   "queued": sum(len(v["tasks"]) for v in queued.values()), "done": len(done),
+                   "answering": len(answering)},
         "needs_you": needs,
         "running": running,
+        "answering": answering,
         "queued": sorted(queued.values(), key=lambda lane: lane["repo"]),
         "done": done[:60],
         "last_event": store.last_event_id(),

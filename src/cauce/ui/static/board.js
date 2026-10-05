@@ -63,7 +63,9 @@ export async function renderBoard(ctx) {
     queueForm(ctx),
     h("div", { class: "columns" },
       column("Needs you", b.counts.needs_you, b.needs_you.map((t) => card(t, ctx.openTask, [h("span", { class: `status-${t.status}` }, t.status)]))),
-      column("Running", b.counts.running, b.running.map((t) => card(t, ctx.openTask, [h("span", {}, `attempt ${t.attempt ?? 1}`), h("span", {}, when(t.updated_at))]))),
+      column("Running", b.counts.running, [
+        ...b.running.map((t) => card(t, ctx.openTask, [h("span", {}, `attempt ${t.attempt ?? 1}`), h("span", {}, when(t.updated_at))])),
+        ...(b.counts.answering ? [h("div", { class: "empty" }, `${b.counts.answering} session${b.counts.answering === 1 ? "" : "s"} answering a prompt now`)] : [])]),
       column("Queued", b.counts.queued, lanes),
       column("Done", b.counts.done, diary)));
 }

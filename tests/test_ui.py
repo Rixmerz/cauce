@@ -27,8 +27,23 @@ def test_the_board_sorts_work_by_what_it_needs(store: Store):
     assert b["needs_you"][1]["asks"].startswith("every cell")
     assert b["running"][0]["attempt"] == 2 and b["running"][0]["current_cell"] == "sonnet/high"
     assert {lane["repo"]: lane["paused"] for lane in b["queued"]} == {"other": True, "r": False}
-    assert b["counts"] == {"needs_you": 2, "running": 1, "workers": 0, "queued": 1, "done": 1}
+    assert b["counts"] == {"needs_you": 2, "running": 1, "workers": 0, "queued": 1, "done": 1, "answering": 0}
     assert b["last_event"] == store.last_event_id()
+
+
+def test_prompts_answered_in_sessions_are_not_cards(store: Store):
+    """Every prompt is recorded as a task, but the board is for work cauce runs: a
+    long session must not bury the done column in turns."""
+    for i in range(80):
+        store.create_task(f"prompt {i}", status="done", source="hook", session_id="s", repo="r")
+    shipped = store.create_task("shipped", status="done", source="cauce", repo="r")
+    store.create_task("still typing", status="running", source="hook", session_id="s", repo="r")
+    store.create_task("elsewhere", status="running", source="hook", session_id="t", repo="other")
+    b = api.board(store)
+    assert [t["id"] for t in b["done"]] == [shipped["id"]] and b["running"] == []
+    assert [t["title"] for t in b["answering"]] == ["elsewhere", "still typing"]
+    assert b["counts"]["done"] == 1 and b["counts"]["answering"] == 2
+    assert [t["title"] for t in api.board(store, {"r"})["answering"]] == ["still typing"]
 
 
 def test_the_board_shows_each_task_s_way_and_the_worker_out_now(store: Store):
@@ -50,7 +65,7 @@ def test_the_board_shows_each_task_s_way_and_the_worker_out_now(store: Store):
     assert going["flow"]["steps"][0]["move"] == "more_effort" and going["flow"]["steps"][0]["failure"] == "code_bug"
     assert going["worker"]["seq"] == 2 and going["worker"]["cell"] == "sonnet/medium"
     assert going["worker"]["capabilities"] == ["livespec"] and going["worker"]["alive"] is True
-    assert next(r for r in b["running"] if r["source"] == "hook").get("flow") is None
+    assert b["answering"][0]["title"] == "in a session" and all(r["source"] != "hook" for r in b["running"])
     assert b["counts"]["workers"] == 1
     assert going["body"] == "going" and "session_id" in going
     long = store.create_task("x" * 2000, status="queued", source="queue", repo="r", cwd="/x")

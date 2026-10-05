@@ -344,9 +344,13 @@ class Store:
         repo: str | None = None,
         status: Sequence[str] | None = None,
         session_id: str | None = None,
+        source: Sequence[str] | None = None,
         limit: int = 50,
     ) -> list[dict]:
         clauses, params = [], []
+        if source:
+            clauses.append(f"source IN ({', '.join('?' for _ in source)})")
+            params.extend(source)
         if repo is not None:
             clauses.append("repo = ?")
             params.append(repo)

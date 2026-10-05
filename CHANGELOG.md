@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-05
+
+### Fixed
+
+- The board showed every prompt typed in a session as a card, so Done filled
+  with turns and pushed real tasks out of its 60 slots. The board now holds
+  only work cauce runs or queued (`source` cauce or queue), filtered in SQL;
+  the sessions answering a prompt right now are listed apart as `answering`
+  (a count under Running in the UI, and `counts.answering`). Prompts are still
+  recorded: they couple follow-ups and results to a turn, list unfinished
+  work after a resume or compaction, and feed the Sessions view.
+
 ## [0.1.1] - 2026-10-05
 
 ### Added — the core
