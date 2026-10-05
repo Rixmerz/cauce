@@ -259,3 +259,8 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m ruff check .
 .venv/bin/python -m coverage run -m pytest && .venv/bin/python -m coverage report
 ```
+
+## License
+
+[Apache-2.0](LICENSE). cauce runs livespec as a separate program and reads its
+index; livespec itself is AGPL-3.0 and is not included.

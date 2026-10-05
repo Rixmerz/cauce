@@ -1,0 +1,8 @@
+cauce
+Copyright 2026 Rixmerz
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+cauce runs livespec (https://github.com/Rixmerz/livespec) as a separate
+program and reads its index; it does not include livespec's code, which is
+licensed under the GNU Affero General Public License v3.0.

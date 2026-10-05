@@ -7,6 +7,7 @@ name = "cauce"
 version = "0.1.0"
 description = "One core for Claude Code: route each task to the right model, effort and capabilities, escalate on evidence, and remember what failed across repositories"
 readme = "README.md"
+license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
 # The core is standard library only. A hook runs on every prompt, and a
 # dependency that fails to import there is a session that fails to start.

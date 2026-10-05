@@ -6,6 +6,7 @@
     "name": "Rixmerz"
   },
   "repository": "https://github.com/Rixmerz/cauce",
+  "license": "Apache-2.0",
   "keywords": [
     "orchestration",
     "routing",

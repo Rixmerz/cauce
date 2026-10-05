@@ -143,8 +143,10 @@ def test_the_token_is_only_for_the_page_and_every_write_needs_it(ui, git_repo):
     assert call(ui, "POST", "/api/queue", b"[1]", headers={"X-Cauce-Token": key})[0].status == 400
     assert call(ui, "POST", "/api/queue", {"text": "x", "repo_dir": "/no/such/dir"},
                 headers={"X-Cauce-Token": key})[0].status == 400
-    big = {"text": "x" * (server.MAX_BODY + 10), "repo_dir": str(git_repo)}
-    assert call(ui, "POST", "/api/queue", big, headers={"X-Cauce-Token": key})[0].status == 413
+    # Refused on the declared length, before a byte of it is read. Sending the
+    # whole body would race the refusal: the server closes while the client writes.
+    big = {"X-Cauce-Token": key, "Content-Length": str(server.MAX_BODY + 1)}
+    assert call(ui, "POST", "/api/queue", b"{}", headers=big)[0].status == 413
 
     # deleting the token file revokes every open tab
     server.token_path(ui.root).unlink()
