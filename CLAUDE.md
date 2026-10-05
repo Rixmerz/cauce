@@ -18,6 +18,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first |
 | `src/cauce/config.py` | cauce's settings (`livespec` on/off), copied from plugin options by SessionStart |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
+| `src/cauce/flow.py` | the queue's dispatcher (`cauce work`), serial lanes per repository, the stale sweep |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
 | `src/cauce/isolate.py` | one git worktree per writing task |
@@ -78,5 +79,8 @@ cannot run yields the default kind, not a guess.
   before adding it, and bump `PINNED` only after checking the new release.
 - Tests run with `CAUCE_LIVESPEC=off` and an empty `CLAUDE_CONFIG_DIR`; a
   test that wants livespec builds the fixture index in `tests/livespec_fixture.py`.
+- A lane pauses only on a task the dispatcher started; a person's own
+  `cauce run` never blocks the queue. A GET in the UI never starts work or
+  sweeps — housekeeping runs in hooks, the dispatcher and the server thread.
 - The capability registry is read from the user's cauce home only. A
   repository must never be able to add an MCP server by committing a file.

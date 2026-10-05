@@ -19,13 +19,14 @@ raises takes the user's session down. But failing open is not failing silently
 from __future__ import annotations
 
 import json
+import re
 import traceback
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from cauce import config, repo
+from cauce import config, flow, repo
 from cauce.adapters import ABSENT, Adapter, default_adapters
 from cauce.store import Store, home
 from cauce.text import fold, words
@@ -35,6 +36,16 @@ _NUDGES = frozenset({
     "sigue por favor", "continua por favor", "please continue", "proceed", "procede",
 })
 _MAX_DEAD_ENDS = 3
+QUEUE_PREFIX = "++"
+DELEGATION_TOOLS = frozenset({"Agent", "Task"})
+
+
+def _queue_request(text: str) -> str | None:
+    """The task text after the queue prefix, "" for a bare prefix, None otherwise."""
+    stripped = text.lstrip()
+    if not stripped.startswith(QUEUE_PREFIX):
+        return None
+    return stripped[len(QUEUE_PREFIX):].strip()
 ERROR_LOG = "hook-errors.log"
 
 
@@ -64,12 +75,24 @@ def _dead_end_text(dead: list[dict], intro: str) -> str:
 def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
     session_id = event.get("session_id")
     text = str(event.get("prompt") or "")
+    if session_id and text.lstrip().startswith("<task-notification"):
+        _background_child_finished(session_id, text, store)
+        return None
     if not session_id or _ignored(text):
         return None
     cwd = event.get("cwd")
     key = repo.key(cwd) if cwd else None
     prompt_id = event.get("prompt_id")
     store.touch_session(session_id, cwd, key)
+
+    queued = _queue_request(text)
+    if queued is not None:
+        if not queued:
+            return {"decision": "block", "reason": f'cauce: "{QUEUE_PREFIX} <task>" queues a task for a worker'}
+        task = store.enqueue(queued, repo=key, cwd=cwd, session_id=session_id)
+        # Blocked: queuing costs no turn. The reason is what the person sees.
+        return {"decision": "block", "reason": f"cauce: queued #{task['id']} — {task['title']}. "
+                f"`cauce work` runs the queue in workers."}
 
     running = store.running_task(session_id, prompt_id) if prompt_id else None
     if running is not None:
@@ -103,11 +126,65 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
     target = store.running_task(session_id, prompt_id) if prompt_id else store.running_task(session_id)
     message = str(event.get("last_assistant_message") or "")
     if target is not None:
-        store.update_task(target["id"], status="done", result=message[:20000])
+        # A subagent this turn started in the background is still working: the
+        # turn's answer is in, but the task is not done until its children are.
+        waiting = store.children(target["id"], status=["running"])
+        store.update_task(target["id"], status="running" if waiting else "done", result=message[:20000])
         if message:
             store.add_message(target["id"], "assistant", message)
     store.interrupt_running(session_id, exclude=[target["id"]] if target else [])
     return None
+
+
+def pre_tool_use(event: Mapping[str, Any], store: Store) -> dict | None:
+    """A delegation to a subagent becomes a child of the turn that made it."""
+    if event.get("tool_name") not in DELEGATION_TOOLS or not event.get("session_id"):
+        return None
+    parent = store.running_task(event["session_id"])
+    tool_input = event.get("tool_input") or {}
+    body = str(tool_input.get("prompt") or tool_input.get("description") or "delegated work")
+    store.create_task(body, status="running", source="delegation", session_id=event["session_id"],
+                      parent_id=parent["id"] if parent else None, cwd=event.get("cwd"),
+                      title=str(tool_input.get("description") or "") or None,
+                      repo=parent["repo"] if parent else None, prompt_id=event.get("tool_use_id"))
+    return None
+
+
+def post_tool_use(event: Mapping[str, Any], store: Store) -> dict | None:
+    """The delegation returned. When it was the last child of a turn that already
+    answered, the turn is done now."""
+    if event.get("tool_name") not in DELEGATION_TOOLS or not event.get("session_id"):
+        return None
+    child = store.delegation(event["session_id"], event.get("tool_use_id"))
+    if child is None:
+        return None
+    if (event.get("tool_input") or {}).get("run_in_background"):
+        # The call returned at launch; the work ends when its notification arrives.
+        return None
+    response = event.get("tool_response")
+    text = response if isinstance(response, str) else json.dumps(response, ensure_ascii=False)[:20000]
+    _finish_child(store, child, "done", text)
+    return None
+
+
+def _finish_child(store: Store, child: dict, status: str, result: str) -> None:
+    store.update_task(child["id"], status=status, result=result)
+    parent = store.get_task(child["parent_id"]) if child["parent_id"] else None
+    if (parent and parent["status"] == "running" and parent["result"]
+            and not store.children(parent["id"], status=["running"])):
+        store.update_task(parent["id"], status="done")
+
+
+_NOTE_TAG = re.compile(r"<(tool-use-id|status|summary|result)>(.*?)</\1>", re.DOTALL)
+
+
+def _background_child_finished(session_id: str, text: str, store: Store) -> None:
+    fields = {k: v.strip() for k, v in _NOTE_TAG.findall(text)}
+    child = store.delegation(session_id, fields.get("tool-use-id")) if fields.get("tool-use-id") else None
+    if child is None or child["status"] != "running":
+        return
+    status = "done" if fields.get("status", "completed") == "completed" else "failed"
+    _finish_child(store, child, status, fields.get("result") or fields.get("summary") or "")
 
 
 def stop_failure(event: Mapping[str, Any], store: Store) -> dict | None:
@@ -133,6 +210,7 @@ def session_start(
         return None
     env = env or {}
     config.sync_plugin_options(env)
+    flow.sweep(store)
     cwd = event.get("cwd")
     key = repo.key(cwd) if cwd else None
     store.touch_session(session_id, cwd, key)
@@ -172,6 +250,8 @@ def _freshen(cwd: Path, root: Path, env: Mapping[str, str], adapters: list[Adapt
 
 HANDLERS = {
     "UserPromptSubmit": user_prompt_submit,
+    "PreToolUse": pre_tool_use,
+    "PostToolUse": post_tool_use,
     "Stop": stop,
     "StopFailure": stop_failure,
 }

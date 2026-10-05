@@ -32,6 +32,9 @@ Request: $ARGUMENTS
    worker's own claim of success is not evidence. `--budget` (default $5)
    bounds the task; `--kind` skips classification when you already know it.
 
+   For work that can wait, queue it instead — `cauce queue add "<task>"` — and
+   start `cauce work` (in the background) to drain the repository's lane.
+
 4. **Read the report and act on its status:**
    - `done` with a branch — show the user the summary and `git diff HEAD...<branch>`;
      merge only when they say so.

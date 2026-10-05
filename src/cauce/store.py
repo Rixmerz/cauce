@@ -75,6 +75,9 @@ CREATE TABLE IF NOT EXISTS fixes (
   evidence TEXT NOT NULL DEFAULT '', task_id INTEGER, created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS fixes_problem ON fixes (problem_id);
+CREATE TABLE IF NOT EXISTS lanes (
+  repo TEXT PRIMARY KEY, paused INTEGER NOT NULL DEFAULT 0, reason TEXT, updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, ts TEXT NOT NULL,
   kind TEXT NOT NULL, data TEXT NOT NULL DEFAULT '{}'
@@ -99,6 +102,14 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "pid": "INTEGER",  # the `cauce run` process driving it, while it runs
         "current_cell": "TEXT",  # the cell of the attempt in flight
         "cancel_requested": "INTEGER NOT NULL DEFAULT 0",
+        # A cell a person chose. The task ran there because they said so, which
+        # says nothing about where the router should start the next one.
+        "pinned": "INTEGER NOT NULL DEFAULT 0",
+        # What a queued task is run with: budget, verify command, kind, start.
+        "options": "TEXT NOT NULL DEFAULT '{}'",
+        # Set when the dispatcher, not a person, started the run: only those
+        # pause their lane when they fail.
+        "dispatched": "INTEGER NOT NULL DEFAULT 0",
     },
 }
 FIX_OUTCOMES = ("worked", "failed", "partial", "pending")
@@ -221,9 +232,23 @@ class Store:
             ).fetchone()
         else:
             row = self._conn.execute(
-                "SELECT * FROM tasks WHERE session_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1",
+                "SELECT * FROM tasks WHERE session_id = ? AND status = 'running' AND source = 'hook' "
+                "ORDER BY id DESC LIMIT 1",
                 (session_id,),
             ).fetchone()
+        return dict(row) if row else None
+
+    def delegation(self, session_id: str, tool_use_id: str | None) -> dict | None:
+        """The running delegation a tool call opened; by its id when the event
+        carries one, else the session's newest."""
+        if tool_use_id:
+            row = self._conn.execute(
+                "SELECT * FROM tasks WHERE session_id = ? AND source = 'delegation' AND prompt_id = ? "
+                "ORDER BY id DESC LIMIT 1", (session_id, tool_use_id)).fetchone()
+        else:
+            row = self._conn.execute(
+                "SELECT * FROM tasks WHERE session_id = ? AND source = 'delegation' AND status = 'running' "
+                "ORDER BY id DESC LIMIT 1", (session_id,)).fetchone()
         return dict(row) if row else None
 
     def last_prompt_task(self, session_id: str) -> dict | None:
@@ -298,10 +323,70 @@ class Store:
         params: list[Any] = [kind, *([repo] if repo is not None else []), limit]
         rows = self._conn.execute(
             "SELECT t.final_cell FROM tasks t WHERE t.kind = ? AND t.status = 'done' "  # noqa: S608
-            "AND t.final_cell IS NOT NULL AND t.source = 'cauce'" + scope + " ORDER BY t.id DESC LIMIT ?",
+            "AND t.final_cell IS NOT NULL AND t.source = 'cauce' AND t.pinned = 0" + scope
+            + " ORDER BY t.id DESC LIMIT ?",
             params,
         ).fetchall()
         return [r[0] for r in rows]
+
+    # --- the queue and its lanes ---------------------------------------------
+
+    def enqueue(self, body: str, *, repo: str | None, cwd: str | None, session_id: str | None = None,
+                options: dict | None = None) -> dict:
+        return self.create_task(body, status="queued", source="queue", repo=repo, cwd=cwd,
+                                session_id=session_id, options=json.dumps(options or {}))
+
+    def next_queued(self, repo: str | None = None) -> dict | None:
+        """The oldest queued task in a lane that is neither paused nor busy.
+
+        A lane is serial: while one of its tasks runs from the dispatcher, the
+        next waits, so it never starts on a state the last one left half done.
+        """
+        scope, params = ("AND t.repo = ?", [repo]) if repo is not None else ("", [])
+        row = self._conn.execute(
+            "SELECT t.* FROM tasks t LEFT JOIN lanes l ON l.repo = t.repo "  # noqa: S608
+            f"WHERE t.status = 'queued' {scope} AND COALESCE(l.paused, 0) = 0 "
+            "AND NOT EXISTS (SELECT 1 FROM tasks r WHERE r.repo IS t.repo AND r.status = 'running' "
+            "AND r.dispatched = 1) ORDER BY t.id LIMIT 1",
+            params,
+        ).fetchone()
+        return dict(row) if row else None
+
+    def claim(self, task_id: int) -> bool:
+        """Move a queued task to running, once: two dispatchers never run one task."""
+        cur = self._conn.execute(
+            "UPDATE tasks SET status = 'running', dispatched = 1, updated_at = ? "
+            "WHERE id = ? AND status = 'queued'", (now(), task_id))
+        return cur.rowcount == 1
+
+    def pause_lane(self, repo: str | None, reason: str) -> None:
+        self._conn.execute(
+            "INSERT INTO lanes (repo, paused, reason, updated_at) VALUES (?, 1, ?, ?) "
+            "ON CONFLICT(repo) DO UPDATE SET paused = 1, reason = excluded.reason, updated_at = excluded.updated_at",
+            (repo or "", reason, now()))
+
+    def unpause_lane(self, repo: str | None) -> None:
+        self._conn.execute(
+            "INSERT INTO lanes (repo, paused, reason, updated_at) VALUES (?, 0, NULL, ?) "
+            "ON CONFLICT(repo) DO UPDATE SET paused = 0, reason = NULL, updated_at = excluded.updated_at",
+            (repo or "", now()))
+
+    def lanes(self) -> list[dict]:
+        """Every repository with queued work or a lane record, and its state."""
+        rows = self._conn.execute(
+            "SELECT r.repo, COALESCE(l.paused, 0) AS paused, l.reason, "
+            "(SELECT count(*) FROM tasks q WHERE q.repo IS r.repo AND q.status = 'queued') AS queued "
+            "FROM (SELECT DISTINCT repo FROM tasks WHERE status = 'queued' UNION SELECT repo FROM lanes) r "
+            "LEFT JOIN lanes l ON l.repo = r.repo ORDER BY r.repo"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def children(self, task_id: int, status: Sequence[str] | None = None) -> list[dict]:
+        clause = f" AND status IN ({', '.join('?' for _ in status)})" if status else ""
+        rows = self._conn.execute(
+            "SELECT * FROM tasks WHERE parent_id = ?" + clause + " ORDER BY id",  # noqa: S608
+            [task_id, *(status or [])]).fetchall()
+        return [dict(r) for r in rows]
 
     # --- events: what a watcher reads ---------------------------------------
 

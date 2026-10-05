@@ -153,3 +153,44 @@ def test_session_start_copies_plugin_options(store, tmp_path):
     env = {"CAUCE_HOME": str(tmp_path / "h"), "CLAUDE_PLUGIN_OPTION_LIVESPEC": "false"}
     hooks.session_start({"session_id": "s"}, store, tmp_path / "h", env, adapters=[])
     assert config.load(env)["livespec"] is False
+
+
+def test_double_plus_queues_without_a_turn(store: Store, git_repo):
+    answer = prompt(store, "++ write the release notes", cwd=str(git_repo))
+    assert answer["decision"] == "block" and "queued #" in answer["reason"]
+    task = store.list_tasks()[0]
+    assert task["status"] == "queued" and task["body"] == "write the release notes"
+    assert task["repo"] == str(git_repo.resolve())
+    assert prompt(store, "++", prompt_id="p2")["reason"].startswith('cauce: "++ <task>"')
+
+
+def test_a_turn_with_a_subagent_still_running_is_not_done(store: Store):
+    prompt(store, "investigate the leak", prompt_id="p1")
+    hooks.pre_tool_use({"session_id": "s", "tool_name": "Agent", "tool_use_id": "tu1",
+                        "tool_input": {"description": "look at the pool", "prompt": "check the pool",
+                                       "run_in_background": True}}, store)
+    hooks.post_tool_use({"session_id": "s", "tool_name": "Agent", "tool_use_id": "tu1",
+                         "tool_input": {"run_in_background": True}, "tool_response": "launched"}, store)
+    hooks.stop({"session_id": "s", "prompt_id": "p1", "last_assistant_message": "waiting on the agent"}, store)
+    parent = next(t for t in store.list_tasks() if t["source"] == "hook")
+    child = next(t for t in store.list_tasks() if t["source"] == "delegation")
+    assert parent["status"] == "running" and child["status"] == "running" and child["parent_id"] == parent["id"]
+    note = ("<task-notification><tool-use-id>tu1</tool-use-id><status>completed</status>"
+            "<result>found it</result></task-notification>")
+    prompt(store, note, prompt_id="p2")
+    assert store.get_task(child["id"])["result"] == "found it"
+    assert store.get_task(parent["id"])["status"] == "done"
+    assert len([t for t in store.list_tasks() if t["source"] == "hook"]) == 1  # a notification is no task
+
+
+def test_a_foreground_subagent_finishes_with_its_tool_call(store: Store):
+    prompt(store, "review it", prompt_id="p1")
+    hooks.pre_tool_use({"session_id": "s", "tool_name": "Task", "tool_use_id": "tu2",
+                        "tool_input": {"prompt": "review"}}, store)
+    hooks.post_tool_use({"session_id": "s", "tool_name": "Task", "tool_use_id": "tu2",
+                         "tool_input": {}, "tool_response": {"content": "lgtm"}}, store)
+    child = next(t for t in store.list_tasks() if t["source"] == "delegation")
+    assert child["status"] == "done" and "lgtm" in child["result"]
+    assert hooks.pre_tool_use({"session_id": "s", "tool_name": "Bash"}, store) is None
+    assert hooks.post_tool_use({"session_id": "s", "tool_name": "Agent", "tool_use_id": "nope"}, store) is None
+    prompt(store, "<task-notification><tool-use-id>missing</tool-use-id></task-notification>", prompt_id="p9")

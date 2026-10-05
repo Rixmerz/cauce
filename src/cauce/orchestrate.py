@@ -234,6 +234,7 @@ def run(
     launcher: Launcher | None = None,
     classifier: Callable[[str], Classification] | None = None,
     adapters: Sequence[Adapter] | None = None,
+    task_id: int | None = None,
 ) -> Report:
     options = options or Options()
     registry = registry if registry is not None else caps.load(home() / "capabilities.json")
@@ -245,11 +246,17 @@ def run(
 
     key = repo.key(repo_dir)
     c = the_plan.classification
-    task = store.create_task(
-        text, status="running", source="cauce", repo=key, cwd=str(repo_dir), kind=the_plan.kind,
-        complexity=c.complexity, class_source=c.source, class_reason=c.reason,
-        start_cell=the_plan.start.label, cost_usd=c.cost_usd,
+    fields = dict(
+        repo=key, cwd=str(repo_dir), kind=the_plan.kind, complexity=c.complexity, class_source=c.source,
+        class_reason=c.reason, start_cell=the_plan.start.label, pinned=int(options.start is not None),
     )
+    if task_id is not None:
+        # A queued task the dispatcher claimed: it keeps its id, its messages
+        # and its place in the lane's history.
+        store.update_task(task_id, status="running", source="cauce", cost_usd=c.cost_usd, **fields)
+        task = store.get_task(task_id)
+    else:
+        task = store.create_task(text, status="running", source="cauce", cost_usd=c.cost_usd, **fields)
     report = Report(task["id"], "running", the_plan, cost_usd=c.cost_usd)
     store.update_task(task["id"], pid=os.getpid())
     store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label,
@@ -347,6 +354,8 @@ def run(
         status = report.status if report.status != "running" else "failed"
         store.update_task(task["id"], status=status, final_cell=report.final_cell, result=report.summary,
                           pid=None, current_cell=None)
+        if status != "done" and store.get_task(task["id"])["dispatched"]:
+            store.pause_lane(key, f"task #{task['id']} ended {status}: {report.summary[:200]}")
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact)
         store.add_message(task["id"], "worker", report.text())

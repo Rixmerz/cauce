@@ -127,3 +127,38 @@ def test_sigterm_becomes_a_cancel():
             signal.raise_signal(signal.SIGTERM)
     finally:
         signal.signal(signal.SIGTERM, previous)
+
+
+def test_queue_lanes_and_work(capsys, git_repo, monkeypatch):
+    assert cli.main(["queue", "add", "write docs", "--repo", str(git_repo), "--verify", "true",
+                     "--kind", "docs"]) == 0
+    assert "queued #1" in capsys.readouterr().out
+    assert cli.main(["queue", "list", "--repo", str(git_repo)]) == 0
+    assert "write docs" in capsys.readouterr().out
+    assert cli.main(["queue"]) == 0
+    assert cli.main(["queue", "add", "second", "--repo", str(git_repo)]) == 0
+    assert cli.main(["queue", "rm", "2"]) == 0
+    assert cli.main(["queue", "rm", "2"]) == 1
+
+    seen = {}
+
+    def fake_work(store, **kw):
+        seen.update(kw)
+        from cauce.flow import WorkReport
+        return WorkReport([], "nothing runnable is queued")
+
+    monkeypatch.setattr(cli.flow, "work", fake_work)
+    assert cli.main(["work", "--repo", str(git_repo), "--max", "3"]) == 0
+    assert seen["max_tasks"] == 3 and seen["repo"] == str(git_repo.resolve())
+    assert cli.main(["work", "--all"]) == 0 and seen["repo"] is None
+
+    store = Store.open()
+    store.pause_lane(str(git_repo.resolve()), "task #1 ended failed")
+    store.close()
+    capsys.readouterr()
+    assert cli.main(["lanes"]) == 0
+    assert "paused: task #1 ended failed" in capsys.readouterr().out
+    assert cli.main(["lanes", "--unpause", str(git_repo)]) == 0
+    assert cli.main(["lanes", "--unpause", "github.com/o/r"]) == 0
+    assert cli.main(["lanes"]) == 0
+    assert "open" in capsys.readouterr().out

@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from cauce import __version__, capabilities, config, hooks, orchestrate, repo
+from cauce import __version__, capabilities, config, flow, hooks, orchestrate, repo
 from cauce.adapters import default_adapters
 from cauce.classify import classify
 from cauce.matrix import KINDS, LADDERS, Cell
@@ -231,6 +231,61 @@ def cmd_neighbours(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_queue(args: argparse.Namespace) -> int:
+    store = Store.open()
+    try:
+        if args.queue_command == "add":
+            where = Path(args.repo or os.getcwd()).resolve()
+            options = {k: v for k, v in {"budget_usd": args.budget, "verify": args.verify, "kind": args.kind,
+                                         "start": args.start}.items() if v is not None}
+            task = store.enqueue(_text(args.text), repo=repo.key(where), cwd=str(where), options=options)
+            print(f"queued #{task['id']} — {task['title']}")
+            return 0
+        if args.queue_command == "rm":
+            task = store.get_task(args.id)
+            if task is None or task["status"] != "queued":
+                print(f"#{args.id} is not queued", file=sys.stderr)
+                return 1
+            store.update_task(args.id, status="cancelled")
+            print(f"removed #{args.id}")
+            return 0
+        for t in store.list_tasks(repo=_repo_key(args), status=["queued"], limit=200)[::-1]:
+            print(f"#{t['id']:<5} {t['repo'] or '-'}  {t['title']}")
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_lanes(args: argparse.Namespace) -> int:
+    store = Store.open()
+    try:
+        if args.unpause is not None:
+            key = repo.key(Path(args.unpause).resolve()) if Path(args.unpause).is_dir() else args.unpause
+            store.unpause_lane(key)
+            print(f"unpaused {key}")
+            return 0
+        for lane in store.lanes():
+            state = f"paused: {lane['reason']}" if lane["paused"] else "open"
+            print(f"{lane['repo'] or '-'}  {lane['queued']} queued  {state}")
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_work(args: argparse.Namespace) -> int:
+    store = Store.open()
+    previous = _cancel_on_sigterm()
+    try:
+        key = None if args.all else repo.key(Path(args.repo or os.getcwd()).resolve())
+        report = flow.work(store, repo=key, max_tasks=args.max,
+                           defaults=orchestrate.Options(use_model_classifier=not args.no_model))
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        store.close()
+    print(report.text())
+    return 0 if all(r.status == "done" for r in report.ran) else 1
+
+
 def cmd_hook(args: argparse.Namespace) -> int:
     return hooks.main(args.event, sys.stdin, sys.stdout, os.environ)
 
@@ -281,6 +336,36 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--status", action="append")
     p.add_argument("--limit", type=int, default=20)
     p.set_defaults(func=cmd_tasks)
+
+    queue = sub.add_parser("queue", help="tasks waiting for a worker; `++ task` in a session queues too")
+    qsub = queue.add_subparsers(dest="queue_command")
+    queue.set_defaults(func=cmd_queue, queue_command="list", repo=None, all=False)
+    p = qsub.add_parser("add", help="queue a task for this repository's lane")
+    p.add_argument("text")
+    p.add_argument("--repo")
+    p.add_argument("--budget", type=float)
+    p.add_argument("--verify")
+    p.add_argument("--kind", choices=KINDS)
+    p.add_argument("--start")
+    p.set_defaults(func=cmd_queue)
+    p = qsub.add_parser("list", help="what is waiting (this repository; --all for every one)")
+    p.add_argument("--repo")
+    p.add_argument("--all", action="store_true")
+    p.set_defaults(func=cmd_queue)
+    p = qsub.add_parser("rm", help="take a task off the queue")
+    p.add_argument("id", type=int)
+    p.set_defaults(func=cmd_queue)
+
+    p = sub.add_parser("lanes", help="one serial lane per repository; a failed task pauses it")
+    p.add_argument("--unpause", metavar="REPO", help="a repository path or key")
+    p.set_defaults(func=cmd_lanes)
+
+    p = sub.add_parser("work", help="run queued tasks in workers, lane by lane")
+    p.add_argument("--repo")
+    p.add_argument("--all", action="store_true", help="every repository's lane")
+    p.add_argument("--max", type=int, default=flow.DEFAULT_MAX_TASKS, help="stop after this many tasks")
+    p.add_argument("--no-model", action="store_true")
+    p.set_defaults(func=cmd_work)
 
     p = sub.add_parser("cancel", help="stop a running or queued task")
     p.add_argument("id", type=int)

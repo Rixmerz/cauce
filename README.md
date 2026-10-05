@@ -142,6 +142,27 @@ cauce memory record --problem "redirect drops query" --fix "use url_for(_externa
 branch only when the task passed. `--launch-dir` starts the worker in another
 directory (its settings and instructions) while it works in the repository.
 
+### Queue and lanes
+
+Work arrives faster than it runs. Type `++ <task>` in a session and it is
+queued without spending a turn; `cauce queue add "<task>" --verify "<cmd>"`
+does the same from a shell. `cauce work` drains the queue in workers, never in
+the session's context.
+
+Each repository is one **serial lane**: its tasks run one after another, and a
+task that ends in anything but a pass **pauses the lane**, so the next one never
+starts on a state the last left broken. `cauce lanes` shows them;
+`cauce lanes --unpause .` reopens one. `--max` bounds how many tasks one
+unattended `cauce work` runs.
+
+A run whose process died leaves no task stuck in `running`: a sweep (at session
+start and before every `cauce work`) marks it interrupted and pauses its lane.
+`cauce cancel <id>` stops a run; `cauce events --follow` shows runs as they go.
+
+A turn that delegated to a subagent is not done while the subagent still runs,
+including one started in the background. A cell a person pinned (`--start`)
+never counts as evidence for where the router should start.
+
 ### Capabilities
 
 `$CAUCE_HOME/capabilities.json` — user-level only, never read from a

@@ -29,6 +29,19 @@
   it starts. Hooks fail open and report what they swallowed.
 - **`/orchestration`**, the one entry point; the `cauce` CLI for everything else.
 
+### Added — live state, the queue and its lanes
+
+- An event trail per run (`cauce events --follow`), the cell in flight, and
+  `cauce cancel`.
+- `++ <task>` in a session, or `cauce queue add`, queues work at zero tokens;
+  `cauce work` drains it in workers. One serial lane per repository, paused by
+  a task that does not pass; `cauce lanes` shows and reopens them.
+- A sweep marks runs whose process died, and session prompts abandoned for 12
+  hours, as interrupted.
+- Subagent delegations are child tasks; a turn is not done while one runs,
+  background ones included (closed by their task notification).
+- Pinned cells are recorded and never teach the router.
+
 ### Added — livespec is built in
 
 - **Adapters**: neighbours the core adopts rather than lists. The livespec
