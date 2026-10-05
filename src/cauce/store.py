@@ -21,10 +21,13 @@ Four things are kept:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import random
 import sqlite3
-from collections.abc import Iterable, Sequence
+import time
+from collections.abc import Iterable, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -165,16 +168,57 @@ def home(env: dict[str, str] | None = None) -> Path:
     return base / "cauce"
 
 
+SETUP_RETRIES = 100
+
+
+@contextlib.contextmanager
+def _setup_lock(db: Path) -> Iterator[None]:
+    """An exclusive lock on `<db>.lock` where the platform has one; a no-op elsewhere."""
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - not POSIX
+        yield
+        return
+    with open(f"{db}.lock", "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 class Store:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = path
         self._conn = sqlite3.connect(str(path), timeout=10, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
-        self._conn.executescript(SCHEMA)
-        self._migrate()
+        try:
+            self._setup()
+        except BaseException:
+            self._conn.close()
+            raise
+
+    def _setup(self) -> None:
+        """WAL, the schema and the added columns, one opener at a time.
+
+        Switching a file to WAL and altering a table take locks SQLite may refuse
+        at once instead of waiting for (a hook, the dispatcher and the UI often
+        open the file in the same instant). A lock file beside the database
+        queues the openers; a refusal that still gets through is retried.
+        """
+        with _setup_lock(self.path):
+            for attempt in range(SETUP_RETRIES):
+                try:
+                    self._conn.execute("PRAGMA journal_mode=WAL")
+                    self._conn.executescript(SCHEMA)
+                    self._migrate()
+                    return
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc) or attempt == SETUP_RETRIES - 1:
+                        raise
+                    time.sleep(0.02 + random.random() * 0.05)  # noqa: S311 - jitter, not security
 
     def _migrate(self) -> None:
         for table, columns in _ADDED_COLUMNS.items():

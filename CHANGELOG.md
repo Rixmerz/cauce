@@ -89,6 +89,10 @@
 
 - Two processes opening an old database at once no longer fail on a column
   the other one just added.
+- Opening the database is serialized across processes (a lock file beside it)
+  and a "database is locked" during setup is retried: switching to WAL and
+  altering a table could be refused at once instead of waiting, when a hook,
+  the dispatcher and the UI opened the file in the same instant.
 
 ### Added — livespec is built in
 
