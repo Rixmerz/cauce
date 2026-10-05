@@ -108,6 +108,7 @@ def queued_options(task: dict, defaults: Options) -> Options:
         allow_approval=bool(raw.get("allow_approval", defaults.allow_approval)),
         livespec=raw.get("livespec", defaults.livespec),
         use_model_classifier=defaults.use_model_classifier,
+        allow_tools=tuple(raw.get("allow_tools") or defaults.allow_tools),
     )
 
 

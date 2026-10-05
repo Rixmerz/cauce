@@ -128,3 +128,40 @@ def test_changes_outside_git_are_unknown(tmp_path):
     assert launch.tracked_state(tmp_path) is None
     assert launch.changed_paths(None, {}) == ()
     assert launch.describe(["a", "b" * 100]).endswith("...")
+
+
+def test_granted_rules_reach_the_worker_one_argument_each(tmp_path):
+    argv = build_argv(spec(tmp_path, allowed_tools=("Bash(npm run build)", "Bash(node:*)")))
+    at = argv.index("--allowedTools")
+    assert argv[at + 1:at + 3] == ["Bash(npm run build)", "Bash(node:*)"]
+    assert "--allowedTools" not in build_argv(spec(tmp_path))
+    argv = build_argv(spec(tmp_path, extra_dirs=(tmp_path / "node_modules",)))
+    assert argv[argv.index("--add-dir") + 1] == str(tmp_path / "node_modules")
+
+
+def test_a_refused_command_is_read_from_the_cli_not_the_worker(tmp_path):
+    s = spec(tmp_path)
+    refusals = [
+        {"tool_name": "Bash", "tool_input": {"command": "npm   run build", "description": "build"}},
+        {"tool_name": "Bash", "tool_input": {"command": "npm run build"}},
+        {"tool_name": "Write", "tool_input": {"file_path": "src/app.ts"}},
+        {"tool_name": "WebFetch", "tool_input": {}},
+        {"tool_name": "Bash", "tool_input": {"command": "x" * 200}},
+        "garbage", {"tool_input": {"command": "ls"}},
+    ]
+    said_done = block(verdict="inconclusive", failure="environment", summary="created the routes; build refused")
+    result = parse(proc(envelope(said_done, permission_denials=refusals)), s)
+    assert not result.passed and result.failure is Failure.PERMISSION and result.verdict == "inconclusive"
+    assert result.denied[:3] == ("Bash(npm run build)", "Write(src/app.ts)", "WebFetch")
+    assert len(result.denied) == 4 and result.denied[3].endswith("...)") and len(result.denied[3]) == 126
+    # no block at all, or a pass it could not show: the refusal still decides
+    assert parse(proc(envelope("stopped", permission_denials=refusals[:1])), s).failure is Failure.PERMISSION
+    bare = parse(proc(envelope(block(verdict="pass", summary="done"), permission_denials=refusals[:1])), s)
+    assert bare.failure is Failure.PERMISSION and bare.verdict == "pass"
+    # a task the worker found wrong is wrong whatever was refused
+    wrong = block(verdict="fail", failure="spec_bug", summary="read-only task asks for files")
+    assert parse(proc(envelope(wrong, permission_denials=refusals[:1])), s).failure is Failure.SPEC_BUG
+    # a pass it could show stands: it found another way
+    shown = block(verdict="pass", summary="done", evidence="ok")
+    assert parse(proc(envelope(shown, permission_denials=refusals[:1])), s).passed
+    assert launch.denials(None) == () and launch.denials({"permission_denials": None}) == ()

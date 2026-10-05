@@ -2,6 +2,67 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-05
+
+From an audit of a session where five tasks ended `blocked` and their reports
+said "I created the routes" while the repository had none of them.
+
+### Fixed
+
+- **Work a worker did was thrown away when its task stopped.** A task that
+  ended `blocked` or `needs_approval` had its worktree and branch deleted, so a
+  worker's true account of what it wrote read as a lie. That work is now kept
+  on `cauce/task-<id>`, committed as unverified, and the report says so.
+  `failed`, `replan` and `cancelled` still leave nothing.
+- **A refused command was retried, then reported as "the environment failed
+  twice".** A one-shot worker is refused whatever its settings do not allow
+  (`npm run build`, `node`). cauce now reads the CLI's own
+  `permission_denials`. A refusal is the new `permission` failure, and it
+  blocks at once: retrying it, or sending a stronger model into it, gets the
+  same refusal. The report names each refused call as the rule to allow.
+- **A fresh worktree could not build.** It has none of the checkout's ignored
+  folders. The checkout's ignored `node_modules`, `.venv` and `venv` are now
+  linked in, and the worker may read them. The person's
+  `.claude/settings.local.json` is copied in, so a worker is allowed (and
+  refused) what the person set. Neither is ever committed.
+- **A pre-commit hook could lose a task's work.** cauce's own snapshot commit
+  on the task branch runs with `--no-verify`. A hook that needs approval, or
+  an install the worktree lacks, no longer stops the work being kept. The
+  person's hooks run when they commit or merge.
+- **A request to create files could get a read-only worker.** "Crear 5
+  módulos…" read as `explore` gets a worker with no write tool, which can only
+  describe changes it did not make. A request that opens a clause with a verb
+  of change (create, add, register, fix, update…, in English and Spanish) is
+  never read as `chat`, `explore` or a review, unless a `#tag` or `--kind`
+  says so. A read-only worker asked for a change answers `spec_bug`, so the
+  run ends `replan`.
+- **"Fix it, then resume" named no command**, and the orchestrating session
+  tried `cauce continue`, which never existed.
+
+### Added
+
+- `cauce resume <id>` runs a task that stopped (`blocked`, `needs_approval`,
+  `failed`, `cancelled`, `interrupted`) again under its own id. It continues
+  on its kept branch from the cell it stopped at, with its earlier attempts in
+  the brief. It reuses the task's verify command and grants; `--allow`,
+  `--verify`, `--budget`, `--start` and `--allow-approval` add to them or
+  replace them.
+- `--allow "<rule>"` on `run`, `route`, `queue add` and `resume` (repeatable),
+  e.g. `--allow "Bash(npm run build)"`. It is passed to workers as
+  `--allowedTools` and kept with the task.
+- Every report of a writing task prints `changed (from git): …` next to the
+  worker's summary. The summary is labelled as the worker's own account, and
+  a kept branch says whether it is ready to merge or unverified.
+- `--verify` can settle an attempt whose worker was refused the command that
+  would check its work, as long as the task has written something and the
+  worker did not call it a failure. A green check is a pass; a red one stays
+  blocked, with the check's output as evidence. The worker's claim alone is
+  never enough.
+- `/orchestration` tells the session to grant commands up front with
+  `--allow`, to say a file was created only when `changed (from git)` lists
+  it, to resume a blocked task instead of redoing it, and to use only the
+  commands `cauce --help` lists.
+
 ## [0.3.2] - 2026-10-05
 
 ### Fixed

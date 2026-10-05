@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -367,3 +368,111 @@ def test_the_fix_that_worked_is_anchored_to_its_commit_and_costs_inform_the_next
     assert fix["outcome"] == "worked" and fix["commit_sha"] == git(git_repo, "rev-parse", report.branch)
     nxt = run("another", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"))
     assert any("cost $0.50 on average" in r for r in nxt.plan.reasons)
+
+
+def refused(summary="created the routes; node was refused", verdict="inconclusive", cost=0.1) -> WorkerResult:
+    return WorkerResult(False, Failure.PERMISSION, summary, cost_usd=cost, verdict=verdict,
+                        denied=("Bash(node server.js)",), changed_paths=("routes.js",))
+
+
+def test_work_a_refusal_stopped_is_kept_unverified_and_the_report_says_what_git_saw(git_repo, store):
+    """The audited run: a worker wrote the routes, was refused `node`, said so; the
+    run ended blocked and the routes were nowhere. Now they are on the branch."""
+    script = Script(refused(), write="routes.js")
+    report = run("create the training routes", git_repo, store, Options(allow_tools=("Bash(npm run build)",)),
+                 registry={}, launcher=script, classifier=kind("implement"))
+    assert report.status == "blocked" and report.cells == ["sonnet/medium"]  # no retry into the same refusal
+    assert "Bash(node server.js)" in report.summary and "--allow" in report.summary
+    assert "The last worker's own account: created the routes" in report.summary
+    assert script.specs[0].allowed_tools == ("Bash(npm run build)",)
+    assert report.branch == f"cauce/task-{report.task_id}" and report.changed == ["routes.js"]
+    assert "routes.js" in git(git_repo, "show", "--name-only", report.branch)
+    assert "(unverified, blocked)" in git(git_repo, "log", "-1", "--format=%s", report.branch)
+    text = report.text()
+    assert "changed (from git): routes.js" in text
+    assert "keeps this task's unverified work" in text and f"cauce resume {report.task_id}" in text
+    assert "review it, then merge it" not in text
+    assert json.loads(store.get_task(report.task_id)["options"])["allow_tools"] == ["Bash(npm run build)"]
+    finished = store.last_event(report.task_id, "finished")["data"]
+    assert finished["changed"] == ["routes.js"] and finished["branch"] == report.branch
+    assert store.last_event(report.task_id, "attempt_finished")["data"]["denied"] == ["Bash(node server.js)"]
+
+
+def test_the_repositorys_check_can_settle_what_a_refused_worker_could_not(git_repo, store):
+    script = Script(refused(), write="routes.js")
+    report = run("create the routes", git_repo, store, Options(verify="test -f routes.js"), registry={},
+                 launcher=script, classifier=kind("implement"))
+    assert report.status == "done" and report.final_cell == "sonnet/medium"
+    assert "`test -f routes.js` passed in its place" in report.summary
+    assert store.attempts(report.task_id)[0]["passed"] == 1
+    # red, it stays blocked, with the check's output for the person
+    script = Script(refused(), write="routes.js")
+    report = run("create the routes", git_repo, store, Options(verify="echo nope; exit 3"), registry={},
+                 launcher=script, classifier=kind("implement"))
+    assert report.status == "blocked"
+    assert "exited 3" in store.attempts(report.task_id)[0]["evidence"]
+    # a worker that called it a failure is not passed by a green check, nor a task that wrote nothing
+    for result in (refused(verdict="fail"), WorkerResult(False, Failure.PERMISSION, "x", verdict="inconclusive",
+                                                         denied=("Bash(ls)",))):
+        report = run("create the routes", git_repo, store, Options(verify="true"), registry={},
+                     launcher=Script(result, write="routes.js" if result.verdict == "fail" else None),
+                     classifier=kind("implement"))
+        assert report.status == "blocked"
+    # outside a worktree, what the attempt changed is what the task wrote
+    report = run("create the routes", git_repo, store, Options(verify="true", isolate=False), registry={},
+                 launcher=Script(refused()), classifier=kind("implement"))
+    assert report.status == "done" and report.changed == ["routes.js"]
+    report = run("create the routes", git_repo, store, Options(isolate=False), registry={},
+                 launcher=Script(refused()), classifier=kind("implement"))
+    assert "these changes are in your checkout, unverified" in report.text()
+
+
+def test_work_that_failed_is_dropped_and_the_report_says_so(git_repo, store):
+    script = Script(bad(Failure.SPEC_BUG, "no such API"), write="half.py")
+    report = run("do it", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert report.status == "replan" and report.branch is None
+    assert "changed (from git): half.py" in report.text() and "nothing of it was kept" in report.text()
+    # a reading task prints no changed line: it has nothing to change
+    report = run("where is it", git_repo, store, registry={}, launcher=Script(ok()), classifier=kind("explore"))
+    assert "changed (from git)" not in report.text()
+
+
+def test_a_resumed_task_continues_on_its_branch_with_its_history_in_the_brief(git_repo, store):
+    first = run("create the routes", git_repo, store, registry={}, launcher=Script(refused(), write="routes.js"),
+                classifier=kind("implement"))
+    (git_repo / ".gitignore").write_text("node_modules/\n")
+    (git_repo / "node_modules").mkdir()
+    seen = []
+
+    spec_dirs = []
+
+    def launcher(spec):
+        seen.append((spec.prompt, (spec.target_dir / "routes.js").read_text()))
+        spec_dirs.extend(spec.extra_dirs)
+        return ok("checked the routes")
+
+    history = [orchestrate.Attempt(Cell("sonnet", "medium"), 30, False, Failure.PERMISSION, "node was refused",
+                                   ("Bash(node server.js)",))]
+    report = run("create the routes", git_repo, store, Options(kind="implement", start=Cell("sonnet", "medium")),
+                 registry={}, launcher=launcher, task_id=first.task_id, history=history)
+    prompt, routes = seen[0]
+    assert routes == "attempt 1\n"  # what the first run wrote is where the second starts
+    assert "is resumed" in prompt and "attempt 1 [sonnet/medium, permission] node was refused" in prompt
+    assert "refused: Bash(node server.js)" in prompt
+    assert "Linked from the person's checkout and shared with it: node_modules" in prompt
+    assert spec_dirs == [(git_repo / "node_modules").resolve()]
+    assert report.status == "done" and report.branch == first.branch
+    assert store.get_task(first.task_id)["cost_usd"] == pytest.approx(0.2)
+    assert [a["seq"] for a in store.attempts(first.task_id)] == [1, 2]
+
+
+def test_a_resumed_worker_that_finds_the_work_done_is_settled_by_the_check(git_repo, store):
+    first = run("create the routes", git_repo, store, registry={}, launcher=Script(refused(), write="routes.js"),
+                classifier=kind("implement"))
+    again = WorkerResult(False, Failure.PERMISSION, "routes.js was already there", verdict="inconclusive",
+                         denied=("Bash(node server.js)",))
+    report = run("create the routes", git_repo, store, Options(kind="implement", verify="test -f routes.js"),
+                 registry={}, launcher=Script(again), task_id=first.task_id)
+    assert report.status == "done" and report.changed == ["routes.js"]
+    assert "(unverified" in git(git_repo, "log", "-2", "--format=%s", report.branch).splitlines()[1]
+    assert "(unverified" not in git(git_repo, "log", "-1", "--format=%s", report.branch)

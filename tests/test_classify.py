@@ -99,3 +99,32 @@ def test_the_neutral_directory_is_created(tmp_path):
     target = tmp_path / "not" / "yet"
     assert by_model("x", runner=run, cwd=target).kind == "docs"
     assert target.is_dir() and run.calls[0][1]["cwd"] == str(target)
+
+
+@pytest.mark.parametrize(
+    ("text", "kind"),
+    [
+        # what the audited session typed: a change, never a search
+        ("Crear 5 módulos de training y 10 rutas lazy en app.routes.ts", "implement"),
+        ("Verifica la estructura contra el spec y registra /api/training en index.js", "implement"),
+        ("revisa el codigo del parser y arregla lo que encuentres", "implement"),
+        ("Find where the router is defined, then add a lazy route", "implement"),
+        # a verb of change inside a search is still a search
+        ("busca donde se crea el usuario", "explore"),
+        ("¿dónde se registra la ruta? y agrega un log", "implement"),
+        ("¿dónde se define el usuario que se crea?", "explore"),
+        ("where is the router defined #explore, then add a route", "explore"),  # a tag is a person's word
+    ],
+)
+def test_a_request_for_a_change_is_never_read_only(text, kind):
+    assert classify(text, use_model=False).kind == kind
+
+
+def test_the_model_reading_a_change_as_a_search_is_overruled(monkeypatch):
+    def fake(argv, **kw):
+        out = {"kind": "explore", "complexity": "medium", "confidence": 0.9, "reason": "mentions the spec"}
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"structured_output": out, "total_cost_usd": 0.01}), "")
+
+    found = classify("Crear la estructura del frontend según el spec", runner=fake)
+    assert found.kind == "implement" and found.source == "model" and found.cost_usd == 0.01
+    assert found.reason == "read as explore, but it asks for a change (crear)"

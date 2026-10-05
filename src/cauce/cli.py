@@ -13,6 +13,7 @@ from pathlib import Path
 from cauce import __version__, capabilities, config, flow, habits, hooks, orchestrate, project, repo, usage
 from cauce.adapters import default_adapters
 from cauce.classify import classify
+from cauce.escalate import Attempt, Failure
 from cauce.matrix import KINDS, LADDERS, Cell
 from cauce.store import FIX_OUTCOMES, Store, home
 
@@ -41,6 +42,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         start=Cell.parse(args.start) if args.start else None,
         dry_run=args.dry_run,
         livespec=args.livespec,
+        allow_tools=tuple(args.allow or ()),
     )
     store = Store.open()
     previous = _cancel_on_sigterm()
@@ -52,6 +54,57 @@ def cmd_run(args: argparse.Namespace) -> int:
         store.close()
     print(report.text())
     return 0 if report.status in ("done", "dry run") else 1
+
+
+#: Endings a task can be resumed from: it stopped, and was not judged wrong.
+RESUMABLE = ("blocked", "needs_approval", "failed", "cancelled", "interrupted")
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    """A task that stopped, run again under its own id: on the branch its work was
+    kept on, from the cell it stopped at, its earlier attempts in the brief."""
+    store = Store.open()
+    previous = _cancel_on_sigterm()
+    try:
+        task = store.get_task(args.id)
+        if task is None or task["source"] != "cauce" or not task["cwd"]:
+            print(f"no task #{args.id} that cauce ran", file=sys.stderr)
+            return 1
+        if task["status"] not in RESUMABLE:
+            print(f"task #{args.id} is {task['status']}; only a task that stopped ({', '.join(RESUMABLE)}) resumes"
+                  + ("; rewrite it as a new task" if task["status"] == "replan" else ""), file=sys.stderr)
+            return 1
+        options = flow.queued_options(task, orchestrate.Options(use_model_classifier=not args.no_model))
+        options.kind = options.kind or task["kind"]
+        options.allow_tools = tuple(dict.fromkeys([*options.allow_tools, *(args.allow or ())]))
+        options.verify = args.verify or options.verify
+        options.budget_usd = args.budget or options.budget_usd
+        options.allow_approval = options.allow_approval or args.allow_approval
+        attempts = store.attempts(args.id)
+        moved = store.last_event(args.id, "moved")
+        waiting = moved["data"].get("next_cell") if moved and task["status"] == "needs_approval" else None
+        if waiting and not options.allow_approval:
+            print(f"task #{args.id} waits for {waiting}, which needs your approval: resume it with --allow-approval",
+                  file=sys.stderr)
+            return 1
+        start = args.start or waiting or (attempts[-1]["cell"] if attempts else None)
+        options.start = Cell.parse(start) if start else None
+        history = [Attempt(Cell.parse(a["cell"]), int(a["max_turns"] or 0), bool(a["passed"]),
+                           _failure_of(a["failure"]), a["summary"] or "") for a in attempts]
+        store.update_task(args.id, options=json.dumps(options.stored()), dispatched=0, cancel_requested=0)
+        report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=args.id, history=history)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        store.close()
+    print(report.text())
+    return 0 if report.status == "done" else 1
+
+
+def _failure_of(value: str | None) -> Failure | None:
+    try:
+        return Failure(value) if value else None
+    except ValueError:
+        return None
 
 
 def _cancel_on_sigterm():
@@ -334,7 +387,7 @@ def cmd_queue(args: argparse.Namespace) -> int:
         if args.queue_command == "add":
             where = Path(args.repo or os.getcwd()).resolve()
             options = {k: v for k, v in {"budget_usd": args.budget, "verify": args.verify, "kind": args.kind,
-                                         "start": args.start}.items() if v is not None}
+                                         "start": args.start, "allow_tools": args.allow}.items() if v is not None}
             task = store.enqueue(_text(args.text), repo=repo.key(where), cwd=str(where), options=options,
                                  session_id=os.environ.get("CAUCE_SESSION_ID"))
             with contextlib.suppress(OSError):
@@ -573,6 +626,10 @@ def cmd_hook(args: argparse.Namespace) -> int:
     return hooks.main(args.event, sys.stdin, sys.stdout, os.environ)
 
 
+ALLOW_HELP = ("a permission rule the workers get, e.g. 'Bash(npm run build)' or 'Bash(node:*)'; repeatable. "
+              "A one-shot worker is refused whatever its settings do not allow")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cauce", description="route work to the right model, effort and tools")
     parser.add_argument("--version", action="version", version=f"cauce {__version__}")
@@ -589,6 +646,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--kind", choices=KINDS, help="skip classification")
         p.add_argument("--start", help="pin the first cell, e.g. sonnet/high")
         p.add_argument("--allow-approval", action="store_true", help="allow cells that need approval (Fable)")
+        p.add_argument("--allow", action="append", metavar="RULE", help=ALLOW_HELP)
         p.add_argument("--no-isolate", action="store_true", help="work in the checkout, not a worktree")
         p.add_argument("--no-model", action="store_true", help="classify with the rules only")
         switch = p.add_mutually_exclusive_group()
@@ -601,6 +659,16 @@ def build_parser() -> argparse.ArgumentParser:
     run_args(p)
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("resume", help="run a task that stopped again: from its kept work and the cell it stopped at")
+    p.add_argument("id", type=int)
+    p.add_argument("--allow", action="append", metavar="RULE", help=ALLOW_HELP)
+    p.add_argument("--verify", help="command whose exit code decides a claimed pass (default: the task's own)")
+    p.add_argument("--budget", type=float, help="dollars this run may spend (default: the task's own)")
+    p.add_argument("--start", help="the cell to resume at (default: where it stopped)")
+    p.add_argument("--allow-approval", action="store_true", help="allow cells that need approval (Fable)")
+    p.add_argument("--no-model", action="store_true")
+    p.set_defaults(func=cmd_resume)
 
     p = sub.add_parser("route", help="show where a task would start and how it would climb")
     run_args(p)
@@ -630,6 +698,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--verify")
     p.add_argument("--kind", choices=KINDS)
     p.add_argument("--start")
+    p.add_argument("--allow", action="append", metavar="RULE", help=ALLOW_HELP)
     p.add_argument("--json", action="store_true", help="print the queued task as JSON")
     p.set_defaults(func=cmd_queue)
     p = qsub.add_parser("list", help="what is waiting (this repository; --all for every one)")

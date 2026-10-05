@@ -13,6 +13,12 @@ that could not be run, is the default kind — which is the middle of the matrix
 not a guess.
 
 `frontier` (Fable) is never a model's decision. Only the `#fable` tag reaches it.
+
+The two mistakes are not equal. A change read as a reading task gets a worker
+with no write tool, which can only report what it did not do; a reading task
+read as a change gets a worktree that is dropped empty. So a request that opens
+a clause with a verb of change is never read-only unless a tag or the caller
+says so.
 """
 from __future__ import annotations
 
@@ -91,6 +97,19 @@ _QUESTION = re.compile(
 )
 _TEST = re.compile(r"\b(escribe|agrega|anade|add|write|corre|run|arregla|fix)\s+(\w+\s+){0,2}(tests?|pruebas?)\b")
 _TAG = re.compile(r"#([a-z][a-z-]+)\b")
+
+#: A verb of change opening a clause: "Crear 5 módulos", "... y registrar la ruta".
+#: Not anywhere in the text: "busca dónde se crea el usuario" is still a search.
+_CHANGE = re.compile(
+    r"(?:^|[.;:\n!?(]\s*|,\s*|\b(?:y|e|and|then|luego|despues|tambien|also|please|por favor)\s+)"
+    r"(crea|crear|creen|creame|create|implementa|implementar|implement|agrega|agregar|anade|anadir|add"
+    r"|escribe|escribir|write|registra|registrar|register|modifica|modificar|modify|edita|editar|edit"
+    r"|arregla|arreglar|fix|refactoriza|refactorizar|refactor|elimina|eliminar|borra|borrar|delete|remove"
+    r"|actualiza|actualizar|update|genera|generar|generate|migra|migrar|migrate|renombra|renombrar|rename"
+    r"|construye|construir|build)\b"
+)
+#: Kinds whose worker cannot write. `plan` is not here: "crea un plan" is a plan.
+_READING = frozenset({"chat", "explore", "review-routine", "review-critical"})
 
 
 def by_rules(text: str) -> Classification | None:
@@ -233,10 +252,23 @@ def by_model(text: str, **haiku_kwargs) -> Classification:
 def classify(text: str, *, use_model: bool = True, **model_kwargs) -> Classification:
     ruled = by_rules(text)
     if ruled is not None:
-        return ruled
+        return asks_for_change(text, ruled)
     if not use_model:
         return Classification(DEFAULT_KIND, reason="no rule matched and the model was not asked")
-    return by_model(text, **model_kwargs)
+    return asks_for_change(text, by_model(text, **model_kwargs))
+
+
+def asks_for_change(text: str, found: Classification) -> Classification:
+    """A reading kind for a request that asks for a change becomes `implement`.
+    A tag is a person's word and stays; so does a question."""
+    folded = fold(text).strip()
+    if found.kind not in _READING or found.reason.startswith("tagged") or folded.endswith("?"):
+        return found
+    verb = _CHANGE.search(folded)
+    if verb is None:
+        return found
+    return Classification("implement", found.complexity, found.source,
+                          f"read as {found.kind}, but it asks for a change ({verb.group(1)})", found.cost_usd)
 
 
 def _quiet_env() -> dict[str, str]:

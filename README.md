@@ -62,11 +62,16 @@ docs             haiku → sonnet/low → sonnet/medium
 | shallow: a bug left, a case missed, no verification | **more effort**, same model |
 | wrong approach, or two cells gave the same answer | **next model**, worktree reset |
 | timeout, missing tool | **retry** once at the same cell |
+| a command the permission settings refused | **blocked** at once — a stronger model gets the same refusal |
 | hit its turn ceiling | **more turns** once, then split |
 | the task contradicts itself or its check | **replan** — no model fixes a wrong task |
 
 A worker's claim of success is not evidence: a pass needs verbatim output, and
-`--verify "<command>"` gets the last word.
+`--verify "<command>"` gets the last word. The report prints what changed as
+git sees it (`changed (from git): …`) beside the worker's own account, so "I
+created the routes" is never the only word on it. A worker refused the command
+that would check its work, that wrote something and did not call it a failure,
+passes only if `--verify` passes in its place.
 
 ### Where a task starts
 
@@ -189,13 +194,23 @@ From a shell:
 ```sh
 cauce route "the login redirect drops the query string"        # where it would start, and why
 cauce run "the login redirect drops the query string" --verify "pytest -q tests/test_auth.py"
+cauce run "build the training module" --verify "npm run build" --allow "Bash(npm run build)"
+cauce resume 12 --allow "Bash(node:*)"                         # a task that stopped, from its kept work
 cauce show 12                                                  # attempts, moves and messages
 cauce memory search "redirect query string"                    # dead ends, every repo
 cauce memory record --problem "redirect drops query" --fix "use url_for(_external)" --outcome failed --why "..."
 ```
 
-`cauce run` writes in a git worktree on `cauce/task-<id>` and leaves that
-branch only when the task passed. `--launch-dir` starts the worker in another
+`cauce run` writes in a git worktree on `cauce/task-<id>`; nothing reaches
+your checkout until you merge that branch. A task that passed leaves it to
+review; one that stopped for a person (blocked, waiting on approval) leaves it
+too, committed as unverified, and `cauce resume <id>` continues on it; one that
+failed or must be replanned leaves nothing. The worktree gets the checkout's
+ignored `node_modules` / `.venv` and your `.claude/settings.local.json` as
+links, so a build can run and a worker is allowed what you allowed; anything
+else a worker needs to run, grant with `--allow "Bash(npm run build)"`
+(repeatable). A one-shot worker has nobody to ask: what its settings do not
+allow is refused, and the report names it. `--launch-dir` starts the worker in another
 directory (its settings and instructions) while it works in the repository.
 
 ### Queue and lanes

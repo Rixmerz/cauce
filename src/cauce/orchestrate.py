@@ -6,10 +6,16 @@ and nothing a model says about its own work decides the next move by itself:
 the result block is checked for evidence, an optional verify command has the
 last word on a claimed pass, and the failure kind is read against the ladder by
 `escalate.decide`.
+
+What a report says changed is git's account, printed beside the worker's own:
+a person reading "I created the routes" can see on the next line whether any
+file says so.
 """
 from __future__ import annotations
 
 import contextlib
+import dataclasses
+import json
 import os
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
@@ -40,6 +46,10 @@ _FINAL_STATUS = {
     Move.BLOCKED: "blocked",
 }
 
+#: Endings that wait on a person, not on the task being rewritten: the work done
+#: so far is kept on the task's branch, unverified, for them to see and resume.
+KEEPS_WORK = frozenset({"done", "blocked", "needs_approval"})
+
 #: How many finished tasks of a kind it takes before history moves the start.
 MIN_REPO_SAMPLES = 3
 MIN_GLOBAL_SAMPLES = 5
@@ -63,6 +73,15 @@ class Options:
     dry_run: bool = False
     #: None reads the `livespec` setting (on by default).
     livespec: bool | None = None
+    #: Permission rules a person granted the workers, e.g. `Bash(npm run build)`.
+    allow_tools: tuple[str, ...] = ()
+
+    def stored(self) -> dict:
+        """What a resumed run is started with again, as the task's `options`."""
+        values = {"budget_usd": self.budget_usd, "verify": self.verify, "kind": self.kind,
+                  "allow_approval": self.allow_approval, "allow_tools": list(self.allow_tools),
+                  "livespec": self.livespec}
+        return {k: v for k, v in values.items() if v not in (None, [], False)}
 
 
 @dataclass
@@ -92,6 +111,10 @@ class Report:
     branch: str | None = None
     summary: str = ""
     impact: list[str] = field(default_factory=list)
+    #: What the task changed, from git — never from the worker.
+    changed: list[str] = field(default_factory=list)
+    #: Whether it worked in a worktree; outside one, its changes are in the checkout.
+    isolated: bool = False
 
     def text(self) -> str:
         lines = [
@@ -112,8 +135,18 @@ class Report:
             lines.append(f"passed at {self.final_cell}")
         if self.cost_usd:
             lines.append(f"cost ${self.cost_usd:.2f}")
-        if self.branch:
-            lines.append(f"branch {self.branch} — review it, then merge it")
+        if self.task_id and self.plan.kind not in READ_ONLY_KINDS:
+            more = len(self.changed) - 8
+            shown = ", ".join(self.changed[:8]) + (f" and {more} more" if more > 0 else "")
+            lines.append(f"changed (from git): {shown or 'nothing'}")
+        if self.branch and self.status == "done":
+            lines.append(f"branch {self.branch} — review it, then merge it; your checkout has none of it until then")
+        elif self.branch:
+            lines.append(f"branch {self.branch} keeps this task's unverified work: review it with "
+                         f"`git diff HEAD...{self.branch}`, or `cauce resume {self.task_id}` once the block is cleared")
+        elif self.task_id and self.status != "done" and self.changed:
+            lines.append("nothing of it was kept" if self.isolated else
+                         "these changes are in your checkout, unverified")
         lines += self.impact
         if self.summary:
             lines.append(self.summary)
@@ -245,7 +278,10 @@ def run(
     adapters: Sequence[Adapter] | None = None,
     task_id: int | None = None,
     session_id: str | None = None,
+    history: Sequence[Attempt] = (),
 ) -> Report:
+    """Run a task. `history` is a resumed task's earlier attempts: shown to its
+    workers, never counted by the escalation, which starts over."""
     options = options or Options()
     registry = registry if registry is not None else caps.load(home() / "capabilities.json")
     launcher = launcher or launch.run
@@ -263,13 +299,15 @@ def run(
         class_reason=c.reason, start_cell=the_plan.start.label, pinned=int(options.start is not None),
     )
     if task_id is not None:
-        # A queued task the dispatcher claimed: it keeps its id, its messages
-        # and its place in the lane's history.
-        store.update_task(task_id, status="running", source="cauce", cost_usd=c.cost_usd, **fields)
+        # A queued or resumed task: it keeps its id, its messages, its cost so
+        # far and its place in the lane's history.
+        before = store.get_task(task_id)
+        store.update_task(task_id, status="running", source="cauce",
+                          cost_usd=float(before["cost_usd"] or 0) + c.cost_usd, **fields)
         task = store.get_task(task_id)
     else:
         task = store.create_task(text, status="running", source="cauce", cost_usd=c.cost_usd,
-                                 session_id=session_id, **fields)
+                                 session_id=session_id, options=json.dumps(options.stored()), **fields)
     report = Report(task["id"], "running", the_plan, cost_usd=c.cost_usd)
     store.update_task(task["id"], pid=os.getpid())
     store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label,
@@ -278,14 +316,23 @@ def run(
 
     workspace = None
     writes = the_plan.kind not in READ_ONLY_KINDS
+    context = list(the_plan.context)
     if options.isolate and writes and repo.toplevel(repo_dir) is not None:
+        resumed = isolate.kept(repo_dir, task["id"])
         workspace = isolate.prepare(repo_dir, task["id"], home())
+        if resumed:
+            context.append("This task was stopped before and is resumed: what its earlier attempts wrote is "
+                           "already here. Check it, and finish it rather than starting over.")
+        if workspace.links:
+            context.append("Linked from the person's checkout and shared with it: "
+                           + ", ".join(workspace.links) + ". Use them; do not delete or reinstall them.")
     workdir = workspace.path if workspace else repo_dir
     launch_dir = options.launch_dir.resolve() if options.launch_dir else workdir
 
     dead = store.dead_ends(text, repo=key, limit=5)
     cell, turns = the_plan.start, options.max_turns
     attempts: list[Attempt] = []
+    changed: set[str] = set()
     decision: Decision | None = None
     try:
         while True:
@@ -301,14 +348,17 @@ def run(
             selection = _equip(caps.select(registry, the_plan.kind, failed_before=bool(attempts), workdir=workdir),
                                the_plan, repo_dir, workdir)
             spec = launch.LaunchSpec(
-                prompt=brief(text, the_plan.kind, workdir, attempts, dead, options.verify, writes,
-                             the_plan.context),
+                prompt=brief(text, the_plan.kind, workdir, [*history, *attempts], dead, options.verify, writes,
+                             context),
                 cell=cell,
                 launch_dir=launch_dir,
                 workdir=workdir if workdir != launch_dir else None,
                 max_turns=turns,
                 max_budget_usd=round(remaining, 2),
                 disallowed_tools=() if writes else launch.WRITE_TOOLS,
+                allowed_tools=options.allow_tools,
+                extra_dirs=tuple(workspace.repo_dir / rel for rel in workspace.links
+                                 if (workspace.repo_dir / rel).is_dir()) if workspace else (),
                 mcp_servers=selection.servers,
                 append_system_prompt=selection.system_prompt(),
                 env={"CAUCE_WORKER_TASK": str(task["id"]), "CAUCE_WORKER_ATTEMPT": str(len(attempts) + 1)},
@@ -319,6 +369,10 @@ def run(
             result = launcher(spec)
             if result.passed and options.verify:
                 result = _verified(result, options.verify, workdir)
+            elif _settles(result, options.verify) and (
+                    isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
+                result = _settled(result, options.verify, workdir)
+            changed.update(result.changed_paths)
             report.cells.append(cell.label)
             report.cost_usd += result.cost_usd
             seq = store.add_attempt(
@@ -331,8 +385,9 @@ def run(
             )
             store.add_event(task["id"], "attempt_finished", seq=seq, cell=cell.label, passed=result.passed,
                             failure=result.failure.value if result.failure else None, cost_usd=result.cost_usd,
-                            turns=result.turns, summary=result.summary[:500])
-            attempt = Attempt(cell, turns, result.passed, result.failure, result.summary)
+                            turns=result.turns, summary=result.summary[:500], denied=list(result.denied),
+                            changed=list(result.changed_paths)[:50])
+            attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied)
             attempts.append(attempt)
             if result.passed:
                 report.status, report.final_cell, report.summary = "done", cell.label, result.summary
@@ -352,8 +407,8 @@ def run(
                 # The worker's own account goes with the reason: "the task is
                 # wrong" is only actionable next to what it found wrong.
                 report.status = _FINAL_STATUS[decision.move]
-                report.summary = f"{decision.reason}. Last attempt: {result.summary}" if result.summary else (
-                    decision.reason)
+                report.summary = f"{decision.reason}. The last worker's own account: {result.summary}" if (
+                    result.summary) else decision.reason
                 break
             if decision.move is Move.NEXT_MODEL and workspace is not None:
                 isolate.reset(workspace)
@@ -362,10 +417,14 @@ def run(
         report.status, report.summary = "cancelled", "cancelled before it finished"
     finally:
         if workspace is not None:
+            report.isolated = True
+            report.changed = list(isolate.changed(workspace))
+            unverified = "" if report.status == "done" else f" {isolate.UNVERIFIED}, {report.status})"
             report.branch = isolate.finish(
-                workspace, keep=report.status == "done", message=f"cauce task #{task['id']}: {task['title']}"
+                workspace, keep=report.status in KEEPS_WORK,
+                message=f"cauce task #{task['id']}{unverified}: {task['title']}",
             )
-            if report.branch:
+            if report.branch and report.status == "done":
                 # The fix that worked is anchored to the commit a person can check.
                 store.set_fix_commit(task["id"], isolate.head(workspace.repo_dir, report.branch))
         status = report.status if report.status != "running" else "failed"
@@ -373,8 +432,11 @@ def run(
                           pid=None, current_cell=None)
         if status != "done" and store.get_task(task["id"])["dispatched"]:
             store.pause_lane(key, f"task #{task['id']} ended {status}: {report.summary[:200]}")
+        if workspace is None:
+            report.changed = sorted(changed)
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
-                        cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact)
+                        cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
+                        changed=report.changed[:50])
         store.add_message(task["id"], "worker", report.text())
     return report
 
@@ -393,7 +455,8 @@ def brief(
     if context:
         parts.append("\n".join(context))
     if not writes:
-        parts.append("This task is read-only: find out and report. Do not change files.")
+        parts.append("This task is read-only: find out and report. Do not change files. If it asks for a "
+                     "change, you cannot make it here: answer `fail` with `spec_bug` and say so.")
     if verify:
         parts.append(f"When you report a pass, it is checked by running: {verify}")
     if dead_ends:
@@ -411,6 +474,8 @@ def brief(
         lines = ["Previous attempts on this task — already tried, do not repeat:"]
         for i, a in enumerate(attempts, 1):
             lines.append(f"  attempt {i} [{a.cell.label}, {a.failure or 'no verdict'}] {a.summary[:300]}")
+            if a.denied:
+                lines.append(f"    refused: {', '.join(a.denied[:5])}")
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
 
@@ -431,24 +496,49 @@ def _equip(selection: caps.Selection, the_plan: Plan, repo_dir: Path, workdir: P
     return caps.Selection(servers, tuple(hints), tuple(names))
 
 
-def _verified(result: launch.WorkerResult, command: str, workdir: Path) -> launch.WorkerResult:
-    """A claimed pass checked by the repository's own command. The worker does not
-    grade itself: a red check turns the pass into a code bug, with the check's
-    output as the evidence the next attempt reads."""
+def _check(command: str, workdir: Path) -> tuple[int | None, str]:
+    """The repository's own check: (exit code, or None on a timeout; its output)."""
     try:
         proc = subprocess.run(command, shell=True, cwd=str(workdir), capture_output=True, text=True,  # noqa: S602
                               timeout=VERIFY_TIMEOUT_S, check=False)
     except subprocess.TimeoutExpired:
-        return launch.WorkerResult(False, Failure.INCONCLUSIVE, f"`{command}` timed out after the claimed pass",
-                                   result.evidence, result.changed_paths, result.cost_usd, result.input_tokens,
-                                   result.output_tokens, result.turns, result.duration_s, result.raw)
-    if proc.returncode == 0:
+        return None, ""
+    return proc.returncode, (proc.stdout + proc.stderr).strip()[-3000:]
+
+
+def _verified(result: launch.WorkerResult, command: str, workdir: Path) -> launch.WorkerResult:
+    """A claimed pass checked by the repository's own command. The worker does not
+    grade itself: a red check turns the pass into a code bug, with the check's
+    output as the evidence the next attempt reads."""
+    code, output = _check(command, workdir)
+    if code is None:
+        return dataclasses.replace(result, passed=False, failure=Failure.INCONCLUSIVE,
+                                   summary=f"`{command}` timed out after the claimed pass")
+    if code == 0:
         return result
-    output = (proc.stdout + proc.stderr).strip()[-3000:]
-    return launch.WorkerResult(
-        False, Failure.CODE_BUG, f"claimed a pass, but `{command}` exited {proc.returncode}: {result.summary}",
-        output, result.changed_paths, result.cost_usd, result.input_tokens, result.output_tokens,
-        result.turns, result.duration_s, result.raw,
+    return dataclasses.replace(
+        result, passed=False, failure=Failure.CODE_BUG, evidence=output,
+        summary=f"claimed a pass, but `{command}` exited {code}: {result.summary}",
+    )
+
+
+def _settles(result: launch.WorkerResult, command: str | None) -> bool:
+    """A worker refused the command that would show its work, that did not call it
+    a failure: on a task that has written something, the repository's own check
+    can still decide. Its claim alone never would."""
+    return bool(command and not result.passed and result.failure is Failure.PERMISSION
+                and result.verdict in ("inconclusive", "pass"))
+
+
+def _settled(result: launch.WorkerResult, command: str, workdir: Path) -> launch.WorkerResult:
+    code, output = _check(command, workdir)
+    if code != 0:
+        why = "timed out" if code is None else f"exited {code}"
+        return dataclasses.replace(result, evidence=f"`{command}` {why}:\n{output}".strip())
+    refused = ", ".join(result.denied[:3])
+    return dataclasses.replace(
+        result, passed=True, failure=None, evidence=output or f"`{command}` exited 0",
+        summary=f"{result.summary} (the worker was refused {refused}; `{command}` passed in its place)",
     )
 
 
