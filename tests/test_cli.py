@@ -219,7 +219,7 @@ def test_board_counts_for_a_status_line(capsys):
     store.enqueue("y", repo="r", cwd="/x")
     store.close()
     assert cli.main(["board", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out) == {"needs_you": 1, "running": 0, "queued": 1, "done": 0}
+    assert json.loads(capsys.readouterr().out) == {"needs_you": 1, "running": 0, "workers": 0, "queued": 1, "done": 0}
     assert cli.main(["board"]) == 0
     assert capsys.readouterr().out.strip() == "cauce ⚠1 ▶0 ⏸1"
 
@@ -238,7 +238,7 @@ def test_the_json_surface_a_page_reads(capsys, git_repo):
     assert cli.main(["board", "--full", "--repo", str(git_repo)]) == 0
     board = json.loads(capsys.readouterr().out)
     assert board["repos"] == {str(git_repo): repo.key(git_repo.resolve())}
-    assert board["counts"] == {"needs_you": 0, "running": 0, "queued": 1, "done": 0}
+    assert board["counts"] == {"needs_you": 0, "running": 0, "workers": 0, "queued": 1, "done": 0}
     assert board["queued"][0]["tasks"][0]["id"] == queued["id"]
     assert cli.main(["board", "--full"]) == 0
     assert json.loads(capsys.readouterr().out)["counts"]["needs_you"] == 1

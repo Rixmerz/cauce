@@ -79,6 +79,11 @@
 - `/cauce:ui` opens the page from a session. `cauce board --full [--repo DIR]…`,
   `cauce show <id> --json` and `cauce queue add … --json` give another program
   the board scoped to some repositories, a task, and what it queued.
+- The board carries each task's way through the matrix (`flow`: kind, ladder,
+  start, every attempt with its cell, outcome and move) and, for a running task,
+  the worker out now (`worker`: the `claude -p` of this attempt, its cell, turn
+  and dollar limits, MCP servers, start time, and whether its process lives).
+  `counts.workers` says how many are out.
 
 ### Fixed
 

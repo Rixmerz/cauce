@@ -27,8 +27,35 @@ def test_the_board_sorts_work_by_what_it_needs(store: Store):
     assert b["needs_you"][1]["asks"].startswith("every cell")
     assert b["running"][0]["attempt"] == 2 and b["running"][0]["current_cell"] == "sonnet/high"
     assert {lane["repo"]: lane["paused"] for lane in b["queued"]} == {"other": True, "r": False}
-    assert b["counts"] == {"needs_you": 2, "running": 1, "queued": 1, "done": 1}
+    assert b["counts"] == {"needs_you": 2, "running": 1, "workers": 0, "queued": 1, "done": 1}
     assert b["last_event"] == store.last_event_id()
+
+
+def test_the_board_shows_each_task_s_way_and_the_worker_out_now(store: Store):
+    """The flow: kind, ladder, start and every attempt with its move. The worker: the claude -p cauce
+    launched for the attempt in flight, gone from the board once that attempt is recorded."""
+    import os
+
+    t = store.create_task("going", status="running", source="cauce", repo="r", pid=os.getpid())
+    store.add_event(t["id"], "planned", kind="implement", start="sonnet/low",
+                    ladder=["sonnet/low", "sonnet/medium", "opus/medium"], reasons=["history raised it"])
+    store.add_attempt(t["id"], cell="sonnet/low", max_turns=30, passed=0, failure="code_bug", cost_usd=0.1)
+    store.set_move(t["id"], 1, "more_effort", "the work was shallow")
+    store.add_event(t["id"], "attempt_started", seq=2, cell="sonnet/medium", max_turns=30, budget_usd=1.9,
+                    capabilities=["livespec"])
+    store.create_task("in a session", status="running", source="hook", session_id="s")
+    b = api.board(store)
+    going = next(r for r in b["running"] if r["id"] == t["id"])
+    assert going["flow"]["ladder"] == ["sonnet/low", "sonnet/medium", "opus/medium"]
+    assert going["flow"]["steps"][0]["move"] == "more_effort" and going["flow"]["steps"][0]["failure"] == "code_bug"
+    assert going["worker"]["seq"] == 2 and going["worker"]["cell"] == "sonnet/medium"
+    assert going["worker"]["capabilities"] == ["livespec"] and going["worker"]["alive"] is True
+    assert next(r for r in b["running"] if r["source"] == "hook").get("flow") is None
+    assert b["counts"]["workers"] == 1
+
+    store.add_attempt(t["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="approach")
+    assert next(r for r in api.board(store)["running"] if r["id"] == t["id"])["worker"] is None  # between attempts
+    assert api.flow_of(store, 999) is None
 
 
 def test_task_detail_spend_routing_memory_habits(store: Store):

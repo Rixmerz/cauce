@@ -6,7 +6,7 @@ import json
 from collections import Counter, defaultdict
 from typing import Any
 
-from cauce import habits, usage
+from cauce import flow, habits, usage
 from cauce.matrix import LADDERS
 from cauce.store import Store
 
@@ -28,6 +28,31 @@ def _brief(task: dict[str, Any]) -> dict[str, Any]:
     return {k: task.get(k) for k in keys}
 
 
+def flow_of(store: Store, task_id: int) -> dict[str, Any] | None:
+    """A task's way through the matrix: its kind, its ladder and where it started, then every attempt
+    with the cell it ran in, how it ended and the move that followed. None for a task cauce never planned
+    (a prompt answered in a session)."""
+    planned = store.last_event(task_id, "planned")
+    if planned is None:
+        return None
+    keys = ("seq", "cell", "passed", "failure", "move", "move_reason", "cost_usd", "turns", "duration_s")
+    return {"kind": planned["data"].get("kind"), "start": planned["data"].get("start"),
+            "ladder": planned["data"].get("ladder") or [], "reasons": planned["data"].get("reasons") or [],
+            "steps": [{k: a.get(k) for k in keys} for a in store.attempts(task_id)]}
+
+
+def worker_of(store: Store, task: dict[str, Any], steps: int) -> dict[str, Any] | None:
+    """The one-shot worker a running task has out now: a `claude -p` that cauce launched for this
+    attempt, with the cell, limits and capabilities it was given. None between attempts."""
+    started = store.last_event(task["id"], "attempt_started")
+    if started is None or started["data"].get("seq", 0) <= steps:
+        return None
+    d = started["data"]
+    return {"seq": d.get("seq"), "cell": d.get("cell"), "max_turns": d.get("max_turns"),
+            "budget_usd": d.get("budget_usd"), "capabilities": d.get("capabilities") or [],
+            "started_at": started["ts"], "alive": flow.alive(task.get("pid"))}
+
+
 def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
     """Every lane's state; with `repos`, only those repositories' tasks and lanes."""
     tasks = store.list_tasks(limit=500)
@@ -36,11 +61,15 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
         if t["source"] == "delegation" or (repos is not None and t["repo"] not in repos):
             continue
         item = _brief(t)
+        if t["source"] in ("cauce", "queue") and (t["status"] in NEEDS_YOU or t["status"] in ("running", "done")):
+            item["flow"] = flow_of(store, t["id"])
         if t["status"] in NEEDS_YOU and t["source"] in ("cauce", "queue"):
             needs.append({**item, "asks": NEEDS_YOU[t["status"]]})
         elif t["status"] == "running":
             started = store.last_event(t["id"], "attempt_started")
             item["attempt"] = started["data"].get("seq") if started else None
+            steps = len((item.get("flow") or {}).get("steps", []))
+            item["worker"] = worker_of(store, t, steps) if item.get("flow") else None
             running.append(item)
         elif t["status"] == "done":
             finished = store.last_event(t["id"], "finished")
@@ -64,6 +93,7 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
             queued[repo] = {"repo": repo, "paused": True, "reason": lane["reason"], "tasks": []}
     return {
         "counts": {"needs_you": len(needs), "running": len(running),
+                   "workers": sum(1 for r in running if r.get("worker")),
                    "queued": sum(len(v["tasks"]) for v in queued.values()), "done": len(done)},
         "needs_you": needs,
         "running": running,
