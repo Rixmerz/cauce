@@ -18,6 +18,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first |
 | `src/cauce/config.py` | cauce's settings (`livespec` on/off), copied from plugin options by SessionStart |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
+| `src/cauce/usage.py` | tokens per model from session transcripts, and spend by model and cell |
 | `src/cauce/flow.py` | the queue's dispatcher (`cauce work`), serial lanes per repository, the stale sweep |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |

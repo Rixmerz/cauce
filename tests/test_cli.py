@@ -162,3 +162,21 @@ def test_queue_lanes_and_work(capsys, git_repo, monkeypatch):
     assert cli.main(["lanes", "--unpause", "github.com/o/r"]) == 0
     assert cli.main(["lanes"]) == 0
     assert "open" in capsys.readouterr().out
+
+
+def test_spend_and_invalidate(capsys):
+    store = Store.open()
+    t = store.create_task("x", status="done", source="cauce", repo="r", kind="docs")
+    store.add_attempt(t["id"], cell="haiku", max_turns=30, passed=1, cost_usd=0.1)
+    p = store.open_problem("p", repo="r")
+    fix = store.add_fix(p, "f", "worked", repo="r")
+    store.close()
+    assert cli.main(["spend", "--days", "3"]) == 0
+    assert "haiku" in capsys.readouterr().out
+    assert cli.main(["spend", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["workers"][0]["cell"] == "haiku"
+    assert cli.main(["memory", "invalidate", str(fix), "--why", "came back"]) == 0
+    assert "recurring" in capsys.readouterr().out
+    assert cli.main(["memory", "invalidate", "999", "--why", "x"]) == 1
+    assert cli.main(["memory", "record", "--problem", "q", "--fix", "g", "--outcome", "worked",
+                     "--commit", "abc"]) == 0

@@ -110,6 +110,22 @@ One SQLite file in `$CAUCE_HOME` (default `~/.local/share/cauce`):
   **across repositories**. A matching dead end is put in front of the model
   before it starts (`UserPromptSubmit`) and in every worker's brief.
 
+### Spend
+
+`cauce spend` shows what work really cost over the last days: a session's own
+turns by the model that served them (read from its transcript at every `Stop`),
+and workers by cell. `cauce route` says what finished tasks of the same kind
+cost on average before a run is paid for. Dollars are API rates on the token
+counts; on a subscription they measure how much of the plan work used.
+
+### Fixes that stop working
+
+A fix that worked is recorded with the time it was trusted from and, when the
+run kept a branch, the commit it is about. When the same problem turns up
+again it is **recurring** and that fix is marked disproved — the most useful
+dead end there is, because it looked solved. `cauce memory invalidate <fix>
+--why "..."` does the same by hand.
+
 ## Install
 
 Requires Python 3.11+ and Claude Code. The core is standard library only.

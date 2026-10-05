@@ -71,3 +71,7 @@ def finish(ws: Workspace, *, keep: bool, message: str) -> str | None:
     if kept is None:
         _git(ws.repo_dir, "branch", "-D", ws.branch, check=False)
     return kept
+
+
+def head(repo_dir: Path, ref: str) -> str:
+    return _git(repo_dir, "rev-parse", ref)

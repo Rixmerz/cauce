@@ -358,3 +358,12 @@ def test_a_cancel_in_the_middle_of_an_attempt_cleans_up(git_repo, store):
     report = run("x", git_repo, store, registry={}, launcher=launcher, classifier=kind("implement"))
     assert report.status == "cancelled" and report.branch is None
     assert "cauce/task-" not in git(git_repo, "branch", "--list")
+
+
+def test_the_fix_that_worked_is_anchored_to_its_commit_and_costs_inform_the_next_plan(git_repo, store):
+    script = Script(bad(Failure.CODE_BUG, "missed it"), ok("fixed", cost=0.4), write="f.py")
+    report = run("fix the parser", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    fix = store.problem(store.dead_ends("fix the parser")[0]["problem_id"])["fixes"][-1]
+    assert fix["outcome"] == "worked" and fix["commit_sha"] == git(git_repo, "rev-parse", report.branch)
+    nxt = run("another", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"))
+    assert any("cost $0.50 on average" in r for r in nxt.plan.reasons)

@@ -119,3 +119,30 @@ def test_an_older_database_gains_the_new_columns(tmp_path):
     assert not store.cancel_requested(999)
     store.close()
     Store(path).close()  # running the migration twice changes nothing
+
+
+def test_a_solved_problem_that_comes_back_is_recurring(store: Store):
+    p = store.open_problem("cache stampede", repo="r", symptom="p99 spikes")
+    worked = store.add_fix(p, "add jitter to the ttl", "worked", repo="r", commit_sha="abc123")
+    fixed = store.problem(p)
+    assert fixed["state"] == "solved" and fixed["fixes"][0]["believed_from"] and fixed["first_seen"]
+    assert fixed["fixes"][0]["commit_sha"] == "abc123"
+    assert store.open_problem("cache stampede", repo="r") == p
+    back = store.problem(p)
+    assert back["state"] == "recurring" and back["fixes"][0]["invalidated_on"]
+    dead = store.dead_ends("cache stampede", repo="r")
+    assert dead[0]["tried"] == "add jitter to the ttl" and dead[0]["disproved_on"]
+    assert "came back" in dead[0]["why"]
+    assert worked
+
+
+def test_invalidating_a_fix_by_hand(store: Store):
+    p = store.open_problem("flaky upload", repo="r")
+    fix = store.add_fix(p, "retry twice", "worked", repo="r")
+    assert store.invalidate_fix(fix, "the retry hid a real timeout")["state"] == "recurring"
+    assert store.invalidate_fix(9999, "x") is None
+    assert store.problem(p)["fixes"][0]["why"] == "the retry hid a real timeout"
+    assert store.search("real timeout")[0]["id"] == p
+    store.add_fix(p, "raise the server timeout", "worked", repo="r")
+    assert store.dead_ends("flaky upload")[0]["worked_instead"] == "raise the server timeout"
+    store.set_fix_commit(999, "x")  # no fix for that task: nothing happens

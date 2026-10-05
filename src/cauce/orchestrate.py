@@ -218,6 +218,9 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
             if ladder[raised] != start:
                 start = ladder[raised]
                 reasons.append(f"one rung up for what the code index found ({start.label})")
+    expected = store.expected_cost(kind, repo=repo.key(repo_dir)) or store.expected_cost(kind)
+    if expected:
+        neighbour_notes.append(f"finished {kind} tasks cost ${expected[0]:.2f} on average (last {expected[1]})")
     selected = caps.select(registry, kind, workdir=repo_dir)
     names = tuple(dict.fromkeys([*selected.names, *(a.name for a, _ in active)]))
     return Plan(kind, classification, ladder, start, reasons + neighbour_notes, names,
@@ -351,6 +354,9 @@ def run(
             report.branch = isolate.finish(
                 workspace, keep=report.status == "done", message=f"cauce task #{task['id']}: {task['title']}"
             )
+            if report.branch:
+                # The fix that worked is anchored to the commit a person can check.
+                store.set_fix_commit(task["id"], isolate.head(workspace.repo_dir, report.branch))
         status = report.status if report.status != "running" else "failed"
         store.update_task(task["id"], status=status, final_cell=report.final_cell, result=report.summary,
                           pid=None, current_cell=None)

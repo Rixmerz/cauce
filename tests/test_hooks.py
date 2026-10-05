@@ -194,3 +194,14 @@ def test_a_foreground_subagent_finishes_with_its_tool_call(store: Store):
     assert hooks.pre_tool_use({"session_id": "s", "tool_name": "Bash"}, store) is None
     assert hooks.post_tool_use({"session_id": "s", "tool_name": "Agent", "tool_use_id": "nope"}, store) is None
     prompt(store, "<task-notification><tool-use-id>missing</tool-use-id></task-notification>", prompt_id="p9")
+
+
+def test_stop_counts_what_the_turn_cost(store: Store, tmp_path):
+    from .test_usage import line
+
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(line("m1", out=42))
+    prompt(store, "do a thing", prompt_id="p1")
+    hooks.stop({"session_id": "s", "prompt_id": "p1", "last_assistant_message": "ok",
+                "transcript_path": str(transcript)}, store)
+    assert store.usage_by_model(days=100000)[0]["output_tokens"] == 42

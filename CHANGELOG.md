@@ -29,6 +29,17 @@
   it starts. Hooks fail open and report what they swallowed.
 - **`/orchestration`**, the one entry point; the `cauce` CLI for everything else.
 
+### Added — memory that remembers being wrong, and real spend
+
+- Fixes carry `believed_from` and `invalidated_on`; a solved problem that
+  turns up again is `recurring` and its fix disproved; `cauce memory
+  invalidate`. Disproved fixes are dead ends, with what worked instead.
+- A fix that worked is anchored to the commit on the task's branch.
+- Token usage per model is read from the session transcript at `Stop`
+  (incrementally, one record per message, a runaway line skipped);
+  `cauce spend` joins it with worker spend by cell. Plans state what
+  finished tasks of the same kind cost on average.
+
 ### Added — live state, the queue and its lanes
 
 - An event trail per run (`cauce events --follow`), the cell in flight, and

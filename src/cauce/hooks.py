@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from cauce import config, flow, repo
+from cauce import config, flow, repo, usage
 from cauce.adapters import ABSENT, Adapter, default_adapters
 from cauce.store import Store, home
 from cauce.text import fold, words
@@ -133,6 +133,10 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
         if message:
             store.add_message(target["id"], "assistant", message)
     store.interrupt_running(session_id, exclude=[target["id"]] if target else [])
+    if event.get("transcript_path"):
+        # What this session's turns cost, by the model that served them.
+        usage.ingest(store, event["transcript_path"], session_id=session_id,
+                     task_id=target["id"] if target else None, repo=target["repo"] if target else None)
     return None
 
 

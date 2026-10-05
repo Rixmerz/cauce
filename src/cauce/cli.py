@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from cauce import __version__, capabilities, config, flow, hooks, orchestrate, repo
+from cauce import __version__, capabilities, config, flow, hooks, orchestrate, repo, usage
 from cauce.adapters import default_adapters
 from cauce.classify import classify
 from cauce.matrix import KINDS, LADDERS, Cell
@@ -177,10 +177,45 @@ def cmd_memory_record(args: argparse.Namespace) -> int:
     try:
         problem = args.problem_id or store.open_problem(args.problem, repo=key, symptom=args.symptom or "")
         fix = store.add_fix(problem, args.fix, args.outcome, repo=key, why=args.why or "",
-                            evidence=args.evidence or "")
+                            evidence=args.evidence or "", commit_sha=args.commit)
     finally:
         store.close()
     print(f"recorded fix #{fix} on problem #{problem}")
+    return 0
+
+
+def cmd_memory_invalidate(args: argparse.Namespace) -> int:
+    store = Store.open()
+    try:
+        problem = store.invalidate_fix(args.fix_id, args.why)
+    finally:
+        store.close()
+    if problem is None:
+        print(f"no fix #{args.fix_id}", file=sys.stderr)
+        return 1
+    print(f"fix #{args.fix_id} disproved; problem #{problem['id']} is {problem['state']}")
+    return 0
+
+
+def cmd_spend(args: argparse.Namespace) -> int:
+    store = Store.open()
+    try:
+        report = usage.spend(store, days=args.days, repo=_repo_key(args))
+    finally:
+        store.close()
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return 0
+    print(f"last {args.days} day(s): ${report['total_usd']:.2f} at API rates")
+    print("sessions, by model:")
+    for row in report["sessions"]:
+        tokens_in = row["input_tokens"] + row["cache_read"] + row["cache_write"]
+        print(f"  {row['family']:<7} {row['model']:<24} {row['output_tokens']:>9} out  {tokens_in:>11} in  "
+              f"${row['usd']:.2f}")
+    print("workers, by cell:")
+    for row in report["workers"]:
+        print(f"  {row['cell']:<14} {row['attempts']:>3} attempts  {row['passed'] or 0:>3} passed  "
+              f"${row['usd'] or 0:.2f}")
     return 0
 
 
@@ -398,8 +433,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--why", help="why it failed, if it did")
     p.add_argument("--evidence", help="error text or test output")
     p.add_argument("--symptom")
+    p.add_argument("--commit", help="the commit the verdict is about")
     p.add_argument("--repo")
     p.set_defaults(func=cmd_memory_record)
+    p = mem.add_parser("invalidate", help="a fix believed to work, shown wrong")
+    p.add_argument("fix_id", type=int)
+    p.add_argument("--why", required=True)
+    p.set_defaults(func=cmd_memory_invalidate)
+
+    p = sub.add_parser("spend", help="tokens and dollars by model and by cell")
+    p.add_argument("--days", type=int, default=7)
+    p.add_argument("--repo")
+    p.add_argument("--all", action="store_true", help="every repository (the default)")
+    p.add_argument("--this", dest="all", action="store_false", help="only this repository")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_spend, all=True)
 
     p = sub.add_parser("capabilities", help="the MCP servers the core hands to workers")
     p.add_argument("--example", action="store_true")

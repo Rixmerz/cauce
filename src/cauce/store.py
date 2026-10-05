@@ -25,7 +25,7 @@ import json
 import os
 import sqlite3
 from collections.abc import Iterable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +75,14 @@ CREATE TABLE IF NOT EXISTS fixes (
   evidence TEXT NOT NULL DEFAULT '', task_id INTEGER, created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS fixes_problem ON fixes (problem_id);
+CREATE TABLE IF NOT EXISTS usage (
+  message_id TEXT PRIMARY KEY, session_id TEXT, task_id INTEGER, repo TEXT, model TEXT,
+  input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read INTEGER NOT NULL DEFAULT 0, cache_write INTEGER NOT NULL DEFAULT 0,
+  sidechain INTEGER NOT NULL DEFAULT 0, ts TEXT
+);
+CREATE INDEX IF NOT EXISTS usage_ts ON usage (ts);
+CREATE TABLE IF NOT EXISTS transcript_offsets (path TEXT PRIMARY KEY, offset INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS lanes (
   repo TEXT PRIMARY KEY, paused INTEGER NOT NULL DEFAULT 0, reason TEXT, updated_at TEXT NOT NULL
 );
@@ -111,12 +119,29 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         # pause their lane when they fail.
         "dispatched": "INTEGER NOT NULL DEFAULT 0",
     },
+    "problems": {
+        "first_seen": "TEXT",
+        "last_seen": "TEXT",
+    },
+    "fixes": {
+        # The window a fix was trusted in. A fix that worked and later stopped
+        # holding is the most valuable dead end there is: it looked solved.
+        "believed_from": "TEXT",
+        "invalidated_on": "TEXT",
+        # Evidence a person can check: the commit the verdict is about.
+        "commit_sha": "TEXT",
+    },
 }
 FIX_OUTCOMES = ("worked", "failed", "partial", "pending")
+PROBLEM_STATES = ("open", "solved", "recurring")
 
 
 def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _days_ago(days: int) -> str:
+    return (datetime.now(UTC) - timedelta(days=days)).isoformat(timespec="seconds")
 
 
 def home(env: dict[str, str] | None = None) -> Path:
@@ -388,6 +413,53 @@ class Store:
             [task_id, *(status or [])]).fetchall()
         return [dict(r) for r in rows]
 
+    # --- spend -----------------------------------------------------------------
+
+    def add_usage(self, **record: Any) -> None:
+        cols = ", ".join(record)
+        marks = ", ".join("?" for _ in record)
+        self._conn.execute(f"INSERT OR REPLACE INTO usage ({cols}) VALUES ({marks})",  # noqa: S608
+                           list(record.values()))
+
+    def transcript_offset(self, path: str) -> int:
+        row = self._conn.execute("SELECT offset FROM transcript_offsets WHERE path = ?", (path,)).fetchone()
+        return int(row[0]) if row else 0
+
+    def set_transcript_offset(self, path: str, offset: int) -> None:
+        self._conn.execute(
+            "INSERT INTO transcript_offsets (path, offset) VALUES (?, ?) "
+            "ON CONFLICT(path) DO UPDATE SET offset = excluded.offset", (path, offset))
+
+    def usage_by_model(self, *, days: int = 7, repo: str | None = None) -> list[dict]:
+        scope, params = ("AND repo = ?", [repo]) if repo is not None else ("", [])
+        rows = self._conn.execute(
+            "SELECT model, count(*) AS messages, sum(input_tokens) AS input_tokens, "  # noqa: S608
+            "sum(output_tokens) AS output_tokens, sum(cache_read) AS cache_read, sum(cache_write) AS cache_write "
+            f"FROM usage WHERE ts >= datetime('now', ?) {scope} GROUP BY model ORDER BY output_tokens DESC",
+            [f"-{int(days)} days", *params]).fetchall()
+        return [dict(r) for r in rows]
+
+    def worker_spend(self, *, days: int = 7, repo: str | None = None) -> list[dict]:
+        """What workers cost, by cell: attempts, passes, dollars, tokens."""
+        scope, params = ("AND t.repo = ?", [repo]) if repo is not None else ("", [])
+        rows = self._conn.execute(
+            "SELECT a.cell, count(*) AS attempts, sum(a.passed) AS passed, round(sum(a.cost_usd), 4) AS usd, "  # noqa: S608
+            "sum(a.input_tokens) AS input_tokens, sum(a.output_tokens) AS output_tokens "
+            "FROM attempts a JOIN tasks t ON t.id = a.task_id "
+            f"WHERE a.created_at >= ? {scope} GROUP BY a.cell ORDER BY usd DESC",
+            [_days_ago(days), *params]).fetchall()
+        return [dict(r) for r in rows]
+
+    def expected_cost(self, kind: str, *, repo: str | None = None, limit: int = 20) -> tuple[float, int] | None:
+        """The average cost of the last finished tasks of a kind, and how many."""
+        scope, params = ("AND repo = ?", [repo]) if repo is not None else ("", [])
+        rows = self._conn.execute(
+            "SELECT cost_usd FROM tasks WHERE kind = ? AND source = 'cauce' "  # noqa: S608
+            f"AND status = 'done' {scope} ORDER BY id DESC LIMIT ?", [kind, *params, limit]).fetchall()
+        if not rows:
+            return None
+        return sum(r[0] for r in rows) / len(rows), len(rows)
+
     # --- events: what a watcher reads ---------------------------------------
 
     def add_event(self, task_id: int, event: str, /, **data: Any) -> int:
@@ -418,17 +490,32 @@ class Store:
     # --- problems and fixes: memory across repositories -------------------
 
     def open_problem(self, title: str, *, repo: str | None, symptom: str = "") -> int:
+        """The problem with this title in this repository, opening it if new.
+
+        A problem that was solved and turns up again is *recurring*: the fix
+        that solved it stopped holding, and is marked as disproved now.
+        """
+        stamp = now()
         row = self._conn.execute(
-            "SELECT id FROM problems WHERE title = ? AND repo IS ? AND state = 'open' ORDER BY id DESC LIMIT 1",
+            "SELECT id, state FROM problems WHERE title = ? AND repo IS ? ORDER BY id DESC LIMIT 1",
             (title, repo),
         ).fetchone()
         if row:
-            return int(row[0])
-        stamp = now()
+            problem_id, state = int(row[0]), row[1]
+            if state == "solved":
+                self._conn.execute(
+                    "UPDATE problems SET state = 'recurring', last_seen = ?, updated_at = ? WHERE id = ?",
+                    (stamp, stamp, problem_id))
+                self._conn.execute(
+                    "UPDATE fixes SET invalidated_on = ? WHERE problem_id = ? AND outcome = 'worked' "
+                    "AND invalidated_on IS NULL", (stamp, problem_id))
+            else:
+                self._conn.execute("UPDATE problems SET last_seen = ? WHERE id = ?", (stamp, problem_id))
+            return problem_id
         cur = self._conn.execute(
-            "INSERT INTO problems (repo, title, symptom, state, created_at, updated_at) "
-            "VALUES (?, ?, ?, 'open', ?, ?)",
-            (repo, title, symptom, stamp, stamp),
+            "INSERT INTO problems (repo, title, symptom, state, created_at, updated_at, first_seen, last_seen) "
+            "VALUES (?, ?, ?, 'open', ?, ?, ?, ?)",
+            (repo, title, symptom, stamp, stamp, stamp, stamp),
         )
         problem_id = int(cur.lastrowid)
         self._index("problem", problem_id, repo, f"{title}\n{symptom}")
@@ -444,21 +531,44 @@ class Store:
         why: str = "",
         evidence: str = "",
         task_id: int | None = None,
+        commit_sha: str | None = None,
     ) -> int:
         if outcome not in FIX_OUTCOMES:
             raise ValueError(f"unknown outcome {outcome!r}")
+        stamp = now()
         cur = self._conn.execute(
-            "INSERT INTO fixes (problem_id, repo, description, outcome, why, evidence, task_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (problem_id, repo, description, outcome, why, evidence[:4000], task_id, now()),
+            "INSERT INTO fixes (problem_id, repo, description, outcome, why, evidence, task_id, created_at, "
+            "believed_from, commit_sha) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (problem_id, repo, description, outcome, why, evidence[:4000], task_id, stamp,
+             stamp if outcome == "worked" else None, commit_sha),
         )
         fix_id = int(cur.lastrowid)
         self._index("fix", fix_id, repo, f"{description}\n{why}")
         if outcome == "worked":
             self._conn.execute(
-                "UPDATE problems SET state = 'solved', updated_at = ? WHERE id = ?", (now(), problem_id)
-            )
+                "UPDATE problems SET state = 'solved', updated_at = ?, last_seen = ? WHERE id = ?",
+                (stamp, stamp, problem_id))
         return fix_id
+
+    def invalidate_fix(self, fix_id: int, why: str) -> dict | None:
+        """A fix that was believed to work, shown wrong: its problem is open again."""
+        row = self._conn.execute("SELECT problem_id FROM fixes WHERE id = ?", (fix_id,)).fetchone()
+        if row is None:
+            return None
+        stamp = now()
+        self._conn.execute(
+            "UPDATE fixes SET invalidated_on = ?, why = CASE WHEN why = '' THEN ? ELSE why || '; ' || ? END "
+            "WHERE id = ?", (stamp, why, why, fix_id))
+        self._conn.execute(
+            "UPDATE problems SET state = 'recurring', updated_at = ? WHERE id = ? AND state = 'solved'",
+            (stamp, row[0]))
+        self._index("fix", fix_id, None, why)
+        return self.problem(int(row[0]))
+
+    def set_fix_commit(self, task_id: int, commit_sha: str) -> None:
+        self._conn.execute(
+            "UPDATE fixes SET commit_sha = ? WHERE task_id = ? AND outcome = 'worked' AND commit_sha IS NULL",
+            (commit_sha, task_id))
 
     def problem(self, problem_id: int) -> dict | None:
         row = self._conn.execute("SELECT * FROM problems WHERE id = ?", (problem_id,)).fetchone()
@@ -506,22 +616,25 @@ class Store:
     def dead_ends(
         self, query: str | None = None, *, repo: str | None = None, limit: int = 8, strict: bool = False
     ) -> list[dict]:
-        """Fixes that failed, each with what worked instead when something did."""
+        """Fixes that failed — and fixes that worked until they did not — each
+        with what worked instead when something did."""
         problems = (self.search(query, repo=repo, limit=50, strict=strict) if query
                     else self._recent_problems(repo, 50))
         out: list[dict] = []
         for problem in problems:
-            worked = [f for f in problem["fixes"] if f["outcome"] == "worked"]
+            holding = [f for f in problem["fixes"] if f["outcome"] == "worked" and not f["invalidated_on"]]
             for fix in problem["fixes"]:
-                if fix["outcome"] != "failed":
+                disproved = fix["outcome"] == "worked" and fix["invalidated_on"]
+                if fix["outcome"] != "failed" and not disproved:
                     continue
                 out.append({
                     "problem_id": problem["id"],
                     "problem": problem["title"],
                     "repo": problem["repo"],
                     "tried": fix["description"],
-                    "why": fix["why"],
-                    "worked_instead": worked[-1]["description"] if worked else "",
+                    "why": fix["why"] or ("believed to work, then the problem came back" if disproved else ""),
+                    "worked_instead": holding[-1]["description"] if holding else "",
+                    "disproved_on": fix["invalidated_on"] if disproved else None,
                 })
                 if len(out) >= limit:
                     return out
