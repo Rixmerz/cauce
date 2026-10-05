@@ -320,3 +320,41 @@ def test_the_switch_turns_livespec_off_everywhere(git_repo, store, monkeypatch):
     monkeypatch.setenv("CAUCE_LIVESPEC", "off")
     assert o.adopted(Options(), None) == []
     assert [a.name for a in o.adopted(Options(livespec=True), None)] == ["livespec"]
+
+
+# --- what a watcher sees, and stopping a run -------------------------------------
+
+def test_a_run_leaves_an_event_trail_a_watcher_can_follow(git_repo, store):
+    script = Script(bad(Failure.CODE_BUG, "missed it"), ok("fixed"))
+    report = run("fix the thing", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    events = store.events(task_id=report.task_id)
+    assert [e["kind"] for e in events] == ["planned", "attempt_started", "attempt_finished", "moved",
+                                           "attempt_started", "attempt_finished", "finished"]
+    assert events[1]["data"]["cell"] == "sonnet/medium" and events[3]["data"]["next_cell"] == "sonnet/high"
+    assert events[-1]["data"]["status"] == "done"
+    assert store.events(after=events[2]["id"], task_id=report.task_id)[0]["kind"] == "moved"
+    task = store.get_task(report.task_id)
+    assert task["pid"] is None and task["current_cell"] is None
+
+
+def test_a_cancel_requested_between_attempts_stops_the_run(git_repo, store):
+    def launcher(spec):
+        store.request_cancel(store.list_tasks()[0]["id"])
+        return bad(Failure.CODE_BUG, "first")
+
+    report = run("x", git_repo, store, registry={}, launcher=launcher, classifier=kind("implement"))
+    assert report.status == "cancelled" and report.cells == ["sonnet/medium"]
+    assert report.branch is None
+    assert store.get_task(report.task_id)["status"] == "cancelled"
+
+
+def test_a_cancel_in_the_middle_of_an_attempt_cleans_up(git_repo, store):
+    from cauce.orchestrate import Cancelled
+
+    def launcher(spec):
+        (spec.target_dir / "half.py").write_text("x\n")
+        raise Cancelled
+
+    report = run("x", git_repo, store, registry={}, launcher=launcher, classifier=kind("implement"))
+    assert report.status == "cancelled" and report.branch is None
+    assert "cauce/task-" not in git(git_repo, "branch", "--list")

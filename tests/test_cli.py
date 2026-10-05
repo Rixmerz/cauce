@@ -78,3 +78,52 @@ def test_config_and_neighbours(capsys, git_repo):
     assert cli.main(["neighbours", "--repo", str(git_repo)]) == 0
     out = capsys.readouterr().out
     assert "livespec setting: off" in out and "livespec: absent" in out
+
+
+def test_cancel_signals_the_run_and_events_print(capsys, monkeypatch):
+    import signal
+
+    store = Store.open()
+    running = store.create_task("long job", status="running", source="cauce", pid=4242)
+    queued = store.create_task("later", status="queued", source="cauce")
+    done = store.create_task("old", status="done", source="cauce")
+    store.add_event(running["id"], "planned", kind="implement")
+    store.close()
+    killed = []
+    monkeypatch.setattr(cli.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    assert cli.main(["cancel", str(running["id"])]) == 0
+    assert killed == [(4242, signal.SIGTERM)]
+    assert cli.main(["cancel", str(queued["id"])]) == 0
+    assert cli.main(["cancel", str(done["id"])]) == 0
+    assert "nothing to cancel" in capsys.readouterr().out
+    assert cli.main(["cancel", "999"]) == 1
+    store = Store.open()
+    assert store.get_task(queued["id"])["status"] == "cancelled"
+    store.close()
+
+    def gone(pid, sig):
+        raise ProcessLookupError
+
+    monkeypatch.setattr(cli.os, "kill", gone)
+    store = Store.open()
+    again = store.create_task("x", status="running", source="cauce", pid=1)
+    store.close()
+    assert cli.main(["cancel", str(again["id"])]) == 0
+
+    assert cli.main(["events"]) == 0
+    assert '"kind": "implement"' in capsys.readouterr().out
+    assert cli.main(["events", "--json", "--task", str(running["id"])]) == 0
+    assert json.loads(capsys.readouterr().out.splitlines()[0])["kind"] == "planned"
+
+
+def test_sigterm_becomes_a_cancel():
+    import signal
+
+    import pytest
+
+    previous = cli._cancel_on_sigterm()
+    try:
+        with pytest.raises(orchestrate.Cancelled):
+            signal.raise_signal(signal.SIGTERM)
+    finally:
+        signal.signal(signal.SIGTERM, previous)

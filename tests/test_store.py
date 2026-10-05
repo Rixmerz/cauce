@@ -96,3 +96,26 @@ def test_two_stores_share_one_file(_isolated_home):
     assert len(b.list_tasks()) == 1
     a.close()
     b.close()
+
+
+def test_an_older_database_gains_the_new_columns(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, parent_id INTEGER, "
+                 "repo TEXT, cwd TEXT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', kind TEXT, "
+                 "complexity TEXT, class_source TEXT, class_reason TEXT, status TEXT NOT NULL, source TEXT NOT NULL, "
+                 "prompt_id TEXT, result TEXT, start_cell TEXT, final_cell TEXT, cost_usd REAL NOT NULL DEFAULT 0, "
+                 "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    conn.execute("INSERT INTO tasks (title, status, source, created_at, updated_at) VALUES ('old', 'done', 'hook', "
+                 "'t', 't')")
+    conn.commit()
+    conn.close()
+    store = Store(path)
+    task = store.get_task(1)
+    assert task["pid"] is None and task["cancel_requested"] == 0
+    assert store.request_cancel(1)["cancel_requested"] == 1 and store.cancel_requested(1)
+    assert not store.cancel_requested(999)
+    store.close()
+    Store(path).close()  # running the migration twice changes nothing

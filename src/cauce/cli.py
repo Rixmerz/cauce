@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
+import signal
 import sys
+import time
 from pathlib import Path
 
 from cauce import __version__, capabilities, config, hooks, orchestrate, repo
@@ -40,12 +43,65 @@ def cmd_run(args: argparse.Namespace) -> int:
         livespec=args.livespec,
     )
     store = Store.open()
+    previous = _cancel_on_sigterm()
     try:
         report = orchestrate.run(_text(args.text), Path(args.repo or os.getcwd()), store, options)
     finally:
+        signal.signal(signal.SIGTERM, previous)
         store.close()
     print(report.text())
     return 0 if report.status in ("done", "dry run") else 1
+
+
+def _cancel_on_sigterm():
+    """`cauce cancel` sends SIGTERM. Turned into an exception, it unwinds the run:
+    `subprocess.run` kills the worker, and the run's cleanup removes its worktree."""
+    def handler(signum, frame):
+        raise orchestrate.Cancelled
+
+    return signal.signal(signal.SIGTERM, handler)
+
+
+def cmd_cancel(args: argparse.Namespace) -> int:
+    store = Store.open()
+    try:
+        task = store.get_task(args.id)
+        if task is None:
+            print(f"no task #{args.id}", file=sys.stderr)
+            return 1
+        if task["status"] not in ("running", "queued"):
+            print(f"task #{args.id} is {task['status']}; nothing to cancel")
+            return 0
+        store.request_cancel(args.id)
+        if task["pid"]:
+            # Gone already: the flag still stops it at its next attempt.
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(int(task["pid"]), signal.SIGTERM)
+        elif task["status"] == "queued":
+            store.update_task(args.id, status="cancelled")
+    finally:
+        store.close()
+    print(f"cancel requested for task #{args.id}")
+    return 0
+
+
+def cmd_events(args: argparse.Namespace) -> int:
+    store = Store.open()
+    after = args.after
+    try:
+        while True:
+            for e in store.events(after=after, task_id=args.task):
+                after = e["id"]
+                print(json.dumps(e, ensure_ascii=False) if args.json else
+                      f"{e['ts']} #{e['task_id']} {e['kind']} {json.dumps(e['data'], ensure_ascii=False)}")
+            if not args.follow:
+                return 0
+            sys.stdout.flush()
+            time.sleep(1)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        store.close()
 
 
 def cmd_route(args: argparse.Namespace) -> int:
@@ -225,6 +281,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--status", action="append")
     p.add_argument("--limit", type=int, default=20)
     p.set_defaults(func=cmd_tasks)
+
+    p = sub.add_parser("cancel", help="stop a running or queued task")
+    p.add_argument("id", type=int)
+    p.set_defaults(func=cmd_cancel)
+
+    p = sub.add_parser("events", help="what runs are doing, as they do it")
+    p.add_argument("--task", type=int)
+    p.add_argument("--after", type=int, default=0, help="only events after this id")
+    p.add_argument("--follow", "-f", action="store_true", help="keep printing new events")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_events)
 
     p = sub.add_parser("show", help="one task: its attempts and its messages")
     p.add_argument("id", type=int)

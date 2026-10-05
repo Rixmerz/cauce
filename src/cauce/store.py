@@ -75,6 +75,11 @@ CREATE TABLE IF NOT EXISTS fixes (
   evidence TEXT NOT NULL DEFAULT '', task_id INTEGER, created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS fixes_problem ON fixes (problem_id);
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, ts TEXT NOT NULL,
+  kind TEXT NOT NULL, data TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS events_task ON events (task_id, id);
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
   kind UNINDEXED, ref_id UNINDEXED, repo UNINDEXED, text, tokenize = 'unicode61 remove_diacritics 2'
 );
@@ -83,7 +88,19 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
 #: Words a query and a problem must share for a strict match.
 STRICT_OVERLAP = 3
 
-TASK_STATES = ("queued", "running", "done", "failed", "interrupted", "blocked", "replan", "needs_approval")
+TASK_STATES = ("queued", "running", "done", "failed", "interrupted", "blocked", "replan", "needs_approval",
+               "cancelled")
+
+#: Columns added after a table first shipped. `CREATE TABLE IF NOT EXISTS` never
+#: alters a table that exists, so each one is added here when it is missing.
+#: Append-only: a column is never renamed or removed once a database has it.
+_ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "tasks": {
+        "pid": "INTEGER",  # the `cauce run` process driving it, while it runs
+        "current_cell": "TEXT",  # the cell of the attempt in flight
+        "cancel_requested": "INTEGER NOT NULL DEFAULT 0",
+    },
+}
 FIX_OUTCOMES = ("worked", "failed", "partial", "pending")
 
 
@@ -109,6 +126,14 @@ class Store:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        for table, columns in _ADDED_COLUMNS.items():
+            have = {row[1] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+            for column, decl in columns.items():
+                if column not in have:
+                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
     @classmethod
     def open(cls, env: dict[str, str] | None = None) -> Store:
@@ -277,6 +302,33 @@ class Store:
             params,
         ).fetchall()
         return [r[0] for r in rows]
+
+    # --- events: what a watcher reads ---------------------------------------
+
+    def add_event(self, task_id: int, event: str, /, **data: Any) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO events (task_id, ts, kind, data) VALUES (?, ?, ?, ?)",
+            (task_id, now(), event, json.dumps(data, ensure_ascii=False, default=str)),
+        )
+        return int(cur.lastrowid)
+
+    def events(self, *, after: int = 0, task_id: int | None = None, limit: int = 200) -> list[dict]:
+        """Events after `after`, oldest first: a watcher keeps the last id it saw
+        and asks for what came since."""
+        scope, params = ("AND task_id = ?", [task_id]) if task_id is not None else ("", [])
+        rows = self._conn.execute(
+            f"SELECT * FROM events WHERE id > ? {scope} ORDER BY id LIMIT ?",  # noqa: S608
+            [after, *params, limit],
+        ).fetchall()
+        return [{**dict(r), "data": json.loads(r["data"])} for r in rows]
+
+    def request_cancel(self, task_id: int) -> dict | None:
+        self._conn.execute("UPDATE tasks SET cancel_requested = 1, updated_at = ? WHERE id = ?", (now(), task_id))
+        return self.get_task(task_id)
+
+    def cancel_requested(self, task_id: int) -> bool:
+        row = self._conn.execute("SELECT cancel_requested FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        return bool(row and row[0])
 
     # --- problems and fixes: memory across repositories -------------------
 

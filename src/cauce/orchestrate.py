@@ -28,6 +28,10 @@ from cauce.store import Store, home
 _MEMORABLE = frozenset({Failure.CODE_BUG, Failure.TEST_BUG, Failure.APPROACH, Failure.SPEC_BUG,
                         Failure.ARCHITECTURE_BUG})
 
+class Cancelled(Exception):
+    """Raised into a run when someone cancels it; the run stops and cleans up."""
+
+
 _FINAL_STATUS = {
     Move.REPLAN: "replan",
     Move.NEEDS_APPROVAL: "needs_approval",
@@ -247,6 +251,10 @@ def run(
         start_cell=the_plan.start.label, cost_usd=c.cost_usd,
     )
     report = Report(task["id"], "running", the_plan, cost_usd=c.cost_usd)
+    store.update_task(task["id"], pid=os.getpid())
+    store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label,
+                    ladder=[x.label for x in the_plan.ladder], reasons=the_plan.reasons,
+                    neighbours=[st.line() for st in the_plan.neighbours])
 
     workspace = None
     writes = the_plan.kind not in READ_ONLY_KINDS
@@ -268,6 +276,8 @@ def run(
             if len(attempts) >= options.max_attempts:
                 report.status, report.summary = "failed", f"{options.max_attempts} attempts without a pass"
                 break
+            if store.cancel_requested(task["id"]):
+                raise Cancelled
             selection = _equip(caps.select(registry, the_plan.kind, failed_before=bool(attempts), workdir=workdir),
                                the_plan, repo_dir, workdir)
             spec = launch.LaunchSpec(
@@ -282,6 +292,9 @@ def run(
                 mcp_servers=selection.servers,
                 append_system_prompt=selection.system_prompt(),
             )
+            store.update_task(task["id"], current_cell=cell.label)
+            store.add_event(task["id"], "attempt_started", seq=len(attempts) + 1, cell=cell.label,
+                            max_turns=turns, budget_usd=spec.max_budget_usd, capabilities=list(selection.names))
             result = launcher(spec)
             if result.passed and options.verify:
                 result = _verified(result, options.verify, workdir)
@@ -295,6 +308,9 @@ def run(
                 duration_s=result.duration_s, changed_paths=result.changed_paths,
                 capabilities=selection.names,
             )
+            store.add_event(task["id"], "attempt_finished", seq=seq, cell=cell.label, passed=result.passed,
+                            failure=result.failure.value if result.failure else None, cost_usd=result.cost_usd,
+                            turns=result.turns, summary=result.summary[:500])
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary)
             attempts.append(attempt)
             if result.passed:
@@ -309,6 +325,8 @@ def run(
             decision = decide(the_plan.ladder, attempts, allow_approval=options.allow_approval)
             store.set_move(task["id"], seq, decision.move.value, decision.reason)
             report.moves.append(f"{decision.move.value}: {decision.reason}")
+            store.add_event(task["id"], "moved", move=decision.move.value, reason=decision.reason,
+                            next_cell=decision.cell.label if decision.cell else None)
             if not decision.continues:
                 # The worker's own account goes with the reason: "the task is
                 # wrong" is only actionable next to what it found wrong.
@@ -319,15 +337,18 @@ def run(
             if decision.move is Move.NEXT_MODEL and workspace is not None:
                 isolate.reset(workspace)
             cell, turns = decision.cell, decision.max_turns
+    except (Cancelled, KeyboardInterrupt):
+        report.status, report.summary = "cancelled", "cancelled before it finished"
     finally:
         if workspace is not None:
             report.branch = isolate.finish(
                 workspace, keep=report.status == "done", message=f"cauce task #{task['id']}: {task['title']}"
             )
-        store.update_task(
-            task["id"], status=report.status if report.status != "running" else "failed",
-            final_cell=report.final_cell, result=report.summary,
-        )
+        status = report.status if report.status != "running" else "failed"
+        store.update_task(task["id"], status=status, final_cell=report.final_cell, result=report.summary,
+                          pid=None, current_cell=None)
+        store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
+                        cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact)
         store.add_message(task["id"], "worker", report.text())
     return report
 
