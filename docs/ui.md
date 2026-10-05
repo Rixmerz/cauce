@@ -39,6 +39,12 @@ stale runs (a `running` task whose `cauce run` pid is gone becomes
 `interrupted` and pauses its lane) and drains lanes when the dispatcher is on.
 A GET never starts work.
 
+The same thread checks, every sweep, what Claude Code has installed
+(`plugins/cache/*/cauce/*`, by the version in each `plugin.json`). A newer
+cauce takes the server's place: the process runs that version's `cauce ui` on
+the same port, and the page, which reads `GET /api/version` every 30 seconds,
+reloads when the version it was loaded with changes.
+
 ## The security envelope
 
 Kept from tasky's dashboard unchanged, because a local server that can launch

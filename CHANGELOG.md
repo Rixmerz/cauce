@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-05
+
+### Fixed
+
+- **The board kept showing every prompt in Done after the update that
+  stopped it (0.1.2).** A `cauce ui` server keeps the code it started with,
+  and a plugin update never restarted it: a board started in a session before
+  an update went on serving that version's board. Now the server checks
+  every 30 seconds what Claude Code has installed. When a newer cauce is
+  there, it runs that version's UI in its own place, on the same port. The
+  open page reads the new `GET /api/version` and reloads when the version
+  changes. A UI from before 0.4.1 cannot do this itself: stop it once.
+- **`cauce ui` on a taken port** failed with a Python traceback. It now says
+  who holds the port. If it is this same version, it prints the board's
+  address and opens it with `--open`. If it is an older cauce UI, it explains
+  that this server shows the old board until it is stopped. If it is another
+  program, it suggests another port.
+
 ## [0.4.0] - 2026-10-05
 
 From an audit of a session where five tasks ended `blocked` and their reports

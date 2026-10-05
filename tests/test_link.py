@@ -102,3 +102,27 @@ def test_cauce_link_command(tmp_path, capsys, monkeypatch):
     assert "was not written by `cauce link`" in capsys.readouterr().err
     monkeypatch.setenv("HOME", str(tmp_path))
     assert link.default_dir(os.environ) == tmp_path / ".local" / "bin"
+
+
+def _plugin(config: Path, version: str, *, executable: bool = True, manifest: str | None = None) -> Path:
+    root = config / "plugins" / "cache" / "rixmerz" / "cauce" / version
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(manifest or f'{{"name": "cauce", "version": "{version}"}}')
+    launcher = root / "bin" / "cauce"
+    launcher.parent.mkdir()
+    launcher.write_text("#!/bin/sh\n")
+    launcher.chmod(0o755 if executable else 0o644)
+    return launcher
+
+
+def test_installs_are_ordered_by_the_version_they_say_not_by_their_dates(tmp_path):
+    config = tmp_path / "config"
+    newest = _plugin(config, "0.10.0")
+    _plugin(config, "0.9.3")
+    _plugin(config, "0.11.0", executable=False)
+    _plugin(config, "broken", manifest="not json")
+    _plugin(config, "odd", manifest='{"version": "next"}')
+    found = link.installed({"CLAUDE_CONFIG_DIR": str(config)})
+    assert found == [((0, 9, 3), found[0][1]), ((0, 10, 0), newest)]
+    assert link.installed({"HOME": str(tmp_path)}) == []
+    assert link.parse_version("1.2") == (1, 2) and link.parse_version("1.x") is None

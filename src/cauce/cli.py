@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import json
 import os
 import signal
@@ -561,7 +562,12 @@ def cmd_habit_run(args: argparse.Namespace) -> int:
 def cmd_ui(args: argparse.Namespace) -> int:
     from cauce.ui import server
 
-    ui = server.serve(args.port)
+    try:
+        ui = server.serve(args.port)
+    except OSError as exc:
+        if exc.errno != errno.EADDRINUSE:
+            raise
+        return _ui_port_taken(args)
     url = f"http://127.0.0.1:{ui.server_address[1]}/"
     print(f"cauce UI at {url} (Ctrl-C stops it)", flush=True)
     if args.open:
@@ -576,6 +582,30 @@ def cmd_ui(args: argparse.Namespace) -> int:
         ui.stop_event.set()
         ui.server_close()
     return 0
+
+
+def _ui_port_taken(args: argparse.Namespace) -> int:
+    """The port is taken. By this same cauce: it is the board, say where. By an
+    older one: it shows what that version showed, and it is the person's to stop."""
+    from cauce.ui import server
+
+    url = f"http://127.0.0.1:{args.port}/"
+    found = server.occupant(args.port)
+    if found and found["cauce"] and found["version"] == __version__:
+        print(f"cauce UI {__version__} is already at {url}", flush=True)
+        if args.open:
+            import webbrowser
+
+            webbrowser.open(url)
+        return 0
+    if found and found["cauce"]:
+        print(f"port {args.port} is held by a cauce UI {found['version'] or 'from before 0.4.1'}, started before "
+              f"cauce {__version__} was installed: it still serves that version's board. Stop it (end the "
+              f"session or background command that started it), then run this again; or use "
+              f"`cauce ui --port <another>`.", file=sys.stderr)
+        return 1
+    print(f"port {args.port} is taken by another program; use `cauce ui --port <another>`", file=sys.stderr)
+    return 1
 
 
 def cmd_link(args: argparse.Namespace) -> int:
