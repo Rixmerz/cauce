@@ -20,12 +20,16 @@ NEEDS_YOU = {
 }
 #: How far back a passed task's branch still counts as waiting for a review.
 REVIEW_DAYS = 3
+#: How much of a task's text the board carries; the task view has all of it.
+BODY_CHARS = 800
 
 
 def _brief(task: dict[str, Any]) -> dict[str, Any]:
     keys = ("id", "title", "status", "kind", "repo", "cwd", "start_cell", "final_cell", "current_cell",
-            "cost_usd", "source", "created_at", "updated_at", "result", "pinned")
-    return {k: task.get(k) for k in keys}
+            "cost_usd", "source", "created_at", "updated_at", "result", "pinned", "session_id")
+    body = task.get("body") or ""
+    return {**{k: task.get(k) for k in keys},
+            "body": body if len(body) <= BODY_CHARS else body[:BODY_CHARS - 1] + "…"}
 
 
 def flow_of(store: Store, task_id: int) -> dict[str, Any] | None:
@@ -168,10 +172,34 @@ def routing(store: Store) -> list[dict[str, Any]]:
     return out
 
 
-def memory(store: Store, query: str = "", limit: int = 40) -> list[dict[str, Any]]:
+def memory(store: Store, query: str = "", limit: int = 40, repos: set[str] | None = None) -> list[dict[str, Any]]:
+    """Problems and every fix tried on them; with `repos`, only those repositories'."""
     if query.strip():
-        return store.search(query, limit=limit)
-    return store._recent_problems(None, limit)
+        found = store.search(query, limit=200 if repos is not None else limit)
+        return [p for p in found if repos is None or p["repo"] in repos][:limit]
+    return store.recent_problems(repos=repos, limit=limit)
+
+
+def projects(store: Store) -> list[dict[str, Any]]:
+    """Every repository cauce has worked in, at the top of the checkout it was last used from."""
+    from pathlib import Path
+
+    from cauce import repo as repo_mod
+
+    out = []
+    for p in store.projects():
+        where = Path(p["cwd"]) if p["cwd"] else None
+        top = repo_mod.toplevel(where) if where is not None and where.is_dir() else None
+        out.append({**p, "dir": str(top or where or ""), "exists": bool(where and where.is_dir())})
+    return out
+
+
+def sessions(store: Store, repos: set[str] | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    """Claude Code sessions cauce has seen, with the command that resumes each where it ran."""
+    import shlex
+
+    return [{**s, "resume": f"cd {shlex.quote(s['cwd'] or '.')} && claude --resume {s['id']}"}
+            for s in store.sessions(repos=repos, limit=limit)]
 
 
 def habit_view(store: Store, days: int = 30) -> dict[str, Any]:

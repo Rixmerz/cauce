@@ -84,6 +84,12 @@
   the worker out now (`worker`: the `claude -p` of this attempt, its cell, turn
   and dollar limits, MCP servers, start time, and whether its process lives).
   `counts.workers` says how many are out.
+- `cauce projects --json`: every repository cauce has worked in, from the
+  directory it was last used from. `cauce sessions --json [--repo DIR]`: the
+  Claude Code sessions it saw, with their prompts and the command that resumes
+  each. `cauce memory list --json [--query Q] [--repo DIR]`: problems and every
+  fix tried, everything or some repositories'. Board items carry the task's
+  text (`body`, up to 800 characters) and its `session_id`.
 
 ### Fixed
 

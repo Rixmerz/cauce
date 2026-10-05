@@ -52,6 +52,11 @@ def test_the_board_shows_each_task_s_way_and_the_worker_out_now(store: Store):
     assert going["worker"]["capabilities"] == ["livespec"] and going["worker"]["alive"] is True
     assert next(r for r in b["running"] if r["source"] == "hook").get("flow") is None
     assert b["counts"]["workers"] == 1
+    assert going["body"] == "going" and "session_id" in going
+    long = store.create_task("x" * 2000, status="queued", source="queue", repo="r", cwd="/x")
+    lane = next(q for q in api.board(store)["queued"] if q["repo"] == "r")
+    assert len(next(x for x in lane["tasks"] if x["id"] == long["id"])["body"]) == api.BODY_CHARS
+    assert store.sessions(repos=[]) == [] and store.recent_problems(repos=[]) == []
 
     store.add_attempt(t["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="approach")
     assert next(r for r in api.board(store)["running"] if r["id"] == t["id"])["worker"] is None  # between attempts

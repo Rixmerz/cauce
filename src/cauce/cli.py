@@ -176,6 +176,62 @@ def cmd_memory_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def _keys(dirs: list[str] | None) -> set[str] | None:
+    return {repo.key(Path(d).resolve()) for d in dirs} if dirs else None
+
+
+def cmd_memory_list(args: argparse.Namespace) -> int:
+    """Problems and their fixes, as JSON or lines: everything, or only some repositories."""
+    from cauce.ui import api
+
+    store = Store.open()
+    try:
+        found = api.memory(store, args.query or "", limit=args.limit, repos=_keys(args.repo))
+    finally:
+        store.close()
+    if args.json:
+        print(json.dumps(found, ensure_ascii=False, default=str))
+        return 0
+    for p in found:
+        print(f"problem #{p['id']} [{p['state']}] {p['title']}  ({p['repo']})")
+        for f in p["fixes"]:
+            print(f"  {f['outcome']:<8} {f['description'][:200]}")
+    return 0
+
+
+def cmd_projects(args: argparse.Namespace) -> int:
+    from cauce.ui import api
+
+    store = Store.open()
+    try:
+        found = api.projects(store)
+    finally:
+        store.close()
+    if args.json:
+        print(json.dumps(found, ensure_ascii=False, default=str))
+        return 0
+    for p in found:
+        mark = "" if p["exists"] else "  (gone)"
+        print(f"{p['dir'] or p['repo']}  {p['sessions']} session(s), last {p['last_seen']}{mark}")
+    return 0
+
+
+def cmd_sessions(args: argparse.Namespace) -> int:
+    from cauce.ui import api
+
+    store = Store.open()
+    try:
+        found = api.sessions(store, repos=_keys(args.repo), limit=args.limit)
+    finally:
+        store.close()
+    if args.json:
+        print(json.dumps(found, ensure_ascii=False, default=str))
+        return 0
+    for x in found:
+        print(f"{x['id']}  {x['last_seen_at']}  {x['prompts']} prompt(s)  {x['last_prompt'] or ''}\n  {x['resume']}")
+    return 0
+
+
 def cmd_memory_record(args: argparse.Namespace) -> int:
     key = _repo_key(args)
     store = Store.open()
@@ -538,6 +594,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo")
     p.add_argument("--limit", type=int, default=10)
     p.set_defaults(func=cmd_memory_search)
+    p = mem.add_parser("list", help="problems and their fixes, latest first or matching --query")
+    p.add_argument("--query")
+    p.add_argument("--repo", action="append", help="only this repository (repeatable)")
+    p.add_argument("--limit", type=int, default=40)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_memory_list)
     p = mem.add_parser("record", help="record a fix and whether it worked")
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument("--problem", help="the problem's title (opens it if new)")
@@ -608,6 +670,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--full", action="store_true", help="the whole board as JSON")
     p.add_argument("--repo", action="append", help="only this repository (repeatable)")
     p.set_defaults(func=cmd_board)
+
+    p = sub.add_parser("projects", help="every repository cauce has worked in")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_projects)
+
+    p = sub.add_parser("sessions", help="the Claude Code sessions cauce saw, and how to resume each")
+    p.add_argument("--repo", action="append", help="only this repository (repeatable)")
+    p.add_argument("--limit", type=int, default=100)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_sessions)
 
     p = sub.add_parser("hook", help="Claude Code hook entry point (reads the event on stdin)")
     p.add_argument("event")

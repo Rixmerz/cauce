@@ -187,6 +187,26 @@ def _setup_lock(db: Path) -> Iterator[None]:
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
+_SESSION_COLUMNS = (
+    "(SELECT COUNT(*) FROM tasks t WHERE t.session_id = s.id AND t.source = 'hook') AS prompts, "
+    "(SELECT t.title FROM tasks t WHERE t.session_id = s.id AND t.source = 'hook' "
+    " ORDER BY t.id DESC LIMIT 1) AS last_prompt, "
+    "(SELECT COUNT(*) FROM tasks t WHERE t.session_id = s.id AND t.status = 'running') AS running, "
+    "(SELECT COALESCE(SUM(t.cost_usd), 0) FROM tasks t WHERE t.session_id = s.id) AS cost_usd"
+)
+
+
+def _in(column: str, values: Iterable[str] | None) -> tuple[str | None, list[str]]:
+    """A WHERE clause keeping `column` in `values`: ("", []) for no filter, (None, []) for an
+    empty one, which matches nothing."""
+    if values is None:
+        return "", []
+    values = list(values)
+    if not values:
+        return None, []
+    return f"WHERE {column} IN ({', '.join('?' * len(values))})", values
+
+
 class Store:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -251,6 +271,37 @@ class Store:
             "repo = COALESCE(excluded.repo, repo), last_seen_at = excluded.last_seen_at",
             (session_id, cwd, repo, stamp, stamp),
         )
+
+    def sessions(self, *, repos: Iterable[str] | None = None, limit: int = 100) -> list[dict]:
+        """Claude Code sessions cauce has seen, latest first, each with how many prompts it
+        took, the last one, and whether one is still running."""
+        scope, params = _in("s.repo", repos)
+        if scope is None:
+            return []
+        query = f"SELECT s.*, {_SESSION_COLUMNS} FROM sessions s {scope} ORDER BY s.last_seen_at DESC LIMIT ?"  # noqa: S608
+        rows = self._conn.execute(query, [*params, limit]).fetchall()
+        return [dict(r) for r in rows]
+
+    def projects(self) -> list[dict]:
+        """Every repository cauce has worked in, from its tasks and the sessions it saw: the
+        directory it was last used from, when, and how its tasks stand."""
+        rows = self._conn.execute(
+            "WITH seen AS ("
+            " SELECT repo, cwd, updated_at AS at FROM tasks WHERE repo IS NOT NULL AND cwd IS NOT NULL "
+            "   AND source != 'delegation' "
+            " UNION ALL SELECT repo, cwd, last_seen_at FROM sessions WHERE repo IS NOT NULL AND cwd IS NOT NULL) "
+            "SELECT repo, MAX(at) AS last_seen, "
+            " (SELECT cwd FROM seen s2 WHERE s2.repo = seen.repo ORDER BY at DESC LIMIT 1) AS cwd "
+            "FROM seen GROUP BY repo ORDER BY last_seen DESC"
+        ).fetchall()
+        out = []
+        for r in rows:
+            counts = dict(self._conn.execute(
+                "SELECT status, COUNT(*) FROM tasks WHERE repo = ? AND source IN ('cauce', 'queue') GROUP BY status",
+                (r["repo"],)).fetchall())
+            sessions = self._conn.execute("SELECT COUNT(*) FROM sessions WHERE repo = ?", (r["repo"],)).fetchone()[0]
+            out.append({**dict(r), "tasks": counts, "sessions": int(sessions)})
+        return out
 
     # --- tasks -----------------------------------------------------------
 
@@ -780,6 +831,17 @@ class Store:
                 if len(out) >= limit:
                     return out
         return out
+
+    def recent_problems(self, *, repos: Iterable[str] | None = None, limit: int = 40) -> list[dict]:
+        """Problems most recently touched, with their fixes; with `repos`, only theirs."""
+        scope, params = _in("repo", repos)
+        if scope is None:
+            return []
+        rows = self._conn.execute(
+            f"SELECT id FROM problems {scope} ORDER BY updated_at DESC, id DESC LIMIT ?",  # noqa: S608
+            [*params, limit],
+        ).fetchall()
+        return [p for p in (self.problem(int(r[0])) for r in rows) if p]
 
     def _recent_problems(self, repo: str | None, limit: int) -> list[dict]:
         scope, params = ("WHERE repo = ?", [repo]) if repo is not None else ("", [])

@@ -249,6 +249,51 @@ def test_the_json_surface_a_page_reads(capsys, git_repo):
     assert cli.main(["show", "999", "--json"]) == 1
 
 
+def test_projects_sessions_and_memory_as_json(capsys, git_repo):
+    """Where cauce has worked, the sessions it saw there with how to resume them, and the problems
+    and fixes it remembers, everything or one repository's."""
+    from cauce import repo
+
+    key = repo.key(git_repo.resolve())
+    store = Store.open()
+    store.touch_session("s-1", str(git_repo), key)
+    store.create_task("fix the cart total", status="done", source="hook", session_id="s-1", repo=key,
+                      cwd=str(git_repo))
+    store.create_task("queued one", status="queued", source="queue", repo=key, cwd=str(git_repo))
+    store.touch_session("s-2", "/elsewhere", "github.com/o/other")
+    p = store.open_problem("cart total off by one", repo=key)
+    store.add_fix(p, "round before summing", "failed", repo=key, why="still off")
+    store.add_fix(p, "sum in cents", "worked", repo=key)
+    q = store.open_problem("flaky login test", repo="github.com/o/other")
+    store.add_fix(q, "retry", "failed", repo="github.com/o/other")
+    store.close()
+
+    assert cli.main(["projects", "--json"]) == 0
+    projects = {x["repo"]: x for x in json.loads(capsys.readouterr().out)}
+    assert projects[key]["dir"] == str(git_repo.resolve()) and projects[key]["exists"]
+    assert projects[key]["sessions"] == 1 and projects[key]["tasks"] == {"queued": 1}
+    assert projects["github.com/o/other"]["exists"] is False
+    assert cli.main(["projects"]) == 0 and "(gone)" in capsys.readouterr().out
+
+    assert cli.main(["sessions", "--json", "--repo", str(git_repo)]) == 0
+    sessions = json.loads(capsys.readouterr().out)
+    assert [x["id"] for x in sessions] == ["s-1"]
+    assert sessions[0]["prompts"] == 1 and sessions[0]["last_prompt"] == "fix the cart total"
+    assert sessions[0]["resume"].endswith("&& claude --resume s-1")
+    assert cli.main(["sessions"]) == 0 and "claude --resume s-2" in capsys.readouterr().out
+
+    assert cli.main(["memory", "list", "--json"]) == 0
+    assert {x["title"] for x in json.loads(capsys.readouterr().out)} == {"cart total off by one", "flaky login test"}
+    assert cli.main(["memory", "list", "--json", "--repo", str(git_repo)]) == 0
+    mine = json.loads(capsys.readouterr().out)
+    assert [x["state"] for x in mine] == ["solved"] and [f["outcome"] for f in mine[0]["fixes"]] == ["failed", "worked"]
+    assert cli.main(["memory", "list", "--json", "--query", "login"]) == 0
+    assert [x["title"] for x in json.loads(capsys.readouterr().out)] == ["flaky login test"]
+    assert cli.main(["memory", "list", "--json", "--query", "login", "--repo", str(git_repo)]) == 0
+    assert json.loads(capsys.readouterr().out) == []
+    assert cli.main(["memory", "list"]) == 0 and "sum in cents" in capsys.readouterr().out
+
+
 def test_ui_command_serves_until_interrupted(monkeypatch, capsys):
     from cauce.ui import server
 
