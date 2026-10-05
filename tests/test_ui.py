@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+import http.server
 import json
 import threading
 
@@ -332,3 +333,70 @@ def test_the_int_parser():
     assert server._int({"days": ["x"]}, "days", 7, 1, 30) == 7
     assert server._int({"days": ["999"]}, "days", 7, 1, 30) == 30
     assert server._int({}, "days", 7, 1, 30) == 7
+
+
+# --- a server that outlives an update ------------------------------------------------------
+
+
+def test_the_server_says_which_cauce_it_is(ui):
+    from cauce import __version__
+
+    res, data = call(ui, "GET", "/api/version")
+    assert res.status == 200 and json.loads(data) == {"version": __version__}
+    assert server.occupant(ui.server_address[1]) == {"cauce": True, "version": __version__}
+
+
+def test_only_a_newer_install_takes_the_servers_place(monkeypatch, tmp_path):
+    launcher = tmp_path / "bin" / "cauce"
+    monkeypatch.setattr(server.link, "installed", lambda env: [((0, 0, 1), launcher), ((99, 0), launcher)])
+    assert server.newer_install({}) == ("99.0", launcher)
+    monkeypatch.setattr(server.link, "installed", lambda env: [((0, 0, 1), launcher)])
+    assert server.newer_install({}) is None
+    monkeypatch.setattr(server.link, "installed", lambda env: [])
+    assert server.newer_install({}) is None
+
+
+def test_housekeeping_hands_the_port_to_a_newer_cauce(_isolated_home, monkeypatch, tmp_path):
+    srv = server.UIServer(0, _isolated_home)
+    port = srv.server_address[1]
+    launcher = tmp_path / "cauce"
+    ran = []
+    monkeypatch.setattr(server, "SWEEP_EVERY_S", 0.01)
+    monkeypatch.setattr(server, "newer_install", lambda env: ("9.9.9", launcher))
+    monkeypatch.setattr(server.os, "execv", lambda path, argv: ran.append((path, argv)))
+    srv.housekeeping()
+    assert ran == [(str(launcher), [str(launcher), "ui", "--port", str(port)])]
+    assert srv.stop_event.is_set() and srv.socket.fileno() == -1
+    assert "this" in (srv.root / "ui-errors.log").read_text() and "9.9.9" in (srv.root / "ui-errors.log").read_text()
+    srv.server_close()
+
+
+class _Other(http.server.BaseHTTPRequestHandler):
+    server_version = "other"
+
+    def do_GET(self):
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+class _OldCauce(_Other):
+    server_version = "cauce"
+
+
+@pytest.mark.parametrize(("handler", "expected"), [
+    (_Other, {"cauce": False, "version": None}),
+    (_OldCauce, {"cauce": True, "version": None}),
+])
+def test_who_holds_a_taken_port(handler, expected):
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        assert server.occupant(srv.server_address[1]) == expected
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert server.occupant(srv.server_address[1]) is None  # nobody answers now

@@ -11,6 +11,10 @@ The envelope, kept from tasky's dashboard because it held:
 - a strict content security policy, a 1 MiB body cap, socket timeouts, and
   bare 500s with the trace in a local log.
 
+A server outlives plugin updates: it keeps the code it started with. So it
+checks, with its sweep, whether Claude Code has installed a newer cauce, and
+when it has, it runs that version's UI in its own place, on its own port.
+
 Two of tasky's weak spots are designed out. The token never travels in a URL:
 the page asks `/api/token`, which answers only a same-origin request (and a
 cross-origin page could not read the answer anyway). And slow work never runs
@@ -21,6 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import hmac
+import http.client
 import json
 import mimetypes
 import os
@@ -30,6 +35,7 @@ import signal
 import threading
 import time
 import traceback
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,7 +43,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from cauce import config, dispatch, flow
+from cauce import __version__, config, dispatch, flow, link
 from cauce.store import Store, home
 from cauce.ui import api
 
@@ -90,16 +96,37 @@ class UIServer(ThreadingHTTPServer):
         return self.local.store
 
     def housekeeping(self) -> None:
-        """The sweep, in the server, on a timer — never because a page is open."""
+        """The sweep, in the server, on a timer — never because a page is open.
+        And the check for a newer cauce, which takes this server's place."""
         store = Store(self.root / "cauce.db")
         try:
             while not self.stop_event.wait(SWEEP_EVERY_S):
                 try:
                     flow.sweep(store)
+                    newer = newer_install(os.environ)
+                    if newer is not None:
+                        self.hand_over(*newer)
+                        return
                 except Exception:  # logged; the server keeps serving
                     self.log_error_trace("housekeeping")
         finally:
             store.close()
+
+    def hand_over(self, version: str, launcher: Path) -> None:
+        """Become the newer cauce's UI, in this process and on this port: an open
+        page keeps its address, and reloads when it sees the version change."""
+        self.log_note(f"cauce {version} is installed; this {__version__} server runs it in its place "
+                      f"on port {self.server_address[1]}")
+        self.stop_event.set()
+        self.socket.close()
+        os.execv(str(launcher), [str(launcher), "ui", "--port", str(self.server_address[1])])  # noqa: S606
+
+    def log_note(self, text: str) -> None:
+        try:
+            with (self.root / "ui-errors.log").open("a", encoding="utf-8") as fh:
+                fh.write(f"--- {datetime.now(UTC).isoformat(timespec='seconds')} {text}\n")
+        except OSError:
+            pass
 
     def log_error_trace(self, where: str) -> None:
         try:
@@ -211,6 +238,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._static("index.html")
         if path.startswith("/static/"):
             return self._static(path.removeprefix("/static/"))
+        if path == "/api/version":
+            # Which cauce answers here: `cauce ui` asks when the port is taken, and
+            # the page reloads when it changes.
+            return self._json(HTTPStatus.OK, {"version": __version__})
         if path == "/api/token":
             # Only the page itself: a browser marks its own fetches same-origin, and
             # a cross-origin page could not read this answer even if it asked.
@@ -332,6 +363,38 @@ def _int(query: dict[str, list[str]], key: str, default: int, low: int, high: in
     except ValueError:
         return default
     return max(low, min(high, value))
+
+
+def newer_install(env: Mapping[str, str]) -> tuple[str, Path] | None:
+    """The newest cauce Claude Code has installed, when it is newer than this one."""
+    found = link.installed(env)
+    own = link.parse_version(__version__)
+    if not found or own is None or found[-1][0] <= own:
+        return None
+    version, launcher = found[-1]
+    return ".".join(map(str, version)), launcher
+
+
+def occupant(port: int) -> dict[str, Any] | None:
+    """Who answers on a taken port: {"cauce": bool, "version": str | None}, or None.
+    A cauce UI from before 0.4.1 answers as cauce, without a version."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+    try:
+        conn.request("GET", "/api/version", headers={"Host": f"127.0.0.1:{port}"})
+        res = conn.getresponse()
+        body = res.read()
+    except (OSError, http.client.HTTPException):
+        return None
+    finally:
+        conn.close()
+    if not (res.getheader("Server") or "").startswith("cauce"):
+        return {"cauce": False, "version": None}
+    try:
+        data = json.loads(body) if res.status == HTTPStatus.OK else {}
+    except ValueError:
+        data = {}
+    version = data.get("version") if isinstance(data, dict) else None
+    return {"cauce": True, "version": version if isinstance(version, str) else None}
 
 
 def serve(port: int = 8790, root: Path | None = None, *, ready: threading.Event | None = None) -> UIServer:

@@ -92,6 +92,14 @@ setInterval(() => {
 }, 15000);
 setInterval(loadProjects, 60000);
 
+// A server hands itself over to a newer cauce when one is installed: the page
+// reloads to run that version's code too.
+const served = await get("/api/version").then((v) => v.version).catch(() => null);
+setInterval(async () => {
+  const now = await get("/api/version").then((v) => v.version).catch(() => null);
+  if (served && now && now !== served) location.reload();
+}, 30000);
+
 await loadProjects();
 // The stream starts after the newest event the board knows; with no project yet there are no events.
 (project ? get(`/api/board?repo=${encodeURIComponent(project)}`) : Promise.resolve({ last_event: 0 }))

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import errno
 import json
+
+import pytest
 
 from cauce import cli, orchestrate
 from cauce.launch import WorkerResult
@@ -385,3 +388,43 @@ def test_queue_add_keeps_the_rules_a_person_granted(capsys, git_repo):
     store.close()
     from cauce import flow
     assert flow.queued_options(task, orchestrate.Options()).allow_tools == ("Bash(npm run build)",)
+
+
+@pytest.mark.parametrize(("found", "code", "says"), [
+    ({"cauce": True, "version": None}, 1, "from before 0.4.1"),
+    ({"cauce": True, "version": "0.1.1"}, 1, "0.1.1, started before"),
+    ({"cauce": False, "version": None}, 1, "another program"),
+    (None, 1, "another program"),
+])
+def test_ui_on_a_taken_port_says_who_holds_it(monkeypatch, capsys, found, code, says):
+    from cauce.ui import server
+
+    def taken(port):
+        raise OSError(errno.EADDRINUSE, "Address already in use")
+
+    monkeypatch.setattr(server, "serve", taken)
+    monkeypatch.setattr(server, "occupant", lambda port: found)
+    assert cli.main(["ui", "--port", "8791"]) == code
+    assert says in capsys.readouterr().err
+
+
+def test_ui_on_a_port_this_cauce_already_serves_opens_it(monkeypatch, capsys):
+    from cauce import __version__
+    from cauce.ui import server
+
+    def taken(port):
+        raise OSError(errno.EADDRINUSE, "Address already in use")
+
+    monkeypatch.setattr(server, "serve", taken)
+    monkeypatch.setattr(server, "occupant", lambda port: {"cauce": True, "version": __version__})
+    opened = []
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
+    assert cli.main(["ui", "--port", "8791", "--open"]) == 0
+    assert "already at http://127.0.0.1:8791/" in capsys.readouterr().out and opened
+
+    def broken(port):
+        raise OSError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(server, "serve", broken)
+    with pytest.raises(OSError):
+        cli.main(["ui", "--port", "80"])

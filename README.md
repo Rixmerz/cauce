@@ -272,6 +272,15 @@ repository's cards at once.
 Work is never typed into the page: it is asked for in a session, where it has
 the session's context and its record.
 
+**A running UI follows updates.** A server keeps the code it started with, so
+one started before a `claude plugin update` would go on showing the old board.
+Every 30 seconds it checks what Claude Code has installed; when a newer cauce
+is there, it runs that version's UI in its own place, on the same port, and
+the open page reloads. `cauce ui` on a port this same version already serves
+says where it is; on a port an older one holds, it says so, and stopping that
+one is yours. A UI from before 0.4.1 cannot follow updates itself: stop it
+once and start `cauce ui` again.
+
 **Enrolled projects only.** A project shows in the UI when it has a `.cauce/`
 folder — at the top of its checkout, or where the session runs. cauce creates
 it the first time work is queued or run there (`++`, `cauce queue add`, `cauce

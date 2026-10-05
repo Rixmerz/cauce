@@ -6,7 +6,9 @@ shim that, each time it runs, finds the newest cauce Claude Code has installed.
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -60,3 +62,27 @@ def remove(target_dir: Path) -> Path | None:
 def on_path(target_dir: Path, env: Mapping[str, str]) -> bool:
     entries = [Path(p).expanduser() for p in env.get("PATH", "").split(os.pathsep) if p]
     return target_dir.resolve() in {e.resolve() for e in entries}
+
+
+# --- what Claude Code has installed ------------------------------------------
+
+
+def parse_version(text: str) -> tuple[int, ...] | None:
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)*)\s*", text or "")
+    return tuple(int(part) for part in match.group(1).split(".")) if match else None
+
+
+def installed(env: Mapping[str, str]) -> list[tuple[tuple[int, ...], Path]]:
+    """Every cauce Claude Code has installed, as (version, launcher), oldest first.
+    The version is read from each install's own plugin.json, never its mtime."""
+    config = Path(env.get("CLAUDE_CONFIG_DIR") or Path(env.get("HOME") or Path.home()) / ".claude")
+    found = []
+    for launcher in config.glob("plugins/cache/*/cauce/*/bin/cauce"):
+        try:
+            manifest = json.loads((launcher.parents[1] / ".claude-plugin" / "plugin.json").read_text())
+        except (OSError, ValueError):
+            continue
+        version = parse_version(str(manifest.get("version") or "")) if isinstance(manifest, dict) else None
+        if version and os.access(launcher, os.X_OK):
+            found.append((version, launcher))
+    return sorted(found)
