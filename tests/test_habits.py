@@ -78,6 +78,19 @@ def test_candidates_pass_every_gate_or_none(store: Store):
     assert best.id in best.line() and "×3 in 3 sessions" in best.line()
 
 
+def test_looking_around_is_never_a_habit(store: Store):
+    """What a real session showed as candidates: all of it repeats, none of it can
+    run as a hook or save a turn."""
+    for seq in (["bash:find", "bash:ls"], ["bash:find", "bash:ls", "bash:ls"], ["read:.ts", "bash:find"],
+                ["bash:mkdir", "bash:cd"], ["bash:cat", "bash:cd", "bash:cd"], ["subagenthandback", "bash:cd"],
+                ["edit:.py", "bash:ls"], ["edit:.py", "bash:git-diff"], ["write:.md", "read:.md"]):
+        _events(store, 4, seq)
+    assert habits.candidates(store.tool_events()) == []
+    assert habits.automatable(["edit:.py", "bash:ruff"])
+    assert habits.automatable(["write:.ts", "bash:ls", "bash:npm-test"])
+    assert not habits.automatable(["edit:.py"]) and not habits.automatable(["bash:ruff", "bash:pytest"])
+
+
 def test_a_sequence_that_mostly_fails_is_no_habit(store: Store):
     _events(store, 4, ["edit:.py", "bash:pytest"], ok=False)
     assert habits.candidates(store.tool_events()) == []

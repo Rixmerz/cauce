@@ -10,10 +10,13 @@ cannot carry a path or a secret.
 
 From those records:
 
-- **candidates** — sequences that repeat. Gates are boolean (enough
-  occurrences, in enough sessions, nearly always succeeding, nothing
-  destructive); the score only ranks what passed them. A large count must never
-  buy its way past a gate.
+- **candidates** — sequences that repeat *and could run on their own*: they
+  start with an edit or a write and end in a command that does something (a
+  formatter, a linter, tests, a build). The model looking around — `find → ls`,
+  `cat → cd` — repeats in every session and is no habit: a hook could not take
+  it over or save a turn. Gates are boolean (automatable, enough occurrences,
+  in enough sessions, nearly always succeeding, nothing destructive); the score
+  only ranks what passed them. A large count must never buy its way past a gate.
 - **recipes** — per kind of task, the sequences that came before a worker's
   pass. They go into the next worker's brief: the steps that worked here last
   time, so it does not spend turns rediscovering them.
@@ -39,9 +42,23 @@ from cauce import signature as sig
 from cauce.signature import arg_hash, signature  # noqa: F401 - re-exported for callers and tests
 from cauce.store import Store
 
+#: The steps a hook can be triggered by: an edit or a write of a file type.
+_EDIT_TRIGGER = re.compile(r"^(edit|write):(.+)$")
 #: Signatures a candidate may never contain: automation must not destroy.
 _DESTRUCTIVE = re.compile(r"bash:(rm|git-push|git-reset|git-clean|git-checkout|docker-rm|kubectl-delete|"
                           r"terraform-apply|terraform-destroy|dd|mkfs|shutdown|reboot)")
+
+#: Bash programs that look, move around or print: a sequence of these is the
+#: model finding its way, never a step worth automating. `find → ls` repeating
+#: in every session is how exploring looks, not a habit a hook could take over.
+_LOOKING = frozenset({
+    "ls", "find", "fd", "cat", "bat", "head", "tail", "less", "more", "cd", "pushd", "popd", "pwd", "echo",
+    "printf", "grep", "rg", "ag", "egrep", "wc", "tree", "which", "type", "file", "stat", "du", "df", "sort",
+    "uniq", "cut", "tr", "diff", "sed", "awk", "jq", "xargs", "sleep", "date", "env", "export", "true", "test",
+    "mkdir", "touch", "cp", "mv", "ln", "chmod", "realpath", "dirname", "basename", "readlink", "unknown",
+    "git", "git-status", "git-log", "git-diff", "git-show", "git-branch", "git-remote", "git-rev-parse",
+    "git-ls-files", "git-blame", "git-config", "git-stash", "git-fetch", "git-add",
+})
 
 MIN_OCCURRENCES = 3
 MIN_SESSIONS = 2
@@ -118,6 +135,8 @@ def candidates(events: Sequence[Mapping[str, Any]]) -> list[Candidate]:
                     (session, all(e["ok"] for e in window), "".join(e["arg_hash"] for e in window)))
     found = []
     for steps, seen in occurrences.items():
+        if not automatable(steps):
+            continue
         n = len(seen)
         sessions = len({s for s, _, _ in seen})
         success = sum(ok for _, ok, _ in seen) / n
@@ -135,6 +154,17 @@ def candidates(events: Sequence[Mapping[str, Any]]) -> list[Candidate]:
             continue
         kept.append(c)
     return kept
+
+
+def automatable(steps: Sequence[str]) -> bool:
+    """Whether a hook could take a sequence over: it starts with an edit or a write
+    (what a hook is triggered by) and ends in a command that does something — a
+    formatter, a linter, a test run, a build. Anything else is a false positive:
+    it repeats, but nothing about it can run on its own or save a turn."""
+    if len(steps) < 2 or _EDIT_TRIGGER.match(steps[0]) is None:
+        return False
+    last = steps[-1]
+    return last.startswith("bash:") and last.removeprefix("bash:") not in _LOOKING
 
 
 def _contains(longer: tuple[str, ...], shorter: tuple[str, ...]) -> bool:
@@ -173,7 +203,6 @@ def recipes(store: Store, kind: str, *, repo: str | None, limit: int = 2) -> lis
 # --- automation, only with a person ---------------------------------------------------
 
 
-_EDIT_TRIGGER = re.compile(r"^(edit|write):(.+)$")
 
 
 class HabitError(ValueError):

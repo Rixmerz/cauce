@@ -134,9 +134,14 @@ contents, the output or the prompt; a final filter keeps a signature to
 `[a-z0-9:._-]`. The hook only appends a line to a file, so it stays out of the
 way of every call.
 
-- `cauce habits` lists sequences that repeat, past boolean gates (enough
-  occurrences, in enough sessions, nearly always succeeding, nothing
-  destructive); the score only ranks what passed.
+- `cauce habits` lists sequences that repeat **and could run as a hook**: an
+  edit or a write followed by a command that does something — a formatter, a
+  linter, tests, a build — past boolean gates (enough occurrences, in enough
+  sessions, nearly always succeeding, nothing destructive); the score only
+  ranks what passed. The model looking around (`find → ls`, `cat → cd`)
+  repeats in every session too, but no hook could take it over or save a turn,
+  so it is never listed. Mining reads every session and repository; installing
+  writes to one repository.
 - Per kind of task, the steps that came before passing worker attempts go into
   the next worker's brief, so it does not spend turns finding them again.
 - `cauce habits install <id> --command "ruff format"` turns a habit that starts

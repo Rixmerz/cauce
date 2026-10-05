@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-05
+
+### Fixed
+
+- Habit candidates listed false positives: `find → ls`, `mkdir → cd`, `cat →
+  cd → cd` repeat in every session, but no hook could take them over and
+  installing one would save nothing. A candidate now has to start with an
+  edit or a write (what a hook is triggered by) and end in a command that does
+  something — not a program that only looks, moves around or prints.
+
 ## [0.3.0] - 2026-10-05
 
 ### Added
