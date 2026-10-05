@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-05
+
 ### Added — the core
 
 - **Model × effort routing.** Fifteen kinds of work, each with a ladder of
