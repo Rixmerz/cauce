@@ -11,6 +11,12 @@ while [ -L "${SRC}" ]; do
 done
 ROOT="$(cd "$(dirname "${SRC}")/.." && pwd)"
 PY="${CAUCE_PYTHON:-python3}"
+if [ -z "${CAUCE_PYTHON:-}" ] && ! command -v python3 >/dev/null 2>&1; then
+  for name in python3.14 python3.13 python3.12 python3.11; do
+    if command -v "${name}" >/dev/null 2>&1; then PY="${name}"; break; fi
+  done
+fi
+# An older python3 that is found is fine here: cauce looks for a newer one itself.
 if ! command -v "${PY}" >/dev/null 2>&1; then
   echo "cauce: ${PY} not found; install Python 3.11+ or set CAUCE_PYTHON to one" >&2
   exit 127

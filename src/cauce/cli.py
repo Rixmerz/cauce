@@ -465,6 +465,26 @@ def cmd_ui(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_link(args: argparse.Namespace) -> int:
+    from cauce import link
+
+    target_dir = Path(args.dir).expanduser() if args.dir else link.default_dir(os.environ)
+    if args.remove:
+        gone = link.remove(target_dir)
+        print(f"removed {gone}" if gone else f"no `cauce link` shim in {target_dir}")
+        return 0
+    launcher = Path(__file__).resolve().parents[2] / "bin" / "cauce"
+    try:
+        target = link.write(target_dir, launcher)
+    except FileExistsError as exc:
+        print(f"cauce: {exc}", file=sys.stderr)
+        return 1
+    print(f"wrote {target}: it runs the newest cauce Claude Code has installed")
+    if not link.on_path(target_dir, os.environ):
+        print(f"{target_dir} is not on PATH; add it to your shell profile: export PATH=\"{target_dir}:$PATH\"")
+    return 0
+
+
 def cmd_board(args: argparse.Namespace) -> int:
     """The board as typed JSON: a status line or a mod reads fields, never a sentence.
 
@@ -664,6 +684,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=8790)
     p.add_argument("--open", action="store_true", help="open it in the browser")
     p.set_defaults(func=cmd_ui)
+
+    p = sub.add_parser("link", help="put `cauce` on a terminal's PATH; survives plugin updates")
+    p.add_argument("--dir", help="where to write it (default ~/.local/bin)")
+    p.add_argument("--remove", action="store_true", help="take it away again")
+    p.set_defaults(func=cmd_link)
 
     p = sub.add_parser("board", help="needs-you, running and queued counts, for a status line")
     p.add_argument("--json", action="store_true", help="the counts as JSON")

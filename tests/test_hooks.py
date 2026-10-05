@@ -193,10 +193,18 @@ def test_the_launcher_follows_a_symlink_and_names_a_missing_python(tmp_path):
                           env={**env, "CAUCE_PYTHON": "no-such-python3"})
     assert proc.returncode == 127 and "no-such-python3 not found" in proc.stderr
     old = shutil.which("python3.10")
-    if old:  # an interpreter too old for cauce says so in one line, not an import traceback
+    if old:
+        # A person's choice is kept: an interpreter too old says so in one line,
+        # not an import traceback.
         proc = subprocess.run([str(link), "matrix"], capture_output=True, text=True, check=False,
                               env={**env, "CAUCE_PYTHON": old})
         assert proc.returncode == 1 and "needs Python 3.11+" in proc.stderr and "Traceback" not in proc.stderr
+        # A bare old python3 hands over to a newer one beside it.
+        if any(shutil.which(name) for name in ("python3.11", "python3.12", "python3.13", "python3.14")):
+            bare = {k: v for k, v in env.items() if k != "CAUCE_PYTHON"}
+            proc = subprocess.run([old, "-m", "cauce", "matrix"], capture_output=True, text=True, check=False,
+                                  env={**bare, "PYTHONPATH": str(ROOT / "src")})
+            assert proc.returncode == 0 and "debug-unclear" in proc.stdout
 
 
 def test_double_plus_queues_without_a_turn(store: Store, git_repo):

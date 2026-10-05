@@ -28,6 +28,8 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/isolate.py` | one git worktree per writing task |
 | `commands/orchestration.md` | the one entry point a user types |
 | `bin/cauce` | the launcher every hook and command goes through |
+| `src/cauce/interpreter.py` | which Python runs cauce; imported before the version check, so it must run on any python3 |
+| `src/cauce/link.py` | `cauce link`: a shim on a terminal's PATH that survives plugin updates |
 
 ## Verify before reporting done
 

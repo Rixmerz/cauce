@@ -149,6 +149,8 @@ way of every call.
 ## Install
 
 Requires Python 3.11+ and Claude Code. The core is standard library only.
+When `python3` is older (macOS ships 3.9), cauce runs on a `python3.11`–`3.14`
+found beside it; `CAUCE_PYTHON` picks one by hand.
 
 ```sh
 claude plugin marketplace add Rixmerz/claude-plugins
@@ -162,8 +164,13 @@ The plugin ships `bin/cauce`, which Claude Code puts on the Bash tool's `PATH`.
 Where it does not — an older Claude Code, or a session opened before the plugin
 was installed — the `SessionStart` hook adds it for the session, and the
 commands fall back to the full path. Restart a session that was open during the
-install. For a terminal, link it: `ln -s <plugin>/bin/cauce ~/.local/bin/cauce`
-(the launcher follows the link).
+install.
+
+For a terminal, outside Claude Code, run `cauce link` once from a session (or
+by the plugin's full path). It writes `~/.local/bin/cauce` (`--dir` for
+another place), a shim that runs the newest cauce Claude Code has installed, so
+a plugin update does not break it; `cauce link --remove` takes it away. It never
+replaces a `cauce` it did not write.
 (claude.ai and Cowork do not install plugins with a `bin/` directory; use
 Claude Code.)
 

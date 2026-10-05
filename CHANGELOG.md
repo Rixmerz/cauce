@@ -103,8 +103,14 @@
   opened before the plugin was installed: `SessionStart` puts the plugin's
   `bin/` on the session's PATH through `CLAUDE_ENV_FILE`, or names the full
   path when it cannot, and the commands fall back to the full path too. The
-  launcher follows symlinks and says so when no Python is found; an older
-  Python than 3.11 gets one line saying so instead of an import traceback.
+  launcher follows symlinks and says so when no Python is found.
+- A `python3` older than 3.11 hands over to a `python3.11`–`3.14` beside it,
+  with no extra process when `python3` is new enough; with none, or with an old
+  `CAUCE_PYTHON`, one line says so instead of an import traceback. The
+  hand-over marker is never inherited by a worker's hooks.
+- `cauce link`: `cauce` in a terminal. It writes a shim to `~/.local/bin` that
+  runs the newest installed cauce, so a plugin update does not break it, and
+  never replaces a `cauce` it did not write.
 
 ### Added — livespec is built in
 

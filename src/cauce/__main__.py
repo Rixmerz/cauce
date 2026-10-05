@@ -3,12 +3,22 @@ from __future__ import annotations
 import os
 import sys
 
-if sys.version_info < (3, 11):  # noqa: UP036 — the point is to run on an older python3
-    # Checked before anything of cauce is imported: on an older python3 the
+from cauce.interpreter import OLD_ENOUGH, newer_python
+
+if sys.version_info < OLD_ENOUGH:
+    # Checked before the rest of cauce is imported: on an older python3 the
     # first import fails with a traceback that does not say what is wrong.
+    # A python3.1x beside it runs cauce instead.
+    newer = newer_python(os.environ)
+    if newer:
+        os.environ["CAUCE_REEXEC"] = "1"
+        os.execv(newer, [newer, "-m", "cauce", *sys.argv[1:]])  # noqa: S606 — the same argv, a newer interpreter
     sys.stderr.write(f"cauce needs Python 3.11+, and {sys.executable} is {sys.version.split()[0]}; "
-                     "set CAUCE_PYTHON to a newer interpreter.\n")
+                     "install a newer one or set CAUCE_PYTHON to it.\n")
     sys.exit(1)
+# Never inherited: a worker's hooks start on the old python3 again and must be
+# free to look for a newer one themselves.
+os.environ.pop("CAUCE_REEXEC", None)
 
 if sys.argv[1:3] == ["hook", "PostToolUse"]:
     # The fastest path: every tool call lands here. One JSON line appended to
