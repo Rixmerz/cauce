@@ -6,8 +6,9 @@ task of an idle lane starts; one queued behind running work starts beside it
 only when Haiku judged it independent of everything running and queued ahead
 (`dispatch.decide`, kept on the task with its reason, `parallel` setting) —
 otherwise it waits its turn. A task that ends in anything but a pass pauses
-the lane, so nothing new starts on a state it may have left broken. A person
-unpauses it.
+the lane, so nothing new starts on a state it may have left broken — unless a
+person cancelled it, which is their call on that task, not on the queue. A
+person unpauses it.
 
 Each dispatched task runs as its own `cauce run-queued` process: its pid is its
 own, so the sweep and `cauce cancel` treat it like any other run, and the

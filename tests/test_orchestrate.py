@@ -244,6 +244,8 @@ def test_dead_ends_from_another_repository_reach_the_brief(git_repo, store):
     run("the websocket reconnect loop is back", git_repo, store, registry={}, launcher=script,
         classifier=kind("implement"))
     assert "raise the backoff" in script.specs[0].prompt and "github.com/x/other" in script.specs[0].prompt
+    task_id = store.list_tasks()[0]["id"]
+    assert store.last_event(task_id, "dead_ends")["data"]["shown"][0]["tried"] == "raise the backoff"
 
 
 def test_options_pin_and_launch_dir_and_dry_run(git_repo, store, tmp_path):
@@ -450,6 +452,7 @@ def test_the_repositorys_check_can_settle_what_a_refused_worker_could_not(git_re
     report = run("create the routes", git_repo, store, Options(verify="true", isolate=False), registry={},
                  launcher=Script(refused()), classifier=kind("implement"))
     assert report.status == "done" and report.changed == ["routes.js"]
+    assert "these changes are in your checkout\n" in report.text()  # no branch to review: the files are the work
     report = run("create the routes", git_repo, store, Options(isolate=False), registry={},
                  launcher=Script(refused()), classifier=kind("implement"))
     assert "these changes are in your checkout, unverified" in report.text()
@@ -543,18 +546,24 @@ def test_a_run_in_the_checkout_resumes_in_the_checkout(git_repo, store):
     assert flow.queued_options({"options": "{}"}, Options()).isolate is True
 
 
-def test_the_plan_names_the_rules_workers_here_were_refused_before(git_repo, store):
+def test_the_plan_names_the_rules_workers_here_were_refused_before(git_repo, store, monkeypatch):
     for i in range(2):
         refusal = WorkerResult(False, Failure.PERMISSION, "refused", verdict="inconclusive",
                                denied=("Bash(npx tsc --noEmit; npm run build)",),
-                               allow=("Bash(npx tsc:*)", "Bash(npm run build:*)"))
+                               allow=("Bash(npx tsc:*)", "Bash(npm run build:*)"), permission_mode="auto")
         run(f"task {i}", git_repo, store, registry={}, launcher=Script(refusal), classifier=kind("implement"))
     old = store.create_task("older", status="blocked", source="cauce", repo=str(git_repo.resolve()))
     store.add_event(old["id"], "attempt_finished", seq=1, denied=["Bash(make lint)"])  # before rules were kept
     dry = run("next", git_repo, store, Options(dry_run=True, allow_tools=("Bash(npm run build:*)",)), registry={},
               classifier=kind("implement"))
     note = next(r for r in dry.plan.reasons if r.startswith("workers here were refused before"))
-    assert "Bash(npx tsc:*) ×2" in note and "Bash(make lint:*) ×1" in note and "npm run build" not in note
+    assert "Bash(npx tsc:*) ×2" in note and "npm run build" not in note
+    # what acceptEdits refused, before auto mode, is not what auto mode will refuse
+    assert "make lint" not in note
+    monkeypatch.setenv("CAUCE_MODE", "acceptEdits")
+    dry = run("next", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"))
+    note = next(r for r in dry.plan.reasons if r.startswith("workers here were refused before"))
+    assert note.startswith("workers here were refused before: Bash(make lint:*) ×1.")
     blocked = store.list_tasks(status=["blocked"])[-1]
     assert "--allow 'Bash(npx tsc:*)' --allow 'Bash(npm run build:*)'" in store.get_task(blocked["id"])["result"]
 

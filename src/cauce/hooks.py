@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from cauce import config, repo, stops
+from cauce import config, project, repo, stops
 from cauce.store import Store, home
 from cauce.text import fold, words
 
@@ -98,7 +98,7 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
             _enroll(cwd)
         # Blocked: queuing costs no turn. The reason is what the person sees.
         return {"decision": "block", "reason": f"cauce: queued #{task['id']} — {task['title']}. "
-                + _dispatch(cwd, key, os.environ)}
+                + _kick(cwd, key)}
 
     running = store.running_task(session_id, prompt_id) if prompt_id else None
     if running is not None:
@@ -112,29 +112,22 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
             store.update_task(previous["id"], status="running", prompt_id=prompt_id)
             return None
 
-    store.create_task(text, status="running", source="hook", session_id=session_id, prompt_id=prompt_id,
-                      cwd=cwd, repo=key)
+    task = store.create_task(text, status="running", source="hook", session_id=session_id, prompt_id=prompt_id,
+                             cwd=cwd, repo=key)
     blocks = [notice] if (notice := _endings(store, session_id, via="prompt")) else []
     dead = store.dead_ends(text, repo=key, limit=_MAX_DEAD_ENDS, strict=True) if len(words(text)) >= 3 else []
     if dead:
+        store.add_event(task["id"], "dead_ends", shown=dead)
         blocks.append(_dead_end_text(
             dead, "cauce memory: fixes already tried against problems like this one, and they did not work. "
             "Before applying one again, say so and check why it failed."))
     return _context("UserPromptSubmit", "\n\n".join(blocks)) if blocks else None
 
 
-def _dispatch(cwd: str | None, key: str | None, env: Mapping[str, str]) -> str:
-    """Start the repository's dispatcher (the `autowork` setting), and say what happens next."""
-    if not cwd or not config.enabled("autowork", env):
-        return "`cauce work` runs the queue in workers."
+def _kick(cwd: str | None, key: str | None) -> str:
     from cauce import dispatch
 
-    root = home(dict(env))
-    if dispatch.held(root, key or "*") or dispatch.start(Path(cwd), root, key or "*"):
-        if config.enabled("parallel", env):
-            return "A worker takes it now, beside the running ones if Haiku finds it independent, or after them."
-        return "A worker takes it when the tasks ahead of it are done."
-    return "Starting a worker failed; `cauce work` runs the queue."
+    return dispatch.kick(cwd, key, os.environ)
 
 
 def stop(event: Mapping[str, Any], store: Store) -> dict | None:
@@ -171,8 +164,6 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
 
 def _enroll(cwd: str) -> None:
     """Using cauce in a project enrolls it: it gets its `.cauce/` folder."""
-    from cauce import project
-
     with contextlib.suppress(OSError, project.NotAProject):
         project.enroll(cwd)
 
@@ -276,7 +267,9 @@ def session_start(
                                    source=("cauce",))
         if stopped:
             blocks.append(_stopped_text(store, stopped))
-    if cwd and repo.toplevel(Path(cwd)) is not None:
+    # Only a project that uses cauce: indexing writes `.mcp-docs/` into the
+    # checkout, and a session opened anywhere else is none of cauce's business.
+    if cwd and repo.toplevel(Path(cwd)) is not None and project.find(cwd) is not None:
         blocks += _freshen(Path(cwd), root, env, adapters)
     if key:
         dead = store.dead_ends(repo=key, limit=5)
@@ -304,9 +297,14 @@ def _endings(store: Store, session_id: str, *, via: str) -> str | None:
         lines.append(f"#{t['id']} [{t['status']}] {t['title']}")
         if t["status"] == "done":
             branch = data.get("branch")
-            lines.append(f"  passed at {data.get('final_cell') or t['final_cell']}"
-                         + (f"; branch {branch}: show `git diff HEAD...{branch}` and merge only when they say so"
-                            if branch else "; its changes are in the checkout"))
+            where = (f"; branch {branch}: show `git diff HEAD...{branch}` and merge only when they say so"
+                     if branch else "; its changes are in the checkout" if changed else "; it changed nothing")
+            lines.append(f"  passed at {data.get('final_cell') or t['final_cell']}{where}")
+            if t.get("result"):
+                lines.append(f"  the worker says: {str(t['result'])[:800]}")
+            if changed:
+                lines.append("  changed: " + ", ".join(changed[:8])
+                             + (f" and {len(changed) - 8} more" if len(changed) > 8 else ""))
             continue
         stop = stops.view(store, t)
         if stop:

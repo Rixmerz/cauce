@@ -92,7 +92,7 @@ index takes part in every step, at no token cost:
 | before the worker starts | a code map at the top of its prompt: the symbols the request is about, where they are, how many callers, the specs they implement, the tests that exercise them |
 | during the work | the worker gets livespec's tools, with a hint for its kind of work and the `workspace` every call needs |
 | after a pass | the specs the change touched, and the files outside the change that call what it changed |
-| between sessions | an index missing or older than the last commit is (re)built in the background at session start |
+| between sessions | an index missing or older than the last commit is (re)built in the background when a session starts in an enrolled project |
 
 cauce reads the index (`.mcp-docs/docs.db`) directly with `sqlite3`, read-only,
 and drives livespec through its own CLI. livespec is not installed separately:
@@ -238,10 +238,10 @@ queued without spending a turn; `cauce queue add "<task>" --verify "<cmd>"`
 does the same from a shell. Either way the task stays the session's: it shows
 under that session in the UI.
 
-A `++` also starts the repository's dispatcher (`autowork`, on by default), so
-queued work runs at once in workers, never in the session's context; `cauce
-work` starts it by hand. One dispatcher runs per repository, and each task it
-starts is its own `cauce run` process.
+A `++` or a `cauce queue add` also starts the repository's dispatcher
+(`autowork`, on by default), so queued work runs at once in workers, never in
+the session's context; `cauce work` starts it by hand. One dispatcher runs per
+repository, and each task it starts is its own `cauce run` process.
 
 Whether a task waits is **Haiku's call** (`parallel`, on by default). The first
 task of an idle repository starts. One queued behind running work starts beside

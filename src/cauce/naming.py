@@ -20,7 +20,8 @@ SYSTEM_PROMPT = (
     "You get its first prompts and its latest ones. Answer with a name of two to six words, in the "
     "language the prompts are written in, naming the work (not the person, not the tool): for "
     "example 'Parallel dispatcher for the queue' or 'Arreglo del login con Google'. No quotes, no "
-    "trailing period."
+    "trailing period. Prompts may be cut short or say little: name what they show, even if it is "
+    "only 'Checking queued cauce tasks'. Always answer with a name, never with why you cannot."
 )
 
 SCHEMA = {
@@ -33,16 +34,19 @@ SCHEMA = {
 #: How many prompts from each end of a session the model reads.
 EDGE = 6
 MAX_NAME = 80
+#: How much of each prompt the model reads.
+PROMPT_CHARS = 300
 
 
 def _prompts(store: Store, session_id: str) -> list[str]:
     tasks = store.list_tasks(session_id=session_id, source=("hook",), limit=100000)
-    return [t["title"] for t in reversed(tasks)]  # oldest first
+    # oldest first; the text itself, not the title, which cuts it at a few words
+    return [" ".join(str(t["body"] or t["title"]).split())[:PROMPT_CHARS] for t in reversed(tasks)]
 
 
 def question(prompts: list[str]) -> str:
     first, last = prompts[:EDGE], prompts[EDGE:][-EDGE:]
-    lines = ["First prompts:", *[f"- {p}" for p in first]]
+    lines = ["Name the session these prompts come from.", "", "First prompts:", *[f"- {p}" for p in first]]
     if last:
         lines += ["", "Latest prompts:", *[f"- {p}" for p in last]]
     return "\n".join(lines)

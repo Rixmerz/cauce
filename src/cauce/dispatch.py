@@ -24,7 +24,9 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from cauce import config
 from cauce.classify import ask_haiku
+from cauce.store import home
 
 #: How much of each task the model reads. Enough to see what it touches.
 BODY_CHARS = 600
@@ -122,6 +124,22 @@ def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
     out["PYTHONPATH"] = src + (os.pathsep + out["PYTHONPATH"] if out.get("PYTHONPATH") else "")
     out.pop("CAUCE_SESSION_ID", None)
     return out
+
+
+def kick(cwd: str | Path | None, key: str | None, env: Mapping[str, str]) -> str:
+    """Start the repository's dispatcher for work just queued (the `autowork`
+    setting), and say what happens next. A `++` and a `cauce queue add` both
+    come here: a task a session queued by hand otherwise waits for a `cauce
+    work` nobody runs, or one run in the session's background, which dies
+    with the session."""
+    if not cwd or not config.enabled("autowork", env):
+        return "`cauce work` runs the queue."
+    root = home(dict(env))
+    if held(root, key or "*") or start(Path(cwd), root, key or "*"):
+        if config.enabled("parallel", env):
+            return "A worker takes it now, beside the running ones if Haiku finds it independent, or after them."
+        return "A worker takes it when the tasks ahead of it are done."
+    return "Starting a worker failed; `cauce work` runs the queue."
 
 
 def start(repo_dir: Path, root: Path, scope: str, *, popen: Callable[..., object] = subprocess.Popen) -> bool:

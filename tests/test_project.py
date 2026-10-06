@@ -99,7 +99,14 @@ def test_haiku_names_a_session_from_its_first_and_latest_prompts(store: Store, g
     store.touch_session("u", str(git_repo), "r")
     store.create_task("one", status="done", source="hook", session_id="u", repo="r")
     assert naming.name_session(store, "u", runner=_runner("not json")) is None
-    assert naming.question(["a"]) == "First prompts:\n- a"
+    assert naming.question(["a"]) == "Name the session these prompts come from.\n\nFirst prompts:\n- a"
+    # the prompt itself, not a title cut at a few words
+    long = "run these two commands and nothing else: first queue the task, then wait sixty seconds " * 3
+    store.touch_session("w", str(git_repo), "r")
+    store.create_task(long, status="done", source="hook", session_id="w", repo="r")
+    run = _runner(_reply(name="Queue and wait"))
+    naming.name_session(store, "w", runner=run)
+    assert long.strip()[:naming.PROMPT_CHARS] in run.calls[0][1]["input"]
 
 
 def test_stop_starts_a_naming_only_when_one_is_wanted(store: Store, git_repo, tmp_path, monkeypatch):

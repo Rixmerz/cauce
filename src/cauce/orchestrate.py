@@ -162,9 +162,12 @@ class Report:
         elif self.branch:
             lines.append(f"branch {self.branch} keeps this task's unverified work: review it with "
                          f"`git diff HEAD...{self.branch}`, or `cauce resume {self.task_id}` once the block is cleared")
+        elif self.task_id and self.changed and not self.isolated:
+            # No worktree (asked for, or a folder that is no checkout): there is no
+            # branch to review, the files themselves are the work.
+            lines.append("these changes are in your checkout" + ("" if self.status == "done" else ", unverified"))
         elif self.task_id and self.status != "done" and self.changed:
-            lines.append("nothing of it was kept" if self.isolated else
-                         "these changes are in your checkout, unverified")
+            lines.append("nothing of it was kept")
         lines += self.impact
         if self.summary:
             lines.append(self.summary)
@@ -289,8 +292,9 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
         neighbour_notes.append(f"workers last ran {lag['workers']} for `{lag['alias']}` while your sessions use "
                                f"{lag['sessions']}: the installed Claude Code's alias is older. Pin it with "
                                f"`{lag['command']}`, or update Claude Code")
-    seen = _refused_here(store, repo.key(repo_dir), (*options.allow_tools, *grants.granted(repo.key(repo_dir))))
     mode = grants.mode_for(start.model)
+    seen = _refused_here(store, repo.key(repo_dir), (*options.allow_tools, *grants.granted(repo.key(repo_dir))),
+                         mode)
     if mode != "auto":
         neighbour_notes.append(f"workers on {start.model} run in {mode} mode")
     node = runtime.node_bin(repo_dir)
@@ -375,6 +379,9 @@ def run(
     launch_dir = options.launch_dir.resolve() if options.launch_dir else workdir
 
     dead = store.dead_ends(text, repo=key, limit=5)
+    if dead:
+        # What the workers are shown, kept as shown: the memory grows after the run.
+        store.add_event(task["id"], "dead_ends", shown=dead)
     # The runtime the project declares goes first on the worker's PATH, and on its
     # check's: a worker given the wrong Node hunts for another and is refused each one.
     run_env = runtime.env_for(workdir)
@@ -518,7 +525,10 @@ def run(
             report.summary = report.summary or report.stop.reason
         store.update_task(task["id"], status=status, final_cell=report.final_cell, result=report.summary,
                           pid=None, current_cell=None)
-        if status != "done" and store.get_task(task["id"])["dispatched"]:
+        # A person's cancel is their call on this task, not a broken state the
+        # next one would start on: the queue behind it goes on.
+        by_a_person = report.stop is not None and report.stop.cause == "cancelled" and report.stop.who == "you"
+        if status != "done" and store.get_task(task["id"])["dispatched"] and not by_a_person:
             store.pause_lane(key, f"task #{task['id']} ended {status}: {report.summary[:200]}")
         if workspace is None:
             report.changed = sorted(changed)
@@ -552,13 +562,19 @@ def _unmet(text: str, registry: Mapping[str, caps.Capability]) -> list[str]:
     return notes
 
 
-def _refused_here(store: Store, key: str | None, granted: Sequence[str]) -> list[tuple[str, int]]:
+def _refused_here(store: Store, key: str | None, granted: Sequence[str], mode: str) -> list[tuple[str, int]]:
     """The rules workers in this repository lacked most often, past refusals read
-    back to rules when an older run did not record them, the granted ones aside."""
+    back to rules when an older run did not record them, the granted ones aside.
+
+    Only refusals in the mode the next worker runs in: what `acceptEdits`
+    refused, auto mode may well let through. An attempt that did not record its
+    mode ran before auto mode, under `acceptEdits`."""
     if not key:
         return []
     counts: dict[str, int] = {}
     for row in store.refusals(key):
+        if (row.get("mode") or grants.FALLBACK_MODE) != mode:
+            continue
         for rule in dict.fromkeys(row["allow"] or allow_rules.from_refusals(row["denied"])):
             if rule not in granted:
                 counts[rule] = counts.get(rule, 0) + 1

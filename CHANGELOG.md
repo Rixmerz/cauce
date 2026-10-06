@@ -2,6 +2,53 @@
 
 ## [Unreleased]
 
+## [0.4.10] - 2026-10-06
+
+From running the installed plugin end to end: real `claude -p` workers, a
+session queueing with `++` and with `cauce queue add`, a cancel, the UI.
+
+### Fixed
+
+- **An audit was not read as a review.** "Audit calc.py for bugs" matched no
+  rule. Haiku read the request as its own task and answered with what it would
+  do first ("looking for calc.py"), which is always a search. Its confidence
+  swung, so the same audit became `explore` one time and `implement` the next.
+  Now:
+  - A rule reads an audit or a hunt for bugs (`audit`, `audita`, `busca bugs`,
+    `find bugs`, `qué problemas tiene`) as a review, critical when it touches
+    auth or money. A verb of change still makes it `implement`.
+  - The classifier gets the request as data to classify (`<request>`), told
+    not to carry it out.
+- **A task queued with `cauce queue add` sat in the queue.** Only `++` started
+  the dispatcher. The main session queues through Bash, so its tasks waited for
+  a `cauce work` nobody ran. `cauce queue add` now starts the dispatcher too,
+  under the same `autowork` setting, and says what happens next.
+- **Cancelling a task paused its repository's queue.** The next task waited
+  for `cauce lanes --unpause`. A person's cancel is their call on that task,
+  not a broken state, so the queue goes on.
+- **Haiku named sessions "Unable to determine - incomplete prompts provided".**
+  It read titles cut at a few words. It now reads the prompts themselves and
+  must always answer with a name.
+- **Every repository a session opened got a `.mcp-docs/` folder.** The
+  livespec index was built at session start in any git checkout. Now it is
+  built only in enrolled projects.
+- **The plan warned about refusals that no longer apply.** It listed commands
+  refused under `acceptEdits` before auto mode. Now it counts only refusals in
+  the mode the next worker runs in.
+- **The drawer listed dead ends a task was never shown.** It searched the
+  memory as it is now. It now shows what the run and the prompt recorded when
+  they showed them.
+- **The notice of a finished task left out its answer.** A pass now carries
+  the worker's summary and the changed files. A pass that changed nothing says
+  so, instead of "its changes are in the checkout".
+- **Every Haiku call cauce made was logged as a tool call.** The classifier,
+  the dispatcher and the namer answer through `StructuredOutput`, and each
+  answer landed in the log that habits are mined from. It is not a step of
+  anyone's work, so it is no longer logged.
+- **A pass outside a worktree left out where its changes were.** This happens
+  in a folder of several repositories. The report now says the changes are in
+  your checkout.
+
 ## [0.4.9] - 2026-10-06
 
 ### Fixed

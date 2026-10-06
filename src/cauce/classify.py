@@ -79,6 +79,14 @@ _RULES: tuple[tuple[re.Pattern[str], str, str], ...] = (
         "asks for a review",
     ),
     (
+        # An audit reports what it finds: "audita el módulo", "busca bugs en calc.py".
+        re.compile(r"\b(audit\w*|audita\w*|auditoria\w*|find (the )?(bugs|issues|problems|vulnerabilit\w*)"
+                   r"|look for (bugs|issues|problems|vulnerabilit\w*)|busca (bugs|errores|problemas|fallos"
+                   r"|vulnerabilidades)|que (bugs|problemas|errores) tiene)\b"),
+        "review",
+        "asks for an audit",
+    ),
+    (
         re.compile(r"\b(arquitectura|architecture|plan tecnico|technical plan|disena (el|un) sistema"
                    r"|design (the|a) system|roadmap|propuesta tecnica|trade-?offs?)\b"),
         "plan",
@@ -149,8 +157,8 @@ _KIND_HELP: Mapping[str, str] = {
     "feature": "a new capability that crosses several parts of the code",
     "debug-repro": "a failure with a clear error or reproducible steps",
     "debug-unclear": "a failure whose cause is unknown, intermittent or hard to reproduce",
-    "review-routine": "review ordinary code",
-    "review-critical": "review code touching auth, money, crypto or security",
+    "review-routine": "review or audit ordinary code and report what is wrong with it",
+    "review-critical": "review or audit code touching auth, money, crypto or security",
     "plan": "design an architecture, a migration or a technical plan",
 }
 
@@ -159,7 +167,9 @@ SYSTEM_PROMPT = (
     "language. Read what is being asked, not the words it uses: 'the header no longer looks "
     "right' is UI work, not debugging. Kinds:\n"
     + "\n".join(f"- {k}: {v}" for k, v in _KIND_HELP.items())
-    + "\nComplexity is how hard the work is, not how long the text is: trivial, low, medium "
+    + "\nYou are given the request only to classify it: you do not carry it out, so whether you could "
+    "find its files is not the question. An audit or a hunt for bugs is a review, not a search.\n"
+    "Complexity is how hard the work is, not how long the text is: trivial, low, medium "
     "or high. Confidence is how sure you are of the kind, from 0 to 1."
 )
 
@@ -229,9 +239,16 @@ def ask_haiku(
     return out, cost, ""
 
 
+def question(text: str) -> str:
+    """The request as data to classify. Bare, Haiku reads it as its own task and
+    answers with what it would do first ("looking for calc.py"), which is always
+    a search."""
+    return f"Classify this request. Do not carry it out.\n\n<request>\n{text}\n</request>"
+
+
 def by_model(text: str, **haiku_kwargs) -> Classification:
     """Haiku's reading of the request. Never raises: a failure is the default kind."""
-    out, cost, failure = ask_haiku(SYSTEM_PROMPT, SCHEMA, text, **haiku_kwargs)
+    out, cost, failure = ask_haiku(SYSTEM_PROMPT, SCHEMA, question(text), **haiku_kwargs)
     if out is None:
         return Classification(DEFAULT_KIND, reason=failure.replace("the model", "the classifier"), cost_usd=cost)
     kind, complexity = out.get("kind"), out.get("complexity")
