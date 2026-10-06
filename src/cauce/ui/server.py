@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from cauce import __version__, config, dispatch, flow, link
+from cauce import __version__, config, dispatch, flow, link, stops
 from cauce.store import Store, home
 from cauce.ui import api
 
@@ -328,9 +328,10 @@ class Handler(BaseHTTPRequestHandler):
             if task is None:
                 return self._error(HTTPStatus.NOT_FOUND, "no such task")
             if task["status"] == "queued":
-                store.update_task(task["id"], status="cancelled")
+                stops.record(store, task["id"], stops.Stop("cancelled", "you cancelled it from the UI before it ran",
+                                                           by="you", extra={"via": "ui"}))
             elif task["status"] == "running":
-                store.request_cancel(task["id"])
+                store.request_cancel(task["id"], via="ui")
                 if task["pid"]:
                     with contextlib.suppress(ProcessLookupError, PermissionError):
                         os.kill(int(task["pid"]), signal.SIGTERM)

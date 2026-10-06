@@ -18,12 +18,13 @@ import dataclasses
 import json
 import os
 import subprocess
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from cauce import capabilities as caps
-from cauce import config, habits, isolate, launch, project, repo
+from cauce import config, habits, isolate, launch, project, repo, stops
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify
 from cauce.escalate import Attempt, Decision, Failure, Move, decide
@@ -115,6 +116,8 @@ class Report:
     changed: list[str] = field(default_factory=list)
     #: Whether it worked in a worktree; outside one, its changes are in the checkout.
     isolated: bool = False
+    #: Why it stopped short of a pass, and who made that call.
+    stop: stops.Stop | None = None
 
     def text(self) -> str:
         lines = [
@@ -150,6 +153,11 @@ class Report:
         lines += self.impact
         if self.summary:
             lines.append(self.summary)
+        if self.stop is not None and self.task_id:
+            lines.append(f"stopped by {stops.WHO.get(self.stop.who, self.stop.who)}: {stops.what_to_do(self.stop)}")
+            command = stops.next_step(self.task_id, self.stop)
+            if command:
+                lines.append(f"  {command}")
         return "\n".join(lines)
 
 
@@ -338,10 +346,14 @@ def run(
         while True:
             remaining = options.budget_usd - report.cost_usd
             if remaining < 0.01:
-                report.status, report.summary = "blocked", f"the ${options.budget_usd:.2f} budget is spent"
+                report.stop = stops.Stop("budget", f"the ${options.budget_usd:.2f} budget is spent",
+                                         budget_usd=options.budget_usd, attempt=len(attempts) or None)
+                report.status, report.summary = "blocked", report.stop.reason
                 break
             if len(attempts) >= options.max_attempts:
-                report.status, report.summary = "failed", f"{options.max_attempts} attempts without a pass"
+                report.stop = stops.Stop("attempts", f"{options.max_attempts} attempts without a pass",
+                                         attempt=len(attempts))
+                report.status, report.summary = "failed", report.stop.reason
                 break
             if store.cancel_requested(task["id"]):
                 raise Cancelled
@@ -409,12 +421,20 @@ def run(
                 report.status = _FINAL_STATUS[decision.move]
                 report.summary = f"{decision.reason}. The last worker's own account: {result.summary}" if (
                     result.summary) else decision.reason
+                report.stop = stops.Stop(
+                    _cause(decision, attempt), decision.reason, denied=attempt.denied, attempt=seq,
+                    next_cell=decision.cell.label if decision.cell else None, account=result.summary[:2000])
                 break
             if decision.move is Move.NEXT_MODEL and workspace is not None:
                 isolate.reset(workspace)
             cell, turns = decision.cell, decision.max_turns
-    except (Cancelled, KeyboardInterrupt):
-        report.status, report.summary = "cancelled", "cancelled before it finished"
+    except Cancelled:
+        report.stop = _cancelled(store, task["id"], len(attempts) or None)
+        report.status, report.summary = "cancelled", report.stop.reason
+    except KeyboardInterrupt:
+        report.stop = stops.Stop("cancelled", "you cancelled it with Ctrl-C before it finished", by="you",
+                                 attempt=len(attempts) or None, extra={"via": "keyboard"})
+        report.status, report.summary = "cancelled", report.stop.reason
     finally:
         if workspace is not None:
             report.isolated = True
@@ -428,6 +448,12 @@ def run(
                 # The fix that worked is anchored to the commit a person can check.
                 store.set_fix_commit(task["id"], isolate.head(workspace.repo_dir, report.branch))
         status = report.status if report.status != "running" else "failed"
+        if status != "done" and report.stop is None:
+            # Nothing above ended it: an error escaped the loop, and cauce, not the work, failed.
+            error = sys.exc_info()[1]
+            report.stop = stops.Stop("crashed", f"cauce itself failed mid-run: {type(error).__name__}: {error}"[:500]
+                                     if error else "it ended without a verdict", attempt=len(attempts) or None)
+            report.summary = report.summary or report.stop.reason
         store.update_task(task["id"], status=status, final_cell=report.final_cell, result=report.summary,
                           pid=None, current_cell=None)
         if status != "done" and store.get_task(task["id"])["dispatched"]:
@@ -436,9 +462,35 @@ def run(
             report.changed = sorted(changed)
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
-                        changed=report.changed[:50])
+                        changed=report.changed[:50], stop=report.stop.data() if report.stop else None)
         store.add_message(task["id"], "worker", report.text())
     return report
+
+
+def _cause(decision: Decision, attempt: Attempt) -> str:
+    """What ended the run, from the move and the failure that led to it."""
+    if decision.move is Move.BLOCKED:
+        return "permission" if attempt.failure is Failure.PERMISSION else "environment"
+    if decision.move is Move.NEEDS_APPROVAL:
+        return "approval"
+    if decision.move is Move.REPLAN:
+        if attempt.failure in (Failure.SPEC_BUG, Failure.ARCHITECTURE_BUG):
+            return "spec"
+        return "turns" if attempt.failure is Failure.TURNS_EXHAUSTED else "ladder"
+    return "exhausted"
+
+
+def _cancelled(store: Store, task_id: int, attempt: int | None) -> stops.Stop:
+    """A cancel a person asked for says how they asked; a SIGTERM nobody asked
+    cauce for (a closed terminal, a killed process) says that instead."""
+    if store.cancel_requested(task_id):
+        asked = store.last_event(task_id, "cancel_requested")
+        via = str(((asked or {}).get("data") or {}).get("via") or "cli")
+        how = stops.CANCEL_VIA.get(via, via)
+        return stops.Stop("cancelled", f"you cancelled it {how} before it finished", by="you", attempt=attempt,
+                          extra={"via": via})
+    return stops.Stop("signal", "a SIGTERM that did not come from `cauce cancel` or the UI stopped it "
+                      "(a closed terminal, or the process was killed)", attempt=attempt)
 
 
 def brief(

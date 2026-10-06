@@ -26,6 +26,7 @@ def test_the_board_sorts_work_by_what_it_needs(store: Store):
     assert [t["id"] for t in b["needs_you"]] == [done["id"], failed["id"]]
     assert "review branch cauce/task-3" in b["needs_you"][0]["asks"]
     assert b["needs_you"][1]["asks"].startswith("every cell")
+    assert b["needs_you"][1]["stop"]["recovered"] and b["needs_you"][1]["stop"]["cause"] == "exhausted"
     assert b["running"][0]["attempt"] == 2 and b["running"][0]["current_cell"] == "sonnet/high"
     assert {lane["repo"]: lane["paused"] for lane in b["queued"]} == {"other": True, "r": False}
     assert b["counts"] == {"needs_you": 2, "running": 1, "workers": 0, "queued": 1, "done": 1, "answering": 0}
@@ -87,8 +88,10 @@ def test_task_detail_spend_routing_memory_habits(store: Store):
     store.add_attempt(t["id"], cell="sonnet/low", max_turns=30, passed=1, cost_usd=0.2)
     store.add_event(t["id"], "planned", ladder=["haiku"], start="haiku", reasons=[])
     store.add_event(t["id"], "finished", status="done", branch="b", impact=["livespec: x"])
+    store.add_event(t["id"], "attempt_finished", seq=1, denied=["Bash(make)"])
     d = api.task_detail(store, t["id"])
     assert d["attempts"][0]["changed_paths"] == ["a.py"] and d["branch"] == "b" and d["impact"] == ["livespec: x"]
+    assert d["attempts"][0]["denied"] == ["Bash(make)"] and d["attempts"][1]["denied"] == [] and d["stop"] is None
     assert d["plan"]["start"] == "haiku" and api.task_detail(store, 999) is None
 
     s = api.spend(store, days=7)
@@ -268,6 +271,8 @@ def test_cancel_unpause_and_start(ui, git_repo, monkeypatch):
     assert call(ui, "POST", f"/api/tasks/{running['id']}/cancel", {}, headers=key)[0].status == 200
     assert call(ui, "POST", "/api/tasks/999/cancel", {}, headers=key)[0].status == 404
     assert store.get_task(queued["id"])["status"] == "cancelled" and store.cancel_requested(running["id"])
+    assert "from the UI" in store.last_event(queued["id"], "finished")["data"]["stop"]["reason"]
+    assert store.last_event(running["id"], "cancel_requested")["data"] == {"via": "ui"}
     started = []
     monkeypatch.setattr(server.dispatch, "start", lambda where, root, scope: started.append((where, scope)) or True)
     store.enqueue("z", repo="r", cwd=str(git_repo))

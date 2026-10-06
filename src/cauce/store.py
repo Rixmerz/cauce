@@ -683,9 +683,24 @@ class Store:
         ).fetchall()
         return [{**dict(r), "data": json.loads(r["data"])} for r in rows]
 
-    def request_cancel(self, task_id: int) -> dict | None:
+    def request_cancel(self, task_id: int, via: str = "cli") -> dict | None:
+        """Flag a run to stop, and say where the request came from: the run that
+        stops reads it back, so its account can say a person cancelled it, and how."""
         self._conn.execute("UPDATE tasks SET cancel_requested = 1, updated_at = ? WHERE id = ?", (now(), task_id))
+        self.add_event(task_id, "cancel_requested", via=via)
         return self.get_task(task_id)
+
+    def denials(self, task_id: int) -> dict[int, list[str]]:
+        """What the permission settings refused, per attempt `seq`: kept on the
+        attempt's event, not in the attempts table."""
+        rows = self._conn.execute(
+            "SELECT data FROM events WHERE task_id = ? AND kind = 'attempt_finished' ORDER BY id", (task_id,))
+        out: dict[int, list[str]] = {}
+        for row in rows:
+            data = json.loads(row[0])
+            if data.get("seq") is not None and data.get("denied"):
+                out[int(data["seq"])] = list(data["denied"])
+        return out
 
     def cancel_requested(self, task_id: int) -> bool:
         row = self._conn.execute("SELECT cancel_requested FROM tasks WHERE id = ?", (task_id,)).fetchone()

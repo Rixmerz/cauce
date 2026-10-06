@@ -11,7 +11,7 @@ import sys
 import time
 from pathlib import Path
 
-from cauce import __version__, capabilities, config, flow, habits, hooks, orchestrate, project, repo, usage
+from cauce import __version__, capabilities, config, flow, habits, hooks, orchestrate, project, repo, stops, usage
 from cauce.adapters import default_adapters
 from cauce.classify import classify
 from cauce.escalate import Attempt, Failure
@@ -90,8 +90,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
             return 1
         start = args.start or waiting or (attempts[-1]["cell"] if attempts else None)
         options.start = Cell.parse(start) if start else None
+        denied = store.denials(args.id)
         history = [Attempt(Cell.parse(a["cell"]), int(a["max_turns"] or 0), bool(a["passed"]),
-                           _failure_of(a["failure"]), a["summary"] or "") for a in attempts]
+                           _failure_of(a["failure"]), a["summary"] or "", tuple(denied.get(a["seq"], ())))
+                   for a in attempts]
         store.update_task(args.id, options=json.dumps(options.stored()), dispatched=0, cancel_requested=0)
         report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=args.id, history=history)
     finally:
@@ -117,6 +119,11 @@ def _cancel_on_sigterm():
     return signal.signal(signal.SIGTERM, handler)
 
 
+def _cancel_stop(via: str) -> stops.Stop:
+    return stops.Stop("cancelled", f"you cancelled it {stops.CANCEL_VIA[via]} before it ran", by="you",
+                      extra={"via": via})
+
+
 def cmd_cancel(args: argparse.Namespace) -> int:
     store = Store.open()
     try:
@@ -127,13 +134,13 @@ def cmd_cancel(args: argparse.Namespace) -> int:
         if task["status"] not in ("running", "queued"):
             print(f"task #{args.id} is {task['status']}; nothing to cancel")
             return 0
-        store.request_cancel(args.id)
+        store.request_cancel(args.id, via="cli")
         if task["pid"]:
             # Gone already: the flag still stops it at its next attempt.
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.kill(int(task["pid"]), signal.SIGTERM)
         elif task["status"] == "queued":
-            store.update_task(args.id, status="cancelled")
+            stops.record(store, args.id, _cancel_stop("cli"))
     finally:
         store.close()
     print(f"cancel requested for task #{args.id}")
@@ -203,12 +210,19 @@ def cmd_show(args: argparse.Namespace) -> int:
         print(f"#{task['id']} [{task['status']}] {task['title']}")
         print(f"repo {task['repo']}  kind {task['kind']} ({task['class_source']}: {task['class_reason']})")
         print(f"cost ${task['cost_usd']:.2f}  start {task['start_cell']}  final {task['final_cell']}")
+        refused = store.denials(args.id)
         for a in store.attempts(args.id):
             verdict = "pass" if a["passed"] else (a["failure"] or "fail")
             print(f"  attempt {a['seq']} {a['cell']} ({a['turns']} turns, ${a['cost_usd']:.2f}) {verdict}"
                   + (f" → {a['move']}: {a['move_reason']}" if a["move"] else ""))
             if a["summary"]:
                 print(f"    {a['summary'][:300]}")
+            if refused.get(a["seq"]):
+                print(f"    refused: {', '.join(refused[a['seq']])}")
+        stop = stops.view(store, task)
+        if stop:
+            print(f"stopped by {stop['who']}: {stop['reason']}")
+            print(f"  {stop['todo']}" + (f": {stop['next']}" if stop["next"] else ""))
         for m in store.messages(args.id):
             print(f"--- {m['role']} {m['ts']}\n{m['text'][:2000]}")
     finally:
@@ -403,7 +417,7 @@ def cmd_queue(args: argparse.Namespace) -> int:
             if task is None or task["status"] != "queued":
                 print(f"#{args.id} is not queued", file=sys.stderr)
                 return 1
-            store.update_task(args.id, status="cancelled")
+            stops.record(store, args.id, _cancel_stop("queue"))
             print(f"removed #{args.id}")
             return 0
         for t in store.list_tasks(repo=_repo_key(args), status=["queued"], limit=200)[::-1]:

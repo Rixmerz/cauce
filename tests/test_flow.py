@@ -49,6 +49,8 @@ def test_the_unattended_limit_and_a_vanished_directory(git_repo, store: Store, t
     gone = store.enqueue("x", repo="elsewhere", cwd=str(tmp_path / "deleted"))
     flow.work(store, repo="elsewhere", runner=_runner([]))
     assert store.get_task(gone["id"])["status"] == "blocked"
+    stop = store.last_event(gone["id"], "finished")["data"]["stop"]
+    assert stop["cause"] == "missing_dir" and str(tmp_path / "deleted") in stop["reason"]
     assert any(lane["repo"] == "elsewhere" and lane["paused"] for lane in store.lanes())
 
 
@@ -153,6 +155,9 @@ def test_the_sweep_marks_dead_runs_and_abandoned_prompts(store: Store):
     assert store.get_task(live["id"])["status"] == "running"
     assert store.get_task(child["id"])["status"] == "running"
     assert store.lanes()[0]["paused"]
+    assert "999999" in store.get_task(dead["id"])["result"]
+    assert store.get_task(prompt["id"])["result"] is None  # a prompt keeps its own answer
+    assert store.last_event(prompt["id"], "finished")["data"]["stop"]["cause"] == "died"
     assert flow.alive(None) is False and flow.alive(1) is True and flow.alive(999999) is False
 
 

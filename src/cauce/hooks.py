@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from cauce import config, repo
+from cauce import config, repo, stops
 from cauce.store import Store, home
 from cauce.text import fold, words
 
@@ -268,6 +268,10 @@ def session_start(
         if unfinished:
             blocks.append("cauce: unfinished tasks in this session (context only, do not restart them unasked):\n"
                           + "\n".join(f"#{t['id']} [{t['status']}] {t['title']}" for t in unfinished))
+        stopped = store.list_tasks(session_id=session_id, status=STOPPED_FOR_A_PERSON, limit=10,
+                                   source=("cauce",))
+        if stopped:
+            blocks.append(_stopped_text(store, stopped))
     if cwd and repo.toplevel(Path(cwd)) is not None:
         blocks += _freshen(Path(cwd), root, env, adapters)
     if key:
@@ -275,6 +279,23 @@ def session_start(
         if dead:
             blocks.append(_dead_end_text(dead, "cauce memory: recent fixes in this repository that did not work."))
     return _context("SessionStart", "\n\n".join(blocks)) if blocks else None
+
+
+#: Endings of cauce runs that wait on a person to clear something.
+STOPPED_FOR_A_PERSON = ("blocked", "needs_approval")
+
+
+def _stopped_text(store: Store, tasks: list[dict]) -> str:
+    """The session's runs that stopped for a person, with why and what clears each:
+    the session can tell the person, rather than guess or rerun them."""
+    lines = ["cauce: tasks of this session that stopped for a person (tell them; do not resume unasked):"]
+    for t in tasks:
+        stop = stops.view(store, t)
+        lines.append(f"#{t['id']} [{t['status']}] {t['title']}")
+        if stop:
+            lines.append(f"  stopped by {stop['who']}: {stop['reason'][:300]}")
+            lines.append(f"  {stop['todo']}" + (f": {stop['next']}" if stop["next"] else ""))
+    return "\n".join(lines)
 
 
 def _export(env: Mapping[str, str], name: str, value: str) -> bool:

@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-06
+
+### Added
+
+- **Every task that stops says why, who made the call, and what continues it.**
+  A *Needs you* card used to say the same sentence for every `blocked` task,
+  and a cancelled task did not say whether a person cancelled it. Each place
+  that ends a task without a pass now records one account on its `finished`
+  event (`src/cauce/stops.py`): the cause (`permission`, `budget`,
+  `environment`, `approval`, `spec`, `turns`, `ladder`, `exhausted`,
+  `attempts`, `cancelled`, `signal`, `died`, `missing_dir`, `crashed`), who
+  made the call, the reason in full, the refused rules, the last worker's own
+  account, and the command that continues it, such as
+  `cauce resume 12 --allow 'Bash(npm run build)'`, `--allow-approval` or a
+  doubled `--budget`. Those places are the run's own loop, `cauce cancel`,
+  `cauce queue rm`, the UI's cancel, Ctrl-C, the dispatcher and the sweep.
+  A cancel records where it came from (the UI, `cauce cancel`,
+  `cauce queue rm`, Ctrl-C). A SIGTERM nobody asked cauce for is told apart
+  from a person's cancel, and so is an error in cauce itself.
+- The board's cards and the task drawer show that account, with the command
+  ready to copy. The drawer also shows what each attempt was refused and the
+  evidence of each failure. A task that stopped before 0.4.2 gets an account
+  read back from its attempts and events, marked as read back.
+- `cauce show <id>` prints each attempt's refused rules and the account. When
+  a session resumes or is compacted, it is told which of its tasks stopped for
+  a person, why, and the command, so it can tell them instead of guessing.
+- The session drawer shows what each open item of Claude Code's own task list
+  waits on (`blockedBy`).
+
+### Fixed
+
+- `cauce resume` lost what earlier attempts were refused: the resumed brief
+  no longer said `refused: …`. It is read back from the attempts' events.
+
 ## [0.4.1] - 2026-10-05
 
 ### Fixed

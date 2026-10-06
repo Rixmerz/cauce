@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from cauce import cli, orchestrate
+from cauce import cli, orchestrate, stops
 from cauce.launch import WorkerResult
 from cauce.store import Store
 
@@ -48,6 +48,18 @@ def test_tasks_show_and_memory(capsys, git_repo):
     out = capsys.readouterr().out
     assert "attempt 1 haiku" in out and "more_effort" in out and "missed" in out
     assert cli.main(["show", "999"]) == 1
+    store = Store.open()
+    blocked = store.create_task("routes", status="running", source="cauce", repo="github.com/o/r", cwd=str(git_repo))
+    store.add_attempt(blocked["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="permission")
+    store.add_event(blocked["id"], "attempt_finished", seq=1, denied=["Bash(node a.js)"])
+    stops.record(store, blocked["id"], stops.Stop("permission", "the worker was refused Bash(node a.js)",
+                                                  denied=("Bash(node a.js)",)))
+    store.close()
+    assert cli.main(["show", str(blocked["id"])]) == 0
+    out = capsys.readouterr().out
+    assert "refused: Bash(node a.js)" in out
+    assert "stopped by your permission settings: the worker was refused" in out
+    assert f"cauce resume {blocked['id']} --allow 'Bash(node a.js)'" in out
 
     assert cli.main(["memory", "record", "--problem", "slow startup", "--fix", "lazy import pandas",
                      "--outcome", "failed", "--why", "still slow", "--repo", str(git_repo)]) == 0
@@ -102,6 +114,8 @@ def test_cancel_signals_the_run_and_events_print(capsys, monkeypatch):
     assert cli.main(["cancel", "999"]) == 1
     store = Store.open()
     assert store.get_task(queued["id"])["status"] == "cancelled"
+    assert "with `cauce cancel`" in store.last_event(queued["id"], "finished")["data"]["stop"]["reason"]
+    assert store.last_event(running["id"], "cancel_requested")["data"] == {"via": "cli"}
     store.close()
 
     def gone(pid, sig):
@@ -142,6 +156,9 @@ def test_queue_lanes_and_work(capsys, git_repo, monkeypatch):
     assert cli.main(["queue", "add", "second", "--repo", str(git_repo)]) == 0
     assert cli.main(["queue", "rm", "2"]) == 0
     assert cli.main(["queue", "rm", "2"]) == 1
+    store = Store.open()
+    assert store.last_event(2, "finished")["data"]["stop"]["by"] == "you"
+    store.close()
 
     seen = {}
 
@@ -346,6 +363,7 @@ def test_resume_continues_a_stopped_task_with_what_it_was_refused_granted(capsys
                           kind="implement", dispatched=1, cancel_requested=1,
                           options=json.dumps({"verify": "npm test", "allow_tools": ["Bash(npm run build)"]}))
     store.add_attempt(t["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="permission", summary="refused")
+    store.add_event(t["id"], "attempt_finished", seq=1, denied=["Bash(node app.js)"])
     approval = store.create_task("plan it", status="needs_approval", source="cauce", repo="r", cwd=str(git_repo),
                                  kind="plan")
     store.add_event(approval["id"], "moved", move="needs_approval", next_cell="fable/high")
@@ -362,6 +380,7 @@ def test_resume_continues_a_stopped_task_with_what_it_was_refused_granted(capsys
     assert options.allow_tools == ("Bash(npm run build)", "Bash(node:*)") and options.verify == "npm test"
     assert options.kind == "implement" and options.start.label == "sonnet/medium"
     assert kw["task_id"] == t["id"] and kw["history"][0].failure.value == "permission"
+    assert kw["history"][0].denied == ("Bash(node app.js)",)  # the resumed brief still says what was refused
     store = Store.open()
     row = store.get_task(t["id"])
     assert row["dispatched"] == 0 and row["cancel_requested"] == 0

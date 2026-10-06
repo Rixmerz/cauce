@@ -31,7 +31,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
-from cauce import config, dispatch
+from cauce import config, dispatch, stops
 from cauce.matrix import Cell
 from cauce.orchestrate import Options, Report
 from cauce.store import Store, home
@@ -72,8 +72,11 @@ def sweep(store: Store, *, now: datetime | None = None, is_alive: Callable[[int 
             dead = task["source"] != "delegation" and now - updated > SESSION_TASK_TIMEOUT
         if not dead:
             continue
-        store.update_task(task["id"], status="interrupted", pid=None, current_cell=None)
-        store.add_event(task["id"], "finished", status="interrupted", reason="no sign of life")
+        gone = (f"no sign of life: its process ({task['pid']}) is gone" if task["source"] == "cauce" and task["pid"]
+                else "no sign of life")
+        # A session's prompt keeps the answer it had so far as its result.
+        stops.record(store, task["id"], stops.Stop("died", gone), pid=None, current_cell=None,
+                     result=task["source"] == "cauce")
         if task["dispatched"]:
             store.pause_lane(task["repo"], f"task #{task['id']} stopped with no sign of life")
         swept.append(task["id"])
@@ -185,9 +188,9 @@ class _Process:
             return "failed"
         if task["status"] in ("running", "queued"):
             # It exited without saying how it ended: it died.
-            self.store.update_task(self.task_id, status="interrupted", pid=None, current_cell=None)
-            self.store.add_event(self.task_id, "finished", status="interrupted",
-                                 reason=f"its process exited with {self.proc.returncode}")
+            stops.record(self.store, self.task_id, stops.Stop(
+                "died", f"its process exited with {self.proc.returncode} without saying how the task ended"),
+                pid=None, current_cell=None)
             self.store.pause_lane(task["repo"], f"task #{self.task_id}: its process exited unexpectedly")
             return "interrupted"
         return task["status"]
@@ -243,7 +246,8 @@ def work(
                     continue  # another dispatcher took it
                 where = Path(task["cwd"]) if task["cwd"] and Path(task["cwd"]).is_dir() else None
                 if where is None:
-                    store.update_task(task["id"], status="blocked", result="its directory no longer exists")
+                    stops.record(store, task["id"], stops.Stop(
+                        "missing_dir", f"its directory no longer exists: {task['cwd'] or '(none recorded)'}"))
                     store.pause_lane(task["repo"], f"task #{task['id']}: its directory no longer exists")
                     continue
                 started += 1

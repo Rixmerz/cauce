@@ -42,7 +42,9 @@ function planList(plan) {
     h("span", { class: "mark-box", "aria-label": t.status }, MARK[t.status] || "☐"),
     h("div", {},
       h("div", { class: "subject" }, t.status === "in_progress" && t.activeForm ? `${t.subject} — ${t.activeForm}` : t.subject),
-      t.description ? h("div", { class: "meta" }, short(t.description, 300)) : null))));
+      t.description ? h("div", { class: "meta" }, short(t.description, 300)) : null,
+      t.status !== "completed" && t.blockedBy?.length
+        ? h("div", { class: "asks" }, `waits on ${t.blockedBy.map((id) => `#${id}`).join(", ")} in this list`) : null))));
 }
 
 export async function openSession(id, ctx) {

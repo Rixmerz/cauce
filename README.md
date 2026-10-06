@@ -205,7 +205,10 @@ cauce memory record --problem "redirect drops query" --fix "use url_for(_externa
 your checkout until you merge that branch. A task that passed leaves it to
 review; one that stopped for a person (blocked, waiting on approval) leaves it
 too, committed as unverified, and `cauce resume <id>` continues on it; one that
-failed or must be replanned leaves nothing. The worktree gets the checkout's
+failed or must be replanned leaves nothing. Whatever stopped it — a refusal, the
+budget, the environment, the approval gate, a cancel from the UI or
+`cauce cancel`, a process that died — the report, `cauce show <id>`, the board
+and the session that asked for it say which, and give the command that goes on. The worktree gets the checkout's
 ignored `node_modules` / `.venv` and your `.claude/settings.local.json` as
 links, so a build can run and a worker is allowed what you allowed; anything
 else a worker needs to run, grant with `--allow "Bash(npm run build)"`
@@ -260,13 +263,18 @@ repository's cards at once.
 - **Board** — *Needs you* (failed, blocked, replan, waiting on approval, a
   branch to merge), *Running* with the live cell, *Queued* with whether each
   task runs beside the others or waits and why, *Done* by day. Narrow it to one
-  session. Cancel a task, reopen a lane, start a lane's dispatcher.
+  session. Cancel a task, reopen a lane, start a lane's dispatcher. Every card
+  that stopped says who made the call (you, your permission settings, the
+  budget, the environment, the worker's verdict, cauce's rules), the reason,
+  what was refused, and the command that continues it, ready to copy.
 - **Sessions** — every Claude Code session cauce saw in the project, with the
   command that resumes it. Open one to review it: its own task list as Claude
   Code keeps it (read from `~/.claude/tasks/<session>/`, never written), the
   work it gave cauce, and its recent turns.
-- **Task** — the attempt timeline with every move and its reason, the plan,
-  the coupled messages, the branch and the merge command.
+- **Task** — why it stopped (the full reason, the refused rules, the last
+  worker's own account, the command), the attempt timeline with every move
+  and its reason, what each attempt was refused and the evidence of each
+  failure, the plan, the coupled messages, the branch and the merge command.
 - **Spend**, **Routing**, **Memory**, **Habits** — the same numbers as the CLI.
 
 Work is never typed into the page: it is asked for in a session, where it has
