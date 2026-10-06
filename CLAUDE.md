@@ -24,6 +24,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, the stale sweep |
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes |
+| `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
 | `src/cauce/allow.py` | a refused call → the `--allow` rules that let it through, one per program; suggestions only, nothing is granted |
 | `src/cauce/stops.py` | why a task stopped, who made the call, and the command that continues it; one account on its `finished` event; light, the hooks and the UI read it |
 | `src/cauce/project.py` | a project's `.cauce/` folder: enrollment (only enrolled projects show in the UI) and `sessions.json`, the session names; stdlib, no git call |
@@ -97,6 +98,9 @@ yields the default kind, not a guess.
   over. A new branch in `decide` gives both; the `moved` event keeps them.
 - History may raise where a task starts, never lower it below its ladder.
 - Fable needs a person: `#fable` or `--allow-approval`.
+- A worker gets a model alias unless a person pinned it (`cauce config model`).
+  cauce never hard-codes a model id; the model that served an attempt is read
+  from the CLI's `modelUsage`, never assumed from the alias.
 - cauce suggests permission rules and never grants one: `allow.py` only
   writes text a person passes with `--allow`. A rule for an absolute path has
   two slashes (`Read(//abs)`).

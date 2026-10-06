@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from cauce import allow
+from cauce import allow, models
 from cauce.escalate import REPLAN, Failure
 from cauce.matrix import Cell
 
@@ -100,6 +100,8 @@ class LaunchSpec:
     #: Directories outside it the worker may read: the checkout's dependency
     #: folders a worktree links to, which otherwise resolve outside its reach.
     extra_dirs: tuple[Path, ...] = ()
+    #: What `--model` gets, when a person pinned the cell's alias to a model id.
+    model_id: str | None = None
     max_turns: int = DEFAULT_MAX_TURNS
     max_budget_usd: float | None = None
     timeout_s: int = DEFAULT_TIMEOUT_S
@@ -143,12 +145,14 @@ class WorkerResult:
     denied: tuple[str, ...] = ()
     #: The `--allow` rules that would let them through, from the full calls.
     allow: tuple[str, ...] = ()
+    #: The model the CLI says did the work, e.g. `claude-sonnet-5-5`; "" when unknown.
+    served_model: str = ""
 
 
 def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path: Path | None = None) -> list[str]:
     argv = [
         claude_bin, "-p",
-        "--model", spec.cell.model,
+        "--model", spec.model_id or spec.cell.model,
         "--output-format", "json",
         "--max-turns", str(spec.max_turns),
         "--permission-mode", spec.permission_mode,
@@ -351,6 +355,7 @@ def _usage(envelope: Mapping[str, Any] | None) -> dict[str, Any]:
         + _int(usage.get("cache_creation_input_tokens")),
         "output_tokens": _int(usage.get("output_tokens")),
         "turns": _int(envelope.get("num_turns")),
+        "served_model": models.served(envelope),
     }
 
 

@@ -31,6 +31,17 @@ def proc(stdout: str, code: int = 0, stderr: str = "") -> subprocess.CompletedPr
     return subprocess.CompletedProcess(["claude"], code, stdout, stderr)
 
 
+def test_a_pinned_model_id_replaces_the_alias_and_the_served_model_is_read_from_the_cli(tmp_path):
+    assert build_argv(spec(tmp_path))[build_argv(spec(tmp_path)).index("--model") + 1] == "sonnet"
+    pinned = build_argv(spec(tmp_path, model_id="claude-sonnet-5-5"))
+    assert pinned[pinned.index("--model") + 1] == "claude-sonnet-5-5"
+    usage = {"claude-sonnet-5-5": {"outputTokens": 700}, "claude-haiku-4-5": {"outputTokens": 30}}
+    out = parse(proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed"), modelUsage=usage)),
+                spec(tmp_path))
+    assert out.served_model == "claude-sonnet-5-5"
+    assert parse(proc(envelope(block(verdict="pass", summary="ok", evidence="1"))), spec(tmp_path)).served_model == ""
+
+
 def test_argv_carries_every_ceiling_and_restriction(tmp_path):
     work = tmp_path / "work"
     s = spec(tmp_path, workdir=work, max_turns=12, max_budget_usd=1.5, tools=("Read", "Bash"),

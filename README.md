@@ -219,6 +219,13 @@ resumes in the checkout too. A one-shot worker has nobody to ask: what its setti
 allow is refused, and the report names it. `--launch-dir` starts the worker in another
 directory (its settings and instructions) while it works in the repository.
 
+Workers run the model aliases (`sonnet`, `opus`, `haiku`), and the installed
+Claude Code decides which model each one is. Every attempt records the model
+that actually served it. When your own sessions run a newer version than the
+workers got, the plan says so. Pin an alias with
+`cauce config model sonnet <model id>`; `cauce config model` lists every alias
+and what last served it.
+
 ### Queue and lanes
 
 Work arrives faster than it runs. Type `++ <task>` in a session and it is

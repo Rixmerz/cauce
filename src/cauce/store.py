@@ -138,6 +138,10 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "parallel": "INTEGER",
         "parallel_reason": "TEXT",
     },
+    "attempts": {
+        # The model the CLI says served the attempt, not the alias it was asked for.
+        "served_model": "TEXT",
+    },
     "problems": {
         "first_seen": "TEXT",
         "last_seen": "TEXT",
@@ -168,7 +172,9 @@ def home(env: dict[str, str] | None = None) -> Path:
     if env.get("CAUCE_HOME"):
         return Path(env["CAUCE_HOME"]).expanduser()
     xdg = env.get("XDG_DATA_HOME", "")
-    base = Path(xdg) if xdg.startswith("/") else Path.home() / ".local" / "share"
+    # The home of the environment given, not of this process: a caller that
+    # passes an environment means all of it.
+    base = Path(xdg) if xdg.startswith("/") else Path(env.get("HOME") or Path.home()) / ".local" / "share"
     return base / "cauce"
 
 
@@ -564,6 +570,25 @@ class Store:
             f"FROM usage WHERE ts >= datetime('now', ?) {scope} GROUP BY model ORDER BY output_tokens DESC",
             [f"-{int(days)} days", *params]).fetchall()
         return [dict(r) for r in rows]
+
+    def session_models(self, *, days: int = 30) -> list[str]:
+        """Every model id a person's own sessions used in `days`."""
+        rows = self._conn.execute("SELECT DISTINCT model FROM usage WHERE model IS NOT NULL AND ts >= ?",
+                                  (_days_ago(days),))
+        return [r[0] for r in rows]
+
+    def worker_models(self) -> dict[str, str]:
+        """Per model family, the model that served the latest worker attempt of it."""
+        from cauce.models import family
+
+        out: dict[str, str] = {}
+        for (served,) in self._conn.execute(
+                "SELECT served_model FROM attempts WHERE served_model IS NOT NULL AND served_model != '' "
+                "ORDER BY id DESC LIMIT 500"):
+            alias = family(served)
+            if alias and alias not in out:
+                out[alias] = served
+        return out
 
     def worker_spend(self, *, days: int = 7, repo: str | None = None) -> list[dict]:
         """What workers cost, by cell: attempts, passes, dollars, tokens."""

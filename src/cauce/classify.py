@@ -30,6 +30,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from cauce import models
 from cauce.matrix import DEFAULT_KIND, KINDS
 from cauce.text import fold, words
 
@@ -188,7 +189,7 @@ def ask_haiku(
     Never raises; a failure is (None, cost so far, the reason)."""
     argv = [
         claude_bin, "-p",
-        "--model", "haiku",
+        "--model", models.resolve("haiku"),
         "--tools", "",
         "--strict-mcp-config",
         "--no-session-persistence",

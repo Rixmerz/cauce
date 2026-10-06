@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-10-06
+
+### Added
+
+- **Which model actually served each attempt.** A worker is started with an
+  alias (`--model sonnet`), and the installed Claude Code decides which model
+  that is. An older Claude Code can still map `sonnet` to an earlier Sonnet
+  while a person's own sessions already run the newer one. Each attempt now
+  records the model id the CLI reports in its `modelUsage` (the one that did
+  most of the work). The report, `cauce show` and the task drawer show it.
+- **Pin an alias to a model id:** `cauce config model sonnet claude-sonnet-5-5`
+  (or `CAUCE_MODEL_SONNET`). `cauce config model sonnet default` unpins it, and
+  `cauce config model` lists every alias with its pin and the model that last
+  served its workers. Unpinned aliases go through as before, so cauce keeps
+  following Claude Code and any provider's model names. The classifier's
+  Haiku honours the pin too.
+- **The plan warns when workers run an older model than your sessions.** If
+  the newest model of a family in the person's sessions is a newer version
+  than the one that last served the workers, the plan (and `--dry-run`) says
+  so, with the command that pins it.
+
+### Fixed
+
+- `store.home(env)` took the home directory from the running process instead
+  of the environment it was given. With that, a test leaked livespec index
+  locks into the real `~/.local/share/cauce`.
+
 ## [0.4.4] - 2026-10-06
 
 From a review of real sessions where most blocked tasks were finished by

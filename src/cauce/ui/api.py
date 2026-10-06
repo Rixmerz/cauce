@@ -89,7 +89,7 @@ def worker_of(store: Store, task: dict[str, Any], steps: int) -> dict[str, Any] 
     if started is None or started["data"].get("seq", 0) <= steps:
         return None
     d = started["data"]
-    return {"seq": d.get("seq"), "cell": d.get("cell"), "max_turns": d.get("max_turns"),
+    return {"seq": d.get("seq"), "cell": d.get("cell"), "model": d.get("model"), "max_turns": d.get("max_turns"),
             "budget_usd": d.get("budget_usd"), "capabilities": d.get("capabilities") or [],
             "started_at": started["ts"], "alive": flow.alive(task.get("pid"))}
 

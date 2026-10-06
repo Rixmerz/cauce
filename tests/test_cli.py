@@ -79,6 +79,26 @@ def test_tasks_show_and_memory(capsys, git_repo):
     assert "nothing recorded" in capsys.readouterr().out
 
 
+def test_config_model_shows_pins_and_what_served(capsys):
+    store = Store.open()
+    store.add_usage(message_id="m1", session_id="s", model="claude-sonnet-5-5", output_tokens=1, ts="2099-01-01")
+    t = store.create_task("x", status="done", source="cauce")
+    store.add_attempt(t["id"], cell="sonnet/medium", max_turns=30, passed=1, served_model="claude-sonnet-5")
+    store.close()
+    assert cli.main(["config", "model"]) == 0
+    out = capsys.readouterr().out
+    assert "sonnet  follows Claude Code; workers last ran claude-sonnet-5; your sessions use claude-sonnet-5-5" in out
+    assert "opus    follows Claude Code" in out
+    assert cli.main(["config", "model", "sonnet", "claude-sonnet-5-5"]) == 0
+    assert capsys.readouterr().out.startswith("sonnet  pinned to claude-sonnet-5-5; workers last ran")
+    assert cli.main(["config", "model", "sonnet", "default"]) == 0
+    assert "follows Claude Code" in capsys.readouterr().out
+    assert cli.main(["config", "model", "gpt"]) == 1
+    assert cli.main(["config", "model", "opus", "two words"]) == 1
+    assert cli.main(["show", str(t["id"])]) == 0
+    assert "attempt 1 sonnet/medium [claude-sonnet-5]" in capsys.readouterr().out
+
+
 def test_capabilities(capsys, _isolated_home):
     assert cli.main(["capabilities"]) == 0
     assert "no capabilities registered" in capsys.readouterr().out
