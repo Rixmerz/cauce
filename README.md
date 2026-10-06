@@ -216,8 +216,8 @@ it for every task in the repository with `cauce allow "Bash(npm run build:*)"`
 (`--preset read|node|python` for the usual sets). Workers run in Claude Code's
 auto mode, which lets safe commands through without a rule (Haiku workers
 bypass permissions; `cauce config mode` changes either), and the project's
-Node from `.nvmrc` / `engines.node` is first on their PATH. Grant with `--allow "Bash(npm run build:*)"`
-(repeatable; an absolute path takes two slashes: `Read(//abs/path)`). A blocked
+Node from `.nvmrc` / `engines.node` is first on their PATH. `--allow` is
+repeatable, and an absolute path takes two slashes: `Read(//abs/path)`. A blocked
 report prints the rules it needs, one per program, and `--dry-run` lists the
 ones workers in the repository lacked before. A task started with `--no-isolate`
 resumes in the checkout too. A one-shot worker has nobody to ask: what its settings do not
