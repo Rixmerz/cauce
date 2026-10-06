@@ -387,6 +387,8 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
 def cmd_config(args: argparse.Namespace) -> int:
     if args.key == "model":
         return _config_model(args)
+    if args.key == "mode":
+        return _config_mode(args)
     if args.key is None:
         for key, value in sorted(config.load().items()):
             print(f"{key} = {json.dumps(value)}")
@@ -403,6 +405,50 @@ def cmd_config(args: argparse.Namespace) -> int:
         return 1
     config.save({args.key: value})
     print(f"{args.key} = {json.dumps(value)}")
+    return 0
+
+
+def _config_mode(args: argparse.Namespace) -> int:
+    """`cauce config mode [alias|default [mode|reset]]`: the permission mode workers run in."""
+    from cauce import grants
+    from cauce.matrix import MODELS
+
+    names = (*MODELS, "default")
+    if args.value is not None and args.value not in names:
+        print(f"unknown model {args.value!r}; known: {', '.join(names)}", file=sys.stderr)
+        return 1
+    if args.value is not None and args.extra is not None:
+        try:
+            grants.set_mode(args.value, None if args.extra == "reset" else args.extra)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+    for alias in [args.value] if args.value and args.value != "default" else MODELS:
+        print(f"{alias:<7} {grants.mode_for(alias)}")
+    return 0
+
+
+def cmd_allow(args: argparse.Namespace) -> int:
+    """Rules every worker in this repository gets, kept in the person's cauce home."""
+    from cauce import grants
+
+    where = Path(args.repo or os.getcwd()).resolve()
+    key = repo.key(where)
+    if not key:
+        print(f"{where} is no repository cauce can key rules to", file=sys.stderr)
+        return 1
+    try:
+        rules = grants.expand(args.rules, args.preset or ())
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.rm:
+        kept = grants.revoke(key, rules)
+    elif rules:
+        kept = grants.grant(key, rules)
+    else:
+        kept = grants.granted(key)
+    print(f"workers in {key} get: " + (", ".join(kept) if kept else "nothing beyond their mode"))
     return 0
 
 
@@ -902,8 +948,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--example", action="store_true")
     p.set_defaults(func=cmd_capabilities)
 
+    p = sub.add_parser("allow", help="rules every worker in this repository gets: cauce allow 'Bash(npm:*)', "
+                                     "--preset read|node|python, --rm to take back")
+    p.add_argument("rules", nargs="*", metavar="RULE")
+    p.add_argument("--preset", action="append", help="a named set of rules: read, node, python")
+    p.add_argument("--rm", action="store_true", help="take the named rules back (all of them when none is named)")
+    p.add_argument("--repo", help="the repository (default: the current directory)")
+    p.set_defaults(func=cmd_allow)
+
     p = sub.add_parser("config", help="show or change a setting: cauce config livespec off; "
-                                      "cauce config model sonnet <model id>|default")
+                                      "cauce config model sonnet <model id>|default; "
+                                      "cauce config mode <model|default> <mode>|reset")
     p.add_argument("key", nargs="?")
     p.add_argument("value", nargs="?")
     p.add_argument("extra", nargs="?", help="for `model`: the model id to pin the alias to, or `default`")

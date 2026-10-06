@@ -107,6 +107,32 @@ def test_init_refuses_the_home_directory(capsys, tmp_path, monkeypatch):
     assert "is not a project" in capsys.readouterr().err and not (tmp_path / ".cauce").exists()
 
 
+def test_allow_keeps_rules_for_the_repository_and_config_mode_sets_modes(capsys, git_repo):
+    assert cli.main(["allow", "--repo", str(git_repo)]) == 0
+    assert "nothing beyond their mode" in capsys.readouterr().out
+    assert cli.main(["allow", "Bash(make:*)", "--preset", "node", "--repo", str(git_repo)]) == 0
+    assert "Bash(npm:*), Bash(npx:*), Bash(node:*), Bash(make:*)" in capsys.readouterr().out
+    assert cli.main(["allow", "--rm", "Bash(make:*)", "--repo", str(git_repo)]) == 0
+    assert "Bash(make:*)" not in capsys.readouterr().out
+    assert cli.main(["allow", "--preset", "nope", "--repo", str(git_repo)]) == 1
+    plain = git_repo.parent / "plain"
+    plain.mkdir()
+    assert cli.main(["allow", "--repo", str(plain)]) in (0, 1)
+    capsys.readouterr()
+
+    assert cli.main(["config", "mode"]) == 0
+    out = capsys.readouterr().out
+    assert "haiku   bypassPermissions" in out and "sonnet  auto" in out
+    assert cli.main(["config", "mode", "haiku", "acceptEdits"]) == 0
+    assert capsys.readouterr().out.strip() == "haiku   acceptEdits"
+    assert cli.main(["config", "mode", "default", "dontAsk"]) == 0
+    assert "opus    dontAsk" in capsys.readouterr().out
+    assert cli.main(["config", "mode", "haiku", "reset"]) == 0
+    assert "bypassPermissions" in capsys.readouterr().out
+    assert cli.main(["config", "mode", "gpt"]) == 1
+    assert cli.main(["config", "mode", "opus", "plan"]) == 1
+
+
 def test_capabilities(capsys, _isolated_home):
     assert cli.main(["capabilities"]) == 0
     assert "no capabilities registered" in capsys.readouterr().out

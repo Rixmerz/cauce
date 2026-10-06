@@ -201,7 +201,10 @@ def decide(
                         because=(seen, "no model fixes a task that should not exist: it is rewritten or split, "
                                        "not climbed"))
 
-    if failure is Failure.PERMISSION:
+    if failure is Failure.PERMISSION or last.denied:
+        # A refusal is the setting that stopped the work, whatever else the
+        # attempt ended with: a check that went red because the worker could not
+        # run its tools is not shallow work, and more effort meets the same refusal.
         more = len(last.denied) - 3
         refused = (", ".join(last.denied[:3]) + (f" and {more} more" if more > 0 else "")) or "a tool call"
         grant = " ".join(f"--allow '{rule}'" for rule in last.allow)

@@ -18,6 +18,7 @@ import dataclasses
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -26,7 +27,7 @@ from pathlib import Path
 
 from cauce import allow as allow_rules
 from cauce import capabilities as caps
-from cauce import config, habits, isolate, launch, models, project, repo, stops
+from cauce import config, grants, habits, isolate, launch, models, project, repo, runtime, stops
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify
 from cauce.escalate import Attempt, Decision, Failure, Move, decide
@@ -171,6 +172,10 @@ class Report:
             command = stops.next_step(self.task_id, self.stop)
             if command:
                 lines.append(f"  {command}")
+            rules = self.stop.allow or allow_rules.from_refusals(self.stop.denied)
+            if self.stop.cause == "permission" and rules:
+                lines.append("  or, for every task in this repository: cauce allow "
+                             + " ".join(shlex.quote(r) for r in rules))
         return "\n".join(lines)
 
 
@@ -283,7 +288,13 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
         neighbour_notes.append(f"workers last ran {lag['workers']} for `{lag['alias']}` while your sessions use "
                                f"{lag['sessions']}: the installed Claude Code's alias is older. Pin it with "
                                f"`{lag['command']}`, or update Claude Code")
-    seen = _refused_here(store, repo.key(repo_dir), options.allow_tools)
+    seen = _refused_here(store, repo.key(repo_dir), (*options.allow_tools, *grants.granted(repo.key(repo_dir))))
+    mode = grants.mode_for(start.model)
+    if mode != "auto":
+        neighbour_notes.append(f"workers on {start.model} run in {mode} mode")
+    node = runtime.node_bin(repo_dir)
+    if node is not None:
+        neighbour_notes.append(f"workers run node {node.version} from {node.bin} ({node.source})")
     if seen:
         neighbour_notes.append("workers here were refused before: " + ", ".join(f"{r} ×{n}" for r, n in seen)
                                + ". Pass the ones this task needs with --allow, or a worker stops on them")
@@ -363,6 +374,9 @@ def run(
     launch_dir = options.launch_dir.resolve() if options.launch_dir else workdir
 
     dead = store.dead_ends(text, repo=key, limit=5)
+    # The runtime the project declares goes first on the worker's PATH, and on its
+    # check's: a worker given the wrong Node hunts for another and is refused each one.
+    run_env = runtime.env_for(workdir)
     cell, turns = the_plan.start, options.max_turns
     attempts: list[Attempt] = []
     changed: set[str] = set()
@@ -386,6 +400,7 @@ def run(
                                the_plan, repo_dir, workdir)
             spec = launch.LaunchSpec(
                 model_id=models.pinned(cell.model),
+                permission_mode=grants.mode_for(cell.model),
                 prompt=brief(text, the_plan.kind, workdir, [*history, *attempts], dead, options.verify, writes,
                              context),
                 cell=cell,
@@ -394,12 +409,16 @@ def run(
                 max_turns=turns,
                 max_budget_usd=round(remaining, 2),
                 disallowed_tools=() if writes else launch.WRITE_TOOLS,
-                allowed_tools=options.allow_tools,
+                # The person's rules, for this run and for this repository, and the
+                # tools of every MCP server cauce itself hands this worker: a
+                # capability it was given and then refused is no capability.
+                allowed_tools=tuple(dict.fromkeys([*options.allow_tools, *grants.granted(key),
+                                                   *(f"mcp__{name}" for name in selection.servers)])),
                 extra_dirs=tuple(workspace.repo_dir / rel for rel in workspace.links
                                  if (workspace.repo_dir / rel).is_dir()) if workspace else (),
                 mcp_servers=selection.servers,
                 append_system_prompt=selection.system_prompt(),
-                env={"CAUCE_WORKER_TASK": str(task["id"]), "CAUCE_WORKER_ATTEMPT": str(len(attempts) + 1)},
+                env={**run_env, "CAUCE_WORKER_TASK": str(task["id"]), "CAUCE_WORKER_ATTEMPT": str(len(attempts) + 1)},
             )
             store.update_task(task["id"], current_cell=cell.label)
             store.add_event(task["id"], "attempt_started", seq=len(attempts) + 1, cell=cell.label,
@@ -428,6 +447,7 @@ def run(
                             failure=result.failure.value if result.failure else None, cost_usd=result.cost_usd,
                             turns=result.turns, summary=result.summary[:500], denied=list(result.denied),
                             allow=list(result.allow), served_model=result.served_model,
+                            permission_mode=result.permission_mode,
                             changed=list(result.changed_paths)[:50])
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:])
@@ -547,7 +567,7 @@ def _refused_here(store: Store, key: str | None, granted: Sequence[str]) -> list
 def _cause(decision: Decision, attempt: Attempt) -> str:
     """What ended the run, from the move and the failure that led to it."""
     if decision.move is Move.BLOCKED:
-        return "permission" if attempt.failure is Failure.PERMISSION else "environment"
+        return "permission" if attempt.failure is Failure.PERMISSION or attempt.denied else "environment"
     if decision.move is Move.NEEDS_APPROVAL:
         return "approval"
     if decision.move is Move.REPLAN:
@@ -632,7 +652,7 @@ def _check(command: str, workdir: Path) -> tuple[int | None, str]:
     """The repository's own check: (exit code, or None on a timeout; its output)."""
     try:
         proc = subprocess.run(command, shell=True, cwd=str(workdir), capture_output=True, text=True,  # noqa: S602
-                              timeout=VERIFY_TIMEOUT_S, check=False)
+                              timeout=VERIFY_TIMEOUT_S, check=False, env={**os.environ, **runtime.env_for(workdir)})
     except subprocess.TimeoutExpired:
         return None, ""
     return proc.returncode, (proc.stdout + proc.stderr).strip()[-3000:]

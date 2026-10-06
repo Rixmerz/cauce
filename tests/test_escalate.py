@@ -165,3 +165,14 @@ def test_a_refusal_names_the_rules_that_let_it_through():
     d = decide(IMPLEMENT, [refused])
     assert "allow it (--allow 'Bash(tg:*)' --allow 'Bash(npx tsc:*)'), then resume" in d.reason
     assert d.because[-1] == "the rules that let it through, one per program: Bash(tg:*), Bash(npx tsc:*)"
+
+
+def test_an_attempt_that_was_refused_blocks_whatever_else_it_ended_with():
+    """A worker refused its tools, then its check went red: that was read as shallow
+    work and climbed to more effort, which met the same refusals."""
+    refused = Attempt(Cell("opus", "high"), 30, False, Failure.CODE_BUG, "tests failed", ("Bash(node x.js)",),
+                      allow=("Bash(node:*)",))
+    d = decide(LADDERS["debug-unclear"], [refused])
+    assert d.move is Move.BLOCKED and "--allow 'Bash(node:*)'" in d.reason
+    wrong = Attempt(Cell("opus", "high"), 30, False, Failure.SPEC_BUG, "", ("Bash(x)",))
+    assert decide(LADDERS["debug-unclear"], [wrong]).move is Move.REPLAN  # a wrong task is still wrong

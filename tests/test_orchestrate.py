@@ -589,3 +589,27 @@ def test_work_that_outgrew_its_turns_is_kept_for_the_resume(git_repo, store):
     assert report.branch == f"cauce/task-{report.task_id}"
     assert "half.py" in git(git_repo, "show", "--name-only", report.branch)
     assert f"cauce resume {report.task_id} --max-turns 120" in report.text()
+
+
+def test_a_worker_gets_its_mode_the_repository_s_rules_and_the_tools_it_was_handed(git_repo, store, tmp_path):
+    from cauce import grants, repo
+
+    grants.grant(repo.key(git_repo), ["Bash(npm:*)"])
+    (tmp_path / "caps.json").write_text(json.dumps({"browser": caps.EXAMPLE["browser"]}))
+    script = Script(ok())
+    registry = caps.load(tmp_path / "caps.json")
+    run("check the page", git_repo, store, Options(allow_tools=("Bash(make:*)",)), registry=registry,
+        launcher=script, classifier=kind("test"))
+    spec = script.specs[0]
+    assert spec.permission_mode == "auto"
+    assert spec.allowed_tools == ("Bash(make:*)", "Bash(npm:*)", "mcp__browser")
+    script = Script(ok())
+    run("where is it", git_repo, store, registry={}, launcher=script, classifier=kind("explore"))
+    assert script.specs[0].permission_mode == "bypassPermissions"  # a haiku cell
+    dry = run("where is it", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("explore"))
+    assert "workers on haiku run in bypassPermissions mode" in dry.plan.reasons
+
+
+def test_a_refused_attempt_tells_how_to_keep_its_rules(git_repo, store):
+    report = run("x", git_repo, store, registry={}, launcher=Script(refused()), classifier=kind("implement"))
+    assert "or, for every task in this repository: cauce allow 'Bash(node:*)'" in report.text()

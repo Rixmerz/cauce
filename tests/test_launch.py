@@ -214,3 +214,21 @@ def test_work_in_checkouts_nested_in_the_work_directory_is_seen(tmp_path):
     empty = tmp_path / "plain"
     empty.mkdir()
     assert launch.tracked_state(empty) is None
+
+
+def test_a_cli_that_does_not_take_the_mode_runs_the_attempt_in_the_old_one(tmp_path):
+    calls = []
+
+    def runner(argv, **kw):
+        calls.append(argv[argv.index("--permission-mode") + 1])
+        if len(calls) == 1:
+            return proc("", 1, "error: option '--permission-mode <mode>' argument 'auto' is invalid.")
+        return proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed")))
+
+    out = launch.run(spec(tmp_path, permission_mode="auto"), runner=runner)
+    assert calls == ["auto", "acceptEdits"] and out.passed and out.permission_mode == "acceptEdits"
+    # any other failure is the attempt's own, not a reason to change mode
+    calls.clear()
+    failing = lambda argv, **kw: calls.append(1) or proc("", 1, "network down")  # noqa: E731
+    assert launch.run(spec(tmp_path, permission_mode="auto"), runner=failing).failure is Failure.ENVIRONMENT
+    assert calls == [1]
