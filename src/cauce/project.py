@@ -1,7 +1,11 @@
 """A project's `.cauce/` folder: whether it is enrolled, and what its sessions are called.
 
 A repository is enrolled when it has a `.cauce/` folder — at the top of the
-checkout, or in the directory a session runs in. Only enrolled projects, and
+checkout, or in the directory a session runs in. Nothing above a checkout
+counts: a `.cauce/` in a folder that holds several projects, or in the home
+directory, does not enroll every session below it. Outside a checkout only the
+session's own directory counts, and the home directory and `/` are never a
+project (a home that is itself a git checkout, for dotfiles, included). Only enrolled projects, and
 the sessions that run in them, appear in the UI: having the plugin on while
 chatting somewhere is not using cauce there. cauce enrolls a project itself
 the first time work is queued or run in it (`++`, `cauce queue add`, `cauce
@@ -34,28 +38,52 @@ NAMES = "sessions.json"
 RENAME_EVERY = 10
 
 
+class NotAProject(ValueError):
+    """A directory that is never a project: the home directory or the filesystem root."""
+
+
+def _never(d: Path) -> bool:
+    return d == d.parent or d == Path.home().resolve()
+
+
+def _scope(cwd: str | Path) -> list[Path]:
+    """The directories whose `.cauce/` a session in `cwd` may belong to: `cwd` and
+    its parents up to the top of its checkout, or `cwd` alone outside one."""
+    here = Path(cwd).resolve()
+    if _never(here):
+        return []
+    chain: list[Path] = []
+    for d in (here, *here.parents):
+        if _never(d):
+            break  # home or `/`: a checkout there (dotfiles) is no project's
+        chain.append(d)
+        if (d / ".git").exists():
+            return chain
+    return [here]
+
+
 def find(cwd: str | Path | None) -> Path | None:
     """The `.cauce/` folder a session in `cwd` belongs to: in `cwd` itself, or in a
-    parent up to and including the top of its git checkout."""
+    parent up to and including the top of its git checkout. Never above it."""
     if not cwd:
         return None
-    here = Path(cwd)
-    for d in (here, *here.parents):
+    for d in _scope(cwd):
         if (d / FOLDER).is_dir():
             return d / FOLDER
-        if (d / ".git").exists():
-            return None
     return None
 
 
 def enroll(cwd: str | Path) -> Path:
     """Create the `.cauce/` folder at the top of the checkout `cwd` is in (or in
-    `cwd` when it is no checkout), unless one is already found. Returns it."""
+    `cwd` when it is no checkout), unless one is already found. Returns it.
+    Raises `NotAProject` for the home directory or `/`."""
     found = find(cwd)
     if found is not None:
         return found
-    here = Path(cwd).resolve()
-    top = next((d for d in (here, *here.parents) if (d / ".git").exists()), here)
+    scope = _scope(cwd)
+    if not scope:
+        raise NotAProject(f"{Path(cwd).resolve()} is not a project: run cauce inside one")
+    top = scope[-1]
     folder = top / FOLDER
     folder.mkdir(exist_ok=True)
     ignore = folder / ".gitignore"

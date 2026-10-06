@@ -307,7 +307,10 @@ once and start `cauce ui` again.
 folder — at the top of its checkout, or where the session runs. cauce creates
 it the first time work is queued or run there (`++`, `cauce queue add`, `cauce
 run`); `cauce init` does it by hand. The folder ignores itself in git. Having
-the plugin on while chatting somewhere does not list that place.
+the plugin on while chatting somewhere does not list that place, and neither
+does a `.cauce/` above the project: one in a folder that holds several projects,
+or in your home directory, enrolls no session below it. The home directory and
+`/` are never a project.
 
 **Session names.** Haiku names each session of an enrolled project after what
 it has been asked, in `.cauce/sessions.json`, after its first prompt and again

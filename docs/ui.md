@@ -20,7 +20,8 @@ state of its own, so the CLI, the hooks and the page never disagree.
 | **Habits** | mined sequences with their gates and score; proposals awaiting approval | none in the page: installing a hook is a CLI command a person types |
 
 Only enrolled projects — a `.cauce/` folder in the checkout or the session's
-directory — and their sessions are listed; each session under the name Haiku
+directory, never one above the checkout, in the home directory or at `/` — and
+their sessions are listed; each session under the name Haiku
 gave it in `.cauce/sessions.json`, or the one a person wrote there instead.
 
 No screen takes a task. Work is asked for in a session (`++ <task>`,

@@ -450,7 +450,7 @@ def cmd_queue(args: argparse.Namespace) -> int:
                                          "start": args.start, "allow_tools": args.allow}.items() if v is not None}
             task = store.enqueue(_text(args.text), repo=repo.key(where), cwd=str(where), options=options,
                                  session_id=os.environ.get("CAUCE_SESSION_ID"))
-            with contextlib.suppress(OSError):
+            with contextlib.suppress(OSError, project.NotAProject):
                 project.enroll(where)
             if args.json:
                 print(json.dumps({k: task[k] for k in ("id", "title", "status", "repo", "cwd")}, ensure_ascii=False))
@@ -519,7 +519,11 @@ def cmd_init(args: argparse.Namespace) -> int:
     if not where.is_dir():
         print(f"no such directory: {where}", file=sys.stderr)
         return 1
-    folder = project.enroll(where)
+    try:
+        folder = project.enroll(where)
+    except project.NotAProject as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     print(f"enrolled: {folder} — this project and its sessions now show in the UI")
     return 0
 

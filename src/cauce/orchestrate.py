@@ -317,7 +317,7 @@ def run(
     the_plan = plan(text, repo_dir, store, options, registry, classifier=classifier, adapters=adapters)
     if options.dry_run:
         return Report(None, "dry run", the_plan)
-    with contextlib.suppress(OSError):
+    with contextlib.suppress(OSError, project.NotAProject):
         project.enroll(repo_dir)  # work run here: the project is cauce's
 
     key = repo.key(repo_dir)
