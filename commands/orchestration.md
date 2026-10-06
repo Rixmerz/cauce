@@ -61,7 +61,10 @@ Request: $ARGUMENTS
    run; `cauce run --dry-run` lists the rules workers here were refused before.
    An absolute path in a rule takes two slashes: `Read(//abs/path)`. The
    project's Node (`.nvmrc`, `.node-version`, `engines.node`) is put first on
-   the workers' PATH for them.
+   the workers' PATH for them; when the project declares none and a
+   dependency needs a newer Node than the PATH has, an installed one that fits
+   is. A `warning: this task needs Node …` line means none installed fits:
+   tell the person before waiting on the task.
 
    A worker works in its own worktree on `cauce/task-<id>`: your checkout has
    none of it until the branch is merged, and the worker does not see your

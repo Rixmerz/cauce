@@ -188,3 +188,20 @@ def test_a_reading_task_whose_cells_agree_has_its_answer():
     assert "the answer is confirmed" in d.because[1]
     # a task that writes still changes model on a repeated answer
     assert decide(LADDERS["review-critical"], attempts).move is Move.REPLAN  # no stronger model left
+
+
+def test_an_environment_failure_after_work_ran_blocks_at_once():
+    import dataclasses
+
+    ran = dataclasses.replace(fail("sonnet/medium", Failure.ENVIRONMENT), changed=("package-lock.json",))
+    d = decide(IMPLEMENT, [ran])
+    assert d.move is Move.BLOCKED and d.cell is None
+    assert "stopped work that had started" in d.reason
+    assert any("changed 1 file(s) first" in step for step in d.because)
+    # after a retry that never ran, work that then ran still blocks, with no third attempt
+    assert decide(IMPLEMENT, [fail("sonnet/medium", Failure.ENVIRONMENT), ran]).move is Move.BLOCKED
+    # what never ran is retried once, as before
+    assert decide(IMPLEMENT, [fail("sonnet/medium", Failure.ENVIRONMENT)]).move is Move.RETRY
+    # changed files on another failure change nothing about how it climbs
+    bug = dataclasses.replace(fail("sonnet/medium", Failure.CODE_BUG), changed=("a.py",))
+    assert decide(IMPLEMENT, [bug]).move is Move.MORE_EFFORT

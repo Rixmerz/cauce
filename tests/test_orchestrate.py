@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 
 import pytest
@@ -786,3 +787,95 @@ def test_a_dry_run_and_a_run_without_a_listener_say_nothing(git_repo, store, cap
     report = run("fix the thing", git_repo, store, registry={}, launcher=Script(ok()), classifier=kind("implement"))
     assert report.status == "done"
     assert capsys.readouterr() == ("", "")
+
+
+# --- a check that cannot run, and work the environment stopped -----------------------
+
+@pytest.mark.parametrize(("check", "why"), [
+    ("echo 'npm error Missing script: \"test\"' >&2; exit 1", 'npm error Missing script: "test"'),
+    ("echo 'npm ERR! enoent Could not read package.json: Error: ENOENT' >&2; exit 254",
+     "npm ERR! enoent Could not read package.json"),
+    ("echo 'Node.js version v22.16.0 detected.'; "
+     "echo 'The build tool requires a minimum Node.js version of v22.22.3.'; exit 3",
+     "requires a minimum Node.js version"),
+    ("no-such-tool-anywhere --run", "exit 127"),
+])
+def test_a_check_that_cannot_run_is_the_environment_and_stops_the_work_it_let_run(git_repo, store, check, why):
+    script = Script(WorkerResult(True, None, "upgraded the lockfile", "0 vulnerabilities", ("package-lock.json",),
+                                 0.1))
+    report = run("upgrade the vulnerable dependencies", git_repo, store, Options(verify=check), registry={},
+                 launcher=script, classifier=kind("implement"))
+    # one attempt: no climb to a stronger model, no retry of the same wall
+    assert report.status == "blocked" and len(script.specs) == 1
+    attempt = store.attempts(report.task_id)[0]
+    assert attempt["failure"] == "environment" and "could not run here" in attempt["summary"]
+    assert why in attempt["summary"]
+    assert report.stop.cause == "environment" and "stopped work that had started" in report.stop.reason
+    # nothing the check said is a dead end against the problem
+    assert store.dead_ends("upgrade the vulnerable dependencies") == []
+
+
+@pytest.mark.parametrize("output", [
+    "FAIL src/app.spec.ts\n  expected 'npm error Missing script: test' to be shown",  # quoted, not npm's own line
+    "npm warn EBADENGINE Unsupported engine {node: '>=22.22.3'}\n1 failing",  # a warning, then a real failure
+    "AssertionError: 2 != 3",
+])
+def test_a_check_that_ran_and_failed_is_still_a_bug_in_the_work(git_repo, store, output):
+    check = f"printf '%s\\n' {shlex.quote(output)}; exit 1"
+    script = Script(ok("fixed"), ok("fixed for real"), write="f.py")
+    report = run("fix the total", git_repo, store, Options(verify=check, max_attempts=2), registry={}, launcher=script,
+                 classifier=kind("implement"))
+    first = store.attempts(report.task_id)[0]
+    assert first["failure"] == "code_bug" and "exited 1" in first["summary"]
+    assert report.cells[:2] == ["sonnet/medium", "sonnet/high"]  # it climbs, as a red check should
+
+
+def test_a_worker_that_says_the_environment_stopped_it_after_changing_files_is_not_retried(git_repo, store):
+    lines = []
+    stopped = WorkerResult(False, Failure.ENVIRONMENT, "the CLI needs a newer Node", "Node.js version v22.16.0",
+                           ("package-lock.json",), 0.17)
+    script = Script(stopped, ok())
+    report = run("upgrade the vulnerable dependencies", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"), progress=lines.append)
+    assert report.status == "blocked" and len(script.specs) == 1
+    assert lines[-1].startswith(f"cauce: #{report.task_id} attempt 1 ended environment")
+    # nothing changed: it never ran, and the one retry stands
+    never = WorkerResult(False, Failure.ENVIRONMENT, "transport error", "", (), 0.0)
+    script = Script(never, ok())
+    report = run("upgrade the vulnerable dependencies", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"))
+    assert report.status == "done" and report.cells == ["sonnet/medium", "sonnet/medium"]
+
+
+def test_a_dead_end_that_shares_only_a_word_or_two_stays_out_of_the_brief(git_repo, store):
+    from cauce import repo as repos
+
+    key = repos.key(git_repo)
+    near = store.open_problem("npm audit fix breaks the lockfile", repo=key)
+    store.add_fix(near, "ran npm audit fix --force", "failed", repo=key, why="it jumped a major version")
+    far = store.open_problem("remove the old signup flow from the shop", repo=key)
+    store.add_fix(far, "deleted the signup folder", "failed", repo=key, why="routes still pointed at it")
+    script = Script(ok())
+    run("fix the npm audit vulnerabilities in the shop lockfile", git_repo, store, registry={},
+        launcher=script, classifier=kind("implement"))
+    prompt = script.specs[0].prompt
+    assert "ran npm audit fix --force" in prompt
+    assert "deleted the signup folder" not in prompt
+
+
+def test_a_resumed_task_numbers_its_attempts_on_from_its_last(git_repo, store):
+    stopped = WorkerResult(False, Failure.ENVIRONMENT, "the CLI needs a newer Node", "", ("NOTES.md",), 0.1)
+    first = run("add the notes file", git_repo, store, registry={}, launcher=Script(stopped),
+                classifier=kind("implement"))
+    lines, seen = [], []
+
+    def launcher(spec):
+        seen.append(spec.env["CAUCE_WORKER_ATTEMPT"])
+        return ok()
+
+    again = run("add the notes file", git_repo, store, registry={}, launcher=launcher, classifier=kind("implement"),
+                task_id=first.task_id, progress=lines.append)
+    n = first.task_id
+    assert f"cauce: #{n} attempt 2 at sonnet/medium" in lines and lines[-1] == f"cauce: #{n} attempt 2 passed"
+    assert seen == ["2"] and again.status == "done"
+    assert [e["data"]["seq"] for e in store.events_of(n, "attempt_started")] == [1, 2]

@@ -262,7 +262,11 @@ it for every task in the repository with `cauce allow "Bash(npm run build:*)"`
 that grants it, so one approval per program is the last one. Workers run in Claude Code's
 auto mode, which lets safe commands through without a rule (Haiku workers
 bypass permissions; `cauce config mode` changes either), and the project's
-Node from `.nvmrc` / `engines.node` is first on their PATH. `--allow` is
+Node from `.nvmrc` / `engines.node` is first on their PATH. A project that
+declares none still gets the Node its installed dependencies need (a CLI's
+own `engines.node`) when the one on the PATH is too old: one nvm installed, of
+the same major when there is one; when none fits, the plan warns before any
+attempt. `--allow` is
 repeatable, and an absolute path takes two slashes: `Read(//abs/path)`. A blocked
 report prints the rules it needs, one per program, and `--dry-run` lists the
 ones workers in the repository lacked before. A task started with `--no-isolate`

@@ -321,6 +321,8 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     node = runtime.node_bin(repo_dir)
     if node is not None:
         neighbour_notes.append(f"workers run node {node.version} from {node.bin} ({node.source})")
+    elif runtime.wanted(repo_dir) is None and (unmet := runtime.needed(repo_dir)[1]):
+        neighbour_notes.append(unmet)
     if seen:
         neighbour_notes.append("workers here were refused before: " + ", ".join(f"{r} ×{n}" for r, n in seen)
                                + ". Pass the ones this task needs with --allow, or a worker stops on them")
@@ -418,7 +420,10 @@ def run(
     workdir = workspace.path if workspace else repo_dir
     launch_dir = options.launch_dir.resolve() if options.launch_dir else workdir
 
-    dead = store.dead_ends(text, repo=key, limit=5)
+    # Strict, as the prompt hook: a task's text shares a word or two with
+    # nearly every task in its repository, and a loose match puts unrelated
+    # failures in front of the worker as if they were this problem's.
+    dead = store.dead_ends(text, repo=key, limit=5, strict=True)
     if dead:
         # What the workers are shown, kept as shown: the memory grows after the run.
         store.add_event(task["id"], "dead_ends", shown=dead)
@@ -446,6 +451,8 @@ def run(
                 raise Cancelled
             selection = _equip(caps.select(registry, the_plan.kind, failed_before=bool(attempts), workdir=workdir),
                                the_plan, repo_dir, workdir)
+            # Numbered as the store numbers it: a resumed task's attempts go on from its last.
+            nth = len(store.attempts(task["id"])) + 1
             spec = launch.LaunchSpec(
                 model_id=models.pinned(cell.model),
                 permission_mode=grants.mode_for(cell.model),
@@ -466,11 +473,11 @@ def run(
                                  if (workspace.repo_dir / rel).is_dir()) if workspace else (),
                 mcp_servers=selection.servers,
                 append_system_prompt=selection.system_prompt(),
-                env={**run_env, "CAUCE_WORKER_TASK": str(task["id"]), "CAUCE_WORKER_ATTEMPT": str(len(attempts) + 1)},
+                env={**run_env, "CAUCE_WORKER_TASK": str(task["id"]), "CAUCE_WORKER_ATTEMPT": str(nth)},
             )
             store.update_task(task["id"], current_cell=cell.label)
-            say(f"cauce: #{task['id']} attempt {len(attempts) + 1} at {cell.label}")
-            store.add_event(task["id"], "attempt_started", seq=len(attempts) + 1, cell=cell.label,
+            say(f"cauce: #{task['id']} attempt {nth} at {cell.label}")
+            store.add_event(task["id"], "attempt_started", seq=nth, cell=cell.label,
                             model=spec.model_id or cell.model,
                             max_turns=turns, budget_usd=spec.max_budget_usd, capabilities=list(selection.names))
             result = launcher(spec)
@@ -729,16 +736,47 @@ def _check(command: str, workdir: Path) -> tuple[int | None, str]:
     return proc.returncode, (proc.stdout + proc.stderr).strip()[-3000:]
 
 
+#: What a check prints when it could not run at all — its script, its manifest
+#: or the Node its tools need is missing. Its exit then says nothing about the
+#: work, and a stronger model meets the same wall. npm's EBADENGINE *warning*
+#: is not here: it prints on runs that go on and pass.
+_CANNOT_RUN = re.compile(
+    r"^npm (?:ERR!|error) Missing script: .*$"
+    r"|^npm (?:ERR!|error) enoent Could not read package\.json.*$"
+    r"|^.*\brequires (?:a minimum )?Node\.js version\b.*$"
+    r"|^.*The engine \"node\" is incompatible with this module.*$",
+    re.MULTILINE)
+
+
+def cannot_run(code: int | None, output: str) -> str | None:
+    """Why a check that exited non-zero could not run at all, or None when it ran
+    and failed. Exit 127 is the shell's "command not found"."""
+    if code is None or code == 0:
+        return None
+    found = _CANNOT_RUN.search(output)
+    if found:
+        return found.group(0).strip()[:300]
+    if code == 127:
+        return "exit 127: the shell did not find the command"
+    return None
+
+
 def _verified(result: launch.WorkerResult, command: str, workdir: Path) -> launch.WorkerResult:
     """A claimed pass checked by the repository's own command. The worker does not
     grade itself: a red check turns the pass into a code bug, with the check's
-    output as the evidence the next attempt reads."""
+    output as the evidence the next attempt reads. A check that could not run at
+    all is the environment's, never a pass and never a bug in the work."""
     code, output = _check(command, workdir)
     if code is None:
         return dataclasses.replace(result, passed=False, failure=Failure.INCONCLUSIVE,
                                    summary=f"`{command}` timed out after the claimed pass")
     if code == 0:
         return result
+    if (why := cannot_run(code, output)) is not None:
+        return dataclasses.replace(
+            result, passed=False, failure=Failure.ENVIRONMENT, evidence=output,
+            summary=f"claimed a pass, but `{command}` could not run here ({why}): {result.summary}",
+        )
     return dataclasses.replace(
         result, passed=False, failure=Failure.CODE_BUG, evidence=output,
         summary=f"claimed a pass, but `{command}` exited {code}: {result.summary}",
