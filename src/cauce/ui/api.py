@@ -118,7 +118,7 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
             branch = finished["data"].get("branch") if finished else None
             item["branch"] = branch
             done.append(item)
-            if branch and t["updated_at"] >= _days_ago_iso(REVIEW_DAYS):
+            if branch and t["updated_at"] >= _days_ago_iso(REVIEW_DAYS) and not _landed(t, branch, finished):
                 needs.append({**item, "asks": f"review branch {branch}, then merge it"})
     # A prompt answered in a session is recorded as a task too (it carries the
     # session's follow-ups and result), but it is not work on the board: every
@@ -154,6 +154,21 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
         "done": done[:60],
         "last_event": store.last_event_id(),
     }
+
+
+def _landed(task: dict, branch: str, finished: dict | None) -> bool:
+    """A branch merged (or squash-merged, or deleted) waits on nobody. A read of
+    git, never a write; unknown, it is still asked for."""
+    from cauce import isolate
+
+    where = Path(task["cwd"]) if task.get("cwd") else None
+    if where is None or not where.is_dir():
+        return False
+    try:
+        changed = (finished or {}).get("data", {}).get("changed") or []
+        return isolate.landed(where, branch, changed)
+    except OSError:
+        return False
 
 
 def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:

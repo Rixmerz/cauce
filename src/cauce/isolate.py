@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -174,3 +175,20 @@ def _commit(ws: Workspace, message: str, *extra: str) -> None:
 
 def head(repo_dir: Path, ref: str) -> str:
     return _git(repo_dir, "rev-parse", ref)
+
+
+def landed(repo_dir: Path, branch: str, paths: Sequence[str] = ()) -> bool:
+    """Whether a kept branch needs no review any more: it is gone, it is in HEAD's
+    history, or (a squash merge) HEAD holds what it changed, file for file."""
+    if not _git(repo_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False):
+        return True
+    ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", f"refs/heads/{branch}", "HEAD"],
+                              cwd=str(repo_dir), capture_output=True, check=False)
+    if ancestor.returncode == 0:
+        return True
+    if not paths:
+        return False
+    same = subprocess.run(["git", "diff", "--quiet", "HEAD", f"refs/heads/{branch}", "--", *paths],
+                          cwd=str(repo_dir), capture_output=True, check=False)
+    return same.returncode == 0
+

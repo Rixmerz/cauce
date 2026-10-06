@@ -6,7 +6,9 @@ import contextlib
 import errno
 import json
 import os
+import shlex
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -78,6 +80,11 @@ def cmd_resume(args: argparse.Namespace) -> int:
             print(f"task #{args.id} is {task['status']}; only a task that stopped ({', '.join(RESUMABLE)}) resumes"
                   + ("; rewrite it as a new task" if task["status"] == "replan" else ""), file=sys.stderr)
             return 1
+        if args.unattended and (refusal := _needs_a_person(store, task, args)):
+            print(refusal, file=sys.stderr)
+            return 3
+        if args.detach:
+            return _detach(args)
         options = flow.queued_options(task, orchestrate.Options(use_model_classifier=not args.no_model))
         options.kind = options.kind or task["kind"]
         options.allow_tools = tuple(dict.fromkeys([*options.allow_tools, *(args.allow or ())]))
@@ -105,12 +112,61 @@ def cmd_resume(args: argparse.Namespace) -> int:
                    for a in attempts]
         store.update_task(args.id, options=json.dumps(options.stored()), dispatched=0, cancel_requested=0)
         report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=args.id, history=history)
-        store.mark_reported([args.id], via="cli")
+        if not args.no_report:
+            # Its report is printed to whoever ran it; a detached resume's is not,
+            # and reaches the session as an ending instead.
+            store.mark_reported([args.id], via="cli")
     finally:
         signal.signal(signal.SIGTERM, previous)
         store.close()
     print(report.text())
     return 0 if report.status == "done" else 1
+
+
+def _needs_a_person(store: Store, task: dict, args: argparse.Namespace) -> str | None:
+    """Why a resume nobody approved would only stop again, or None. A model may
+    continue work; it may not grant what a person must: a refused command, or a
+    cell that waits for approval. A rule the person kept since with `cauce allow`
+    counts as granted."""
+    from cauce import allow as allow_rules
+    from cauce import grants
+
+    stop = stops.of(store, task)
+    if task["status"] == "needs_approval" and not args.allow_approval:
+        return (f"task #{task['id']} waits for a cell that needs the person's approval: they resume it "
+                f"(`cauce resume {task['id']} --allow-approval`)")
+    if stop is not None and stop.cause == "permission":
+        needed = list(stop.allow or allow_rules.from_refusals(stop.denied))
+        have = {*grants.granted(task["repo"]), *(args.allow or ())}
+        missing = [rule for rule in needed if rule not in have]
+        if missing:
+            return (f"task #{task['id']} was refused {', '.join(stop.denied[:3]) or 'a command'}: only the person "
+                    f"can allow {', '.join(missing)} (`{stops.next_step(task['id'], stop)}`, or keep it for this "
+                    f"repository with `cauce allow {' '.join(shlex.quote(r) for r in missing)}`)")
+    return None
+
+
+def _detach(args: argparse.Namespace) -> int:
+    """Run the same resume in a process of its own and return at once: its ending
+    reaches the session that sent the task, as every queued task's does."""
+    from cauce import dispatch
+
+    argv = [sys.executable, "-m", "cauce", "resume", str(args.id), "--no-report"]
+    for flag, value in (("--verify", args.verify), ("--budget", args.budget), ("--start", args.start),
+                        ("--max-turns", args.max_turns)):
+        if value is not None:
+            argv += [flag, str(value)]
+    for rule in args.allow or ():
+        argv += ["--allow", rule]
+    argv += [flag for flag, on in (("--allow-approval", args.allow_approval), ("--no-isolate", args.no_isolate),
+                                   ("--no-model", args.no_model)) if on]
+    log = home() / "work" / f"resume-{args.id}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with open(log, "a") as out:
+        subprocess.Popen(argv, cwd=os.getcwd(), env=dispatch.child_env(), stdin=subprocess.DEVNULL,
+                         stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+    print(f"resuming #{args.id} in the background; its ending reaches the session that sent it")
+    return 0
 
 
 def _failure_of(value: str | None) -> Failure | None:
@@ -662,7 +718,11 @@ def cmd_note(args: argparse.Namespace) -> int:
         note = store.get_note(note_id)
     finally:
         store.close()
-    print(f"{'kept' if new else 'already known as'} #{note_id} [{note['topic']}] {note['title']}")
+    if args.json:
+        print(json.dumps({"id": note_id, "new": new, "topic": note["topic"], "title": note["title"]},
+                         ensure_ascii=False))
+    else:
+        print(f"{'kept' if new else 'already known as'} #{note_id} [{note['topic']}] {note['title']}")
     return 0
 
 
@@ -708,6 +768,11 @@ def cmd_notes(args: argparse.Namespace) -> int:
                     print(f"cauce: no note #{args.id} in this project", file=sys.stderr)
                     return 1
                 _print_notes(found, args.json)
+            elif command == "topics" and args.json:
+                counts = store.note_counts(key)
+                print(json.dumps([{"name": name, "description": about,
+                                   "notes": sum(counts.get(name, {}).get(s, 0) for s in notes.LIVE)}
+                                  for name, about in notes.topics(store, key).items()], ensure_ascii=False))
             elif command == "topics":
                 counts = store.note_counts(key)
                 for name, about in notes.topics(store, key).items():
@@ -942,6 +1007,21 @@ def cmd_board(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_endings(args: argparse.Namespace) -> int:
+    """What ended since a session last heard: the same notice the Stop hook and the
+    next prompt deliver. `--peek` reads it without taking it."""
+    store = Store.open()
+    try:
+        text, ids = hooks.endings(store, args.session, claim=None if args.peek else args.via)
+    finally:
+        store.close()
+    if args.json:
+        print(json.dumps({"notice": text, "ids": ids}, ensure_ascii=False))
+    elif text:
+        print(text)
+    return 0
+
+
 def cmd_hook(args: argparse.Namespace) -> int:
     return hooks.main(args.event, sys.stdin, sys.stdout, os.environ)
 
@@ -994,6 +1074,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-turns", type=int,
                    help="turns per attempt; a task that outgrew its turns resumes with 120 by default")
     p.add_argument("--no-model", action="store_true")
+    p.add_argument("--detach", action="store_true", help="run it in the background; its ending reaches the session")
+    p.add_argument("--unattended", action="store_true",
+                   help="refuse (exit 3) when only a person can clear what stopped it: a refusal, an approval")
+    p.add_argument("--no-report", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_resume)
 
     p = sub.add_parser("route", help="show where a task would start and how it would climb")
@@ -1119,6 +1203,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--link", action="append", metavar="ID[:KIND]",
                    help="a note it relates to: depends_on (default), explains, replaces, contradicts, example_of")
     p.add_argument("--repo")
+    p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_note)
 
     p = sub.add_parser("recall", help="what this project's notes say: by topic, by file, one link away")
@@ -1161,7 +1246,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = nsub.add_parser("unlink", help="remove the links between two notes")
     p.add_argument("id", type=int)
     p.add_argument("to", type=int)
-    nsub.add_parser("topics", help="the topics, how many notes each, and topics Haiku proposed")
+    p = nsub.add_parser("topics", help="the topics, how many notes each, and topics Haiku proposed")
+    p.add_argument("--json", action="store_true")
     p = nsub.add_parser("topic", help="add a topic to this project: cauce notes topic add api \"<what it holds>\"")
     p.add_argument("action", choices=["add"])
     p.add_argument("name")
@@ -1236,6 +1322,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dir", help="where to write it (default ~/.local/bin)")
     p.add_argument("--remove", action="store_true", help="take it away again")
     p.set_defaults(func=cmd_link)
+
+    p = sub.add_parser("endings", help="what ended since a session last heard; delivered once, --peek to look")
+    p.add_argument("--session", required=True)
+    p.add_argument("--peek", action="store_true", help="read it without marking it delivered")
+    p.add_argument("--via", default="mod", help=argparse.SUPPRESS)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_endings)
 
     p = sub.add_parser("board", help="needs-you, running and queued counts, for a status line")
     p.add_argument("--json", action="store_true", help="the counts as JSON")

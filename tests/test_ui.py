@@ -498,3 +498,33 @@ def test_a_project_s_notes_by_topic_with_their_links(store: Store, ui):
 
 def rule_title(store, note_id):
     return store.get_note(note_id)["title"]
+
+
+def test_a_branch_that_landed_waits_on_nobody(store: Store, git_repo):
+    """Merged, squash-merged or deleted: no "review branch" card for it."""
+    from .conftest import git
+
+    def done(task_id, branch, changed):
+        t = store.create_task(f"task {task_id}", status="running", source="cauce", cwd=str(git_repo), repo="r")
+        store.add_event(t["id"], "finished", status="done", branch=branch, changed=changed)
+        store.update_task(t["id"], status="done")
+        return t["id"]
+
+    for name, content in (("merged", "a"), ("squashed", "b"), ("pending", "c")):
+        git(git_repo, "checkout", "-qb", f"cauce/{name}")
+        (git_repo / f"{name}.txt").write_text(content)
+        git(git_repo, "add", "-A")
+        git(git_repo, "commit", "-qm", name)
+        git(git_repo, "checkout", "-q", "main")
+    git(git_repo, "merge", "-q", "--ff-only", "cauce/merged")
+    (git_repo / "squashed.txt").write_text("b")
+    git(git_repo, "add", "-A")
+    git(git_repo, "commit", "-qm", "squash")
+    ids = {name: done(i, f"cauce/{name}", [f"{name}.txt"]) for i, name in enumerate(("merged", "squashed", "pending"))}
+    ids["gone"] = done(9, "cauce/gone", ["x.txt"])
+    asks = {c["id"]: c["asks"] for c in api.board(store, {"r"})["needs_you"]}
+    assert asks == {ids["pending"]: "review branch cauce/pending, then merge it"}
+    # a squash-merged file changed again on HEAD is asked for again: unknown is never "landed"
+    (git_repo / "squashed.txt").write_text("changed later")
+    git(git_repo, "commit", "-qam", "later")
+    assert ids["squashed"] in {c["id"] for c in api.board(store, {"r"})["needs_you"]}

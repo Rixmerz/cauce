@@ -10,3 +10,7 @@ dist/
 .coverage.*
 # livespec's index of this repository (cauce adopts livespec; the index is local state)
 .mcp-docs/
+
+# Laid by Claude Code when it loads the mod from this folder
+.claude-plugin/types/
+node_modules/

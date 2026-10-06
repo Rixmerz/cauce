@@ -308,6 +308,30 @@ A turn that delegated to a subagent is not done while the subagent still runs,
 including one started in the background. A cell a person pinned (`--start`)
 never counts as evidence for where the router should start.
 
+### Inside Claude Code: the mod
+
+On a Claude Code that loads mods (function hooks), the plugin also loads
+`hooks/cauce.tsx`, a thin layer over the same core. The classic hooks stay, so
+everything above works without it.
+
+- **Tools the model calls by name**: `recall`, `note`, `queue`, `tasks` and
+  `resume` (as `mcp__cauce__<name>`). There is no `cauce` on PATH to find, no
+  permission rule per command, and `note` takes only the project's topics.
+  `queue` returns at once: the ending comes back on its own. `resume`
+  continues work in the background, and refuses what only a person may clear:
+  a refused command, or a cell that needs approval.
+- **The session wakes when queued work ends.** When a task the session queued
+  ends while it is idle, cauce starts a turn with the notice, and the session
+  tells you and goes on. Work that ends during a turn is still delivered by
+  the Stop hook. Delivery is claimed atomically, so an ending is never handed
+  over twice. Turn this off with the `wake` plugin setting.
+- **A status entry** (`cauce ⚠2 ▶1 ⏸0`), and **a band above the prompt** for
+  what waits on you. It has a button that continues each one, with exactly
+  the rule cauce suggests: *Allow & resume*, *Approve & resume*, *Resume*.
+  The press is yours; the model has no such button.
+- **`/cauce`** opens a pane with the board: cancel what runs, and confirm or
+  drop the notes whose code changed.
+
 ### The UI
 
 `cauce ui` (or `/cauce:ui` in a session) serves a local page (`http://127.0.0.1:8790/`, `--open` opens it)

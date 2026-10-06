@@ -189,3 +189,32 @@ def test_notes_never_reach_the_problem_search_and_an_edit_is_searchable(store):
     assert store.notes("r", ids=[]) == [] and store.note_links([]) == [] and store.note_anchors([]) == []
     assert store.notes_at("r", []) == [] and store.search_notes("r", "") == []
     assert store.note_projects() == ["r"]
+
+
+def test_two_deliverers_at_once_never_hand_over_the_same_ending(store):
+    """The Stop hook and a mod's poll can run at the same moment at a turn's end."""
+    import threading
+
+    for i in range(5):
+        t = store.create_task(f"t{i}", status="running", source="cauce", session_id="s")
+        store.add_event(t["id"], "finished", status="done")
+        store.update_task(t["id"], status="done")
+    got: list[int] = []
+    lock = threading.Lock()
+
+    def deliver(via):
+        mine = Store(store.path)
+        try:
+            ids = [t["id"] for t in mine.claim_unreported("s", via=via)]
+        finally:
+            mine.close()
+        with lock:
+            got.extend(ids)
+
+    threads = [threading.Thread(target=deliver, args=(f"v{i}",)) for i in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert sorted(got) == [1, 2, 3, 4, 5]  # each once, whoever won
+    assert store.claim_unreported("s", via="late") == []

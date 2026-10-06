@@ -556,3 +556,96 @@ def test_a_report_the_caller_read_is_not_reported_again(capsys, git_repo, monkey
     store = Store.open()
     assert store.unreported("s") == []
     store.close()
+
+
+def test_an_unattended_resume_never_grants_what_only_a_person_can(capsys, git_repo, monkeypatch):
+    """A model may continue work; it may not clear a refusal or an approval."""
+    from cauce import grants, stops
+
+    ran = []
+    monkeypatch.setattr(orchestrate, "run", lambda *a, **kw: ran.append(kw["task_id"]) or orchestrate.Report(
+        kw["task_id"], "done", None))  # type: ignore[arg-type]
+    monkeypatch.setattr(orchestrate.Report, "text", lambda self: "ok")
+    store = Store.open()
+    refused = store.create_task("build it", status="running", source="cauce", repo="r", cwd=str(git_repo))
+    stops.record(store, refused["id"], stops.Stop("permission", "refused", denied=("Bash(npm run build)",),
+                                                  allow=("Bash(npm run build:*)",)))
+    waiting = store.create_task("plan it", status="needs_approval", source="cauce", repo="r", cwd=str(git_repo))
+    outgrew = store.create_task("big", status="running", source="cauce", repo="r", cwd=str(git_repo))
+    stops.record(store, outgrew["id"], stops.Stop("turns", "outgrew"))
+    store.close()
+
+    # 1. refused, nothing granted: exit 3, the rule named, nothing ran
+    assert cli.main(["resume", str(refused["id"]), "--unattended"]) == 3
+    err = capsys.readouterr().err
+    assert "only the person can allow Bash(npm run build:*)" in err and "cauce allow 'Bash(npm run build:*)'" in err
+    # 2. a rule passed by hand is the person's, as is one they kept for the repository
+    assert cli.main(["resume", str(refused["id"]), "--unattended", "--allow", "Bash(npm run build:*)"]) == 0
+    grants.grant("r", ["Bash(npm run build:*)"])
+    assert cli.main(["resume", str(refused["id"]), "--unattended"]) == 0
+    # 3. a cell waiting for approval stays waiting
+    assert cli.main(["resume", str(waiting["id"]), "--unattended"]) == 3
+    assert "needs the person's approval" in capsys.readouterr().err
+    # 4. work that only outgrew its turns goes on
+    assert cli.main(["resume", str(outgrew["id"]), "--unattended"]) == 0
+    assert ran == [refused["id"], refused["id"], outgrew["id"]]
+
+
+def test_a_detached_resume_returns_at_once_and_its_ending_is_left_for_the_session(capsys, git_repo, monkeypatch):
+    from cauce import stops
+
+    store = Store.open()
+    big = store.create_task("big", status="running", source="cauce", repo="r", cwd=str(git_repo), session_id="s")
+    stops.record(store, big["id"], stops.Stop("turns", "outgrew"))
+    store.close()
+    started = []
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda argv, **kw: started.append((argv, kw)))
+    assert cli.main(["resume", str(big["id"]), "--detach", "--max-turns", "150", "--allow", "Bash(ls:*)"]) == 0
+    argv, kw = started[0]
+    assert argv[1:] == ["-m", "cauce", "resume", str(big["id"]), "--no-report", "--max-turns", "150",
+                        "--allow", "Bash(ls:*)"]
+    assert kw["start_new_session"] and "CAUCE_SESSION_ID" not in kw["env"]
+    assert "in the background" in capsys.readouterr().out
+    # a detached resume does not take the ending its session is owed
+    monkeypatch.setattr(orchestrate, "run", lambda *a, **kw: orchestrate.Report(kw["task_id"], "done", None))
+    monkeypatch.setattr(orchestrate.Report, "text", lambda self: "ok")
+    assert cli.main(["resume", str(big["id"]), "--no-report"]) == 0
+    store = Store.open()
+    assert store.last_event(big["id"], "reported") is None
+    store.close()
+
+
+def test_endings_are_peeked_or_delivered_once_and_only_to_their_session(capsys):
+    store = Store.open()
+    mine = store.create_task("write docs", status="running", source="cauce", session_id="s1", final_cell="haiku")
+    store.add_event(mine["id"], "finished", status="done", final_cell="haiku")
+    store.update_task(mine["id"], status="done", result="wrote them")
+    other = store.create_task("other session's", status="running", source="cauce", session_id="s2")
+    store.add_event(other["id"], "finished", status="failed")
+    store.update_task(other["id"], status="failed")
+    store.create_task("still running", status="running", source="cauce", session_id="s1")
+    store.close()
+
+    assert cli.main(["endings", "--session", "s1", "--peek", "--json"]) == 0
+    peeked = json.loads(capsys.readouterr().out)
+    assert peeked["ids"] == [mine["id"]] and "#1 [done] write docs" in peeked["notice"]
+    assert "still running" not in peeked["notice"] and "other session" not in peeked["notice"]
+    assert cli.main(["endings", "--session", "s1", "--json"]) == 0  # a peek took nothing
+    assert json.loads(capsys.readouterr().out)["ids"] == [mine["id"]]
+    assert cli.main(["endings", "--session", "s1", "--json"]) == 0  # delivered once
+    assert json.loads(capsys.readouterr().out) == {"notice": None, "ids": []}
+    assert cli.main(["endings", "--session", "nobody"]) == 0 and capsys.readouterr().out == ""
+    store = Store.open()
+    assert store.last_event(mine["id"], "reported")["data"]["via"] == "mod"
+    store.close()
+
+
+def test_note_and_topics_answer_in_json(git_repo, capsys, monkeypatch):
+    monkeypatch.chdir(git_repo)
+    assert cli.main(["note", "Invoices are numbered per country", "--topic", "business", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"id": 1, "new": True, "topic": "business",
+                                                   "title": "Invoices are numbered per country"}
+    assert cli.main(["notes", "topics", "--json"]) == 0
+    topics = json.loads(capsys.readouterr().out)
+    assert topics[0] == {"name": "business", "description": topics[0]["description"], "notes": 1}
+    assert [t["name"] for t in topics] == ["business", "code", "decisions", "conventions", "environment"]

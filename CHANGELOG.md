@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-06
+
+### Added
+
+- **cauce as a Claude Code mod.** The plugin also loads `hooks/cauce.tsx`, a
+  module of function hooks over the same core. The classic hooks stay, so
+  nothing depends on it.
+  - **Tools the model calls by name**: `recall`, `note`, `queue`, `tasks` and
+    `resume`. They need no PATH and no permission rule (none was asked in
+    default mode), and `note` takes only the project's topics.
+    - `resume` runs with `--unattended`. It refuses what only a person may
+      clear, a refused command or an approval, and says so. No model input
+      reaches `--allow`.
+  - **The session wakes when work it queued ends.** When a queued task ends
+    while the session is idle, cauce starts a turn with the notice, and the
+    session acts on it without waiting for the next message. Work that ends
+    during a turn is still delivered by the Stop hook. The `wake` setting
+    turns it off.
+  - **A status entry, a band above the prompt and a `/cauce` pane.**
+    - The band lists what waits on you, with a button that continues it with
+      the rule cauce suggests: *Allow & resume*, *Approve & resume* or
+      *Resume*.
+    - The pane cancels running work and confirms or drops notes to review.
+- `cauce endings --session <id> [--peek] [--json]`: what ended since a
+  session last heard.
+- `cauce resume --detach`: run a resume in the background; its ending reaches
+  the session that sent the task.
+- `cauce resume --unattended`: refuse a resume that only a person can clear.
+- `cauce note --json` and `cauce notes topics --json`.
+
+### Fixed
+
+- **An ending could be delivered twice.** The Stop hook and the next prompt
+  each read and then marked it, so two at once could both deliver it. Now the
+  ending is claimed in one transaction.
+- **The board asked to review branches that had already landed.** A merged,
+  squash-merged or deleted branch no longer waits on anyone.
+
 ## [0.5.0] - 2026-10-06
 
 ### Added
