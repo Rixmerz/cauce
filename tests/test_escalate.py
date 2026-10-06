@@ -97,3 +97,47 @@ def test_a_refused_command_blocks_at_once_and_names_what_to_allow():
     assert d.move is Move.BLOCKED and not d.continues
     assert "Bash(npm run build), Bash(node server.js), Bash(ls) and 2 more" in d.reason and "--allow" in d.reason
     assert "a tool call" in decide(LADDERS["implement"], [Attempt(Cell("haiku"), 30, False, Failure.PERMISSION)]).reason
+
+
+def test_every_move_says_what_the_attempt_ended_with_the_rule_and_where_it_goes():
+    d = decide(IMPLEMENT, [fail("sonnet/medium", Failure.CODE_BUG)])
+    assert d.axis == "effort" and d.skipped == ()
+    assert d.because[0] == ("attempt 1 at sonnet/medium ended code_bug: the work happened and left a bug or a "
+                            "missed edge case")
+    assert "shallow" in d.because[1] and d.because[-1] == "next: sonnet/high (the floor for work that needs judgment)"
+
+    d = decide(IMPLEMENT, [fail("sonnet/medium", Failure.APPROACH)])
+    assert d.axis == "model" and "the bet that already lost" in d.because[1]
+    assert d.because[-1] == "next: opus/high (the floor for work that needs judgment)"
+    assert [s.split(":")[0] for s in d.skipped] == ["sonnet/high", "sonnet/xhigh"]
+
+    pair = [fail("sonnet/medium", Failure.CODE_BUG, "the parser still accepts unicode digits"),
+            fail("sonnet/high", Failure.CODE_BUG, "the parser still accepts unicode digits.")]
+    d = decide(IMPLEMENT, pair)
+    assert "attempts 1 (sonnet/medium) and 2 (sonnet/high) failed the same way (code_bug)" in d.because[1]
+    assert d.skipped == ("sonnet/xhigh: more effort from sonnet, which is not what failed",)
+
+    d = decide(IMPLEMENT, [fail("sonnet/xhigh", Failure.INCONCLUSIVE)])
+    assert "sonnet/xhigh was sonnet's last cell" in d.because[2] and d.because[-1].startswith("next: opus/high")
+
+
+@pytest.mark.parametrize(
+    ("ladder", "attempts", "axis", "phrase"),
+    [
+        (IMPLEMENT, [fail("sonnet/medium", Failure.ENVIRONMENT)], "retry", "a retry is not an escalation"),
+        (IMPLEMENT, [fail("sonnet/medium", Failure.ENVIRONMENT)] * 2, "stop", "failed to run 2 times"),
+        (IMPLEMENT, [fail("sonnet/medium", Failure.TURNS_EXHAUSTED)], "turns", "60 turns instead of 30"),
+        (IMPLEMENT, [fail("sonnet/medium", Failure.TURNS_EXHAUSTED)] * 2, "stop", "already raised once"),
+        (IMPLEMENT, [fail("sonnet/medium", Failure.TURNS_EXHAUSTED, turns=200)], "stop", "200 turns is the cap"),
+        (IMPLEMENT, [fail("sonnet/medium", Failure.SPEC_BUG)], "stop", "rewritten or split"),
+        (IMPLEMENT, [Attempt(Cell("sonnet", "medium"), 30, False, Failure.PERMISSION, "", ("Bash(make)",))],
+         "stop", "refused: Bash(make)"),
+        (IMPLEMENT, [fail("opus/high", Failure.CODE_BUG)], "stop", "the top of this ladder"),
+        (IMPLEMENT, [fail("opus/high", Failure.APPROACH)], "stop", "no model above opus"),
+        (PLAN, [fail("opus/max", Failure.CODE_BUG)], "stop", "resume with --allow-approval"),
+    ],
+)
+def test_moves_that_stop_or_stay_explain_themselves(ladder, attempts, axis, phrase):
+    d = decide(ladder, attempts)
+    assert d.axis == axis and d.because[0].startswith(f"attempt {len(attempts)} at ")
+    assert any(phrase in line for line in d.because), d.because

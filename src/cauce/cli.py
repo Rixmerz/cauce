@@ -211,6 +211,7 @@ def cmd_show(args: argparse.Namespace) -> int:
         print(f"repo {task['repo']}  kind {task['kind']} ({task['class_source']}: {task['class_reason']})")
         print(f"cost ${task['cost_usd']:.2f}  start {task['start_cell']}  final {task['final_cell']}")
         refused = store.denials(args.id)
+        climbed = {e["data"]["seq"]: e["data"] for e in store.events_of(args.id, "moved") if "seq" in e["data"]}
         for a in store.attempts(args.id):
             verdict = "pass" if a["passed"] else (a["failure"] or "fail")
             print(f"  attempt {a['seq']} {a['cell']} ({a['turns']} turns, ${a['cost_usd']:.2f}) {verdict}"
@@ -219,6 +220,14 @@ def cmd_show(args: argparse.Namespace) -> int:
                 print(f"    {a['summary'][:300]}")
             if refused.get(a["seq"]):
                 print(f"    refused: {', '.join(refused[a['seq']])}")
+            move = climbed.get(a["seq"])
+            if move:
+                if move.get("to_cell"):
+                    print(f"    {move.get('axis')}: {move.get('from_cell')} → {move['to_cell']}")
+                for line in move.get("because") or ():
+                    print(f"      · {line}")
+                for line in move.get("skipped") or ():
+                    print(f"      · skipped {line}")
         stop = stops.view(store, task)
         if stop:
             print(f"stopped by {stop['who']}: {stop['reason']}")

@@ -272,10 +272,14 @@ repository's cards at once.
   Code keeps it (read from `~/.claude/tasks/<session>/`, never written), the
   work it gave cauce, and its recent turns.
 - **Task** — why it stopped (the full reason, the refused rules, the last
-  worker's own account, the command), the attempt timeline with every move
-  and its reason, what each attempt was refused and the evidence of each
+  worker's own account, the command), the ladder with each attempt on the cell
+  it ran at, the attempt timeline with every move as from → to, the dial it
+  turned and the evidence for it (the failure, the rule, the cells skipped), what each attempt was refused and the evidence of each
   failure, the plan, the coupled messages, the branch and the merge command.
-- **Spend**, **Routing**, **Memory**, **Habits** — the same numbers as the CLI.
+- **Routing** — per kind, where tasks started and passed, and how each ladder
+  was really climbed: every move with the failure behind it and how often the
+  next attempt passed. The evidence for tuning a ladder.
+- **Spend**, **Memory**, **Habits** — the same numbers as the CLI.
 
 Work is never typed into the page: it is asked for in a session, where it has
 the session's context and its record.

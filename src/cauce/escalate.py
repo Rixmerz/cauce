@@ -28,7 +28,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-from cauce.matrix import Cell
+from cauce.matrix import EFFORT_PURPOSE, MODELS, Cell
 from cauce.text import reads_alike
 
 
@@ -44,6 +44,20 @@ class Failure(StrEnum):
     TURNS_EXHAUSTED = "turns_exhausted"
     BUDGET_EXHAUSTED = "budget_exhausted"  # the attempt's own spending cap
 
+
+#: What each failure says about where the problem lives, as a move explains itself.
+MEANING = {
+    Failure.CODE_BUG: "the work happened and left a bug or a missed edge case",
+    Failure.TEST_BUG: "the work happened, but the test it relied on was wrong",
+    Failure.INCONCLUSIVE: "no verdict, or a pass without evidence",
+    Failure.APPROACH: "the work went the wrong way: the task was misunderstood",
+    Failure.SPEC_BUG: "the task as written cannot be done",
+    Failure.ARCHITECTURE_BUG: "the design the task assumes is wrong",
+    Failure.ENVIRONMENT: "the work never ran: a timeout, a missing tool, a transport error",
+    Failure.PERMISSION: "a tool call the worker needed was refused by the permission settings",
+    Failure.TURNS_EXHAUSTED: "the worker used all its turns before a verdict",
+    Failure.BUDGET_EXHAUSTED: "the attempt reached its own spending cap before a verdict",
+}
 
 EFFORT_AXIS = frozenset({Failure.CODE_BUG, Failure.TEST_BUG, Failure.INCONCLUSIVE, Failure.BUDGET_EXHAUSTED})
 REPLAN = frozenset({Failure.SPEC_BUG, Failure.ARCHITECTURE_BUG})
@@ -62,6 +76,8 @@ class Move(StrEnum):
 
 #: The moves after which another attempt runs.
 CONTINUES = frozenset({Move.RETRY, Move.MORE_EFFORT, Move.NEXT_MODEL, Move.MORE_TURNS})
+#: Which dial a move turns; every other move stops the run.
+AXIS = {Move.RETRY: "retry", Move.MORE_EFFORT: "effort", Move.NEXT_MODEL: "model", Move.MORE_TURNS: "turns"}
 
 MAX_ENV_RETRIES = 1
 MAX_TURNS_CEILING = 200
@@ -84,10 +100,19 @@ class Decision:
     cell: Cell | None = None
     max_turns: int = 0
     reason: str = ""
+    #: The chain of evidence behind the move, in order: what the attempt ended
+    #: with, what that means, the rule it was read against, where that leads.
+    because: tuple[str, ...] = ()
+    #: Cells of the ladder the move went past, each with why.
+    skipped: tuple[str, ...] = ()
 
     @property
     def continues(self) -> bool:
         return self.move in CONTINUES
+
+    @property
+    def axis(self) -> str:
+        return AXIS.get(self.move, "stop")
 
 
 def repeated_answer(attempts: Sequence[Attempt]) -> bool:
@@ -96,11 +121,18 @@ def repeated_answer(attempts: Sequence[Attempt]) -> bool:
     Same model and effort agreeing with itself is determinism, not a finding,
     so only a pair from different cells counts.
     """
-    failed = [a for a in attempts if not a.passed]
+    return _repeated_pair(attempts) is not None
+
+
+def _repeated_pair(attempts: Sequence[Attempt]) -> tuple[int, int] | None:
+    """The 1-based numbers of the two failures that said the same thing."""
+    failed = [(i, a) for i, a in enumerate(attempts, 1) if not a.passed]
     if len(failed) < 2:
-        return False
-    a, b = failed[-2], failed[-1]
-    return a.cell != b.cell and a.failure == b.failure and reads_alike(a.summary, b.summary)
+        return None
+    (i, a), (j, b) = failed[-2], failed[-1]
+    if a.cell != b.cell and a.failure == b.failure and reads_alike(a.summary, b.summary):
+        return i, j
+    return None
 
 
 def _position(ladder: Sequence[Cell], cell: Cell) -> int:
@@ -128,61 +160,114 @@ def _next_model(ladder: Sequence[Cell], cell: Cell) -> Cell | None:
     return None
 
 
+def _skipped(ladder: Sequence[Cell], cell: Cell, target: Cell) -> tuple[str, ...]:
+    """The cells between where the work was and where the move goes, all of the
+    same model: more effort from a model whose approach was the problem."""
+    if target not in ladder:
+        return ()
+    between = ladder[_position(ladder, cell) + 1: ladder.index(target)]
+    return tuple(f"{c.label}: more effort from {c.model}, which is not what failed" for c in between
+                 if c.model == cell.model)
+
+
+def _arrives(target: Cell) -> str:
+    purpose = f" ({EFFORT_PURPOSE[target.effort]})" if target.effort else ""
+    return f"next: {target.label}{purpose}"
+
+
 def decide(
     ladder: Sequence[Cell],
     attempts: Sequence[Attempt],
     *,
     allow_approval: bool = False,
 ) -> Decision:
-    """The move after the last attempt."""
+    """The move after the last attempt, with the evidence it rests on."""
     if not attempts:
         raise ValueError("decide() needs at least one attempt")
     last = attempts[-1]
     if last.passed:
         raise ValueError("the last attempt passed; there is nothing to decide")
     failure = last.failure or Failure.INCONCLUSIVE
+    seen = f"attempt {len(attempts)} at {last.cell.label} ended {failure}: {MEANING[failure]}"
 
     if failure in REPLAN:
-        return Decision(Move.REPLAN, reason=f"{failure}: the task, not the work, is wrong")
+        return Decision(Move.REPLAN, reason=f"{failure}: the task, not the work, is wrong",
+                        because=(seen, "no model fixes a task that should not exist: it is rewritten or split, "
+                                       "not climbed"))
 
     if failure is Failure.PERMISSION:
         more = len(last.denied) - 3
         refused = (", ".join(last.denied[:3]) + (f" and {more} more" if more > 0 else "")) or "a tool call"
-        return Decision(Move.BLOCKED, reason=f"the worker was refused {refused}; allow it (`--allow`), then resume")
+        return Decision(Move.BLOCKED, reason=f"the worker was refused {refused}; allow it (`--allow`), then resume",
+                        because=(seen, f"refused: {', '.join(last.denied) or 'a tool call'}",
+                                 "a refusal is a setting: a retry, or a stronger model, gets the same refusal"))
 
     if failure is Failure.ENVIRONMENT:
         retries = sum(1 for a in attempts if a.failure is Failure.ENVIRONMENT)
         if retries <= MAX_ENV_RETRIES:
-            return Decision(Move.RETRY, last.cell, last.max_turns, "the work never ran; same cell")
-        return Decision(Move.BLOCKED, reason="the environment failed twice; fix it, then resume")
+            return Decision(Move.RETRY, last.cell, last.max_turns, "the work never ran; same cell",
+                            because=(seen, "a retry is not an escalation: nothing was tried, so nothing says a "
+                                           "stronger cell would do better; the same cell, once",
+                                     f"next: {last.cell.label} again"))
+        return Decision(Move.BLOCKED, reason="the environment failed twice; fix it, then resume",
+                        because=(seen, f"it failed to run {retries} times: past the one retry, a person has to "
+                                       "look at the environment"))
 
     if failure is Failure.TURNS_EXHAUSTED:
         raised = sum(1 for a in attempts if a.failure is Failure.TURNS_EXHAUSTED)
         if raised <= 1 and last.max_turns < MAX_TURNS_CEILING:
             turns = min(last.max_turns * 2, MAX_TURNS_CEILING)
-            return Decision(Move.MORE_TURNS, last.cell, turns, f"hit {last.max_turns} turns; raised to {turns}")
-        return Decision(Move.REPLAN, reason="the task does not fit even the raised turn budget; split it")
+            return Decision(Move.MORE_TURNS, last.cell, turns, f"hit {last.max_turns} turns; raised to {turns}",
+                            because=(seen, f"a turn ceiling is not a fault of the model or its effort: the same "
+                                           f"cell gets {turns} turns instead of {last.max_turns}, once "
+                                           f"(the cap is {MAX_TURNS_CEILING})"))
+        why = "the turns were already raised once" if raised > 1 else f"{last.max_turns} turns is the cap"
+        return Decision(Move.REPLAN, reason="the task does not fit even the raised turn budget; split it",
+                        because=(seen, f"{why}: the task is bigger than one worker, so it is split, not climbed"))
 
-    if repeated_answer(attempts) or failure is Failure.APPROACH:
-        why = "two cells gave the same answer" if failure is not Failure.APPROACH else "the approach was wrong"
+    pair = _repeated_pair(attempts)
+    if pair or failure is Failure.APPROACH:
+        if failure is Failure.APPROACH:
+            why = "the approach was wrong"
+            rule = ("the worker went the wrong way: more thinking from the same model is the bet that already "
+                    "lost, so a different model starts over")
+        else:
+            why = "two cells gave the same answer"
+            first, second = attempts[pair[0] - 1], attempts[pair[1] - 1]
+            rule = (f"attempts {pair[0]} ({first.cell.label}) and {pair[1]} ({second.cell.label}) failed the "
+                    f"same way ({failure}) and their summaries read alike: two cells agreeing is a settled bet, "
+                    "so more effort would give the same answer")
         target = _next_model(ladder, last.cell)
         if target is None:
-            return Decision(Move.REPLAN, reason=f"{why}, and there is no stronger model on this ladder")
-        return _gated(Move.NEXT_MODEL, target, last.max_turns, why, allow_approval)
+            return Decision(Move.REPLAN, reason=f"{why}, and there is no stronger model on this ladder",
+                            because=(seen, rule, f"no model above {last.cell.model} on this ladder: the task "
+                                                 "is rewritten instead"))
+        return _gated(Move.NEXT_MODEL, target, last.max_turns, why, allow_approval,
+                      (seen, rule, _arrives(target)), _skipped(ladder, last.cell, target))
 
     # Effort axis: the work was shallow. The next effort of the same model,
     # and only when this model has run out does the next one start.
+    shallow = "the work happened and was shallow: the same model, more thorough"
     target = _next_effort(ladder, last.cell)
     if target is not None:
-        return Decision(Move.MORE_EFFORT, target, last.max_turns, f"{failure}: same model, more thorough")
+        return Decision(Move.MORE_EFFORT, target, last.max_turns, f"{failure}: same model, more thorough",
+                        because=(seen, shallow, _arrives(target)))
     target = _next_model(ladder, last.cell)
     if target is None:
-        return Decision(Move.EXHAUSTED, reason="the top of the ladder failed too")
+        return Decision(Move.EXHAUSTED, reason="the top of the ladder failed too",
+                        because=(seen, f"{last.cell.label} is the top of this ladder: there is nothing left "
+                                       "to climb to"))
     why = f"{failure}, and {last.cell.label} was this model's last cell"
-    return _gated(Move.NEXT_MODEL, target, last.max_turns, why, allow_approval)
+    return _gated(Move.NEXT_MODEL, target, last.max_turns, why, allow_approval,
+                  (seen, shallow, f"{last.cell.label} was {last.cell.model}'s last cell on this ladder, so the "
+                                  "next model takes over", _arrives(target)))
 
 
-def _gated(move: Move, cell: Cell, turns: int, why: str, allow_approval: bool) -> Decision:
+def _gated(move: Move, cell: Cell, turns: int, why: str, allow_approval: bool,
+           because: tuple[str, ...] = (), skipped: tuple[str, ...] = ()) -> Decision:
     if cell.needs_approval and not allow_approval:
-        return Decision(Move.NEEDS_APPROVAL, cell, turns, f"{why}; {cell.label} needs your approval")
-    return Decision(move, cell, turns, why)
+        return Decision(Move.NEEDS_APPROVAL, cell, turns, f"{why}; {cell.label} needs your approval",
+                        because=(*because, f"{MODELS[cell.model].alias} runs only when a person says so: "
+                                           "resume with --allow-approval, or tag the task #fable"),
+                        skipped=skipped)
+    return Decision(move, cell, turns, why, because=because, skipped=skipped)

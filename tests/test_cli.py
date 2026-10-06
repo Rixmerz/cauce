@@ -60,6 +60,15 @@ def test_tasks_show_and_memory(capsys, git_repo):
     assert "refused: Bash(node a.js)" in out
     assert "stopped by your permission settings: the worker was refused" in out
     assert f"cauce resume {blocked['id']} --allow 'Bash(node a.js)'" in out
+    store = Store.open()
+    store.set_move(blocked["id"], 1, "more_effort", "code_bug: same model, more thorough")
+    store.add_event(blocked["id"], "moved", seq=1, from_cell="sonnet/medium", to_cell="sonnet/high", axis="effort",
+                    because=["attempt 1 ended code_bug", "next: sonnet/high"], skipped=["sonnet/xhigh: why"])
+    store.close()
+    assert cli.main(["show", str(blocked["id"])]) == 0
+    out = capsys.readouterr().out
+    assert "effort: sonnet/medium → sonnet/high" in out and "· next: sonnet/high" in out
+    assert "· skipped sonnet/xhigh: why" in out
 
     assert cli.main(["memory", "record", "--problem", "slow startup", "--fix", "lazy import pandas",
                      "--outcome", "failed", "--why", "still slow", "--repo", str(git_repo)]) == 0

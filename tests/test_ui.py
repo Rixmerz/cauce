@@ -405,3 +405,39 @@ def test_who_holds_a_taken_port(handler, expected):
         srv.shutdown()
         srv.server_close()
     assert server.occupant(srv.server_address[1]) is None  # nobody answers now
+
+
+def test_each_move_says_where_it_went_and_why_and_routing_adds_them_up(store: Store, git_repo):
+    from cauce.escalate import Failure
+    from cauce.launch import WorkerResult
+    from cauce.orchestrate import run
+
+    from .test_orchestrate import Script, bad, kind
+
+    for _ in range(2):
+        report = run("fix the parser", git_repo, store, registry={}, classifier=kind("implement"),
+                     launcher=Script(bad(Failure.CODE_BUG, "missed it"), WorkerResult(True, None, "ok", "1 passed")))
+    d = api.task_detail(store, report.task_id)
+    c = d["attempts"][0]["climb"]
+    assert (c["from"], c["to"], c["axis"], c["trigger"]) == ("sonnet/medium", "sonnet/high", "effort", "code_bug")
+    assert c["because"][0].startswith("attempt 1 at sonnet/medium ended code_bug") and c["turns_to"] == 30
+    assert d["attempts"][1]["climb"] is None
+    assert api.flow_of(store, report.task_id)["steps"][0]["climb"]["to"] == "sonnet/high"
+
+    # a run from before moves kept their evidence: what its attempts say
+    old = store.create_task("old", status="failed", source="cauce", kind="implement")
+    store.add_event(old["id"], "planned", kind="implement", ladder=["sonnet/medium"], start="sonnet/medium")
+    store.add_attempt(old["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="approach")
+    store.set_move(old["id"], 1, "next_model", "the approach was wrong")
+    store.add_attempt(old["id"], cell="opus/high", max_turns=30, passed=0, failure="code_bug")
+    store.set_move(old["id"], 2, "exhausted", "the top of the ladder failed too")
+    steps = api.flow_of(store, old["id"])["steps"]
+    assert steps[0]["climb"] == {"from": "sonnet/medium", "to": "opus/high", "axis": "model", "trigger": "approach",
+                                 "because": ["the approach was wrong"], "skipped": [], "recovered": True}
+    assert steps[1]["climb"]["to"] is None and steps[1]["climb"]["axis"] == "stop"
+
+    implement = next(r for r in api.routing(store) if r["kind"] == "implement")
+    assert implement["climbs"][0] == {"from": "sonnet/medium", "move": "more_effort", "to": "sonnet/high",
+                                      "after": "code_bug", "times": 2, "then_passed": 2}
+    stopped = next(c for c in implement["climbs"] if c["move"] == "exhausted")
+    assert stopped["to"] is None and stopped["then_passed"] is None

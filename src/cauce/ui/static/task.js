@@ -10,6 +10,40 @@ function close() {
 }
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
 
+const DIAL = { effort: "more effort, same model", model: "a different model", turns: "more turns, same cell",
+  retry: "the same cell again", stop: "stopped" };
+
+// The move after a failed attempt: where it went, along which dial, and the evidence, in order.
+function climb(c, move) {
+  if (!c) return null;
+  const head = c.to
+    ? [h("b", {}, `${DIAL[c.axis] || c.axis}: `), h("span", { class: "chip" }, c.from), " → ", h("span", { class: "chip" }, c.to)]
+    : [h("b", {}, `${move}: `), "no further attempt"];
+  return h("div", { class: `climb climb-${c.axis}` },
+    h("div", { class: "row" }, ...head,
+      c.turns_to && c.turns_to !== c.turns_from ? h("span", { class: "meta" }, `turns ${c.turns_from} → ${c.turns_to}`) : null,
+      c.budget_left !== undefined && c.budget_left !== null ? h("span", { class: "meta" }, `$${Number(c.budget_left).toFixed(2)} left`) : null),
+    c.because.length ? h("ol", {}, c.because.map((line) => h("li", {}, line))) : null,
+    c.skipped.length ? h("div", { class: "meta" }, "skipped: ", c.skipped.join("; ")) : null,
+    c.recovered ? h("div", { class: "meta" }, "from before cauce kept the evidence of each move: the reason is all it recorded") : null);
+}
+
+// The ladder, cheapest first, with each attempt where it ran: the shape of the climb at a glance.
+function ladderPath(plan, attempts) {
+  const ran = new Map();
+  for (const a of attempts) {
+    if (!ran.has(a.cell)) ran.set(a.cell, []);
+    ran.get(a.cell).push(a);
+  }
+  const cells = [...(plan.ladder || [])];
+  for (const cell of ran.keys()) if (!cells.includes(cell)) cells.push(cell);  // pinned or learned off the ladder
+  return h("div", { class: "ladder" }, cells.map((cell, i) => [
+    i ? h("span", { class: "rung-gap" }, "→") : null,
+    h("span", { class: ["rung", ran.has(cell) ? (ran.get(cell).some((a) => a.passed) ? "rung-pass" : "rung-fail") : "",
+      cell === plan.start ? "rung-start" : ""].join(" "), title: cell === plan.start ? "where it started" : "" },
+      cell, ...(ran.get(cell) || []).map((a) => h("sup", {}, ` #${a.seq}`)))]));
+}
+
 function attempt(a) {
   return h("li", { class: a.passed ? "pass" : "fail" },
     h("div", { class: "row" },
@@ -18,7 +52,7 @@ function attempt(a) {
       h("span", {}, `${a.turns} turns`), h("span", {}, usd(a.cost_usd))),
     a.summary ? h("div", {}, a.summary) : null,
     a.denied.length ? h("div", { class: "refused" }, `refused: ${a.denied.join(", ")}`) : null,
-    a.move ? h("div", { class: "move" }, `→ ${a.move}: ${a.move_reason}`) : null,
+    climb(a.climb, a.move),
     !a.passed && a.evidence ? h("details", {}, h("summary", {}, "evidence"), h("pre", {}, a.evidence)) : null,
     a.changed_paths.length ? h("div", { class: "meta" }, `changed: ${a.changed_paths.join(", ")}`) : null,
     a.capabilities.length ? h("div", { class: "meta" }, `capabilities: ${a.capabilities.join(", ")}`) : null);
@@ -52,7 +86,8 @@ export async function openTask(id, quiet = false) {
       h("div", {}, t.parallel ? "May run beside the work going in this repository: " : "Waits for the work ahead of it: ",
         t.parallel_reason)) : null,
     d.plan ? h("div", { class: "section" }, h("h2", {}, "Plan"),
-      h("div", {}, `${(d.plan.ladder || []).join(" → ")}  ·  start ${d.plan.start}`),
+      ladderPath(d.plan, d.attempts),
+      h("div", { class: "meta" }, `started at ${d.plan.start}, because:`),
       h("ul", {}, (d.plan.reasons || []).map((r) => h("li", {}, r))),
       (d.plan.neighbours || []).map((n) => h("div", { class: "meta" }, n))) : null,
     d.attempts.length ? h("div", { class: "section" }, h("h2", {}, "Attempts"), h("ul", { class: "timeline" }, d.attempts.map(attempt))) : null,

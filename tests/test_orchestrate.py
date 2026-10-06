@@ -86,7 +86,12 @@ def test_shallow_failures_climb_effort_and_keep_the_work(git_repo, store):
     script = Script(bad(Failure.CODE_BUG, "missed the empty case"), ok("fixed"))
     report = run("fix the parser", git_repo, store, registry={}, launcher=launcher, classifier=kind("implement"))
     assert report.cells == ["sonnet/medium", "sonnet/high"]
-    assert report.moves[0].startswith("more_effort")
+    assert report.moves[0].startswith("more_effort to sonnet/high: ")
+    moved = store.last_event(report.task_id, "moved")["data"]
+    assert moved["seq"] == 1 and moved["from_cell"] == "sonnet/medium" and moved["to_cell"] == "sonnet/high"
+    assert moved["axis"] == "effort" and moved["trigger"] == "code_bug" and moved["turns_to"] == 30
+    assert moved["because"][-1].startswith("next: sonnet/high") and moved["budget_left"] < 5
+    assert "    · next: sonnet/high (the floor for work that needs judgment)" in report.text()
     assert seen == [None, "attempt 1\n"]  # the more thorough attempt continues the work
     run("fix the parser", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
     second = script.specs[1]

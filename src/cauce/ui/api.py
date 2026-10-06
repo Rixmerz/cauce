@@ -46,9 +46,40 @@ def flow_of(store: Store, task_id: int) -> dict[str, Any] | None:
     if planned is None:
         return None
     keys = ("seq", "cell", "passed", "failure", "move", "move_reason", "cost_usd", "turns", "duration_s")
+    attempts = store.attempts(task_id)
     return {"kind": planned["data"].get("kind"), "start": planned["data"].get("start"),
             "ladder": planned["data"].get("ladder") or [], "reasons": planned["data"].get("reasons") or [],
-            "steps": [{k: a.get(k) for k in keys} for a in store.attempts(task_id)]}
+            "steps": [{**{k: a.get(k) for k in keys}, "climb": c}
+                      for a, c in zip(attempts, climbs_of(store, task_id, attempts), strict=True)]}
+
+
+#: Moves after which another attempt ran, and the dial each one turned.
+_AXIS = {"retry": "retry", "more_effort": "effort", "next_model": "model", "more_turns": "turns"}
+
+
+def climbs_of(store: Store, task_id: int, attempts: list[dict]) -> list[dict[str, Any] | None]:
+    """For each attempt, the move that followed it: from which cell to which, along
+    which dial, and the evidence. A run from before the moves kept their evidence
+    gets what its attempts say (the destination is the next attempt's cell)."""
+    recorded = {e["data"]["seq"]: e["data"] for e in store.events_of(task_id, "moved") if "seq" in e["data"]}
+    out: list[dict[str, Any] | None] = []
+    for i, a in enumerate(attempts):
+        if not a.get("move"):
+            out.append(None)
+            continue
+        found = recorded.get(a["seq"])
+        if found is not None:
+            out.append({"from": found.get("from_cell"), "to": found.get("to_cell"), "axis": found.get("axis"),
+                        "trigger": found.get("trigger"), "because": found.get("because") or [],
+                        "skipped": found.get("skipped") or [], "turns_from": found.get("turns_from"),
+                        "turns_to": found.get("turns_to"), "budget_left": found.get("budget_left")})
+            continue
+        following = attempts[i + 1] if i + 1 < len(attempts) and a["move"] in _AXIS else None
+        out.append({"from": a["cell"], "to": following["cell"] if following else None,
+                    "axis": _AXIS.get(a["move"], "stop"), "trigger": a.get("failure"),
+                    "because": [a["move_reason"]] if a.get("move_reason") else [], "skipped": [],
+                    "recovered": True})
+    return out
 
 
 def worker_of(store: Store, task: dict[str, Any], steps: int) -> dict[str, Any] | None:
@@ -131,10 +162,11 @@ def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:
         return None
     attempts = store.attempts(task_id)
     refused = store.denials(task_id)
-    for a in attempts:
+    for a, climb in zip(attempts, climbs_of(store, task_id, attempts), strict=True):
         a["changed_paths"] = json.loads(a["changed_paths"] or "[]")
         a["capabilities"] = json.loads(a["capabilities"] or "[]")
         a["denied"] = refused.get(a["seq"], [])
+        a["climb"] = climb
     finished = store.last_event(task_id, "finished")
     return {
         "task": {**_brief(task), "body": task["body"], "options": json.loads(task.get("options") or "{}"),
@@ -179,6 +211,14 @@ def routing(store: Store) -> list[dict[str, Any]]:
             kind["passes"][row["final_cell"]] += 1
         if row["attempts"] > 1:
             kind["climbed"] += 1
+    moves: dict[str, Counter] = defaultdict(Counter)
+    landed: dict[str, Counter] = defaultdict(Counter)
+    for m in store.moves():
+        to = m["next_cell"] if m["move"] in _AXIS else None
+        key = (m["cell"], m["move"], to, m["failure"] or "inconclusive")
+        moves[m["kind"]][key] += 1
+        if to and m["next_passed"]:
+            landed[m["kind"]][key] += 1
     out = []
     for name, ladder in LADDERS.items():
         k = stats.get(name, {"kind": name, "tasks": 0, "passed": 0, "climbed": 0, "pinned": 0, "cost_usd": 0.0,
@@ -189,6 +229,11 @@ def routing(store: Store) -> list[dict[str, Any]]:
             "ladder": [c.label for c in ladder],
             "starts": dict(k["starts"]),
             "passes": dict(k["passes"]),
+            # How this ladder is really climbed: each move with the failure behind it, how often, and how
+            # often the next attempt passed. The evidence for moving a start or a rung.
+            "climbs": [{"from": f, "move": mv, "to": to, "after": why, "times": n,
+                        "then_passed": landed[name][(f, mv, to, why)] if to else None}
+                       for (f, mv, to, why), n in moves[name].most_common()],
         })
     return out
 
