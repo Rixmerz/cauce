@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-06
+
+### Added
+
+- **Project notes: what a project knows, by topic.** Problems and fixes stay
+  global. Each project now also keeps notes of what it knows, so a session
+  that compacted, or a worker that just started, reads it back instead of
+  rebuilding it from the code.
+  - **Topics.** `business`, `code`, `decisions`, `conventions` and
+    `environment`, plus any a person adds to a project (`cauce notes topic
+    add`). Haiku files under the topics that exist. When none fits it
+    proposes one, and a person decides.
+  - **Links between notes.** `depends_on`, `explains`, `replaces` (retires the
+    old note), `contradicts`, `example_of`. Recall follows them one step.
+  - **Anchors.** A note is tied to a file, or to a symbol from the livespec
+    index (read-only). When a commit that changes it reaches the checkout,
+    the note goes to review. A branch not merged yet changes nothing, and a
+    squash merge moves the anchor along. `cauce notes ok`, `cauce notes drop`.
+  - **Written at three moments.**
+    - A passing worker's result block now has `learned`. Haiku files each
+      fact, anchored to the files the task changed as its branch has them.
+    - Before a session compacts and when it ends (`PreCompact`,
+      `SessionEnd`), a detached Haiku reads what was said since the last
+      time and keeps the durable facts.
+    - A person keeps one with `cauce note "<fact>" --topic <t>`.
+    - A failed attempt's facts are never filed, and nothing that looks like
+      a secret is kept. Without Haiku, a fact is kept under the topic its
+      words point to.
+  - **Read back in four places.**
+    - Every worker's brief gets the notes that match its task.
+    - A prompt that matches notes gets them in context.
+    - A session that starts, resumes or compacts gets the project's index of
+      notes.
+    - `cauce recall "<question>" [--topic] [--path]` answers on demand.
+  - **The UI's new Notes tab.** One project's notes by topic, with their
+    links and anchors. A note to review can be confirmed or dropped there.
+  - **The `notes` setting.** On by default: plugin option, `cauce config
+    notes off`, `CAUCE_NOTES`.
+
 ## [0.4.10] - 2026-10-06
 
 From running the installed plugin end to end: real `claude -p` workers, a

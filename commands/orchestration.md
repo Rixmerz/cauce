@@ -95,7 +95,16 @@ Request: $ARGUMENTS
 
    Use only the commands `cauce --help` lists; there is no `cauce continue`.
 
-5. **Memory.** Before debugging, `cauce memory search "<symptom>"` shows fixes
+5. **What this project knows.** Before rebuilding context from the code —
+   above all after a compaction — ask its notes: `cauce recall "<question>"`
+   (add `--topic business|code|decisions|conventions|environment` or
+   `--path <file>`). A note marked TO REVIEW describes code that changed since:
+   check it before relying on it. When the person tells you a durable fact
+   about the project (a business rule, why something is built a certain way, a
+   convention, how to run it), keep it: `cauce note "<fact>" --topic <t>`.
+   Workers file what they learn on their own; do not copy their reports in.
+
+6. **Memory.** Before debugging, `cauce memory search "<symptom>"` shows fixes
    already tried against similar problems, in any repository. When a fix is
    confirmed or refuted outside a worker, record it:
    `cauce memory record --problem "<title>" --fix "<what changed>" --outcome worked|failed --why "<why>"`.

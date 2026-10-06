@@ -4,14 +4,15 @@ import { renderSessions, openSession } from "./sessions.js";
 import { renderSpend } from "./spend.js";
 import { renderRouting } from "./routing.js";
 import { renderMemory } from "./memory.js";
+import { renderNotes } from "./notes.js";
 import { renderHabits } from "./habits.js";
 import { openTask } from "./task.js";
 import { h, repoName } from "./util.js";
 
 const views = { board: renderBoard, sessions: renderSessions, spend: renderSpend, routing: renderRouting,
-                memory: renderMemory, habits: renderHabits };
-// The board and the sessions are always one project's: never every card at once.
-const scoped = new Set(["board", "sessions"]);
+                notes: renderNotes, memory: renderMemory, habits: renderHabits };
+// The board, the sessions and the notes are always one project's: never every card at once.
+const scoped = new Set(["board", "sessions", "notes"]);
 const main = document.getElementById("view");
 const picker = document.getElementById("project");
 let current = "board";

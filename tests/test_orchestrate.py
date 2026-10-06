@@ -634,3 +634,63 @@ def test_a_reading_task_is_told_its_findings_are_the_answer_and_stops_when_cells
     assert report.status == "failed" and report.cells == ["opus/high", "opus/xhigh"]
     assert report.stop.cause == "converged" and report.stop.account == said + "."
     assert "resuming would only repeat them" in report.text() and "cauce resume" not in report.text()
+
+
+def test_a_passing_worker_s_learned_facts_are_filed_and_later_workers_read_them(git_repo, store, monkeypatch):
+    from cauce import notes
+
+    monkeypatch.setenv("CAUCE_NOTES", "on")
+    learned = WorkerResult(True, None, "done", "1 passed", learned=("Prices are stored in cents in every table",))
+    asked = []
+
+    def ask(system, schema, question, **kw):
+        asked.append(question)
+        return {"notes": [{"fact": 0, "keep": True, "topic": "business", "title": "Prices in cents",
+                           "duplicate_of": None, "links": [], "paths": ["prices.py"], "new_topic": None}]}, 0.0, ""
+
+    report = run("store prices in cents", git_repo, store, registry={}, launcher=Script(learned, write="prices.py"),
+                 classifier=kind("implement"), notes_ask=ask)
+    assert report.noted == [{"id": 1, "new": True, "topic": "business", "title": "Prices in cents"}]
+    assert "notes: kept #1 [business] Prices in cents" in report.text()
+    assert "- prices.py" in asked[0]
+    anchor = store.note_anchors([1])[0]
+    assert anchor["path"] == "prices.py" and anchor["commit_sha"] == git(git_repo, "rev-parse", "cauce/task-1")
+    assert store.last_event(report.task_id, "noted")["data"]["notes"][0]["id"] == 1
+    # the next worker in this project reads it
+    script = Script(ok())
+    later = run("change how prices are stored in cents", git_repo, store, registry={}, launcher=script,
+                classifier=kind("implement"), notes_ask=ask)
+    assert "What this project's notes say" in script.specs[0].prompt and "#1 [business] Prices in cents" in (
+        script.specs[0].prompt)
+    assert any(r.startswith("notes: 1 from this project's memory") for r in later.plan.reasons)
+    # off: neither read nor filed
+    monkeypatch.setenv("CAUCE_NOTES", "off")
+    script = Script(learned)
+    run("prices in cents again", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+        notes_ask=ask)
+    assert "notes say" not in script.specs[0].prompt and len(asked) == 1
+    assert notes.recall(store, notes.repo.key(git_repo), "prices")[0]["id"] == 1
+
+
+def test_notes_that_cannot_be_filed_never_fail_the_pass(git_repo, store, monkeypatch):
+    monkeypatch.setenv("CAUCE_NOTES", "on")
+
+    def broken(*a, **kw):
+        raise RuntimeError("database is locked")
+
+    learned = WorkerResult(True, None, "done", "1 passed", learned=("The cache is warmed by a cron job",))
+    report = run("x", git_repo, store, registry={}, launcher=Script(learned), classifier=kind("implement"),
+                 notes_ask=broken)
+    assert report.status == "done" and report.noted == []
+    assert any("could not be filed (RuntimeError: database is locked)" in line for line in report.impact)
+    # a failed attempt's facts are not filed: they were not confirmed by a pass
+    report = run("y", git_repo, store, registry={}, launcher=Script(
+        WorkerResult(False, Failure.SPEC_BUG, "no", learned=("A guess about the cache layer",))),
+        classifier=kind("implement"), notes_ask=broken)
+    assert report.status == "replan" and not store.notes(notes_key(git_repo))
+
+
+def notes_key(where):
+    from cauce import repo
+
+    return repo.key(where)

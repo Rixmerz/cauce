@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.4.10",
+  "version": "0.5.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -37,6 +37,12 @@
       "type": "boolean",
       "title": "Haiku names sessions",
       "description": "Haiku names each session of an enrolled project after what it has been asked, in .cauce/sessions.json. A name you edit there is kept.",
+      "default": true
+    },
+    "notes": {
+      "type": "boolean",
+      "title": "Project notes",
+      "description": "Each project keeps notes of what it knows, by topic (business, code, decisions, conventions, environment), linked to each other and to the code they are about. Workers that pass add what they learned and sessions add what they established before compacting (Haiku files them); workers get the relevant notes in their brief, and sessions read them with cauce recall.",
       "default": true
     }
   }

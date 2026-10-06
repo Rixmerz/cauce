@@ -27,7 +27,7 @@ from pathlib import Path
 
 from cauce import allow as allow_rules
 from cauce import capabilities as caps
-from cauce import config, grants, habits, isolate, launch, models, project, repo, runtime, stops
+from cauce import config, grants, habits, isolate, launch, models, notes, project, repo, runtime, stops
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify
 from cauce.escalate import Attempt, Decision, Failure, Move, decide
@@ -80,6 +80,9 @@ class Options:
     livespec: bool | None = None
     #: Permission rules a person granted the workers, e.g. `Bash(npm run build)`.
     allow_tools: tuple[str, ...] = ()
+    #: None reads the `notes` setting (on by default): the project's notes in the
+    #: brief, and what a passing worker learned filed into them.
+    notes: bool | None = None
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -104,6 +107,8 @@ class Plan:
     neighbours: tuple[Status, ...] = ()
     #: The adopted neighbours that are present, with their status.
     active: tuple[tuple[Adapter, Status], ...] = ()
+    #: The project's notes the workers are shown.
+    notes: tuple[dict, ...] = ()
 
 
 @dataclass
@@ -128,6 +133,9 @@ class Report:
     isolated: bool = False
     #: Why it stopped short of a pass, and who made that call.
     stop: stops.Stop | None = None
+    #: What the passing worker learned, and where each fact was filed in the notes.
+    learned: tuple[str, ...] = ()
+    noted: list[dict] = field(default_factory=list)
 
     def text(self) -> str:
         lines = [
@@ -169,6 +177,10 @@ class Report:
         elif self.task_id and self.status != "done" and self.changed:
             lines.append("nothing of it was kept")
         lines += self.impact
+        if self.noted:
+            lines.append("notes: " + "; ".join(
+                f"{'kept' if n['new'] else 'already known as'} #{n['id']} [{n['topic']}] {n['title']}"
+                for n in self.noted))
         if self.summary:
             lines.append(self.summary)
         if self.stop is not None and self.task_id:
@@ -306,10 +318,20 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     expected = store.expected_cost(kind, repo=repo.key(repo_dir)) or store.expected_cost(kind)
     if expected:
         neighbour_notes.append(f"finished {kind} tasks cost ${expected[0]:.2f} on average (last {expected[1]})")
+    known: list[dict] = []
+    key = repo.key(repo_dir)
+    if key and config.enabled("notes", os.environ, options.notes):
+        if not options.dry_run:
+            notes.review(store, key, repo_dir)
+        known = notes.recall(store, key, text, limit=6)
+        if known:
+            context += notes.brief_lines(known)
+            neighbour_notes.append(f"notes: {len(known)} from this project's memory ("
+                                   + ", ".join(f"#{n['id']} {n['topic']}" for n in known) + ")")
     selected = caps.select(registry, kind, workdir=repo_dir)
     names = tuple(dict.fromkeys([*selected.names, *(a.name for a, _ in active)]))
     return Plan(kind, classification, ladder, start, reasons + neighbour_notes, names,
-                tuple(context), tuple(statuses), tuple(active))
+                tuple(context), tuple(statuses), tuple(active), tuple(known))
 
 
 def run(
@@ -325,6 +347,7 @@ def run(
     task_id: int | None = None,
     session_id: str | None = None,
     history: Sequence[Attempt] = (),
+    notes_ask: notes.Ask | None = None,
 ) -> Report:
     """Run a task. `history` is a resumed task's earlier attempts: shown to its
     workers, never counted by the escalation, which starts over."""
@@ -462,6 +485,7 @@ def run(
             attempts.append(attempt)
             if result.passed:
                 report.status, report.final_cell, report.summary = "done", cell.label, result.summary
+                report.learned = result.learned
                 for adapter, status in the_plan.active:
                     report.impact += adapter.assess(result.changed_paths, repo_dir, status)
                 if len(attempts) > 1:
@@ -532,6 +556,10 @@ def run(
             store.pause_lane(key, f"task #{task['id']} ended {status}: {report.summary[:200]}")
         if workspace is None:
             report.changed = sorted(changed)
+        if status == "done" and report.learned and config.enabled("notes", os.environ, options.notes):
+            _note(store, task, key, report, the_plan, workspace.repo_dir if workspace else repo_dir,
+                  isolate.head(workspace.repo_dir, report.branch) if workspace and report.branch else None,
+                  notes_ask)
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
                         changed=report.changed[:50], stop=report.stop.data() if report.stop else None)
@@ -731,6 +759,30 @@ def _settled(result: launch.WorkerResult, command: str, workdir: Path) -> launch
         result, passed=True, failure=None, evidence=output or f"`{command}` exited 0",
         summary=f"{result.summary} ({cause}; `{command}` passed in its place)",
     )
+
+
+def _note(store: Store, task: dict, key: str | None, report: Report, the_plan: Plan, checkout: Path,
+          commit: str | None, ask: notes.Ask | None) -> None:
+    """File what the passing worker learned in the project's notes, anchored to
+    the files it changed as its branch has them. Never fails the run: the work
+    passed, and a note that could not be filed is said in the report."""
+    if not key:
+        return
+    lookups = [(a, s) for a, s in the_plan.active if hasattr(a, "symbols_named")]
+
+    def symbols_of(fact: str) -> list[tuple[str, str]]:
+        return [x for adapter, status in lookups for x in adapter.symbols_named(fact, status)]
+
+    try:
+        report.noted = notes.file_facts(
+            store, key, report.learned, author="worker", source=f"task #{task['id']}", task_id=task["id"],
+            repo_dir=checkout, paths=report.changed, commit=commit, symbols_of=symbols_of if lookups else None,
+            ask=ask)
+    except Exception as exc:  # a pass is not undone by its notes
+        report.impact.append(f"notes: what the worker learned could not be filed ({type(exc).__name__}: {exc})")
+        return
+    if report.noted:
+        store.add_event(task["id"], "noted", notes=report.noted)
 
 
 def _remember(store: Store, task: dict, key: str | None, attempt: Attempt, outcome: str,

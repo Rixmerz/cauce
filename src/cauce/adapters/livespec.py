@@ -304,6 +304,26 @@ class Livespec:
             raise_rungs = 1
         return Briefing(tuple(lines), raise_rungs, critical, tuple(dict.fromkeys(reasons)))
 
+    def symbols_named(self, text: str, status: Status) -> list[tuple[str, str]]:
+        """The symbols a text names outright, as (qualified name, path): what a
+        note about them is anchored to. Read-only, like everything here."""
+        if not status.present:
+            return []
+        named = sorted({t for t in _IDENT.findall(text) if len(t) >= 4 and _looks_like_code(t)})
+        found: list[tuple[str, str]] = []
+        try:
+            with _connect(Path(status.data["db"])) as conn:
+                for token in named:
+                    rows = conn.execute(
+                        "SELECT s.qualified_name, f.path FROM symbol s JOIN file f ON f.id = s.file_id "
+                        "WHERE f.project_id = ? AND (s.qualified_name = ? OR s.qualified_name LIKE ? OR s.name = ?) "
+                        "LIMIT 3", (int(status.data["project"]), token, f"%.{token}", token.rsplit(".", 1)[-1]),
+                    ).fetchall()
+                    found += [(r["qualified_name"], r["path"]) for r in rows if not is_test_path(r["path"])]
+        except sqlite3.Error:
+            return []
+        return list(dict.fromkeys(found))[:6]
+
     # --- after a pass ------------------------------------------------------
 
     def assess(self, changed: Sequence[str], repo_dir: Path, status: Status) -> tuple[str, ...]:

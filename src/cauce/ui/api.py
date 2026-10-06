@@ -265,6 +265,35 @@ def memory(store: Store, query: str = "", limit: int = 40, repos: set[str] | Non
     return store.recent_problems(repos=repos, limit=limit)
 
 
+def notes_view(store: Store, repo_key: str, *, topic: str = "", query: str = "", state: str = "") -> dict[str, Any]:
+    """One project's notes: the topics with their counts, and the notes asked for,
+    each with its anchors and links. Read only: a GET never reviews."""
+    from cauce import notes
+
+    counts = store.note_counts(repo_key)
+    topics = [{"name": name, "description": about,
+               "live": sum(counts.get(name, {}).get(s, 0) for s in notes.LIVE),
+               "review": counts.get(name, {}).get("review", 0)}
+              for name, about in notes.topics(store, repo_key).items()]
+    states = [state] if state in notes.STATES else list(notes.LIVE)
+    in_topics = [topic] if topic else None
+    if query.strip():
+        found = notes.recall(store, repo_key, query, in_topics=in_topics, limit=40, hops=1, states=states)
+    else:
+        rows = store.notes(repo_key, topics=in_topics, states=states, limit=200)
+        found = notes.expand(store, [r["id"] for r in rows])
+    titles = {n["id"]: n["title"] for n in found}
+    for n in found:
+        for x in n["links"]:
+            if x["to"] not in titles:
+                other = store.get_note(x["to"])
+                titles[x["to"]] = other["title"] if other else ""
+            x["title"] = titles[x["to"]]
+    proposals = [{"id": n["id"], "title": n["title"], "topic": n["proposed_topic"]}
+                 for n in store.notes(repo_key, states=notes.LIVE) if n["proposed_topic"]]
+    return {"topics": topics, "notes": found, "proposals": proposals}
+
+
 def projects(store: Store, enrolled_only: bool = True) -> list[dict[str, Any]]:
     """Every repository cauce has worked in, at the top of the checkout it was last used from.
     Only enrolled ones (a `.cauce/` folder) unless asked: the plugin being on is not using cauce."""

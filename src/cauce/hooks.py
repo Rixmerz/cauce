@@ -4,14 +4,19 @@
   turn is running belongs to that turn's task, not to one of its own. A bare
   "continue" folds into the turn it pushes along. When the prompt matches a
   fix that already failed — here or in another repository — the dead end is
-  put in front of the model before it starts.
+  put in front of the model before it starts; when it matches this project's
+  notes, so are they.
 - **Stop** — the turn's final message is the task's result. Any other task
   still running in the session belongs to a turn the user interrupted; Claude
   Code fires no Stop for those, so they are marked interrupted now.
 - **StopFailure** — the turn died; its task failed.
 - **SessionStart** — on resume or compaction, the unfinished tasks of the
-  session; always, the recent dead ends of this repository. When `cauce` does
-  not resolve on PATH, it is put there for the session's commands.
+  session; always, the recent dead ends of this repository and the index of
+  its notes. When `cauce` does not resolve on PATH, it is put there for the
+  session's commands.
+- **PreCompact**, **SessionEnd** — a detached Haiku reads what the session
+  said since the last time and keeps its durable facts in the project's notes,
+  before the conversation is summarized away or closed.
 
 Hooks fail open: an exception never reaches Claude Code, because a hook that
 raises takes the user's session down. But failing open is not failing silently
@@ -25,8 +30,10 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
+import sys
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
@@ -121,6 +128,15 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
         blocks.append(_dead_end_text(
             dead, "cauce memory: fixes already tried against problems like this one, and they did not work. "
             "Before applying one again, say so and check why it failed."))
+    if key and cwd and len(words(text)) >= 3 and config.enabled("notes", os.environ) and project.find(cwd):
+        from cauce import notes
+
+        known = notes.recall(store, key, text, limit=3, hops=0, strict=True)
+        if known:
+            store.add_event(task["id"], "notes_shown", ids=[n["id"] for n in known])
+            blocks.append("cauce notes: what this project's notes say about this (kept from earlier work; check "
+                          "them against the code, and `cauce recall \"<question>\"` for more):\n"
+                          + "\n".join(f"- {notes.line(n, text_chars=300)}" for n in known))
     return _context("UserPromptSubmit", "\n\n".join(blocks)) if blocks else None
 
 
@@ -275,7 +291,43 @@ def session_start(
         dead = store.dead_ends(repo=key, limit=5)
         if dead:
             blocks.append(_dead_end_text(dead, "cauce memory: recent fixes in this repository that did not work."))
+    if key and cwd and project.find(cwd) is not None and config.enabled("notes", {**os.environ, **env}):
+        # After a compaction above all: what the project knows is read back from
+        # its notes, not rebuilt from the code. The index, not the notes: a
+        # session asks for what it needs with `cauce recall`.
+        from cauce import notes
+
+        notes.review(store, key, Path(cwd))
+        index = notes.index_text(store, key)
+        if index:
+            blocks.append(index)
     return _context("SessionStart", "\n\n".join(blocks)) if blocks else None
+
+
+def keep_notes(event: Mapping[str, Any], root: Path, env: Mapping[str, str], *,
+               popen: Callable[..., Any] = subprocess.Popen) -> bool:
+    """PreCompact and SessionEnd: start a detached `cauce extract-notes`, so what the
+    conversation established is in the project's notes before it is summarized
+    away or closed. A model call takes longer than a hook may; one at a time per
+    session. Only in an enrolled project, with the `notes` setting on."""
+    session_id, transcript, cwd = event.get("session_id"), event.get("transcript_path"), event.get("cwd")
+    if not (session_id and transcript and cwd) or not config.enabled("notes", env):
+        return False
+    if project.find(cwd) is None or not Path(str(transcript)).is_file():
+        return False
+    from cauce import dispatch
+
+    if dispatch.held(root, f"notes:{session_id}"):
+        return False
+    try:
+        (root / "work").mkdir(parents=True, exist_ok=True)
+        with open(root / "work" / "notes.log", "a") as out:
+            popen([sys.executable, "-m", "cauce", "extract-notes", str(session_id), str(transcript), str(cwd)],
+                  cwd=str(cwd), env=dispatch.child_env(env), stdin=subprocess.DEVNULL, stdout=out,
+                  stderr=subprocess.STDOUT, start_new_session=True)
+    except OSError:
+        return False
+    return True
 
 
 #: Endings of cauce runs that wait on a person to clear something.
@@ -402,11 +454,18 @@ HANDLERS = {
 }
 
 
+#: Hooks that need the environment and the cauce home, not only the store.
+WITH_ENV = frozenset({"SessionStart", "PreCompact", "SessionEnd"})
+
+
 def handle(
     event_name: str, event: Mapping[str, Any], store: Store, root: Path, env: Mapping[str, str] | None = None
 ) -> dict | None:
     if event_name == "SessionStart":
         return session_start(event, store, root, env)
+    if event_name in ("PreCompact", "SessionEnd"):
+        keep_notes(event, root, dict(os.environ if env is None else env))
+        return None
     handler = HANDLERS.get(event_name)
     return handler(event, store) if handler else None
 

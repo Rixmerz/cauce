@@ -115,6 +115,47 @@ One SQLite file in `$CAUCE_HOME` (default `~/.local/share/cauce`):
   **across repositories**. A matching dead end is put in front of the model
   before it starts (`UserPromptSubmit`) and in every worker's brief.
 
+### Project notes
+
+Problems and fixes are global: a dead end in one repository is a dead end in
+the next. What a project *knows* is its own — its business rules, why its code
+is shaped the way it is, how it is run — so it is kept per project, in
+**notes**, and read back instead of rebuilt from the code after a compaction
+or by every new worker.
+
+A library, not a heap:
+
+- **Topics.** Every note is filed under one topic: `business`, `code`,
+  `decisions` (how the project evolved and why), `conventions`, `environment`,
+  plus any a person adds to a project (`cauce notes topic add api "<what it
+  holds>"`). Haiku files under the topics that exist; when none fits it
+  proposes one, and a person decides.
+- **Links.** Notes point at each other with a kind — `depends_on`, `explains`,
+  `replaces` (which retires the old note), `contradicts`, `example_of` — so a
+  business rule leads to the decision behind it and the code that implements it.
+- **Anchors.** A note can be about a file, or a symbol from the livespec index,
+  as livespec ties a spec to code. The anchor keeps the file's content when the
+  note was written; once a commit that changes it is in the checkout, the note
+  is marked **to review** (a branch not merged yet changes nothing). `cauce
+  notes ok <id>` confirms it, `cauce notes drop <id>` retires it.
+
+Notes are written at three moments, never whenever a model feels like it:
+
+| When | Who | How |
+|---|---|---|
+| a worker passes | the worker | its result block lists what it `learned`; Haiku files each fact (topic, title, links, the changed files it is about) |
+| before a session compacts, and when it ends | Haiku | reads what the person and the agent said since the last time (no tool output, no injected context) and keeps the durable facts |
+| any time | a person | `cauce note "<fact>" --topic business --anchor src/cart.ts --link 12:explains` |
+
+And read back in four places: every worker's brief gets the project's notes
+that match its task (one link away); a prompt that matches notes gets them in
+context; a session that starts, resumes or compacts gets the project's index of
+notes; and `cauce recall "<question>" [--topic t] [--path file]` answers from
+them on demand. The UI's **Notes** tab shows them by topic, with their links
+and anchors. Without Haiku a fact is still kept, under the topic its words
+point to. A fact that looks like a secret is never kept. Turn the whole thing
+off with the `notes` plugin setting or `cauce config notes off`.
+
 ### Spend
 
 `cauce spend` shows what work really cost over the last days: a session's own

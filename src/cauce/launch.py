@@ -57,7 +57,8 @@ When you are done, end your reply with exactly one fenced block:
   "verdict": "pass" | "fail" | "inconclusive",
   "failure": "code_bug" | "test_bug" | "approach" | "spec_bug" | "architecture_bug" | "environment" | null,
   "summary": "one or two sentences: what you did, or what stopped you",
-  "evidence": "the command you ran to check it and its real output, verbatim"
+  "evidence": "the command you ran to check it and its real output, verbatim",
+  "learned": ["a durable fact about this project that you confirmed and the next person would want"]
 }}
 ```
 
@@ -91,6 +92,11 @@ When you are done, end your reply with exactly one fenced block:
   no browser unless your tools include one; without it, answer `fail` with
   `environment` and say so, never describe a page you did not open.
 - Do not list the files you changed; they are read from git.
+- `learned` goes into the project's notes, read by whoever works here next. Put
+  at most five facts you confirmed while working that outlive this task: a
+  business rule, why the code is shaped this way, a convention, how to run or
+  test something, a trap. Not what you changed, not guesses, not anything
+  plain from reading the code, never a secret. `[]` when there is none.
 """.strip()
 
 Runner = Callable[..., subprocess.CompletedProcess]
@@ -158,6 +164,8 @@ class WorkerResult:
     served_model: str = ""
     #: The permission mode the worker ran in, after any fallback.
     permission_mode: str = ""
+    #: Facts about the project the worker says it confirmed: filed in its notes on a pass.
+    learned: tuple[str, ...] = ()
 
 
 def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path: Path | None = None) -> list[str]:
@@ -287,6 +295,7 @@ def parse(
     verdict = str(block.get("verdict") or "").lower()
     summary = str(block.get("summary") or "")[:1000]
     evidence = str(block.get("evidence") or "")[:4000]
+    common["learned"] = learned(block)
     if verdict == "pass":
         if not evidence.strip():
             return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
@@ -294,6 +303,19 @@ def parse(
         return WorkerResult(True, None, summary, evidence, raw=text, verdict=verdict, **common)
     failure = _refused(_failure(block.get("failure"), verdict), denied)
     return WorkerResult(False, failure, summary, evidence, raw=text, verdict=verdict, **common)
+
+
+#: How many facts one attempt may add to the notes, and how long each may be.
+MAX_LEARNED, LEARNED_CHARS = 5, 600
+
+
+def learned(block: Mapping[str, Any]) -> tuple[str, ...]:
+    """The facts a result block says the worker learned: strings only, a few, short."""
+    raw = block.get("learned")
+    if not isinstance(raw, list):
+        return ()
+    found = [" ".join(x.split())[:LEARNED_CHARS] for x in raw if isinstance(x, str) and x.strip()]
+    return tuple(dict.fromkeys(found))[:MAX_LEARNED]
 
 
 def _refused(failure: Failure, denied: Sequence[str]) -> Failure:
