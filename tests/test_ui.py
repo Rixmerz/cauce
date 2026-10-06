@@ -104,6 +104,10 @@ def test_task_detail_spend_routing_memory_habits(store: Store):
     p = store.open_problem("slow import", repo="r")
     store.add_fix(p, "lazy load", "failed", repo="r")
     assert api.memory(store)[0]["title"] == "slow import"
+    # a dead end recorded after the task ran was never shown to it
+    assert api.task_detail(store, t["id"])["dead_ends"] == []
+    store.add_event(t["id"], "dead_ends", shown=[{"problem": "fix it", "tried": "x"}])
+    assert api.task_detail(store, t["id"])["dead_ends"][0]["tried"] == "x"
     assert api.memory(store, "slow import")[0]["id"] == p
 
     for s_ in range(3):

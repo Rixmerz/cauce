@@ -82,6 +82,16 @@ def test_double_plus_starts_the_dispatcher_when_autowork_is_on(store: Store, git
     assert all(t["session_id"] == "s" for t in store.list_tasks(status=["queued"]))
 
 
+def test_a_task_queued_by_hand_starts_the_dispatcher_too(git_repo, monkeypatch, capsys):
+    """A session that queued with `cauce queue add` waited for a `cauce work`
+    nobody ran: the task sat queued."""
+    calls = []
+    monkeypatch.setattr(dispatch, "start", lambda repo_dir, root, scope: calls.append(repo_dir) or True)
+    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    assert cli.main(["queue", "add", "write the docs", "--repo", str(git_repo)]) == 0
+    assert calls == [git_repo.resolve()] and "A worker takes it" in capsys.readouterr().out
+
+
 def test_a_task_process_that_dies_unannounced_is_interrupted(store: Store):
     task = store.enqueue("x", repo="r", cwd="/x")
     store.claim(task["id"])
@@ -150,6 +160,7 @@ def test_a_run_or_queue_typed_in_a_session_is_that_session_s(git_repo, monkeypat
     monkeypatch.setenv("CAUCE_SESSION_ID", "sess-1")
     assert cli.main(["queue", "add", "write the docs", "--repo", str(git_repo), "--json"]) == 0
     queued = json.loads(capsys.readouterr().out)
+    assert queued["then"] == "`cauce work` runs the queue."  # autowork is off in tests
     store = Store.open()
     assert store.get_task(queued["id"])["session_id"] == "sess-1"
     store.close()

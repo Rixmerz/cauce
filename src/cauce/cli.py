@@ -506,10 +506,14 @@ def cmd_queue(args: argparse.Namespace) -> int:
                                  session_id=os.environ.get("CAUCE_SESSION_ID"))
             with contextlib.suppress(OSError, project.NotAProject):
                 project.enroll(where)
+            from cauce import dispatch
+
+            then = dispatch.kick(where, repo.key(where), os.environ)
             if args.json:
-                print(json.dumps({k: task[k] for k in ("id", "title", "status", "repo", "cwd")}, ensure_ascii=False))
+                print(json.dumps({**{k: task[k] for k in ("id", "title", "status", "repo", "cwd")}, "then": then},
+                                 ensure_ascii=False))
             else:
-                print(f"queued #{task['id']} — {task['title']}")
+                print(f"queued #{task['id']} — {task['title']}. {then}")
             return 0
         if args.queue_command == "rm":
             task = store.get_task(args.id)

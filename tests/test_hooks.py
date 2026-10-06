@@ -59,6 +59,8 @@ def test_known_dead_ends_reach_the_model_before_it_starts(store: Store):
     context = answer["hookSpecificOutput"]["additionalContext"]
     assert answer["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
     assert "raise the backoff to 30s" in context and "github.com/x/y" in context
+    shown = store.last_event(store.list_tasks()[0]["id"], "dead_ends")["data"]["shown"]
+    assert shown[0]["tried"] == "raise the backoff to 30s"
     assert prompt(store, "rename the button", prompt_id="p9") is None
     assert prompt(store, "ok", prompt_id="p10") is None
 
@@ -146,6 +148,12 @@ def test_session_start_freshens_an_adopted_index_in_the_background(store, git_re
 
     root = tmp_path / "root"
     event = {"session_id": "s", "cwd": str(git_repo), "source": "startup"}
+    stranger = Fake(ABSENT)
+    hooks.session_start(event, store, root, {}, adapters=[stranger])
+    assert not stranger.started  # a repository that does not use cauce is left alone
+    from cauce import project
+
+    project.enroll(git_repo)
     for fake, word in ((Fake(ABSENT), "indexing"), (Fake(PRESENT, stale=True), "refreshing")):
         answer = hooks.session_start(event, store, root, {}, adapters=[fake])
         assert word in answer["hookSpecificOutput"]["additionalContext"] and fake.started
@@ -278,12 +286,16 @@ def test_work_a_session_sent_is_reported_to_it_once_when_it_ends(store: Store, g
                              cwd=str(git_repo), final_cell="sonnet/low")
     store.add_event(done["id"], "finished", status="done", branch="cauce/task-1", final_cell="sonnet/low",
                     changed=["CHANGELOG.md"])
-    store.update_task(done["id"], status="done")
+    store.update_task(done["id"], status="done", result="Wrote the 0.5.0 entry.")
     big = store.create_task("reduce the app to four modules", status="running", source="cauce", session_id="s",
                             cwd=str(git_repo))
     stops.record(store, big["id"], stops.Stop("turns", "the task does not fit even the raised turn budget"))
     store.add_event(big["id"], "finished", status="replan", changed=[f"src/f{i}.ts" for i in range(7)],
                     stop=stops.Stop("turns", "the task does not fit even the raised turn budget").data())
+    answer = store.create_task("where is slug defined?", status="running", source="cauce", session_id="s",
+                               cwd=str(git_repo), final_cell="haiku")
+    store.add_event(answer["id"], "finished", status="done", final_cell="haiku")
+    store.update_task(answer["id"], status="done", result="slug.js:1")
     other = store.create_task("not this session's", status="failed", source="cauce", session_id="t")
     store.add_event(other["id"], "finished", status="failed")
     store.create_task("still going", status="running", source="cauce", session_id="s")
@@ -292,6 +304,8 @@ def test_work_a_session_sent_is_reported_to_it_once_when_it_ends(store: Store, g
     assert out["decision"] == "block"
     notice = out["reason"]
     assert "#1 [done] write the changelog" in notice and "git diff HEAD...cauce/task-1" in notice
+    assert "the worker says: Wrote the 0.5.0 entry." in notice and "changed: CHANGELOG.md" in notice
+    assert "passed at haiku; it changed nothing\n  the worker says: slug.js:1" in notice
     assert f"#{big['id']} [replan]" in notice and "stopped by cauce's rules" in notice
     assert "src/f0.ts, src/f1.ts, src/f2.ts, src/f3.ts, src/f4.ts and 2 more" in notice
     assert f"cauce resume {big['id']} --max-turns 120" in notice

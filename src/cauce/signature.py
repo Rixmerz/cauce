@@ -82,6 +82,9 @@ def arg_hash(tool_input: Mapping[str, Any] | None) -> str:
 
 
 DELEGATION_TOOLS = frozenset({"Agent", "Task"})
+#: Not a step of anyone's work: the CLI's own answer to a JSON schema, made by
+#: every classifier, dispatch and naming call cauce asks Haiku.
+NOT_STEPS = frozenset({"StructuredOutput"})
 
 
 def log_dir(env: Mapping[str, str]) -> Path:
@@ -113,6 +116,8 @@ def entry(event: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, Any]:
 
 
 def append(event: Mapping[str, Any], env: Mapping[str, str]) -> None:
+    if event.get("tool_name") in NOT_STEPS:
+        return
     directory = log_dir(env)
     directory.mkdir(parents=True, exist_ok=True)
     line = json.dumps(entry(event, env), separators=(",", ":")) + "\n"

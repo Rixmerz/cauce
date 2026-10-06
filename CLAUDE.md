@@ -143,8 +143,8 @@ yields the default kind, not a guess.
   that differs from `haiku_name` is theirs, and nothing in cauce overwrites it.
 - The UI shows one project at a time and takes no task: work is asked for in
   a session. Claude Code's own task files are read, never written.
-- A lane pauses only on a task the dispatcher started; a person's own
-  `cauce run` never blocks the queue. A GET in the UI never starts work or
+- A lane pauses only on a task the dispatcher started, and never on one a
+  person cancelled; a person's own `cauce run` never blocks the queue. A GET in the UI never starts work or
   sweeps — housekeeping runs in hooks, the dispatcher and the server thread.
 - The UI builds every node with `textContent` (`h()` in `static/util.js`),
   never `innerHTML`: task text and worker summaries are untrusted. The token

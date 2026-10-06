@@ -16,6 +16,9 @@ from cauce.classify import SCHEMA, by_model, by_rules, classify
         ("el test es flaky, a veces pasa", "debug-unclear"),
         ("haz un review del PR de login", "review-critical"),
         ("revisa el codigo del parser", "review-routine"),
+        ("audit calc.py for bugs and report what you find", "review-routine"),
+        ("audita el módulo de pagos", "review-critical"),
+        ("busca bugs en el parser", "review-routine"),
         ("propón la arquitectura para el sistema de pagos", "plan"),
         ("¿dónde está definido el router?", "explore"),
         ("haz commit y push", "docs"),
@@ -67,8 +70,15 @@ def test_model_classification_is_used_when_confident():
     assert argv[argv.index("--tools") + 1] == ""
     assert "--strict-mcp-config" in argv and "--no-session-persistence" in argv
     assert json.loads(argv[argv.index("--json-schema") + 1]) == SCHEMA
-    assert kwargs["input"] == "the header looks wrong"
+    assert kwargs["input"].endswith("<request>\nthe header looks wrong\n</request>")
     assert kwargs["env"]["CAUCE_HOOKS_OFF"] == "1"
+
+
+def test_the_model_is_asked_to_classify_the_request_not_to_do_it():
+    run = _runner(_reply(kind="review-routine", complexity="low", confidence=0.9, reason="r"))
+    by_model("look at calc.py", runner=run)
+    sent = run.calls[0][1]["input"]
+    assert "Do not carry it out" in sent and "<request>\nlook at calc.py\n</request>" in sent
 
 
 def test_frontier_is_not_a_choice_for_the_model():
@@ -114,6 +124,7 @@ def test_the_neutral_directory_is_created(tmp_path):
         ("Crear 5 módulos de training y 10 rutas lazy en app.routes.ts", "implement"),
         ("Verifica la estructura contra el spec y registra /api/training en index.js", "implement"),
         ("revisa el codigo del parser y arregla lo que encuentres", "implement"),
+        ("audita el modulo y arregla lo que encuentres", "implement"),
         ("Find where the router is defined, then add a lazy route", "implement"),
         # a verb of change inside a search is still a search
         ("busca donde se crea el usuario", "explore"),

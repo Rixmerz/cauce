@@ -58,11 +58,12 @@ Request: $ARGUMENTS
    so a large change still gets its tests run; give one whenever a command can
    tell whether the work is done.
 
-   For work that can wait, queue it instead — `cauce queue add "<task>"` — and
-   start `cauce work` (in the background); if a dispatcher already runs for the
-   repository, it says so and the running one picks the task up. Whether a
-   queued task runs beside the others or waits its turn is decided there, not
-   here.
+   For work that can wait, queue it instead — `cauce queue add "<task>"`. A
+   worker picks it up at once, in its own process that outlives this session;
+   its output says so. Only when it says `cauce work` runs the queue (the
+   person turned `autowork` off) start `cauce work` in the background. Whether
+   a queued task runs beside the others or waits its turn is decided there,
+   not here.
 
 4. **Read the report and act on its status.** The summary is the worker's own
    account; `changed (from git)` is what the files say. Never tell the user a

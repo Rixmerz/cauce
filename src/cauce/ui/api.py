@@ -178,7 +178,8 @@ def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:
         "stop": stops.view(store, task),
         "branch": finished["data"].get("branch") if finished else None,
         "impact": finished["data"].get("impact", []) if finished else [],
-        "dead_ends": store.dead_ends(task["body"], repo=task["repo"], limit=5),
+        # What it was shown when it ran; the memory as it is now would include later ones.
+        "dead_ends": ((store.last_event(task_id, "dead_ends") or {}).get("data") or {}).get("shown") or [],
         "events": store.events(task_id=task_id, limit=500),
     }
 

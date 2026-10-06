@@ -50,7 +50,9 @@ def test_the_log_line_holds_no_argument(tmp_path):
     event = {"session_id": "s", "tool_name": "Bash", "tool_input": {"command": "pytest tests/secret_name.py"},
              "tool_response": {"interrupted": True}}
     signature.append(event, env)
+    signature.append({"session_id": "s", "tool_name": "StructuredOutput", "tool_input": {"kind": "docs"}}, env)
     raw = next((tmp_path / "tool-events").glob("*.ndjson")).read_text()
+    assert "structuredoutput" not in raw  # a classifier's answer is no step of the work
     assert "secret_name" not in raw
     record = json.loads(raw)
     assert record["sig"] == "bash:pytest" and record["task_id"] == 7 and record["attempt"] == 2

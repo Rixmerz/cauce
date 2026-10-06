@@ -39,6 +39,26 @@ def test_a_lane_runs_in_order_and_pauses_on_the_first_failure(git_repo, store: S
     assert [r.status for r in again.ran] == ["done"] and not store.lanes()[0]["paused"]
 
 
+def test_a_task_a_person_cancelled_does_not_pause_the_queue(git_repo, store: Store):
+    key = str(git_repo.resolve())
+    for text in ("first", "second"):
+        store.enqueue(text, repo=key, cwd=str(git_repo))
+
+    def cancel_first(spec):
+        store.request_cancel(store.list_tasks(status=["running"])[0]["id"], via="cli")
+        return bad(Failure.CODE_BUG, "half done")
+
+    results = [cancel_first, lambda spec: ok()]
+
+    def runner(text, where, store, options, **kw):
+        return run(text, where, store, options, registry={}, launcher=results.pop(0),
+                   classifier=kind("implement"), adapters=[], **kw)
+
+    report = flow.work(store, runner=runner)
+    assert [r.status for r in report.ran] == ["cancelled", "done"]
+    assert not any(lane["paused"] for lane in store.lanes())
+
+
 def test_the_unattended_limit_and_a_vanished_directory(git_repo, store: Store, tmp_path):
     key = str(git_repo.resolve())
     for i in range(3):

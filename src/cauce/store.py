@@ -781,7 +781,8 @@ class Store:
         for task_id, raw in rows:
             data = json.loads(raw)
             if data.get("denied"):
-                out.append({"task_id": task_id, "denied": data["denied"], "allow": data.get("allow") or []})
+                out.append({"task_id": task_id, "denied": data["denied"], "allow": data.get("allow") or [],
+                            "mode": data.get("permission_mode") or ""})
         return out
 
     def cancel_requested(self, task_id: int) -> bool:
