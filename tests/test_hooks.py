@@ -267,3 +267,46 @@ def test_stop_counts_what_the_turn_cost(store: Store, tmp_path):
     hooks.stop({"session_id": "s", "prompt_id": "p1", "last_assistant_message": "ok",
                 "transcript_path": str(transcript)}, store)
     assert store.usage_by_model(days=100000)[0]["output_tokens"] == 42
+
+
+def test_work_a_session_sent_is_reported_to_it_once_when_it_ends(store: Store, git_repo):
+    """A queued task finished while the main session waited on nothing: nothing
+    told it to tell the person, continue or relaunch."""
+    from cauce import stops
+
+    done = store.create_task("write the changelog", status="running", source="cauce", session_id="s",
+                             cwd=str(git_repo), final_cell="sonnet/low")
+    store.add_event(done["id"], "finished", status="done", branch="cauce/task-1", final_cell="sonnet/low",
+                    changed=["CHANGELOG.md"])
+    store.update_task(done["id"], status="done")
+    big = store.create_task("reduce the app to four modules", status="running", source="cauce", session_id="s",
+                            cwd=str(git_repo))
+    stops.record(store, big["id"], stops.Stop("turns", "the task does not fit even the raised turn budget"))
+    store.add_event(big["id"], "finished", status="replan", changed=[f"src/f{i}.ts" for i in range(7)],
+                    stop=stops.Stop("turns", "the task does not fit even the raised turn budget").data())
+    other = store.create_task("not this session's", status="failed", source="cauce", session_id="t")
+    store.add_event(other["id"], "finished", status="failed")
+    store.create_task("still going", status="running", source="cauce", session_id="s")
+
+    out = hooks.stop({"session_id": "s"}, store)
+    assert out["decision"] == "block"
+    notice = out["reason"]
+    assert "#1 [done] write the changelog" in notice and "git diff HEAD...cauce/task-1" in notice
+    assert f"#{big['id']} [replan]" in notice and "stopped by cauce's rules" in notice
+    assert "src/f0.ts, src/f1.ts, src/f2.ts, src/f3.ts, src/f4.ts and 2 more" in notice
+    assert f"cauce resume {big['id']} --max-turns 120" in notice
+    assert "not this session's" not in notice and "still going" not in notice
+    assert hooks.stop({"session_id": "s"}, store) is None  # once
+    # a later ending reaches the next prompt instead
+    store.add_event(big["id"], "finished", status="replan",
+                    stop=stops.Stop("turns", "again").data())
+    context = prompt(store, "what is next for the app", session="s")["hookSpecificOutput"]["additionalContext"]
+    assert f"#{big['id']} [replan]" in context and "#1 [done]" not in context
+    assert prompt(store, "and after that", prompt_id="p2", session="s") is None
+
+
+def test_an_old_ending_is_not_brought_back(store: Store):
+    t = store.create_task("long ago", status="done", source="cauce", session_id="s")
+    store._conn.execute("INSERT INTO events (task_id, ts, kind, data) VALUES (?, ?, 'finished', '{}')",
+                        (t["id"], "2020-01-01T00:00:00+00:00"))
+    assert store.unreported("s") == []

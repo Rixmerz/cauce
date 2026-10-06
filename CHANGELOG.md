@@ -18,6 +18,25 @@
   - a session's own prompts, and older tasks run from a terminal, still say
     "you".
 
+### Added
+
+- **The main session hears when the work it sent ends.** A queued task, or a
+  run in the background, could end while the main session waited on nothing,
+  so it never told the person, continued or relaunched. Now each ending is
+  reported to the session that sent it, once:
+  - when the session is about to end its turn, the Stop hook blocks it once
+    with what ended, why, what changed so far and the command that goes on;
+  - when the session is idle, it hears with the person's next message;
+  - a `cauce run` or `cauce resume` whose report the caller read already
+    counts as reported.
+
+  Only endings of the last 24 hours are reported, so old work does not come
+  back.
+- **A task that outgrew its turns can be continued.** A `replan` because a
+  task did not fit the raised turn budget is not a wrong task. It now resumes
+  with `cauce resume <id> --max-turns 120` (or any `--max-turns`), and in a
+  worktree its work is kept on its branch instead of dropped.
+
 ## [0.4.6] - 2026-10-06
 
 ### Fixed

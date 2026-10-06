@@ -114,14 +114,13 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
 
     store.create_task(text, status="running", source="hook", session_id=session_id, prompt_id=prompt_id,
                       cwd=cwd, repo=key)
-    if len(words(text)) < 3:
-        return None
-    dead = store.dead_ends(text, repo=key, limit=_MAX_DEAD_ENDS, strict=True)
-    if not dead:
-        return None
-    return _context("UserPromptSubmit", _dead_end_text(
-        dead, "cauce memory: fixes already tried against problems like this one, and they did not work. "
-        "Before applying one again, say so and check why it failed."))
+    blocks = [notice] if (notice := _endings(store, session_id, via="prompt")) else []
+    dead = store.dead_ends(text, repo=key, limit=_MAX_DEAD_ENDS, strict=True) if len(words(text)) >= 3 else []
+    if dead:
+        blocks.append(_dead_end_text(
+            dead, "cauce memory: fixes already tried against problems like this one, and they did not work. "
+            "Before applying one again, say so and check why it failed."))
+    return _context("UserPromptSubmit", "\n\n".join(blocks)) if blocks else None
 
 
 def _dispatch(cwd: str | None, key: str | None, env: Mapping[str, str]) -> str:
@@ -162,6 +161,11 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
     from cauce import naming
 
     naming.maybe_start(store, session_id, home(), os.environ)
+    notice = _endings(store, session_id, via="stop")
+    if notice:
+        # The turn would end without the session knowing its work stopped:
+        # it goes on, once per ending, to tell the person and continue.
+        return {"decision": "block", "reason": notice}
     return None
 
 
@@ -283,6 +287,38 @@ def session_start(
 
 #: Endings of cauce runs that wait on a person to clear something.
 STOPPED_FOR_A_PERSON = ("blocked", "needs_approval")
+
+
+def _endings(store: Store, session_id: str, *, via: str) -> str | None:
+    """Work this session sent that ended since it last heard, each with what to do
+    next, marked as reported: a queued task finishes while nobody waits on it,
+    and the session that sent it would otherwise never learn it should act."""
+    ended = store.unreported(session_id)
+    if not ended:
+        return None
+    lines = ["cauce: work this session sent has ended since you last heard. Act on each now: tell the person "
+             "what happened, then continue as its line says (never redo a worker's task by hand)."]
+    for t in ended:
+        data = t["finished_data"]
+        changed = data.get("changed") or []
+        lines.append(f"#{t['id']} [{t['status']}] {t['title']}")
+        if t["status"] == "done":
+            branch = data.get("branch")
+            lines.append(f"  passed at {data.get('final_cell') or t['final_cell']}"
+                         + (f"; branch {branch}: show `git diff HEAD...{branch}` and merge only when they say so"
+                            if branch else "; its changes are in the checkout"))
+            continue
+        stop = stops.view(store, t)
+        if stop:
+            lines.append(f"  stopped by {stop['who']}: {stop['reason'][:300]}")
+        if changed:
+            shown = ", ".join(changed[:5]) + (f" and {len(changed) - 5} more" if len(changed) > 5 else "")
+            lines.append(f"  changed so far: {shown}")
+        if stop:
+            lines.append(f"  next: {stop['todo']}" + (f": {stop['next']}" if stop["next"] else ""))
+    store.mark_reported([t["id"] for t in ended], via=via)
+    return "\n".join(lines)
+
 
 
 def _stopped_text(store: Store, tasks: list[dict]) -> str:
