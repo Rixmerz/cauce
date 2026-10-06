@@ -373,8 +373,37 @@ def worker_env() -> dict[str, str]:
 # --- what changed ---------------------------------------------------------
 
 
+#: How deep below the work directory a nested git checkout is looked for, and how
+#: many are read: a folder holding a few repositories, not a whole disk.
+NESTED_DEPTH, NESTED_MAX = 2, 24
+_SKIP_DIRS = frozenset({"node_modules", ".venv", "venv", ".git", "dist", "build", "target", "__pycache__"})
+
+
 def tracked_state(directory: Path) -> dict[str, str] | None:
-    """`git status` of a directory, path -> status code; None outside git."""
+    """`git status` of a directory, path -> status code, and of every git checkout
+    nested in it, their paths prefixed. A folder that holds several repositories
+    is no checkout itself, and a checkout's status does not look inside a nested
+    one: without these, work done in them reads as "changed nothing".
+    None when neither the directory nor anything in it is under git."""
+    own = _status(directory)
+    nested = nested_checkouts(directory)
+    if own is None and not nested:
+        return None
+    state = dict(own or {})
+    for sub in nested:
+        found = _status(sub)
+        if found is None:
+            continue
+        rel = sub.relative_to(directory).as_posix()
+        for path, code in found.items():
+            state[f"\0HEAD:{rel}" if path == "\0HEAD" else f"{rel}/{path}"] = code
+    # The parent's own status lists a nested checkout as one untracked folder.
+    for sub in nested:
+        state.pop(sub.relative_to(directory).as_posix() + "/", None)
+    return state
+
+
+def _status(directory: Path) -> dict[str, str] | None:
     try:
         proc = subprocess.run(
             ["git", "status", "--porcelain", "-uall", "-z"],
@@ -394,20 +423,47 @@ def tracked_state(directory: Path) -> dict[str, str] | None:
     return state
 
 
+def nested_checkouts(directory: Path) -> list[Path]:
+    """Git checkouts below `directory`, at most `NESTED_DEPTH` levels down."""
+    found: list[Path] = []
+    level = [directory]
+    for _ in range(NESTED_DEPTH):
+        below: list[Path] = []
+        for parent in level:
+            try:
+                children = sorted(p for p in parent.iterdir() if p.is_dir() and not p.is_symlink())
+            except OSError:
+                continue
+            for child in children:
+                if child.name in _SKIP_DIRS or child.name.startswith("."):
+                    continue
+                if (child / ".git").exists():
+                    found.append(child)
+                    if len(found) >= NESTED_MAX:
+                        return found
+                else:
+                    below.append(child)
+        level = below
+    return found
+
+
 def changed_paths(
     before: dict[str, str] | None, after: dict[str, str] | None, directory: Path | None = None
 ) -> tuple[str, ...]:
     if before is None or after is None:
         return ()
-    changed = {p for p in set(before) | set(after) if before.get(p) != after.get(p)}
-    changed.discard("\0HEAD")
-    old, new = before.get("\0HEAD"), after.get("\0HEAD")
-    if directory is not None and old and new and old != new:
-        # The worker committed: what it committed is clean in `status` and would
-        # otherwise read as "changed nothing".
-        diff = subprocess.run(["git", "diff", "--name-only", old, new], cwd=str(directory),
-                              capture_output=True, text=True, check=False)
-        changed |= {line for line in diff.stdout.splitlines() if line}
+    changed = {p for p in set(before) | set(after) if before.get(p) != after.get(p) and not p.startswith("\0HEAD")}
+    if directory is not None:
+        for key in {k for k in set(before) | set(after) if k.startswith("\0HEAD")}:
+            old, new = before.get(key), after.get(key)
+            if not (old and new and old != new):
+                continue
+            # The worker committed: what it committed is clean in `status` and would
+            # otherwise read as "changed nothing".
+            rel = key.removeprefix("\0HEAD").removeprefix(":")
+            diff = subprocess.run(["git", "diff", "--name-only", old, new], cwd=str(directory / rel),
+                                  capture_output=True, text=True, check=False)
+            changed |= {f"{rel}/{line}" if rel else line for line in diff.stdout.splitlines() if line}
     return tuple(sorted(changed))
 
 
