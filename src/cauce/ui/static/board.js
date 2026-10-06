@@ -1,4 +1,5 @@
 import { get, post } from "./net.js";
+import { stopCard } from "./stop.js";
 import { h, short, usd, when } from "./util.js";
 
 // Where a queued task stands with the dispatcher: Haiku's call on whether it may
@@ -19,7 +20,7 @@ function card(task, openTask, extra = []) {
         ? h("span", { class: "chip" }, task.current_cell || task.final_cell || task.start_cell) : null,
       task.cost_usd ? h("span", {}, usd(task.cost_usd)) : null,
       ...extra),
-    task.asks ? h("div", { class: "asks" }, task.asks) : null,
+    task.stop ? stopCard(task.stop) : task.asks ? h("div", { class: "asks" }, task.asks) : null,
     task.status === "queued" && task.parallel_reason ? h("div", { class: "reason" }, short(task.parallel_reason, 160)) : null);
 }
 

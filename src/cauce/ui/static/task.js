@@ -1,4 +1,5 @@
 import { get, post } from "./net.js";
+import { stopSection } from "./stop.js";
 import { h, repoName, usd, when } from "./util.js";
 
 const drawer = () => document.getElementById("drawer");
@@ -16,7 +17,9 @@ function attempt(a) {
       h("span", {}, a.passed ? "pass" : (a.failure || "fail")),
       h("span", {}, `${a.turns} turns`), h("span", {}, usd(a.cost_usd))),
     a.summary ? h("div", {}, a.summary) : null,
+    a.denied.length ? h("div", { class: "refused" }, `refused: ${a.denied.join(", ")}`) : null,
     a.move ? h("div", { class: "move" }, `→ ${a.move}: ${a.move_reason}`) : null,
+    !a.passed && a.evidence ? h("details", {}, h("summary", {}, "evidence"), h("pre", {}, a.evidence)) : null,
     a.changed_paths.length ? h("div", { class: "meta" }, `changed: ${a.changed_paths.join(", ")}`) : null,
     a.capabilities.length ? h("div", { class: "meta" }, `capabilities: ${a.capabilities.join(", ")}`) : null);
 }
@@ -43,6 +46,7 @@ export async function openTask(id, quiet = false) {
           t.kind ? h("span", { class: "chip" }, t.kind) : null, h("span", {}, usd(t.cost_usd)),
           t.pinned ? h("span", { class: "chip" }, "pinned") : null, h("span", {}, when(t.created_at)))),
       h("div", { class: "row" }, ...actions, h("button", { onclick: close, "aria-label": "close" }, "✕"))),
+    stopSection(d.stop),
     h("div", { class: "section" }, h("h2", {}, "Task"), h("div", { class: "text" }, t.body)),
     t.parallel_reason ? h("div", { class: "section" }, h("h2", {}, "Dispatch"),
       h("div", {}, t.parallel ? "May run beside the work going in this repository: " : "Waits for the work ahead of it: ",

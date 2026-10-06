@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from cauce import hooks
+from cauce import hooks, stops
 from cauce.store import Store
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,6 +81,14 @@ def test_session_start_lists_unfinished_work_dead_ends_and_swallowed_errors(stor
     event = {"session_id": "s", "cwd": str(git_repo), "source": "resume"}
     context = hooks.session_start(event, store, root)["hookSpecificOutput"]["additionalContext"]
     assert "2 hook error(s)" in context and "half done thing" in context and "pin the version" in context
+    assert "stopped for a person" not in context
+    blocked = store.create_task("create the routes", status="running", source="cauce", session_id="s", cwd="/x")
+    stops.record(store, blocked["id"], stops.Stop("permission", "the worker was refused Bash(node a.js)",
+                                                  denied=("Bash(node a.js)",)))
+    context = hooks.session_start(event, store, root)["hookSpecificOutput"]["additionalContext"]
+    assert f"#{blocked['id']} [blocked] create the routes" in context
+    assert "stopped by your permission settings: the worker was refused Bash(node a.js)" in context
+    assert f"cauce resume {blocked['id']} --allow 'Bash(node a.js)'" in context
     again = hooks.session_start({**event, "source": "startup"}, store, root)["hookSpecificOutput"]
     assert "hook error" not in again["additionalContext"]
     assert hooks.session_start({}, store, root) is None

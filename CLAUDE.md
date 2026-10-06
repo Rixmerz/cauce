@@ -24,6 +24,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, the stale sweep |
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes |
+| `src/cauce/stops.py` | why a task stopped, who made the call, and the command that continues it; one account on its `finished` event; light, the hooks and the UI read it |
 | `src/cauce/project.py` | a project's `.cauce/` folder: enrollment (only enrolled projects show in the UI) and `sessions.json`, the session names; stdlib, no git call |
 | `src/cauce/naming.py` | Haiku names a session, started detached by the Stop hook; a name a person wrote is never replaced |
 | `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step |
@@ -85,6 +86,10 @@ yields the default kind, not a guess.
   kind unless a tag or `--kind` says so.
 - Work that stopped for a person (blocked, needs approval) is kept on its
   branch, unverified; only `failed`, `replan` and `cancelled` drop it.
+- Every ending short of a pass records a `stops.Stop` on its `finished`
+  event: a new way for a task to stop adds its cause there, and a status set
+  without one is read back and marked `recovered`, never presented as recorded.
+  A cancel says where it came from; "a person did it" is never a guess.
 - The model's stated confidence about its own work is not an input.
 - History may raise where a task starts, never lower it below its ladder.
 - Fable needs a person: `#fable` or `--allow-approval`.

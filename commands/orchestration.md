@@ -57,10 +57,11 @@ Request: $ARGUMENTS
    - `replan` — the task as written cannot be done, or does not fit. Rewrite or
      split it from the report's reason, then dispatch again. Do not rerun it as is.
    - `blocked` — a refused command, the environment or the budget stopped it.
-     Say which, and what is needed. Its work so far is on its branch, marked
-     unverified. When the user grants what was refused, continue it:
-     `cauce resume <id> --allow "<the refused rule>"` — not a new task, and
-     never by hand.
+     The report's `stopped by …` line says which, and the line under it is the
+     command that continues it. Tell the user both, in those words. Its work
+     so far is on its branch, marked unverified. When the user grants what was
+     refused, run that command (`cauce resume <id> --allow "<the refused rule>"`).
+     It is not a new task, and you never redo it by hand.
    - `failed` — every cell on the ladder tried. Report what each attempt found
      (`cauce show <id>`); do not try it yourself in this context.
 

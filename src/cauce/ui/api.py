@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from cauce import flow, habits, project, usage
+from cauce import flow, habits, project, stops, usage
 from cauce.matrix import LADDERS
 from cauce.store import Store
 
@@ -74,7 +74,8 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
         if t["status"] in NEEDS_YOU or t["status"] in ("running", "done"):
             item["flow"] = flow_of(store, t["id"])
         if t["status"] in NEEDS_YOU:
-            needs.append({**item, "asks": NEEDS_YOU[t["status"]]})
+            # The generic ask is the fallback; the account says what stopped this one, who did, and the next step.
+            needs.append({**item, "asks": NEEDS_YOU[t["status"]], "stop": stops.view(store, t)})
         elif t["status"] == "running":
             started = store.last_event(t["id"], "attempt_started")
             item["attempt"] = started["data"].get("seq") if started else None
@@ -129,9 +130,11 @@ def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:
     if task is None:
         return None
     attempts = store.attempts(task_id)
+    refused = store.denials(task_id)
     for a in attempts:
         a["changed_paths"] = json.loads(a["changed_paths"] or "[]")
         a["capabilities"] = json.loads(a["capabilities"] or "[]")
+        a["denied"] = refused.get(a["seq"], [])
     finished = store.last_event(task_id, "finished")
     return {
         "task": {**_brief(task), "body": task["body"], "options": json.loads(task.get("options") or "{}"),
@@ -140,6 +143,7 @@ def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:
         "attempts": attempts,
         "messages": store.messages(task_id),
         "children": [_brief(c) for c in store.children(task_id)],
+        "stop": stops.view(store, task),
         "branch": finished["data"].get("branch") if finished else None,
         "impact": finished["data"].get("impact", []) if finished else [],
         "dead_ends": store.dead_ends(task["body"], repo=task["repo"], limit=5),

@@ -91,6 +91,8 @@ def test_a_task_process_that_dies_unannounced_is_interrupted(store: Store):
     handle.proc.wait()
     assert handle.poll() == "interrupted"
     assert store.get_task(task["id"])["status"] == "interrupted" and store.lanes()[0]["paused"]
+    stop = store.last_event(task["id"], "finished")["data"]["stop"]
+    assert stop["cause"] == "died" and stop["by"] == "cauce" and "without saying how" in stop["reason"]
     store.update_task(task["id"], status="done")
     assert handle.poll() == "done"
     store.update_task(task["id"], status="running")

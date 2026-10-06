@@ -102,3 +102,12 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .turn { padding: 8px 0; border-bottom: 1px solid var(--line); }
 @media (max-width: 700px) { .project select { max-width: 150px; } .sessions { grid-template-columns: 1fr; } }
 .turn .meta { display: flex; gap: 8px; font-size: 12px; } .turn .subject { margin: 2px 0 4px; }
+.stop { margin-top: 6px; font-size: 12px; display: grid; gap: 3px; overflow-wrap: anywhere; }
+.by { font-weight: 700; font-size: 11px; } .by-you { color: var(--accent); }
+.by-settings, .by-budget, .by-environment { color: var(--bad); } .by-worker, .by-cauce, .by-outside, .by-unknown { color: var(--warn); }
+.refused { font-family: var(--mono); font-size: 11px; color: var(--bad); overflow-wrap: anywhere; }
+.next { display: flex; gap: 6px; align-items: center; } .next code { font-family: var(--mono); font-size: 11px;
+        background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; overflow-wrap: anywhere; }
+.next .copy { padding: 1px 8px; font-size: 11px; flex: none; }
+.stop-detail ul { margin: 4px 0; padding-left: 18px; } .stop-detail > * { margin-top: 6px; }
+details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
