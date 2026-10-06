@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-10-06
+
+### Fixed
+
+- **The UI listed sessions from every folder, not just enrolled projects.**
+  To find a session's `.cauce/`, cauce climbed every parent folder, and
+  outside a git checkout it went all the way to `/`. So one `.cauce/` high up
+  enrolled every session below it: in a folder that holds several projects,
+  in the home directory, or at the top of a home that is itself a git
+  checkout (dotfiles). Now a session belongs to the `.cauce/` in its own
+  directory, or in a parent up to the top of its checkout, and never above it.
+  Outside a checkout only its own directory counts. The home directory and `/`
+  are never a project, and `cauce init` refuses them. A stray `.cauce/` left
+  in a high folder no longer lists anything below it, with no cleanup needed.
+
 ## [0.4.5] - 2026-10-06
 
 ### Added

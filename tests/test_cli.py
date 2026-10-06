@@ -99,6 +99,14 @@ def test_config_model_shows_pins_and_what_served(capsys):
     assert "attempt 1 sonnet/medium [claude-sonnet-5]" in capsys.readouterr().out
 
 
+def test_init_refuses_the_home_directory(capsys, tmp_path, monkeypatch):
+    from cauce import project
+
+    monkeypatch.setattr(project.Path, "home", classmethod(lambda cls: tmp_path))
+    assert cli.main(["init", str(tmp_path)]) == 1
+    assert "is not a project" in capsys.readouterr().err and not (tmp_path / ".cauce").exists()
+
+
 def test_capabilities(capsys, _isolated_home):
     assert cli.main(["capabilities"]) == 0
     assert "no capabilities registered" in capsys.readouterr().out

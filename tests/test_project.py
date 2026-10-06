@@ -26,7 +26,39 @@ def test_a_project_is_enrolled_by_its_cauce_folder(git_repo, tmp_path):
     # Outside any checkout, the session's own directory is the project.
     loose = tmp_path / "loose" / "dir"
     loose.mkdir(parents=True)
-    assert project.enroll(loose).parent in (loose, tmp_path)
+    assert project.enroll(loose) == loose / ".cauce"
+
+
+def test_a_cauce_folder_above_a_project_enrolls_no_session_below_it(store: Store, tmp_path, monkeypatch):
+    """A `.cauce/` in a folder that holds several projects, or in the home
+    directory, put every session on the machine in the UI."""
+    home = tmp_path / "home"
+    monkeypatch.setattr(project.Path, "home", classmethod(lambda cls: home))
+    container = home / "projects"
+    loose, repo = container / "notes", container / "app"
+    for d in (loose / "deep", repo / "src"):
+        d.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (container / ".cauce").mkdir()  # cauce once ran in the container itself
+    (home / ".cauce").mkdir()
+    assert project.find(container) == container / ".cauce"  # that session is its own
+    assert project.find(loose) is None and project.find(loose / "deep") is None
+    assert project.find(repo / "src") is None
+    assert project.find(home) is None and project.find(home / "Downloads") is None
+    # a home that is a git checkout (dotfiles) is no project either
+    (home / ".git").mkdir()
+    assert project.find(loose / "deep") is None
+    assert project.enroll(loose / "deep") == loose / "deep" / ".cauce"
+    for never in (home, project.Path("/")):
+        try:
+            project.enroll(never)
+        except project.NotAProject as exc:
+            assert "is not a project" in str(exc)
+        else:
+            raise AssertionError(f"{never} was enrolled")
+    for i, cwd in enumerate((container, loose, repo / "src", home, home / "Downloads")):
+        store.touch_session(f"s{i}", str(cwd), "r")
+    assert [s["id"] for s in api.sessions(store)] == ["s0"]
 
 
 def test_a_name_haiku_gave_is_haiku_s_until_a_person_changes_it(tmp_path):

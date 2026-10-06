@@ -169,7 +169,7 @@ def _enroll(cwd: str) -> None:
     """Using cauce in a project enrolls it: it gets its `.cauce/` folder."""
     from cauce import project
 
-    with contextlib.suppress(OSError):
+    with contextlib.suppress(OSError, project.NotAProject):
         project.enroll(cwd)
 
 

@@ -119,6 +119,10 @@ yields the default kind, not a guess.
   waits. It is made once and kept on the task with its reason. Tests run with
   `CAUCE_PARALLEL=off`, `CAUCE_AUTOWORK=off` and `CAUCE_NAMES=off`; a test
   that wants them passes a fake `decide`, `start` or `popen`.
+- A session belongs to the `.cauce/` in its own directory or up to the top of
+  its checkout, never above it; outside a checkout, its own directory only.
+  The home directory and `/` are never a project, a dotfiles checkout at home
+  included.
 - `.cauce/sessions.json` belongs to the person as much as to Haiku: a `name`
   that differs from `haiku_name` is theirs, and nothing in cauce overwrites it.
 - The UI shows one project at a time and takes no task: work is asked for in
