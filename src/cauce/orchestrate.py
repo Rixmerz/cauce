@@ -23,6 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from cauce import allow as allow_rules
 from cauce import capabilities as caps
 from cauce import config, habits, isolate, launch, project, repo, stops
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
@@ -78,10 +79,12 @@ class Options:
     allow_tools: tuple[str, ...] = ()
 
     def stored(self) -> dict:
-        """What a resumed run is started with again, as the task's `options`."""
+        """What a resumed run is started with again, as the task's `options`. A run
+        in the checkout itself resumes there: in a worktree it could not see the
+        uncommitted work it was continuing."""
         values = {"budget_usd": self.budget_usd, "verify": self.verify, "kind": self.kind,
                   "allow_approval": self.allow_approval, "allow_tools": list(self.allow_tools),
-                  "livespec": self.livespec}
+                  "livespec": self.livespec, "no_isolate": not self.isolate}
         return {k: v for k, v in values.items() if v not in (None, [], False)}
 
 
@@ -271,6 +274,10 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     if learned:
         context.append("Steps that came before passing attempts on this kind of task here: "
                        + "; ".join(learned) + ". Use them unless the task says otherwise.")
+    seen = _refused_here(store, repo.key(repo_dir), options.allow_tools)
+    if seen:
+        neighbour_notes.append("workers here were refused before: " + ", ".join(f"{r} ×{n}" for r, n in seen)
+                               + ". Pass the ones this task needs with --allow, or a worker stops on them")
     expected = store.expected_cost(kind, repo=repo.key(repo_dir)) or store.expected_cost(kind)
     if expected:
         neighbour_notes.append(f"finished {kind} tasks cost ${expected[0]:.2f} on average (last {expected[1]})")
@@ -404,8 +411,10 @@ def run(
             store.add_event(task["id"], "attempt_finished", seq=seq, cell=cell.label, passed=result.passed,
                             failure=result.failure.value if result.failure else None, cost_usd=result.cost_usd,
                             turns=result.turns, summary=result.summary[:500], denied=list(result.denied),
+                            allow=list(result.allow),
                             changed=list(result.changed_paths)[:50])
-            attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied)
+            attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
+                              allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:])
             attempts.append(attempt)
             if result.passed:
                 report.status, report.final_cell, report.summary = "done", cell.label, result.summary
@@ -435,7 +444,8 @@ def run(
                 report.summary = f"{decision.reason}. The last worker's own account: {result.summary}" if (
                     result.summary) else decision.reason
                 report.stop = stops.Stop(
-                    _cause(decision, attempt), decision.reason, denied=attempt.denied, attempt=seq,
+                    _cause(decision, attempt), decision.reason, denied=attempt.denied, allow=attempt.allow,
+                    attempt=seq,
                     next_cell=decision.cell.label if decision.cell else None, account=result.summary[:2000])
                 break
             if decision.move is Move.NEXT_MODEL and workspace is not None:
@@ -478,6 +488,19 @@ def run(
                         changed=report.changed[:50], stop=report.stop.data() if report.stop else None)
         store.add_message(task["id"], "worker", report.text())
     return report
+
+
+def _refused_here(store: Store, key: str | None, granted: Sequence[str]) -> list[tuple[str, int]]:
+    """The rules workers in this repository lacked most often, past refusals read
+    back to rules when an older run did not record them, the granted ones aside."""
+    if not key:
+        return []
+    counts: dict[str, int] = {}
+    for row in store.refusals(key):
+        for rule in dict.fromkeys(row["allow"] or allow_rules.from_refusals(row["denied"])):
+            if rule not in granted:
+                counts[rule] = counts.get(rule, 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:8]
 
 
 def _cause(decision: Decision, attempt: Attempt) -> str:
@@ -541,6 +564,9 @@ def brief(
             lines.append(f"  attempt {i} [{a.cell.label}, {a.failure or 'no verdict'}] {a.summary[:300]}")
             if a.denied:
                 lines.append(f"    refused: {', '.join(a.denied[:5])}")
+        last = attempts[-1]
+        if not last.passed and last.evidence.strip():
+            lines.append("  The output that failed the last attempt, last lines:\n" + last.evidence.strip()[-1500:])
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
 
@@ -587,23 +613,39 @@ def _verified(result: launch.WorkerResult, command: str, workdir: Path) -> launc
     )
 
 
+#: Attempts that stopped before the worker could check its own work, through no
+#: verdict of its own: the repository's check is run for them.
+_UNCHECKED = frozenset({Failure.TURNS_EXHAUSTED, Failure.BUDGET_EXHAUSTED})
+
+
 def _settles(result: launch.WorkerResult, command: str | None) -> bool:
-    """A worker refused the command that would show its work, that did not call it
-    a failure: on a task that has written something, the repository's own check
-    can still decide. Its claim alone never would."""
-    return bool(command and not result.passed and result.failure is Failure.PERMISSION
-                and result.verdict in ("inconclusive", "pass"))
+    """A worker that could not run the command that would show its work — refused
+    it, or ran out of turns or money first — and did not call it a failure: on a
+    task that has written something, the repository's own check can still
+    decide. Its claim alone never would. Run by cauce, the check costs the
+    worker nothing, and a red one hands the next attempt the failing output."""
+    if not command or result.passed:
+        return False
+    if result.failure is Failure.PERMISSION:
+        return result.verdict in ("inconclusive", "pass")
+    return result.failure in _UNCHECKED
 
 
 def _settled(result: launch.WorkerResult, command: str, workdir: Path) -> launch.WorkerResult:
     code, output = _check(command, workdir)
+    if result.failure is Failure.PERMISSION:
+        cause = f"the worker was refused {', '.join(result.denied[:3])}"
+    elif result.failure is Failure.TURNS_EXHAUSTED:
+        cause = "the worker ran out of turns before checking its work"
+    else:
+        cause = "the worker reached its spending cap before checking its work"
     if code != 0:
         why = "timed out" if code is None else f"exited {code}"
-        return dataclasses.replace(result, evidence=f"`{command}` {why}:\n{output}".strip())
-    refused = ", ".join(result.denied[:3])
+        return dataclasses.replace(result, evidence=f"`{command}` {why}:\n{output}".strip(),
+                                   summary=f"{result.summary} ({cause}; cauce ran `{command}`, which {why})")
     return dataclasses.replace(
         result, passed=True, failure=None, evidence=output or f"`{command}` exited 0",
-        summary=f"{result.summary} (the worker was refused {refused}; `{command}` passed in its place)",
+        summary=f"{result.summary} ({cause}; `{command}` passed in its place)",
     )
 
 

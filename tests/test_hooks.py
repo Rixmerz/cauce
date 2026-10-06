@@ -88,7 +88,7 @@ def test_session_start_lists_unfinished_work_dead_ends_and_swallowed_errors(stor
     context = hooks.session_start(event, store, root)["hookSpecificOutput"]["additionalContext"]
     assert f"#{blocked['id']} [blocked] create the routes" in context
     assert "stopped by your permission settings: the worker was refused Bash(node a.js)" in context
-    assert f"cauce resume {blocked['id']} --allow 'Bash(node a.js)'" in context
+    assert f"cauce resume {blocked['id']} --allow 'Bash(node:*)'" in context
     again = hooks.session_start({**event, "source": "startup"}, store, root)["hookSpecificOutput"]
     assert "hook error" not in again["additionalContext"]
     assert hooks.session_start({}, store, root) is None

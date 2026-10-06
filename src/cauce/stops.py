@@ -19,6 +19,8 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Any
 
+from cauce import allow
+
 #: Who made the call, as the board says it. `you` is the only one a person did
 #: by hand; `settings` and `budget` are theirs too, set before the run.
 WHO = {
@@ -66,8 +68,10 @@ class Stop:
     #: Overrides the cause's usual author, e.g. a ladder that ran out is cauce's
     #: call but a cancel's author is whoever sent it.
     by: str = ""
-    #: The tool calls the settings refused, as rules `--allow` takes.
+    #: The tool calls the settings refused, as they were made.
     denied: tuple[str, ...] = ()
+    #: The `--allow` rules that let them through, one per program.
+    allow: tuple[str, ...] = ()
     #: The cell a person must approve before the run goes on.
     next_cell: str | None = None
     #: The budget the run had, for the suggestion to raise it.
@@ -97,6 +101,8 @@ class Stop:
         out: dict[str, Any] = {"cause": self.cause, "by": self.who, "reason": self.reason}
         if self.denied:
             out["denied"] = list(self.denied)
+        if self.allow:
+            out["allow"] = list(self.allow)
         for key in ("next_cell", "budget_usd", "attempt"):
             if getattr(self, key) is not None:
                 out[key] = getattr(self, key)
@@ -110,9 +116,11 @@ class Stop:
 def read(data: dict[str, Any] | None) -> Stop | None:
     if not isinstance(data, dict) or not data.get("cause"):
         return None
-    known = {"cause", "by", "reason", "denied", "next_cell", "budget_usd", "attempt", "account", "recovered"}
+    known = {"cause", "by", "reason", "denied", "allow", "next_cell", "budget_usd", "attempt", "account",
+             "recovered"}
     return Stop(str(data["cause"]), str(data.get("reason") or ""), by=str(data.get("by") or ""),
-                denied=tuple(data.get("denied") or ()), next_cell=data.get("next_cell"),
+                denied=tuple(data.get("denied") or ()), allow=tuple(data.get("allow") or ()),
+                next_cell=data.get("next_cell"),
                 budget_usd=data.get("budget_usd"), attempt=data.get("attempt"),
                 account=str(data.get("account") or ""), recovered=bool(data.get("recovered")),
                 extra={k: v for k, v in data.items() if k not in known})
@@ -124,8 +132,9 @@ def next_step(task_id: int, stop: Stop, *, resumable: bool = True) -> str | None
     if not resumable or stop.cause in ("spec", "turns", "ladder", "missing_dir"):
         return None
     base = f"cauce resume {task_id}"
-    if stop.cause == "permission" and stop.denied:
-        return base + "".join(f" --allow {shlex.quote(rule)}" for rule in stop.denied)
+    rules = stop.allow or allow.from_refusals(stop.denied)
+    if stop.cause == "permission" and rules:
+        return base + "".join(f" --allow {shlex.quote(rule)}" for rule in rules)
     if stop.cause == "approval":
         return f"{base} --allow-approval"
     if stop.cause == "budget" and stop.budget_usd:
@@ -223,5 +232,6 @@ def view(store: Any, task: dict[str, Any]) -> dict[str, Any] | None:
     resumable = task.get("source") == "cauce" and bool(task.get("cwd"))
     todo = what_to_do(stop) if resumable or stop.status != "cancelled" else (
         "it never ran: queue it again if you still want it")
-    return {**stop.data(), "status": stop.status, "who": WHO.get(stop.who, stop.who), "todo": todo,
+    rules = list(stop.allow or allow.from_refusals(stop.denied)) if stop.cause == "permission" else []
+    return {**stop.data(), "allow": rules, "status": stop.status, "who": WHO.get(stop.who, stop.who), "todo": todo,
             "next": next_step(task["id"], stop, resumable=resumable)}

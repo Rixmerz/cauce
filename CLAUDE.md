@@ -24,6 +24,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, the stale sweep |
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes |
+| `src/cauce/allow.py` | a refused call → the `--allow` rules that let it through, one per program; suggestions only, nothing is granted |
 | `src/cauce/stops.py` | why a task stopped, who made the call, and the command that continues it; one account on its `finished` event; light, the hooks and the UI read it |
 | `src/cauce/project.py` | a project's `.cauce/` folder: enrollment (only enrolled projects show in the UI) and `sessions.json`, the session names; stdlib, no git call |
 | `src/cauce/naming.py` | Haiku names a session, started detached by the Stop hook; a name a person wrote is never replaced |
@@ -96,6 +97,12 @@ yields the default kind, not a guess.
   over. A new branch in `decide` gives both; the `moved` event keeps them.
 - History may raise where a task starts, never lower it below its ladder.
 - Fable needs a person: `#fable` or `--allow-approval`.
+- cauce suggests permission rules and never grants one: `allow.py` only
+  writes text a person passes with `--allow`. A rule for an absolute path has
+  two slashes (`Read(//abs)`).
+- A worker that stopped before its own check (refused, out of turns or
+  money) is checked with `--verify` by cauce when the task changed something;
+  a red check is evidence for the next brief, never a pass.
 - An adopted neighbour is read, never written: the livespec index is opened
   `mode=ro`, and the index is built only through livespec's own CLI. Absent
   and unreadable are different states and neither stops a run.

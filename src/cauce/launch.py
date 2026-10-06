@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from cauce import allow
 from cauce.escalate import REPLAN, Failure
 from cauce.matrix import Cell
 
@@ -75,6 +76,11 @@ When you are done, end your reply with exactly one fenced block:
   you did not make or could not save; if you changed nothing, say so.
 - If a command you needed was refused, name it in `summary`; the verdict is
   `inconclusive`. The work you did stays: it is kept for a person to see.
+- Nobody can approve a command while you run: what your settings do not allow
+  is refused. Read and search with the Read, Grep and Glob tools, which need no
+  approval, rather than with shell commands. Run one shell command per call
+  instead of chaining them with `;`, `&&` or `|`: every part of a chain is
+  checked, and one refused part refuses all of it.
 - Do not list the files you changed; they are read from git.
 """.strip()
 
@@ -135,6 +141,8 @@ class WorkerResult:
     verdict: str = ""
     #: The tool calls the permission settings refused, from the CLI, not the worker.
     denied: tuple[str, ...] = ()
+    #: The `--allow` rules that would let them through, from the full calls.
+    allow: tuple[str, ...] = ()
 
 
 def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path: Path | None = None) -> list[str]:
@@ -228,7 +236,7 @@ def parse(
     envelope = _json(proc.stdout)
     usage = _usage(envelope)
     denied = denials(envelope)
-    common = dict(changed_paths=changed, duration_s=duration_s, denied=denied, **usage)
+    common = dict(changed_paths=changed, duration_s=duration_s, denied=denied, allow=allow_rules(envelope), **usage)
     if envelope is None:
         detail = (proc.stderr or "").strip()[:300]
         return WorkerResult(False, Failure.ENVIRONMENT,
@@ -265,6 +273,16 @@ def _refused(failure: Failure, denied: Sequence[str]) -> Failure:
     the task itself wrong: no model gets past a setting, and a stronger one sent
     into the same refusal only costs more."""
     return Failure.PERMISSION if denied and failure not in REPLAN else failure
+
+
+def allow_rules(envelope: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """The rules a person would pass to let every refused call through: one per
+    program, read from the calls in full (see `cauce.allow`)."""
+    found: list[str] = []
+    for entry in (envelope or {}).get("permission_denials") or ():
+        if isinstance(entry, dict) and entry.get("tool_name"):
+            found += allow.rules(str(entry["tool_name"]), entry.get("tool_input"))
+    return tuple(dict.fromkeys(found))
 
 
 def denials(envelope: Mapping[str, Any] | None) -> tuple[str, ...]:

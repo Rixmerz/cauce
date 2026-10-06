@@ -45,8 +45,8 @@ def test_a_refusal_names_the_rules_and_the_command_that_allows_them(git_repo, st
     stop = _stop(store, report.task_id)
     assert stop.denied == ("Bash(node server.js)",)
     assert stop.account == "created the routes; node was refused"
-    assert stops.next_step(report.task_id, stop) == f"cauce resume {report.task_id} --allow 'Bash(node server.js)'"
-    assert f"  cauce resume {report.task_id} --allow 'Bash(node server.js)'" in report.text()
+    assert stops.next_step(report.task_id, stop) == f"cauce resume {report.task_id} --allow 'Bash(node:*)'"
+    assert f"  cauce resume {report.task_id} --allow 'Bash(node:*)'" in report.text()
 
 
 def test_approval_and_budget_say_how_to_go_on(tmp_path, store):
@@ -154,7 +154,7 @@ def test_the_view_says_who_in_words_and_what_to_do(store: Store):
     stops.record(store, ran["id"], stops.Stop("permission", "refused", denied=("Bash(ls -la)",)))
     view = stops.view(store, store.get_task(ran["id"]))
     assert view["who"] == "your permission settings" and view["status"] == "blocked"
-    assert view["next"] == f"cauce resume {ran['id']} --allow 'Bash(ls -la)'" and "allow" in view["todo"]
+    assert view["next"] == f"cauce resume {ran['id']} --allow 'Bash(ls:*)'" and "allow" in view["todo"]
     never = store.enqueue("never ran", repo="r", cwd="/x")
     stops.record(store, never["id"], stops.Stop("cancelled", "you cancelled it", by="you"))
     view = stops.view(store, store.get_task(never["id"]))

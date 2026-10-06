@@ -59,7 +59,7 @@ def test_tasks_show_and_memory(capsys, git_repo):
     out = capsys.readouterr().out
     assert "refused: Bash(node a.js)" in out
     assert "stopped by your permission settings: the worker was refused" in out
-    assert f"cauce resume {blocked['id']} --allow 'Bash(node a.js)'" in out
+    assert f"cauce resume {blocked['id']} --allow 'Bash(node:*)'" in out
     store = Store.open()
     store.set_move(blocked["id"], 1, "more_effort", "code_bug: same model, more thorough")
     store.add_event(blocked["id"], "moved", seq=1, from_cell="sonnet/medium", to_cell="sonnet/high", axis="effort",
@@ -390,6 +390,7 @@ def test_resume_continues_a_stopped_task_with_what_it_was_refused_granted(capsys
     assert options.kind == "implement" and options.start.label == "sonnet/medium"
     assert kw["task_id"] == t["id"] and kw["history"][0].failure.value == "permission"
     assert kw["history"][0].denied == ("Bash(node app.js)",)  # the resumed brief still says what was refused
+    assert options.isolate is True
     store = Store.open()
     row = store.get_task(t["id"])
     assert row["dispatched"] == 0 and row["cancel_requested"] == 0
@@ -400,7 +401,8 @@ def test_resume_continues_a_stopped_task_with_what_it_was_refused_granted(capsys
     assert "--allow-approval" in capsys.readouterr().err
     assert cli.main(["resume", str(approval["id"]), "--allow-approval"]) == 0
     assert calls[-1][2].start.label == "fable/high" and calls[-1][2].allow_approval
-    assert cli.main(["resume", str(odd["id"]), "--verify", "true", "--budget", "2"]) == 0
+    assert cli.main(["resume", str(odd["id"]), "--verify", "true", "--budget", "2", "--no-isolate"]) == 0
+    assert calls[-1][2].isolate is False
     assert calls[-1][3]["history"][0].failure is None and calls[-1][2].budget_usd == 2
     for refused in (hook["id"], done["id"], 999):
         assert cli.main(["resume", str(refused)]) == 1
