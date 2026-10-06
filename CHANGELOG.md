@@ -2,6 +2,53 @@
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-10-06
+
+From a session where one read-only audit went five attempts deep, each refused
+different commands, and a person ran it by hand in thirty seconds.
+
+### Changed
+
+- **Workers run in Claude Code's auto mode.** Under `acceptEdits`, every
+  command not named by a rule was refused. A worker that needed `node`
+  reached for it five ways (`nvm`, `~/.nvm/.../node`, `/opt/homebrew/bin/node`,
+  …) and met five refusals, one new `--allow` each. In auto mode a classifier
+  lets safe commands through with no rule per command. Haiku is not served by
+  auto mode, so Haiku workers run with `bypassPermissions`. This is a
+  deliberate choice: Bash in a Haiku worker is unchecked, and deny rules still
+  hold, so a reading task's write tools stay removed. `cauce config mode
+  <model|default> <mode>` changes either. A CLI that does not take the mode
+  runs the attempt again in `acceptEdits` instead of failing.
+- **A refused attempt never climbs.** A worker refused its tools, then its
+  check went red. That read as shallow work and moved to more effort
+  (opus/high → opus/xhigh), which met the same refusals. Any attempt with a
+  refusal now blocks, unless the worker found the task itself wrong.
+
+### Fixed
+
+- **Workers were refused the MCP servers cauce handed them.** A capability,
+  livespec included, was configured for the worker but its tools were never
+  allowed. The tools of every server cauce hands a worker are now allowed
+  with it (`mcp__<name>`).
+
+### Added
+
+- **`cauce allow`: rules kept for a repository.** `--allow` grants a rule to
+  one run. A new task in the same repository started with none and met the
+  same refusals again. `cauce allow 'Bash(npm:*)'` keeps rules for every run
+  and resume in the repository, `--preset read|node|python` adds the usual
+  sets, and `--rm` takes rules back. They live in the person's cauce home,
+  never in the repository. A blocked report also prints the `cauce allow`
+  command that keeps its rules.
+- **The project's Node goes first on the worker's PATH.** It is read from
+  `.nvmrc`, `.node-version` or `engines.node` (for a folder of projects, the
+  version that fits them all), found among the versions nvm installed, and
+  put first on the PATH of the worker and of its `--verify`. The plan says
+  which one. Workers are told to run tools by name, never through a version
+  manager or a full path.
+- `/orchestration` answers quick read-only lookups itself: a worker's setup
+  costs more than a grep.
+
 ## [0.4.7] - 2026-10-06
 
 ### Fixed

@@ -25,6 +25,8 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes |
 | `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
+| `src/cauce/grants.py` | what workers may do: the permission mode per model (auto; Haiku bypasses) and the rules a person keeps per repository with `cauce allow` |
+| `src/cauce/runtime.py` | the Node a project declares (`.nvmrc`, `.node-version`, `engines.node`), found among nvm's and put first on a worker's PATH |
 | `src/cauce/allow.py` | a refused call → the `--allow` rules that let it through, one per program; suggestions only, nothing is granted |
 | `src/cauce/stops.py` | why a task stopped, who made the call, and the command that continues it; one account on its `finished` event; light, the hooks and the UI read it |
 | `src/cauce/project.py` | a project's `.cauce/` folder: enrollment (only enrolled projects show in the UI) and `sessions.json`, the session names; stdlib, no git call |
@@ -107,8 +109,14 @@ yields the default kind, not a guess.
   cauce never hard-codes a model id; the model that served an attempt is read
   from the CLI's `modelUsage`, never assumed from the alias.
 - cauce suggests permission rules and never grants one: `allow.py` only
-  writes text a person passes with `--allow`. A rule for an absolute path has
-  two slashes (`Read(//abs)`).
+  writes text a person passes with `--allow` or keeps with `cauce allow`
+  (stored in their cauce home, never in a repository). A rule for an absolute
+  path has two slashes (`Read(//abs)`). Two things are allowed with the
+  worker itself: the tools of the MCP servers cauce hands it, and the
+  permission mode its model runs in (auto; Haiku bypasses), which a person
+  changes with `cauce config mode`.
+- A refused attempt blocks; it never climbs, whatever else it ended with,
+  unless the worker found the task wrong.
 - A worker that stopped before its own check (refused, out of turns or
   money) is checked with `--verify` by cauce when the task changed something;
   a red check is evidence for the next brief, never a pass.

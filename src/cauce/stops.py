@@ -150,7 +150,8 @@ def next_step(task_id: int, stop: Stop, *, resumable: bool = True) -> str | None
 def what_to_do(stop: Stop) -> str:
     """What a person does before the command, in one sentence."""
     return {
-        "permission": "allow what was refused (or run it yourself), then resume",
+        "permission": "allow what was refused for this run, or keep it for every task here with `cauce allow`, "
+                      "then resume",
         "environment": "fix what failed to run, then resume",
         "budget": "resume with a larger budget, or read the attempts first",
         "missing_dir": "the task's directory is gone: restore it, or queue the task again where it now lives",
@@ -239,5 +240,7 @@ def view(store: Any, task: dict[str, Any]) -> dict[str, Any] | None:
     todo = what_to_do(stop) if resumable or stop.status != "cancelled" else (
         "it never ran: queue it again if you still want it")
     rules = list(stop.allow or allow.from_refusals(stop.denied)) if stop.cause == "permission" else []
-    return {**stop.data(), "allow": rules, "status": stop.status, "who": WHO.get(stop.who, stop.who), "todo": todo,
+    keep = ("cauce allow " + " ".join(shlex.quote(r) for r in rules)) if rules else None
+    return {**stop.data(), "allow": rules, "keep": keep, "status": stop.status, "who": WHO.get(stop.who, stop.who),
+            "todo": todo,
             "next": next_step(task["id"], stop, resumable=resumable)}

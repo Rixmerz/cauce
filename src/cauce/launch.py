@@ -23,6 +23,7 @@ says about the code.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -34,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from cauce import allow, models
+from cauce import allow, grants, models
 from cauce.escalate import REPLAN, Failure
 from cauce.matrix import Cell
 
@@ -81,6 +82,10 @@ When you are done, end your reply with exactly one fenced block:
   approval, rather than with shell commands. Run one shell command per call
   instead of chaining them with `;`, `&&` or `|`: every part of a chain is
   checked, and one refused part refuses all of it.
+- Run a project's tools by name (`npm test`, `npx tsc`), as its scripts do. Do
+  not source a version manager or call a binary by its full path: the
+  project's own Node, when it declares one, is already first on your PATH, and
+  if the version is still wrong, answer `fail` with `environment` and say so.
 - A command that never returns (a dev server, a watcher) blocks the call it
   runs in: start it in the background and stop it before you finish. You have
   no browser unless your tools include one; without it, answer `fail` with
@@ -151,6 +156,8 @@ class WorkerResult:
     allow: tuple[str, ...] = ()
     #: The model the CLI says did the work, e.g. `claude-sonnet-5-5`; "" when unknown.
     served_model: str = ""
+    #: The permission mode the worker ran in, after any fallback.
+    permission_mode: str = ""
 
 
 def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path: Path | None = None) -> list[str]:
@@ -225,8 +232,21 @@ def run(
     finally:
         if mcp_path is not None:
             mcp_path.unlink(missing_ok=True)
+    if _mode_refused(proc, spec):
+        # This CLI does not take the mode (an older one, or auto mode not on for
+        # the account): the attempt runs again, as it would have before.
+        return run(dataclasses.replace(spec, permission_mode=grants.FALLBACK_MODE), runner=runner,
+                   claude_bin=claude_bin)
     changed = changed_paths(before, tracked_state(spec.target_dir), spec.target_dir)
-    return parse(proc, spec, changed, duration_s=time.monotonic() - started)
+    return dataclasses.replace(parse(proc, spec, changed, duration_s=time.monotonic() - started),
+                               permission_mode=spec.permission_mode)
+
+
+def _mode_refused(proc: subprocess.CompletedProcess, spec: LaunchSpec) -> bool:
+    if spec.permission_mode == grants.FALLBACK_MODE or proc.returncode == 0 or _json(proc.stdout):
+        return False
+    said = (proc.stderr or "").lower()
+    return "permission-mode" in said or "permission mode" in said or "auto mode" in said
 
 
 class LaunchError(Exception):

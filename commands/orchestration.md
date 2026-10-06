@@ -9,9 +9,12 @@ capabilities its task needs, and nothing of theirs comes back but a report.
 
 Request: $ARGUMENTS
 
-1. **Answer it yourself only if it is conversation** — a question about
-   something already in this context, or a clarification. Everything that reads
-   a codebase, changes files, debugs, reviews or plans goes to a worker.
+1. **Answer it yourself when it is conversation or a quick look** — a question
+   about something already in this context, a clarification, or a read-only
+   lookup a few searches and file reads settle (where is X, does Y still exist).
+   A worker costs a setup and a report; a grep costs seconds. Everything that
+   changes files, runs a check, debugs, reviews in depth or plans goes to a
+   worker.
 
 2. **Split it when it has independent parts.** One `cauce run` per part. Parts
    that touch different files can run at the same time (each gets its own
@@ -36,13 +39,15 @@ Request: $ARGUMENTS
    itself, so it needs no permission. `--budget` (default $5) bounds the task;
    `--kind` skips classification when you already know it.
 
-   Before dispatching, `cauce run --dry-run` lists the rules workers in this
-   repository were refused before. Pass the ones the task and its `--verify`
-   need with `--allow` from the start (`Bash(npm run build:*)`, `Bash(npx tsc:*)`,
-   and `Read(//abs/path)` with two slashes for an absolute path).
-   A worker runs unattended: any command its settings do not allow is refused,
-   with nobody to ask. When the work needs one (`npm run build`, `node`, a test
-   runner), grant it up front: `--allow "Bash(npm run build:*)"`, repeatable.
+   Workers run in Claude Code's auto mode (Haiku workers bypass permissions):
+   a classifier lets safe commands through, so most work needs no rules. What
+   it still refuses is named in the report with the rule that lets it through.
+   Keep rules for every task in this repository with `cauce allow <rule>…` or a
+   preset (`cauce allow --preset node`), instead of passing `--allow` to each
+   run; `cauce run --dry-run` lists the rules workers here were refused before.
+   An absolute path in a rule takes two slashes: `Read(//abs/path)`. The
+   project's Node (`.nvmrc`, `.node-version`, `engines.node`) is put first on
+   the workers' PATH for them.
 
    A worker works in its own worktree on `cauce/task-<id>`: your checkout has
    none of it until the branch is merged, and the worker does not see your

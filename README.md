@@ -211,7 +211,12 @@ budget, the environment, the approval gate, a cancel from the UI or
 and the session that asked for it say which, and give the command that goes on. The worktree gets the checkout's
 ignored `node_modules` / `.venv` and your `.claude/settings.local.json` as
 links, so a build can run and a worker is allowed what you allowed; anything
-else a worker needs to run, grant with `--allow "Bash(npm run build:*)"`
+else a worker needs to run, grant with `--allow "Bash(npm run build:*)"` — or keep
+it for every task in the repository with `cauce allow "Bash(npm run build:*)"`
+(`--preset read|node|python` for the usual sets). Workers run in Claude Code's
+auto mode, which lets safe commands through without a rule (Haiku workers
+bypass permissions; `cauce config mode` changes either), and the project's
+Node from `.nvmrc` / `engines.node` is first on their PATH. Grant with `--allow "Bash(npm run build:*)"`
 (repeatable; an absolute path takes two slashes: `Read(//abs/path)`). A blocked
 report prints the rules it needs, one per program, and `--dry-run` lists the
 ones workers in the repository lacked before. A task started with `--no-isolate`

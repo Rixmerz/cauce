@@ -47,6 +47,8 @@ export function stopSection(stop) {
     stop.account ? h("div", {}, h("b", {}, "The last worker's own account"), h("div", { class: "text" }, stop.account)) : null,
     h("div", { class: "asks" }, stop.todo),
     stop.next ? command(stop.next) : null,
+    stop.keep ? h("div", { class: "meta" }, "to keep these rules for every task in this repository:") : null,
+    stop.keep ? command(stop.keep) : null,
     stop.recovered ? h("div", { class: "meta" },
       "Read back from this task's records: it stopped before cauce kept an account of why.") : null);
 }
