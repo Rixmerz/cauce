@@ -339,7 +339,7 @@ def run(
         # Run from a session's own Bash (`CAUCE_SESSION_ID` set), the text is the main
         # session's, not something a person typed.
         task = store.create_task(text, status="running", source="cauce", cost_usd=c.cost_usd,
-                                 author="orchestrator" if session_id else "user",
+                                 author="orchestrator" if session_id else "person",
                                  session_id=session_id, options=json.dumps(options.stored()), **fields)
     report = Report(task["id"], "running", the_plan, cost_usd=c.cost_usd)
     store.update_task(task["id"], pid=os.getpid())

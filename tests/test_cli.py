@@ -447,7 +447,7 @@ def test_queue_add_keeps_the_rules_a_person_granted(capsys, git_repo):
     from cauce import flow
     assert flow.queued_options(task, orchestrate.Options()).allow_tools == ("Bash(npm run build)",)
     store = Store.open()
-    assert store.messages(task_id)[0]["role"] == "user"
+    assert store.messages(task_id)[0]["role"] == "person"
     store.close()
 
 

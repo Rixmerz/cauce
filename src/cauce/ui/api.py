@@ -173,7 +173,7 @@ def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:
                  "class_source": task["class_source"], "class_reason": task["class_reason"]},
         "plan": (store.last_event(task_id, "planned") or {}).get("data"),
         "attempts": attempts,
-        "messages": store.messages(task_id),
+        "messages": [{**m, "author": author(m["role"], task)} for m in store.messages(task_id)],
         "children": [_brief(c) for c in store.children(task_id)],
         "stop": stops.view(store, task),
         "branch": finished["data"].get("branch") if finished else None,
@@ -181,6 +181,24 @@ def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:
         "dead_ends": store.dead_ends(task["body"], repo=task["repo"], limit=5),
         "events": store.events(task_id=task_id, limit=500),
     }
+
+
+#: Who wrote a message, in words.
+AUTHORS = {"person": "you", "orchestrator": "main session (orchestrator)", "assistant": "main session's answer",
+           "worker": "cauce report"}
+
+
+def author(role: str, task: dict[str, Any]) -> str:
+    """Who wrote a message. A session's own prompt is the person's. Work recorded
+    before authors were kept says `user` whoever wrote it; sent from a session,
+    it was almost always the main session, and the label says it is inferred."""
+    if role in AUTHORS:
+        return AUTHORS[role]
+    if role == "user":
+        if task.get("source") == "hook" or not task.get("session_id"):
+            return "you"
+        return "main session (orchestrator, inferred: recorded before cauce kept who wrote it)"
+    return role
 
 
 def spend(store: Store, days: int = 7) -> dict[str, Any]:

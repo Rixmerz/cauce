@@ -93,7 +93,7 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
     if queued is not None:
         if not queued:
             return {"decision": "block", "reason": f'cauce: "{QUEUE_PREFIX} <task>" queues a task for a worker'}
-        task = store.enqueue(queued, repo=key, cwd=cwd, session_id=session_id)
+        task = store.enqueue(queued, repo=key, cwd=cwd, session_id=session_id, author="person")
         if cwd:
             _enroll(cwd)
         # Blocked: queuing costs no turn. The reason is what the person sees.
