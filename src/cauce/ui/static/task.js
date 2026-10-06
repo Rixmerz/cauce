@@ -10,6 +10,10 @@ function close() {
 }
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
 
+// Who wrote each message, in words: a person, the main session that sent the work, or cauce.
+const AUTHOR = { user: "you", orchestrator: "main session (orchestrator)", assistant: "main session's answer",
+  worker: "cauce report" };
+
 const DIAL = { effort: "more effort, same model", model: "a different model", turns: "more turns, same cell",
   retry: "the same cell again", stop: "stopped" };
 
@@ -54,7 +58,7 @@ function attempt(a) {
     a.summary ? h("div", {}, a.summary) : null,
     a.denied.length ? h("div", { class: "refused" }, `refused: ${a.denied.join(", ")}`) : null,
     climb(a.climb, a.move),
-    !a.passed && a.evidence ? h("details", {}, h("summary", {}, "evidence"), h("pre", {}, a.evidence)) : null,
+    !a.passed && a.evidence?.trim() ? h("details", {}, h("summary", {}, "evidence"), h("pre", {}, a.evidence)) : null,
     a.changed_paths.length ? h("div", { class: "meta" }, `changed: ${a.changed_paths.join(", ")}`) : null,
     a.capabilities.length ? h("div", { class: "meta" }, `capabilities: ${a.capabilities.join(", ")}`) : null);
 }
@@ -116,7 +120,7 @@ export async function openTask(id, quiet = false) {
     d.children.length ? h("div", { class: "section" }, h("h2", {}, "Delegations"),
       d.children.map((c) => h("div", { class: "fix" }, h("span", { class: `tag status-${c.status}` }, c.status), c.title))) : null,
     h("div", { class: "section" }, h("h2", {}, "Messages"),
-      d.messages.map((m) => h("div", {}, h("div", { class: "meta" }, `${m.role} · ${when(m.ts)}`), h("div", { class: "text" }, m.text)))),
+      d.messages.map((m) => h("div", {}, h("div", { class: "meta" }, `${AUTHOR[m.role] || m.role} · ${when(m.ts)}`), h("div", { class: "text" }, m.text)))),
   ].filter(Boolean));
   if (!quiet) el.scrollTop = 0;
   el.hidden = false;

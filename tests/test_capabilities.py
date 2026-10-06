@@ -23,6 +23,7 @@ def test_selection_by_kind_and_after_failure(tmp_path):
     retry = caps.select(registry, "implement", failed_before=True, workdir=Path("/w"))
     assert retry.names == ("livespec", "layout-inspector")
     assert 'workspace="/w"' in first.system_prompt()
+    assert caps.select(registry, "test", workdir=Path("/w")).names == ("livespec", "browser")
     assert caps.Selection().system_prompt() == ""
 
 

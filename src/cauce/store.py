@@ -319,7 +319,9 @@ class Store:
 
     # --- tasks -----------------------------------------------------------
 
-    def create_task(self, body: str, *, status: str, source: str, **fields: Any) -> dict:
+    def create_task(self, body: str, *, status: str, source: str, author: str = "user", **fields: Any) -> dict:
+        """A task, with its text as its first message. `author` is who wrote that
+        text: `user` for a person, `orchestrator` for the main session that sent it."""
         if status not in TASK_STATES:
             raise ValueError(f"unknown task status {status!r}")
         stamp = now()
@@ -336,7 +338,7 @@ class Store:
         marks = ", ".join("?" for _ in row)
         cur = self._conn.execute(f"INSERT INTO tasks ({cols}) VALUES ({marks})", list(row.values()))  # noqa: S608
         task_id = int(cur.lastrowid)
-        self.add_message(task_id, "user", body)
+        self.add_message(task_id, author, body)
         return self.get_task(task_id)
 
     def get_task(self, task_id: int) -> dict | None:
@@ -489,8 +491,8 @@ class Store:
     # --- the queue and its lanes ---------------------------------------------
 
     def enqueue(self, body: str, *, repo: str | None, cwd: str | None, session_id: str | None = None,
-                options: dict | None = None) -> dict:
-        return self.create_task(body, status="queued", source="queue", repo=repo, cwd=cwd,
+                options: dict | None = None, author: str = "user") -> dict:
+        return self.create_task(body, status="queued", source="queue", repo=repo, cwd=cwd, author=author,
                                 session_id=session_id, options=json.dumps(options or {}))
 
     def queued_in(self, repo: str | None) -> list[dict]:

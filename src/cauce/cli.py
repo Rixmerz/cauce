@@ -449,6 +449,7 @@ def cmd_queue(args: argparse.Namespace) -> int:
             options = {k: v for k, v in {"budget_usd": args.budget, "verify": args.verify, "kind": args.kind,
                                          "start": args.start, "allow_tools": args.allow}.items() if v is not None}
             task = store.enqueue(_text(args.text), repo=repo.key(where), cwd=str(where), options=options,
+                                 author="orchestrator" if os.environ.get("CAUCE_SESSION_ID") else "user",
                                  session_id=os.environ.get("CAUCE_SESSION_ID"))
             with contextlib.suppress(OSError, project.NotAProject):
                 project.enroll(where)

@@ -29,6 +29,33 @@
   A refusal cut inside a quote lost everything after the quote opened. Now
   the program is kept whenever it is whole, and a cut quote is closed before
   the line is read.
+- **The task's text was always labeled "user".** When the main session sends
+  work through its own Bash (`cauce run` or `cauce queue add` with
+  `CAUCE_SESSION_ID` set), or delegates to a subagent, the text is the main
+  session's, not something a person typed. It is now recorded as
+  `orchestrator`. The task drawer labels each message by who wrote it: you,
+  the main session (orchestrator), the main session's answer, or cauce's
+  report. Older tasks keep `user`.
+- The task drawer no longer shows an empty "evidence" block for an attempt
+  whose evidence was blank.
+
+### Added
+
+- **The plan says when a task needs what a worker does not have.**
+  - **A browser:** words like "browser", "navigate" or "screenshot", with no
+    browser capability registered.
+  - **Running servers:** "dev servers", `npm start`, `ng serve`,
+    `localhost:<port>`. A server a worker starts stops when the worker
+    finishes.
+
+  The note appears before any money is spent, in the report and in
+  `--dry-run`.
+- `cauce capabilities --example` includes a browser (Playwright MCP) for
+  `test` tasks, and for `ui` tasks after a failure.
+- Workers are told that a command that never returns blocks the call it runs
+  in. They should start it in the background and stop it before they finish.
+  Without a browser they answer `environment`, never a description of a page
+  they did not open.
 
 ## [0.4.5] - 2026-10-06
 

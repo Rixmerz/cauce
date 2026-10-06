@@ -81,6 +81,10 @@ When you are done, end your reply with exactly one fenced block:
   approval, rather than with shell commands. Run one shell command per call
   instead of chaining them with `;`, `&&` or `|`: every part of a chain is
   checked, and one refused part refuses all of it.
+- A command that never returns (a dev server, a watcher) blocks the call it
+  runs in: start it in the background and stop it before you finish. You have
+  no browser unless your tools include one; without it, answer `fail` with
+  `environment` and say so, never describe a page you did not open.
 - Do not list the files you changed; they are read from git.
 """.strip()
 

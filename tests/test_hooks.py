@@ -235,6 +235,7 @@ def test_a_turn_with_a_subagent_still_running_is_not_done(store: Store):
     hooks.stop({"session_id": "s", "prompt_id": "p1", "last_assistant_message": "waiting on the agent"}, store)
     parent = next(t for t in store.list_tasks() if t["source"] == "hook")
     child = next(t for t in store.list_tasks() if t["source"] == "delegation")
+    assert store.messages(child["id"])[0]["role"] == "orchestrator"  # the main session wrote it
     assert parent["status"] == "running" and child["status"] == "running" and child["parent_id"] == parent["id"]
     note = ("<task-notification><tool-use-id>tu1</tool-use-id><status>completed</status>"
             "<result>found it</result></task-notification>")

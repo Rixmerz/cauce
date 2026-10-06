@@ -17,6 +17,7 @@ import contextlib
 import dataclasses
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -277,6 +278,7 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     if learned:
         context.append("Steps that came before passing attempts on this kind of task here: "
                        + "; ".join(learned) + ". Use them unless the task says otherwise.")
+    neighbour_notes += _unmet(text, registry)
     for lag in models.lagging(store):
         neighbour_notes.append(f"workers last ran {lag['workers']} for `{lag['alias']}` while your sessions use "
                                f"{lag['sessions']}: the installed Claude Code's alias is older. Pin it with "
@@ -334,7 +336,10 @@ def run(
                           cost_usd=float(before["cost_usd"] or 0) + c.cost_usd, **fields)
         task = store.get_task(task_id)
     else:
+        # Run from a session's own Bash (`CAUCE_SESSION_ID` set), the text is the main
+        # session's, not something a person typed.
         task = store.create_task(text, status="running", source="cauce", cost_usd=c.cost_usd,
+                                 author="orchestrator" if session_id else "user",
                                  session_id=session_id, options=json.dumps(options.stored()), **fields)
     report = Report(task["id"], "running", the_plan, cost_usd=c.cost_usd)
     store.update_task(task["id"], pid=os.getpid())
@@ -499,6 +504,29 @@ def run(
                         changed=report.changed[:50], stop=report.stop.data() if report.stop else None)
         store.add_message(task["id"], "worker", report.text())
     return report
+
+
+#: Words that say a task needs a browser, or servers that keep running.
+_BROWSER = re.compile(r"\b(browser|navegador|navigate|navega\w*|abr[ie]\w* (?:el )?navegador|screenshot|"
+                      r"captura de pantalla|playwright|puppeteer|e2e)\b", re.IGNORECASE)
+_SERVER = re.compile(r"(\bdev servers?\b|\blevanta\w*\b|\bstart (?:both |the )?(?:dev )?servers?\b|"
+                     r"\bng serve\b|\bnpm (?:run )?(?:start|dev)\b|localhost:\d+)", re.IGNORECASE)
+_BROWSER_CAPS = ("browser", "playwright", "chrome", "puppeteer")
+
+
+def _unmet(text: str, registry: Mapping[str, caps.Capability]) -> list[str]:
+    """What a task asks for that a one-shot worker does not have, said before any
+    money is spent: a worker has no browser unless a capability gives it one,
+    and a server it starts ends with it."""
+    notes = []
+    if _BROWSER.search(text) and not any(k in name.lower() for name in registry for k in _BROWSER_CAPS):
+        notes.append("this task needs a browser and workers have none: register a browser MCP server in "
+                     "your cauce capabilities.json (`cauce capabilities --example` has one) and allow its tools "
+                     "(--allow 'mcp__browser'), or check the pages yourself")
+    if _SERVER.search(text):
+        notes.append("this task needs running servers: start them yourself before dispatching, or pass the "
+                     "--allow rules that start them; a server a worker starts stops when it finishes")
+    return notes
 
 
 def _refused_here(store: Store, key: str | None, granted: Sequence[str]) -> list[tuple[str, int]]:

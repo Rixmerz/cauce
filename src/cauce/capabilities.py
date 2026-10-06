@@ -135,4 +135,11 @@ EXAMPLE = {
         "hint": "measure the rendered page (detect_issues, compare_viewports) instead of "
         "judging it by eye",
     },
+    "browser": {
+        "server": {"command": "npx", "args": ["@playwright/mcp@latest"]},
+        "when": ["test"],
+        "after_failure": ["ui"],
+        "hint": "open the running app with browser_navigate and read it with browser_snapshot; report what "
+        "the page shows, never what it should show",
+    },
 }
