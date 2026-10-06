@@ -51,7 +51,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     previous = _cancel_on_sigterm()
     try:
         report = orchestrate.run(_text(args.text), Path(args.repo or os.getcwd()), store, options,
-                                 session_id=os.environ.get("CAUCE_SESSION_ID"))
+                                 session_id=os.environ.get("CAUCE_SESSION_ID"), progress=_say)
         if getattr(report, "task_id", None):
             store.mark_reported([report.task_id], via="cli")  # its caller reads the report below
     finally:
@@ -80,6 +80,22 @@ def cmd_resume(args: argparse.Namespace) -> int:
             print(f"task #{args.id} is {task['status']}; only a task that stopped ({', '.join(RESUMABLE)}) resumes"
                   + ("; rewrite it as a new task" if task["status"] == "replan" else ""), file=sys.stderr)
             return 1
+        if args.keep:
+            # Kept for every task in this repository, so the next one is not
+            # refused the same program: a person's press, never an unattended one.
+            if args.unattended:
+                print("--keep keeps rules for every task in the repository: only a person passes it, "
+                      "never an unattended resume", file=sys.stderr)
+                return 2
+            from cauce import grants
+
+            rules = grants.expand(args.allow or ())
+            if not rules or not task["repo"]:
+                why = "name them with --allow" if not rules else f"task #{args.id} has no repository to key them to"
+                print(f"--keep keeps the --allow rules for the task's repository: {why}", file=sys.stderr)
+                return 2
+            kept = grants.grant(task["repo"], rules)
+            print(f"workers in {task['repo']} get: {', '.join(kept)}", file=sys.stderr)
         if args.unattended and (refusal := _needs_a_person(store, task, args)):
             print(refusal, file=sys.stderr)
             return 3
@@ -111,7 +127,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
                            changed=tuple(json.loads(a["changed_paths"] or "[]")))
                    for a in attempts]
         store.update_task(args.id, options=json.dumps(options.stored()), dispatched=0, cancel_requested=0)
-        report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=args.id, history=history)
+        report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=args.id, history=history,
+                                 progress=_say)
         if not args.no_report:
             # Its report is printed to whoever ran it; a detached resume's is not,
             # and reaches the session as an ending instead.
@@ -167,6 +184,11 @@ def _detach(args: argparse.Namespace) -> int:
                          stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
     print(f"resuming #{args.id} in the background; its ending reaches the session that sent it")
     return 0
+
+
+def _say(line: str) -> None:
+    """Progress, to stderr and at once: a run's report waits for its end."""
+    print(line, file=sys.stderr, flush=True)
 
 
 def _failure_of(value: str | None) -> Failure | None:
@@ -1075,6 +1097,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="turns per attempt; a task that outgrew its turns resumes with 120 by default")
     p.add_argument("--no-model", action="store_true")
     p.add_argument("--detach", action="store_true", help="run it in the background; its ending reaches the session")
+    p.add_argument("--keep", action="store_true",
+                   help="also keep the --allow rules for every task in the task's repository (cauce allow)")
     p.add_argument("--unattended", action="store_true",
                    help="refuse (exit 3) when only a person can clear what stopped it: a refusal, an approval")
     p.add_argument("--no-report", action="store_true", help=argparse.SUPPRESS)

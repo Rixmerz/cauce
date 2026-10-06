@@ -1,8 +1,10 @@
 // cauce as a Claude Code mod: the same core, reached from inside the session.
 //
 // - Tools the model calls by name (recall, note, queue, tasks, resume) instead
-//   of `cauce` through Bash: no PATH to find, no permission rule per command,
-//   and a schema that keeps a topic to the project's topics.
+//   of `cauce` through Bash: no PATH to find, no permission rule per command.
+//   Their schemas are loose on purpose: a value outside a list is read by the
+//   handler and answered with what cauce takes, never refused as "Invalid tool
+//   parameters", which tells the model nothing.
 // - Work a session queued that ends while it is idle wakes it: a turn starts
 //   with the notice, and the session tells the person and goes on.
 // - A status entry, a band above the prompt for what waits on the person, and
@@ -17,7 +19,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { CauceBoard, CauceCard, CauceNote } from '../types'
 import type { Ran } from './cauce-cli'
-import { DEFAULT_TOPICS, json, resumeArgs, resumeLabel } from './cauce-cli'
+import { DEFAULT_TOPICS, json, keepArgs, resumeArgs, resumeLabel } from './cauce-cli'
 
 const PANE = 'cauce'
 const POLL_MS = 15_000
@@ -34,6 +36,10 @@ const NOTE = 'mcp__cauce__note'
 const QUEUE = 'mcp__cauce__queue'
 const TASKS = 'mcp__cauce__tasks'
 const RESUME = 'mcp__cauce__resume'
+/** The tools that only read the project's notes and board, or keep a note in
+ * cauce's own store: asking the person for each is a prompt that protects
+ * nothing. `queue` and `resume` spend money, and stay the person's call. */
+const QUIET = [RECALL, TASKS, NOTE]
 
 /** A plugin tool's arguments, as the model gave them: loose until read. */
 function input(e: object): Record<string, unknown> {
@@ -42,6 +48,14 @@ function input(e: object): Record<string, unknown> {
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+/** A positive whole number, as a number or its digits ("42", "#42"); else null. */
+function whole(value: unknown): number | null {
+  const n = typeof value === 'number' ? value
+    : typeof value === 'string' && /^#?\d+$/.test(value.trim()) ? Number(value.trim().replace('#', ''))
+    : NaN
+  return Number.isSafeInteger(n) && n > 0 ? n : null
 }
 
 /** What waits on the person, by a key that changes when the list does. */
@@ -162,7 +176,7 @@ export const register: Register = (on, options) => {
         type: 'object',
         properties: {
           question: { type: 'string', description: 'what you want to know; empty for the latest notes' },
-          topic: { type: 'string', enum: names },
+          topic: { type: 'string', description: `only this topic: ${names.join(', ')}` },
           path: { type: 'string', description: 'notes about this file, relative to the checkout' },
         },
       },
@@ -175,19 +189,24 @@ export const register: Register = (on, options) => {
         type: 'object',
         properties: {
           fact: { type: 'string', description: 'one or two self-contained sentences, in the person\'s language' },
-          topic: { type: 'string', enum: names },
+          topic: {
+            type: 'string',
+            description: `where it is filed: ${names.join(', ')}; left out, the topic its words point to`,
+          },
           title: { type: 'string' },
           anchors: { type: 'array', items: { type: 'string' }, description: 'files it is about' },
           links: {
             type: 'array',
             items: {
               type: 'object',
-              properties: { to: { type: 'integer' }, kind: { type: 'string', enum: LINKS } },
-              required: ['to', 'kind'],
+              properties: {
+                to: { type: ['integer', 'string'], description: 'the other note\'s id' },
+                kind: { type: 'string', description: LINKS.join(', ') },
+              },
             },
           },
         },
-        required: ['fact', 'topic'],
+        required: ['fact'],
       },
     })
     await $.tool.register({
@@ -200,7 +219,10 @@ export const register: Register = (on, options) => {
         properties: {
           task: { type: 'string' },
           verify: { type: 'string', description: "the repository's own check, e.g. npm test" },
-          kind: { type: 'string', enum: KINDS },
+          kind: {
+            type: 'string',
+            description: `only when you know it: ${KINDS.join(', ')}; left out, cauce classifies the task`,
+          },
         },
         required: ['task'],
       },
@@ -216,7 +238,7 @@ export const register: Register = (on, options) => {
         + 'the person can clear what stopped it (a refused command, an approval): tell them instead.',
       inputSchema: {
         type: 'object',
-        properties: { id: { type: 'integer' }, max_turns: { type: 'integer' } },
+        properties: { id: { type: ['integer', 'string'] }, max_turns: { type: ['integer', 'string'] } },
         required: ['id'],
       },
     })
@@ -257,20 +279,30 @@ export const register: Register = (on, options) => {
     const e = input(call)
     const fact = text(e.fact)
     if (!fact) return { deny: 'a note needs a fact' }
-    const args = ['note', fact, '--topic', text(e.topic) || 'code', '--repo', await $.session.cwd(), '--json']
+    const args = ['note', fact, '--repo', await $.session.cwd(), '--json']
+    // A topic is resolved by cauce, aliases included; one it does not know is
+    // answered with the project's topics.
+    if (text(e.topic)) args.push('--topic', text(e.topic))
     if (text(e.title)) args.push('--title', text(e.title))
     for (const path of Array.isArray(e.anchors) ? e.anchors : []) {
       if (text(path)) args.push('--anchor', text(path))
     }
+    const skipped: string[] = []
     for (const link of Array.isArray(e.links) ? e.links : []) {
-      const to = (link as { to?: unknown }).to
-      const kind = text((link as { kind?: unknown }).kind)
-      if (Number.isInteger(to) && LINKS.includes(kind)) args.push('--link', `${to}:${kind}`)
+      const to = whole((link as { to?: unknown } | null)?.to)
+      const kind = text((link as { kind?: unknown } | null)?.kind)
+      if (to !== null && LINKS.includes(kind)) args.push('--link', `${to}:${kind}`)
+      else skipped.push(JSON.stringify(link))
     }
     const ran = await cauce($, args, { session: await $.session.id() })
     const kept = json<{ id: number; new: boolean; topic: string; title: string }>(ran)
     if (!kept) return { deny: ran.err || 'cauce note failed' }
-    return { result: `${kept.new ? 'kept' : 'already known as'} #${kept.id} [${kept.topic}] ${kept.title}` }
+    const said = `${kept.new ? 'kept' : 'already known as'} #${kept.id} [${kept.topic}] ${kept.title}`
+    return {
+      result: skipped.length
+        ? `${said}. Links left out (a link is {to: <note id>, kind: ${LINKS.join('|')}}): ${skipped.join(', ')}`
+        : said,
+    }
   }).catch(failed)
 
   on('tool.call', { tool: QUEUE }, async ($, call) => {
@@ -279,12 +311,20 @@ export const register: Register = (on, options) => {
     if (task.length < 8) return { deny: 'write the task in full: the worker sees nothing of this conversation' }
     const args = ['queue', 'add', task, '--repo', await $.session.cwd(), '--json']
     if (text(e.verify)) args.push('--verify', text(e.verify))
-    if (KINDS.includes(text(e.kind))) args.push('--kind', text(e.kind))
+    // A kind cauce does not have is left to its classifier, not a refusal: the
+    // task is what matters, and the model hears what it named instead.
+    const kind = text(e.kind)
+    if (KINDS.includes(kind)) args.push('--kind', kind)
     const ran = await cauce($, args, { session: await $.session.id() })
     const queued = json<{ id: number; title: string; then: string }>(ran)
     if (!queued) return { deny: ran.err || 'cauce queue add failed' }
     void refresh($).catch(ignore)
-    return { result: `queued #${queued.id} — ${queued.title}. ${queued.then} Its ending reaches this session on its own.` }
+    const unknown = kind && !KINDS.includes(kind)
+      ? ` The kind "${kind}" is not one of cauce's (${KINDS.join(', ')}); it classifies the task itself.`
+      : ''
+    return {
+      result: `queued #${queued.id} — ${queued.title}. ${queued.then} Its ending reaches this session on its own.${unknown}`,
+    }
   }).catch(failed)
 
   on('tool.call', { tool: TASKS }, async $ => {
@@ -309,17 +349,29 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: RESUME }, async ($, call) => {
     const e = input(call)
-    const id = Number(e.id)
-    if (!Number.isInteger(id) || id <= 0) return { deny: 'resume needs a task id' }
+    const id = whole(e.id)
+    if (id === null) return { deny: 'resume needs a task id: the number after # on the board (`tasks`)' }
     // `--unattended`: cauce refuses what only a person may clear. The model's
     // input names no rule; nothing it passes reaches `--allow`.
     const args = ['resume', String(id), '--unattended', '--detach']
-    if (Number.isInteger(e.max_turns) && Number(e.max_turns) > 0) args.push('--max-turns', String(e.max_turns))
+    const turns = whole(e.max_turns)
+    if (turns !== null) args.push('--max-turns', String(turns))
     const ran = await cauce($, args)
     if (!ran.ok) return { deny: ran.err || `cauce could not resume #${id}` }
     void refresh($).catch(ignore)
     return { result: ran.out }
   }).catch(failed)
+
+  // Only an `ask` turns into an allow: a rule or a setting that denies one of
+  // these still denies it, and an organization's ceiling still caps it.
+  for (const tool of QUIET) {
+    on('tool.check', { tool }, async ($, e, next) => {
+      const verdict = await next(e)
+      return verdict.decision === 'ask'
+        ? { decision: 'allow', reason: "cauce: reads this project's notes and board, or keeps a note" }
+        : verdict
+    })
+  }
 
   on('command.run', { command: 'cauce' }, async $ => {
     await refresh($)
@@ -338,6 +390,7 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column">
         {shown.map(card => {
           const args = resumeArgs(card)
+          const keep = keepArgs(card)
           const stop = card.stop
           return (
             <Box key={`card-${card.id}`} flexDirection="row" gap={1}>
@@ -349,6 +402,13 @@ export const register: Register = (on, options) => {
                   key={`resume-${card.id}`}
                   label={resumeLabel(stop.cause)}
                   onPress={() => press($, args, `cauce: resuming #${card.id}`)}
+                />
+              )}
+              {keep && (
+                <Button
+                  key={`keep-${card.id}`}
+                  label="Always allow here"
+                  onPress={() => press($, keep, `cauce: kept for this repository; resuming #${card.id}`)}
                 />
               )}
             </Box>
@@ -374,6 +434,7 @@ export const register: Register = (on, options) => {
         {found.needs_you.length === 0 && <Text dimColor>nothing</Text>}
         {found.needs_you.map(card => {
           const args = resumeArgs(card)
+          const keep = keepArgs(card)
           return (
             <Box key={`need-${card.id}`} flexDirection="column">
               <Text>#{card.id} [{card.status}] {card.title}</Text>
@@ -382,6 +443,10 @@ export const register: Register = (on, options) => {
               {args && card.stop && (
                 <Button key={`resume-${card.id}`} label={resumeLabel(card.stop.cause)}
                   onPress={() => press($, args, `cauce: resuming #${card.id}`)} />
+              )}
+              {keep && (
+                <Button key={`keep-${card.id}`} label="Always allow here"
+                  onPress={() => press($, keep, `cauce: kept for this repository; resuming #${card.id}`)} />
               )}
             </Box>
           )

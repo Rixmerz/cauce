@@ -30,6 +30,14 @@ export function resumeArgs(card: { id: number; stop?: CauceStop | null }): strin
   return base
 }
 
+/** The same press, the rules also kept for every task in the task's repository:
+ * one press per program, never again for the next task there. Only for a
+ * refusal with rules to keep. */
+export function keepArgs(card: { id: number; stop?: CauceStop | null }): string[] | null {
+  const args = card.stop?.cause === 'permission' ? resumeArgs(card) : null
+  return args ? [...args, '--keep'] : null
+}
+
 export function resumeLabel(cause: string): string {
   if (cause === 'permission') return 'Allow & resume'
   if (cause === 'approval') return 'Approve & resume'

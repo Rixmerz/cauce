@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-06
+
+### Fixed
+
+- **A run in a background shell said nothing for minutes, and had no task to
+  show.** A stale or missing livespec index was rebuilt before the task was
+  created, and on a large repository that took minutes. The index now
+  builds in the background, under the same lock as every other refresh. The
+  task starts at once: it uses the index as it is, or runs without one. A
+  repository livespec cannot index says so, instead of claiming a refresh is
+  running.
+- **`cauce run` and `cauce resume` printed nothing until the end.** They now
+  print progress to stderr as it happens: the task number, warnings, each
+  attempt and how it ended. The report on stdout stays the same. A warning
+  that a task needs a browser or running servers now shows before any money
+  is spent, not only in the final report.
+- **The mod's tools answered "Invalid tool parameters" to a value outside a
+  list.** This happened with a kind cauce does not have, a topic alias, or an
+  id written as `"42"`. The schemas no longer constrain these values; the
+  handler checks them instead and says what it accepts:
+  - an unknown kind is dropped and cauce classifies the task;
+  - cauce resolves a topic, aliases included, and an unknown one comes back
+    with the project's topics;
+  - `note` without a topic is filed by its words;
+  - links it cannot read are named in the answer.
+
+### Added
+
+- **Fewer approvals for the same thing.**
+  - `cauce resume <id> --allow <rule> --keep` also keeps the rules for every
+    task in the task's repository, so the next task there is not refused the
+    same program. It is refused together with `--unattended`.
+  - The mod's band and pane offer **Always allow here** next to *Allow &
+    resume*.
+  - The mod's reading tools (`recall`, `tasks`, `note`) are never put to the
+    person. A rule or setting that denies them still does. `queue` and
+    `resume` spend money and stay under the person's rules.
+
 ## [0.6.0] - 2026-10-06
 
 ### Added

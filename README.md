@@ -237,12 +237,16 @@ cauce route "the login redirect drops the query string"        # where it would 
 cauce run "the login redirect drops the query string" --verify "pytest -q tests/test_auth.py"
 cauce run "build the training module" --verify "npm run build" --allow "Bash(npm run build)"
 cauce resume 12 --allow "Bash(node:*)"                         # a task that stopped, from its kept work
+cauce resume 12 --allow "Bash(node:*)" --keep                  # …and every task here gets the rule from now on
 cauce show 12                                                  # attempts, moves and messages
 cauce memory search "redirect query string"                    # dead ends, every repo
 cauce memory record --problem "redirect drops query" --fix "use url_for(_external)" --outcome failed --why "..."
 ```
 
-`cauce run` writes in a git worktree on `cauce/task-<id>`; nothing reaches
+`cauce run` prints the task number at once, and each attempt as it starts
+and ends, on stderr; the report comes on stdout when the task stops. A
+livespec index that is missing or stale is rebuilt in the background, never
+before the task. `cauce run` writes in a git worktree on `cauce/task-<id>`; nothing reaches
 your checkout until you merge that branch. A task that passed leaves it to
 review; one that stopped for a person (blocked, waiting on approval) leaves it
 too, committed as unverified, and `cauce resume <id>` continues on it; one that
@@ -254,7 +258,8 @@ ignored `node_modules` / `.venv` and your `.claude/settings.local.json` as
 links, so a build can run and a worker is allowed what you allowed; anything
 else a worker needs to run, grant with `--allow "Bash(npm run build:*)"` — or keep
 it for every task in the repository with `cauce allow "Bash(npm run build:*)"`
-(`--preset read|node|python` for the usual sets). Workers run in Claude Code's
+(`--preset read|node|python` for the usual sets), or with `--keep` on the resume
+that grants it, so one approval per program is the last one. Workers run in Claude Code's
 auto mode, which lets safe commands through without a rule (Haiku workers
 bypass permissions; `cauce config mode` changes either), and the project's
 Node from `.nvmrc` / `engines.node` is first on their PATH. `--allow` is
@@ -316,7 +321,9 @@ everything above works without it.
 
 - **Tools the model calls by name**: `recall`, `note`, `queue`, `tasks` and
   `resume` (as `mcp__cauce__<name>`). There is no `cauce` on PATH to find, no
-  permission rule per command, and `note` takes only the project's topics.
+  permission rule per command, and the reading tools (`recall`, `tasks`,
+  `note`) never ask. A value cauce does not take (a kind, a topic, a malformed
+  link) is answered with what it takes, never refused as invalid parameters.
   `queue` returns at once: the ending comes back on its own. `resume`
   continues work in the background, and refuses what only a person may clear:
   a refused command, or a cell that needs approval.
@@ -328,7 +335,8 @@ everything above works without it.
 - **A status entry** (`cauce ⚠2 ▶1 ⏸0`), and **a band above the prompt** for
   what waits on you. It has a button that continues each one, with exactly
   the rule cauce suggests: *Allow & resume*, *Approve & resume*, *Resume*.
-  The press is yours; the model has no such button.
+  A refusal also offers *Always allow here*, which keeps the rule for every
+  task in the repository. The press is yours; the model has no such button.
 - **`/cauce`** opens a pane with the board: cancel what runs, and confirm or
   drop the notes whose code changed.
 

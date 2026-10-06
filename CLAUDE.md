@@ -116,8 +116,9 @@ yields the default kind, not a guess.
   cauce never hard-codes a model id; the model that served an attempt is read
   from the CLI's `modelUsage`, never assumed from the alias.
 - cauce suggests permission rules and never grants one: `allow.py` only
-  writes text a person passes with `--allow` or keeps with `cauce allow`
-  (stored in their cauce home, never in a repository). A rule for an absolute
+  writes text a person passes with `--allow` or keeps with `cauce allow` or
+  `cauce resume --keep` (stored in their cauce home, never in a repository;
+  `--keep` is refused with `--unattended`). A rule for an absolute
   path has two slashes (`Read(//abs)`). Two things are allowed with the
   worker itself: the tools of the MCP servers cauce hands it, and the
   permission mode its model runs in (auto; Haiku bypasses), which a person
@@ -156,6 +157,9 @@ yields the default kind, not a guess.
 - The UI builds every node with `textContent` (`h()` in `static/util.js`),
   never `innerHTML`: task text and worker summaries are untrusted. The token
   never goes in a URL, and every mutation needs it in a header.
+- `plan()` never waits on a neighbour's index: a refresh starts in the
+  background and the task uses the index as it is. A run says its task number
+  and each attempt on stderr as they happen; stdout stays the report.
 - `PostToolUse` runs on every tool call: its fast path in `__main__.py`
   imports only `cauce.signature` and appends one line. Do not add a database
   write, a git call or an orchestrator import to it.
@@ -175,8 +179,10 @@ yields the default kind, not a guess.
   test that wants notes turns them on and passes a fake `ask`.
 - The mod adds a way in, never a power. Every tool runs `bin/cauce`. `resume`
   runs with `--unattended`, which refuses what only a person may clear, and
-  no model input ever reaches `--allow` or `--allow-approval`: only a button
-  the person presses does. Without the mod, everything still works through
+  no model input ever reaches `--allow`, `--allow-approval` or `--keep`: only
+  a button the person presses does. Tool schemas carry no `enum`: the handler
+  reads a value and says what cauce takes. Only the reading tools (`recall`,
+  `tasks`, `note`) turn an `ask` into an allow; a deny stays a deny. Without the mod, everything still works through
   the classic hooks.
 - An ending is claimed, not just read, when it is delivered
   (`Store.claim_unreported`). The Stop hook, the next prompt and the mod's

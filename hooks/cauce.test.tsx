@@ -61,7 +61,15 @@ function world(on: On, answers: Record<string, Answer>, broken = false) {
 
 const EMPTY_BOARD = JSON.stringify({ counts: { needs_you: 0, running: 0, queued: 0 }, needs_you: [], running: [], queued: [] })
 
-test('the tools are registered with the project topics as the only choices', async ($, on) => {
+/** Every list in a schema, at any depth: none may be there, a value outside one is refused by the
+ * engine as "Invalid tool parameters" before the mod can say what cauce takes. */
+function enums(schema: unknown): string[] {
+  if (!schema || typeof schema !== 'object') return []
+  return Object.entries(schema as Record<string, unknown>)
+    .flatMap(([key, value]) => (key === 'enum' ? [JSON.stringify(value)] : enums(value)))
+}
+
+test('the tools are registered with the project topics named, and no list the engine would refuse by', async ($, on) => {
   mock.clock(on)
   const seen = world(on, {
     'notes --repo /work/shop topics --json': { exitCode: 0, stdout: JSON.stringify([{ name: 'business' }, { name: 'billing' }]) },
@@ -70,7 +78,9 @@ test('the tools are registered with the project topics as the only choices', asy
   await $.session.start({ cwd: '/work/shop', surface: 'terminal', isInteractive: true })
   expect(seen.tools.map(t => t.name)).toEqual(['recall', 'note', 'queue', 'tasks', 'resume'])
   const note = seen.tools.find(t => t.name === 'note')!
-  expect((note.inputSchema as any).properties.topic.enum).toEqual(['business', 'billing'])
+  expect((note.inputSchema as any).properties.topic.description).toContain('business, billing;')
+  expect((note.inputSchema as any).required).toEqual(['fact'])
+  expect(seen.tools.flatMap(t => enums(t.inputSchema))).toEqual([])
   expect(seen.commands).toEqual(['cauce'])
 })
 
@@ -87,30 +97,55 @@ function call($: any, tool: string, args: Record<string, unknown>) {
 
 // --- tools ---------------------------------------------------------------------------
 
-test('without the project topics the five default ones are the choices', async ($, on) => {
+test('without the project topics the five default ones are named', async ($, on) => {
   const { seen } = await started($, on, { 'notes --repo /work/shop topics': { exitCode: 1, stdout: '', stderr: 'boom' } })
   const note = seen.tools.find(t => t.name === 'note')!
-  expect((note.inputSchema as any).properties.topic.enum).toEqual(['business', 'code', 'decisions', 'conventions', 'environment'])
+  expect((note.inputSchema as any).properties.topic.description)
+    .toContain('business, code, decisions, conventions, environment')
 })
 
 test('a topics answer that is not JSON falls back too', async ($, on) => {
   const { seen } = await started($, on, { 'notes --repo /work/shop topics': { exitCode: 0, stdout: 'not json' } })
-  expect((seen.tools.find(t => t.name === 'recall')!.inputSchema as any).properties.topic.enum.length).toBe(5)
+  expect((seen.tools.find(t => t.name === 'recall')!.inputSchema as any).properties.topic.description)
+    .toBe('only this topic: business, code, decisions, conventions, environment')
 })
 
-test('note passes the fact, the session and only well-formed links', async ($, on) => {
+test('note passes the fact, the session and only well-formed links, and says which it left out', async ($, on) => {
   const { seen } = await started($, on, {
     note: { exitCode: 0, stdout: JSON.stringify({ id: 7, new: true, topic: 'business', title: 'Cents' }) },
   })
   const answer = await call($, 'note', {
     fact: 'Prices are stored in cents', topic: 'business', anchors: ['cart.py', '', 3],
-    links: [{ to: 2, kind: 'explains' }, { to: 'x', kind: 'explains' }, { to: 3, kind: 'loves' }],
+    links: [{ to: 2, kind: 'explains' }, { to: '#5', kind: 'replaces' }, { to: 'x', kind: 'explains' },
+      { to: 3, kind: 'loves' }, null, { to: 0, kind: 'explains' }],
   })
-  expect(answer.result).toBe('kept #7 [business] Cents')
+  expect(answer.result).toStartWith('kept #7 [business] Cents. Links left out')
+  expect(answer.result).toContain('{"to":3,"kind":"loves"}')
+  expect(answer.result).toContain('null')
+  expect(answer.result).toContain('depends_on|explains|replaces|contradicts|example_of')
   const i = seen.argv.findIndex(a => a[0] === 'note')
-  expect(seen.argv[i]).toEqual(['note', 'Prices are stored in cents', '--topic', 'business', '--repo', '/work/shop',
-    '--json', '--anchor', 'cart.py', '--link', '2:explains'])
+  expect(seen.argv[i]).toEqual(['note', 'Prices are stored in cents', '--repo', '/work/shop', '--json',
+    '--topic', 'business', '--anchor', 'cart.py', '--link', '2:explains', '--link', '5:replaces'])
   expect(seen.env[i]).toEqual({ CAUCE_SESSION_ID: 'sess-1' })
+})
+
+test('a note without a topic is filed by its words; any topic, an alias included, goes to cauce', async ($, on) => {
+  const { seen } = await started($, on, {
+    note: { exitCode: 0, stdout: JSON.stringify({ id: 8, new: true, topic: 'decisions', title: 'Why' }) },
+  })
+  expect((await call($, 'note', { fact: 'We chose SQLite because it ships with Python' })).result)
+    .toBe('kept #8 [decisions] Why')
+  expect(seen.argv.filter(a => a[0] === 'note')[0]).not.toContain('--topic')
+  await call($, 'note', { fact: 'Discounts never stack', topic: 'negocio' })
+  expect(seen.argv.filter(a => a[0] === 'note')[1]).toContain('negocio')
+})
+
+test("a topic cauce does not know comes back with the project's topics", async ($, on) => {
+  await started($, on, {
+    note: { exitCode: 2, stdout: '', stderr: "cauce: unknown topic 'misc'; known: business, code" },
+  })
+  const answer = await call($, 'note', { fact: 'Discounts never stack', topic: 'misc' })
+  expect(answer.deny).toBe("cauce: unknown topic 'misc'; known: business, code")
 })
 
 test('an empty fact is refused without running cauce', async ($, on) => {
@@ -163,10 +198,16 @@ test('queue passes the check, a known kind only, and the session', async ($, on)
   })
   const answer = await call($, 'queue', { task: 'Add the volume discount to cart.total', verify: 'npm test', kind: 'hack' })
   expect(answer.result).toContain('queued #4 — Add the discount. A worker takes it now.')
+  // a kind it does not have queues the task anyway, and the model hears why it was dropped
+  expect(answer.result).toContain('The kind "hack" is not one of cauce\'s')
   const i = seen.argv.findIndex(a => a[0] === 'queue')
   expect(seen.argv[i]).toEqual(['queue', 'add', 'Add the volume discount to cart.total', '--repo', '/work/shop',
     '--json', '--verify', 'npm test'])
   expect(seen.env[i]).toEqual({ CAUCE_SESSION_ID: 'sess-1' })
+  const known = await call($, 'queue', { task: 'Reproduce the double charge on retry', kind: 'debug-repro', verify: 7 })
+  expect(known.result).not.toContain('not one of')
+  expect(seen.argv.filter(a => a[0] === 'queue')[1]).toEqual(['queue', 'add', 'Reproduce the double charge on retry',
+    '--repo', '/work/shop', '--json', '--kind', 'debug-repro'])
 })
 
 test('resume never carries a rule or an approval the model asks for', async ($, on) => {
@@ -176,6 +217,16 @@ test('resume never carries a rule or an approval the model asks for', async ($, 
   expect(seen.argv.find(a => a[0] === 'resume')).toEqual(['resume', '12', '--unattended', '--detach'])
 })
 
+test('resume takes an id and turns written as digits, as a model often sends them', async ($, on) => {
+  const { seen } = await started($, on, { resume: { exitCode: 0, stdout: 'resuming in the background' } })
+  await call($, 'resume', { id: '42', max_turns: '120' })
+  await call($, 'resume', { id: ' #42 ', max_turns: '-5' })
+  expect(seen.argv.filter(a => a[0] === 'resume')).toEqual([
+    ['resume', '42', '--unattended', '--detach', '--max-turns', '120'],
+    ['resume', '42', '--unattended', '--detach'],
+  ])
+})
+
 test('resume: what only the person can clear comes back as a refusal', async ($, on) => {
   await started($, on, { resume: { exitCode: 3, stdout: '', stderr: 'task #12 was refused npm test: only the person can allow Bash(npm test:*)' } })
   expect((await call($, 'resume', { id: 12, max_turns: 150 })).deny).toContain('only the person can allow')
@@ -183,10 +234,31 @@ test('resume: what only the person can clear comes back as a refusal', async ($,
 
 test('resume refuses an id that is no id, before running anything', async ($, on) => {
   const { seen } = await started($, on, {})
-  for (const id of ['abc', -1, 0, 2.5, undefined]) {
-    expect((await call($, 'resume', { id })).deny).toBe('resume needs a task id')
+  for (const id of ['abc', -1, 0, 2.5, undefined, '1e3', '12abc', '', null, [12], 2 ** 60]) {
+    expect((await call($, 'resume', { id })).deny).toContain('resume needs a task id')
   }
   expect(seen.argv.some(a => a[0] === 'resume')).toBe(false)
+})
+
+test('the reading tools are not put to the person; queue, resume and a deny are left as they are', async ($, on) => {
+  let base: 'ask' | 'deny' | 'allow' = 'ask'
+  on('tool.check', () => ({ decision: base, reason: 'the engine' }))
+  await started($, on, {})
+  const verdict = (name: string) => $.tool.check({ tool: `mcp__cauce__${name}`, input: {} })
+  for (const name of ['recall', 'tasks', 'note']) {
+    expect((await verdict(name)).decision).toBe('allow')
+  }
+  // queue and resume spend money: the person's rules and mode decide them
+  expect((await verdict('queue')).decision).toBe('ask')
+  expect((await verdict('resume')).decision).toBe('ask')
+  // another tool, even one named like ours, is never touched
+  expect((await $.tool.check({ tool: 'mcp__other__recall', input: {} })).decision).toBe('ask')
+  expect((await $.tool.check({ tool: 'Bash', input: { command: 'cauce recall x' } })).decision).toBe('ask')
+  // a deny stays a deny
+  base = 'deny'
+  for (const name of ['recall', 'tasks', 'note']) {
+    expect((await verdict(name)).decision).toBe('deny')
+  }
 })
 
 test('a cauce that cannot run is said, never a hang', async ($, on) => {
@@ -332,6 +404,33 @@ test('a refusal offers Allow & resume, and the press runs exactly the suggested 
   await ui.press({ key: 'resume-12' })
   expect(seen.argv.find(a => a[0] === 'resume')).toEqual(['resume', '12', '--detach', '--allow', 'Bash(npm test:*)'])
   expect(seen.toasts).toContain('cauce: resuming #12')
+})
+
+test('Always allow here keeps the same rules for the repository and resumes; only a refusal offers it', async ($, on) => {
+  const stopped = (id: number, cause: string, allow: string[]) => ({ id, title: `t${id}`, status: 'blocked',
+    stop: { cause, who: 'x', reason: `r${id}`, todo: 'do', next: `cauce resume ${id}`, allow } })
+  const board = { ...BOARD, needs_you: [BOARD.needs_you[0], stopped(2, 'permission', []), stopped(3, 'approval', ['Bash(x)'])] }
+  const { seen } = await withBoard($, on, board, { resume: { exitCode: 0, stdout: 'resuming' } })
+  const ui = await $.ui.mount({ plugin: 'cauce', surface: 'terminal', ...BAND } as never)
+  expect((await ui.find({ key: 'keep-12' }))?.props.label).toBe('Always allow here')
+  // no rule to keep, or a stop that is no refusal: nothing to keep, no button
+  expect(await ui.find({ key: 'keep-2' })).toBeUndefined()
+  expect(await ui.find({ key: 'keep-3' })).toBeUndefined()
+  await ui.press({ key: 'keep-12' })
+  expect(seen.argv.find(a => a[0] === 'resume')).toEqual(['resume', '12', '--detach', '--allow', 'Bash(npm test:*)', '--keep'])
+  expect(seen.toasts).toContain('cauce: kept for this repository; resuming #12')
+  // the model's resume never keeps anything, whatever it asks for
+  await call($, 'resume', { id: 12, keep: true, allow: ['Bash(npm test:*)'] })
+  expect(seen.argv.filter(a => a[0] === 'resume').at(-1)).toEqual(['resume', '12', '--unattended', '--detach'])
+})
+
+test('the pane offers the same keep press', async ($, on) => {
+  const { seen } = await withBoard($, on, BOARD, { resume: { exitCode: 0, stdout: 'resuming' } })
+  const ui = await $.ui.mount({ plugin: 'cauce', surface: 'desktop', component: 'Pane', requestId: 'cauce',
+    props: { title: 'cauce', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { bodyRows: 30, offset: 0 } } } as never)
+  expect(await ui.find({ key: 'keep-13' })).toBeUndefined()
+  await ui.press({ key: 'keep-12' })
+  expect(seen.argv.find(a => a[0] === 'resume')).toEqual(['resume', '12', '--detach', '--allow', 'Bash(npm test:*)', '--keep'])
 })
 
 test('a refusal with no rule to offer has no button; other stops resume as cauce says', async ($, on) => {

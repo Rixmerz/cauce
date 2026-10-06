@@ -33,7 +33,11 @@ def test_run_reports_and_fails_on_a_non_pass(capsys, git_repo, monkeypatch):
     monkeypatch.setattr(orchestrate, "run", fake_run)
     code = cli.main(["run", "fix it", "--repo", str(git_repo), "--no-model", "--kind", "docs",
                      "--max-attempts", "1", "--start", "haiku"])
-    assert code == 1 and "task #1: failed" in capsys.readouterr().out
+    out, err = capsys.readouterr()
+    assert code == 1 and "task #1: failed" in out
+    # progress goes to stderr as it happens, so stdout stays the report alone
+    assert err.splitlines()[:2] == ["cauce: task #1 started: docs, at haiku", "cauce: #1 attempt 1 at haiku"]
+    assert "cauce: task #1 started" not in out
 
 
 def test_tasks_show_and_memory(capsys, git_repo):
@@ -613,6 +617,44 @@ def test_a_detached_resume_returns_at_once_and_its_ending_is_left_for_the_sessio
     store = Store.open()
     assert store.last_event(big["id"], "reported") is None
     store.close()
+
+
+def test_keep_allows_once_for_the_repository_and_never_unattended(capsys, git_repo, monkeypatch):
+    """One press per program per repository: the next task there is not refused it again."""
+    from cauce import grants, stops
+
+    monkeypatch.setattr(orchestrate, "run", lambda *a, **kw: orchestrate.Report(kw["task_id"], "done", None))
+    monkeypatch.setattr(orchestrate.Report, "text", lambda self: "ok")
+    started = []
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda argv, **kw: started.append(argv))
+    store = Store.open()
+    refused = store.create_task("build it", status="blocked", source="cauce", repo="r", cwd=str(git_repo))
+    stops.record(store, refused["id"], stops.Stop("permission", "refused", denied=("Bash(npm test)",),
+                                                  allow=("Bash(npm test:*)",)))
+    other = store.create_task("other", status="blocked", source="cauce", repo="elsewhere", cwd=str(git_repo))
+    stops.record(store, other["id"], stops.Stop("permission", "refused", allow=("Bash(npm test:*)",)))
+    keyless = store.create_task("no repo", status="blocked", source="cauce", repo=None, cwd=str(git_repo))
+    store.close()
+
+    # 1. an unattended resume never keeps a rule, whatever it names: nothing granted, nothing run
+    assert cli.main(["resume", str(refused["id"]), "--unattended", "--keep", "--allow", "Bash(npm test:*)"]) == 2
+    assert "only a person passes it" in capsys.readouterr().err
+    assert grants.granted("r") == ()
+    # 2. --keep with no rule, or no repository to key them to, says so and keeps nothing
+    assert cli.main(["resume", str(refused["id"]), "--keep"]) == 2
+    assert "name them with --allow" in capsys.readouterr().err
+    assert cli.main(["resume", str(keyless["id"]), "--keep", "--allow", "Bash(ls:*)", "--detach"]) == 2
+    assert grants.granted("r") == () and started == []
+    # 3. a person's press keeps the rule for the task's repository only, and a detached child does not keep twice
+    assert cli.main(["resume", str(refused["id"]), "--keep", "--allow", " Bash(npm test:*) ", "--detach"]) == 0
+    assert grants.granted("r") == ("Bash(npm test:*)",) and grants.granted("elsewhere") == ()
+    assert "--keep" not in started[0]
+    # 4. now an unattended resume of the next refusal in that repository goes on, elsewhere it still waits
+    assert cli.main(["resume", str(refused["id"]), "--unattended"]) == 0
+    assert cli.main(["resume", str(other["id"]), "--unattended"]) == 3
+    # 5. keeping again adds nothing twice
+    assert cli.main(["resume", str(refused["id"]), "--keep", "--allow", "Bash(npm test:*)"]) == 0
+    assert grants.granted("r") == ("Bash(npm test:*)",)
 
 
 def test_endings_are_peeked_or_delivered_once_and_only_to_their_session(capsys):

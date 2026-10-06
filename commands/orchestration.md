@@ -41,6 +41,12 @@ Request: $ARGUMENTS
    session opened before the plugin was installed), call it by that path. Never
    do the work by hand because the command did not resolve.
 
+   Run it in the background when it may take a while: it prints its task
+   number and each attempt on stderr as they happen, and its report when it
+   stops. A `warning:` line (no browser, servers that must be running) means
+   the task as written will not get far: say so to the person before waiting
+   on it.
+
    Write the task in full: the worker sees nothing of this conversation. Add
    `--verify` whenever the repository has a command that proves the work — a
    worker's own claim of success is not evidence, and cauce runs the check
@@ -88,7 +94,9 @@ Request: $ARGUMENTS
      command that continues it. Tell the user both, in those words. Its work
      so far is on its branch, marked unverified. When the user grants what was
      refused, run that command (`cauce resume <id> --allow "<the refused rule>"`).
-     It is not a new task, and you never redo it by hand.
+     It is not a new task, and you never redo it by hand. When the person
+     wants the rule for every task here, add `--keep`: one approval per
+     program, not one per task.
    - `failed` — every cell on the ladder tried. Report what each attempt found
      (`cauce show <id>`); do not try it yourself in this context.
 
