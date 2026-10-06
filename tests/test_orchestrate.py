@@ -270,7 +270,7 @@ def test_rules_only_classification(git_repo, store):
 
 # --- livespec, adopted ---------------------------------------------------------
 
-def _livespec(tmp_path, *, runner=None):
+def _livespec(tmp_path, *, runner=None, popen=None):
     import subprocess as sp
 
     from cauce.adapters.livespec import Livespec
@@ -281,7 +281,8 @@ def _livespec(tmp_path, *, runner=None):
     (bindir / "uvx").chmod(0o755)
     env = {"PATH": str(bindir), "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path / "cc"),
            "CAUCE_HOME": str(tmp_path / "cauce")}
-    return Livespec(env=env, runner=runner or (lambda argv, **kw: sp.CompletedProcess(argv, 0, "", "")))
+    return Livespec(env=env, runner=runner or (lambda argv, **kw: sp.CompletedProcess(argv, 0, "", "")),
+                    **({"popen": popen} if popen else {}))
 
 
 def test_livespec_runs_through_the_whole_flow(git_repo, store, tmp_path):
@@ -306,6 +307,8 @@ def test_livespec_runs_through_the_whole_flow(git_repo, store, tmp_path):
     assert "Code map from livespec" in spec.prompt and "SPEC-7" in spec.prompt
     # the worker gets livespec's server and a hint naming the workspace
     assert spec.mcp_servers["livespec"]["command"] == "uvx"
+    # and its tools are allowed with it: a worker is never refused the index it was handed
+    assert "mcp__livespec" in spec.allowed_tools
     assert f'workspace="{git_repo.resolve()}"' in spec.append_system_prompt
     assert "livespec" in report.plan.capabilities
     # after the pass: what the change touched
@@ -313,23 +316,83 @@ def test_livespec_runs_through_the_whole_flow(git_repo, store, tmp_path):
     assert "livespec: present" in report.text()
 
 
-def test_an_unindexed_repo_is_indexed_first_and_a_dry_run_only_says_so(git_repo, store, tmp_path):
+def test_an_unindexed_repo_is_indexed_in_the_background_and_the_task_starts_at_once(git_repo, store, tmp_path):
+    from cauce.adapters import livespec as ls
+
     from .livespec_fixture import build
 
-    def indexer(argv, **kw):
-        import subprocess as sp
-        build(git_repo)
-        return sp.CompletedProcess(argv, 0, "", "")
+    started = []
+
+    def popen(argv, **kw):
+        started.append(argv)
+        return None
 
     dry = run("parse_amount rounds wrong", git_repo, store, Options(dry_run=True), registry={},
-              classifier=kind("implement"), adapters=[_livespec(tmp_path, runner=indexer)])
-    assert "livespec: would index first" in dry.plan.reasons
-    assert not (git_repo / ".mcp-docs").exists()
+              classifier=kind("implement"), adapters=[_livespec(tmp_path, popen=popen)])
+    assert "livespec: would index in the background" in dry.plan.reasons
+    assert started == [] and not (git_repo / ".mcp-docs").exists()
+    script = Script(ok())
+    lines = []
+    report = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"), adapters=[_livespec(tmp_path, popen=popen)], progress=lines.append)
+    # the index is started, never waited on: the task runs without it
+    assert started and started[0][-2:] == ["index-livespec", str(git_repo.resolve())]
+    assert "livespec: indexing in the background; this task runs without it" in report.plan.reasons
+    assert "Code map from livespec" not in script.specs[0].prompt
+    assert report.status == "done" and lines[0].startswith(f"cauce: task #{report.task_id} started")
+    # a task planned while that index runs starts no second one
+    adapter = _livespec(tmp_path, popen=popen)
+    with ls._lock(adapter.lock_path(git_repo), wait_s=0) as (got, _):
+        assert got
+        busy = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=Script(ok()),
+                   classifier=kind("implement"), adapters=[adapter])
+    assert "livespec: already indexing in the background; this task runs without it" in busy.plan.reasons
+    assert len(started) == 1
+    # the next task finds the index the background run built
+    build(git_repo)
     script = Script(ok())
     report = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=script,
-                 classifier=kind("implement"), adapters=[_livespec(tmp_path, runner=indexer)])
-    assert "livespec: livespec index refreshed" in report.plan.reasons
-    assert "22 caller(s)" in script.specs[0].prompt
+                 classifier=kind("implement"), adapters=[_livespec(tmp_path, popen=popen)])
+    assert len(started) == 1 and "22 caller(s)" in script.specs[0].prompt
+
+
+def test_a_stale_index_is_used_as_it_is_while_one_refresh_runs(git_repo, store, tmp_path, monkeypatch):
+    from cauce.adapters import livespec as ls
+
+    from .livespec_fixture import build
+
+    build(git_repo)
+    monkeypatch.setattr(ls, "_older_than_head", lambda indexed_at, root: True)
+    started = []
+    adapter = _livespec(tmp_path, popen=lambda argv, **kw: started.append(argv))
+    script = Script(ok())
+    report = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"), adapters=[adapter])
+    assert "livespec: refreshing in the background; this task uses the index as it is" in report.plan.reasons
+    assert "22 caller(s)" in script.specs[0].prompt and len(started) == 1
+    # a refresh that holds the lock is not started twice
+    with ls._lock(adapter.lock_path(git_repo), wait_s=0) as (got, _):
+        assert got
+        again = run("parse_amount rounds wrong", git_repo, store, Options(dry_run=False), registry={},
+                    launcher=Script(ok()), classifier=kind("implement"), adapters=[adapter])
+    assert "livespec: already refreshing in the background; this task uses the index as it is" in again.plan.reasons
+    assert len(started) == 1
+
+
+def test_a_stale_index_livespec_cannot_refresh_says_so_and_never_claims_a_running_one(
+        git_repo, store, tmp_path, monkeypatch):
+    from cauce.adapters import livespec as ls
+
+    from .livespec_fixture import build
+
+    build(git_repo)
+    monkeypatch.setattr(ls, "_older_than_head", lambda indexed_at, root: True)
+    adapter = _livespec(tmp_path, popen=lambda argv, **kw: pytest.fail("nothing to start"))
+    monkeypatch.setattr(adapter, "server", lambda: None)
+    report = run("parse_amount rounds wrong", git_repo, store, Options(dry_run=True), registry={},
+                 classifier=kind("implement"), adapters=[adapter])
+    assert "livespec: cannot refresh here; this task uses the index as it is" in report.plan.reasons
+    assert not any("already" in r or "would refresh" in r for r in report.plan.reasons)
 
 
 def test_review_of_critical_code_is_reviewed_as_critical(git_repo, store, tmp_path):
@@ -694,3 +757,32 @@ def notes_key(where):
     from cauce import repo
 
     return repo.key(where)
+
+
+# --- what a run says while it runs ------------------------------------------------
+
+def test_a_run_says_its_task_number_warnings_and_attempts_as_they_happen(git_repo, store):
+    lines = []
+    script = Script(bad(Failure.CODE_BUG, "missed the rounding " + "x" * 400), ok("fixed"))
+    report = run("check the checkout page in the browser and fix the total", git_repo, store, registry={},
+                 launcher=script, classifier=kind("implement"), progress=lines.append)
+    n = report.task_id
+    assert lines[0] == f"cauce: task #{n} started: implement, at {report.plan.start.label}"
+    # the warning comes before any money is spent, not only in the report
+    assert lines[1].startswith(f"cauce: #{n} warning: this task needs a browser")
+    assert lines.index(f"cauce: #{n} attempt 1 at {report.cells[0]}") == 2
+    ended = lines[3]
+    assert ended.startswith(f"cauce: #{n} attempt 1 ended code_bug: missed the rounding")
+    assert len(ended) < 220  # a summary is cut, never dumped
+    assert lines[-1] == f"cauce: #{n} attempt 2 passed"
+    # every line is cauce's, and a reason that is no warning is not repeated
+    assert all(line.startswith("cauce: ") for line in lines)
+    assert not any("ladder" in line for line in lines)
+
+
+def test_a_dry_run_and_a_run_without_a_listener_say_nothing(git_repo, store, capsys):
+    run("check it in the browser", git_repo, store, Options(dry_run=True), registry={},
+        classifier=kind("implement"), progress=lambda line: pytest.fail(line))
+    report = run("fix the thing", git_repo, store, registry={}, launcher=Script(ok()), classifier=kind("implement"))
+    assert report.status == "done"
+    assert capsys.readouterr() == ("", "")

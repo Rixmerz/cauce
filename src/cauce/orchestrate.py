@@ -261,11 +261,20 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
         status = adapter.inspect(repo_dir)
         runnable_absent = status.state == ABSENT and adapter.server() is not None
         if runnable_absent or status.stale:
-            if options.dry_run:
-                neighbour_notes.append(f"{adapter.name}: would {'index' if runnable_absent else 'refresh'} first")
+            # In the background, never before the task: a large repository takes
+            # minutes to index, and a run that is silent for minutes, with no task
+            # yet to show, reads as one that never started. This task uses the
+            # index as it is; the next one gets the fresh one.
+            what = "index" if runnable_absent else "refresh"
+            meanwhile = "this task runs without it" if runnable_absent else "this task uses the index as it is"
+            if adapter.server() is None:
+                neighbour_notes.append(f"{adapter.name}: cannot {what} here; {meanwhile}")
+            elif options.dry_run:
+                neighbour_notes.append(f"{adapter.name}: would {what} in the background")
+            elif adapter.refresh_in_background(repo_dir, home() / f"{adapter.name}-index.log"):
+                neighbour_notes.append(f"{adapter.name}: {what}ing in the background; {meanwhile}")
             else:
-                neighbour_notes.append(f"{adapter.name}: {adapter.refresh(repo_dir)}")
-                status = adapter.inspect(repo_dir)
+                neighbour_notes.append(f"{adapter.name}: already {what}ing in the background; {meanwhile}")
         statuses.append(status)
         if not status.present:
             continue
@@ -348,6 +357,7 @@ def run(
     session_id: str | None = None,
     history: Sequence[Attempt] = (),
     notes_ask: notes.Ask | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> Report:
     """Run a task. `history` is a resumed task's earlier attempts: shown to its
     workers, never counted by the escalation, which starts over."""
@@ -382,6 +392,13 @@ def run(
                                  session_id=session_id, options=json.dumps(options.stored()), **fields)
     report = Report(task["id"], "running", the_plan, cost_usd=c.cost_usd)
     store.update_task(task["id"], pid=os.getpid())
+    say = progress or (lambda line: None)
+    # Said as it happens: a run in a background shell is otherwise silent until
+    # its report, and silence reads as a run that never started.
+    say(f"cauce: task #{task['id']} started: {the_plan.kind}, at {the_plan.start.label}")
+    for reason in the_plan.reasons:
+        if reason.startswith(("this task needs", "workers here were refused before")):
+            say(f"cauce: #{task['id']} warning: {reason}")
     store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label,
                     ladder=[x.label for x in the_plan.ladder], reasons=the_plan.reasons,
                     neighbours=[st.line() for st in the_plan.neighbours])
@@ -452,6 +469,7 @@ def run(
                 env={**run_env, "CAUCE_WORKER_TASK": str(task["id"]), "CAUCE_WORKER_ATTEMPT": str(len(attempts) + 1)},
             )
             store.update_task(task["id"], current_cell=cell.label)
+            say(f"cauce: #{task['id']} attempt {len(attempts) + 1} at {cell.label}")
             store.add_event(task["id"], "attempt_started", seq=len(attempts) + 1, cell=cell.label,
                             model=spec.model_id or cell.model,
                             max_turns=turns, budget_usd=spec.max_budget_usd, capabilities=list(selection.names))
@@ -483,6 +501,8 @@ def run(
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:])
             attempts.append(attempt)
+            say(f"cauce: #{task['id']} attempt {seq} " + ("passed" if result.passed else
+                f"ended {(result.failure or Failure.INCONCLUSIVE).value}: {result.summary[:160]}"))
             if result.passed:
                 report.status, report.final_cell, report.summary = "done", cell.label, result.summary
                 report.learned = result.learned

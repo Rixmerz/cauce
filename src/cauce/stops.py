@@ -151,7 +151,7 @@ def next_step(task_id: int, stop: Stop, *, resumable: bool = True) -> str | None
 def what_to_do(stop: Stop) -> str:
     """What a person does before the command, in one sentence."""
     return {
-        "permission": "allow what was refused for this run, or keep it for every task here with `cauce allow`, "
+        "permission": "allow what was refused for this run, or add --keep to keep it for every task here, "
                       "then resume",
         "environment": "fix what failed to run, then resume",
         "budget": "resume with a larger budget, or read the attempts first",
