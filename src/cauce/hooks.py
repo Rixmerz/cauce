@@ -334,13 +334,21 @@ def keep_notes(event: Mapping[str, Any], root: Path, env: Mapping[str, str], *,
 STOPPED_FOR_A_PERSON = ("blocked", "needs_approval")
 
 
-def _endings(store: Store, session_id: str, *, via: str) -> str | None:
+def _endings(store: Store, session_id: str, *, via: str, mark: bool = True) -> str | None:
     """Work this session sent that ended since it last heard, each with what to do
     next, marked as reported: a queued task finishes while nobody waits on it,
-    and the session that sent it would otherwise never learn it should act."""
-    ended = store.unreported(session_id)
+    and the session that sent it would otherwise never learn it should act.
+    `mark=False` reads them without taking them: a display, not a delivery."""
+    return endings(store, session_id, claim=via if mark else None)[0]
+
+
+def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple[str | None, list[int]]:
+    """The notice of what ended since the session last heard, and the tasks it
+    covers. With `claim`, they are marked delivered by that route as they are
+    read, atomically; without, only read."""
+    ended = store.claim_unreported(session_id, via=claim) if claim else store.unreported(session_id)
     if not ended:
-        return None
+        return None, []
     lines = ["cauce: work this session sent has ended since you last heard. Act on each now: tell the person "
              "what happened, then continue as its line says (never redo a worker's task by hand)."]
     for t in ended:
@@ -368,8 +376,7 @@ def _endings(store: Store, session_id: str, *, via: str) -> str | None:
             lines.append(f"  changed so far: {shown}")
         if stop:
             lines.append(f"  next: {stop['todo']}" + (f": {stop['next']}" if stop["next"] else ""))
-    store.mark_reported([t["id"] for t in ended], via=via)
-    return "\n".join(lines)
+    return "\n".join(lines), [t["id"] for t in ended]
 
 
 

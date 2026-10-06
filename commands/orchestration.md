@@ -20,6 +20,14 @@ Request: $ARGUMENTS
    that touch different files can run at the same time (each gets its own
    worktree); run them as background commands and collect the reports.
 
+   When the `mcp__cauce__*` tools are in your list (Claude Code loaded
+   cauce's mod), use them instead of the commands below: `queue` for work
+   (it returns at once and its ending comes back to you on its own), `tasks`
+   for what waits or runs, `recall` and `note` for the project's notes,
+   `resume` to continue a task. They need no PATH and no permission rule. When
+   a tool refuses because only the person can clear what stopped a task, tell
+   the person in those words.
+
 3. **Dispatch** with Bash, from the repository the work is in:
 
    ```bash

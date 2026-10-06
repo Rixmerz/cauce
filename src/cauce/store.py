@@ -767,6 +767,22 @@ class Store:
             (session_id, (datetime.now(UTC) - timedelta(hours=hours)).isoformat(timespec="seconds"), limit))
         return [{**dict(r), "finished_data": json.loads(r["finished_data"])} for r in rows]
 
+    def claim_unreported(self, session_id: str, *, via: str) -> list[dict]:
+        """Read and mark in one transaction: two deliverers at once (the Stop hook
+        and a mod's poll at a turn's end) never both hand the session the same
+        ending."""
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            ended = self.unreported(session_id)
+            for t in ended:
+                self._conn.execute("INSERT INTO events (task_id, ts, kind, data) VALUES (?, ?, 'reported', ?)",
+                                   (t["id"], now(), json.dumps({"via": via})))
+            self._conn.execute("COMMIT")
+        except BaseException:
+            self._conn.execute("ROLLBACK")
+            raise
+        return ended
+
     def mark_reported(self, task_ids: Iterable[int], *, via: str) -> None:
         for task_id in task_ids:
             self.add_event(task_id, "reported", via=via)

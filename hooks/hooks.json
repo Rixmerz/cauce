@@ -1,5 +1,8 @@
 {
   "description": "cauce couples every prompt, follow-up and result to a task, and puts known dead ends and the project's notes in front of the model, and keeps what a session established in those notes before it compacts or ends. Every hook exits 0; a failure is logged and reported at the next SessionStart.",
+  "modules": [
+    "./cauce.tsx"
+  ],
   "hooks": {
     "SessionStart": [
       {

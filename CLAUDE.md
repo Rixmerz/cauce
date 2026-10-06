@@ -34,6 +34,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/naming.py` | Haiku names a session, started detached by the Stop hook; a name a person wrote is never replaced |
 | `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
+| `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, status, band, `/cauce` pane; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
 | `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified |
 | `commands/orchestration.md` | the one entry point a user types |
 | `bin/cauce` | the launcher every hook and command goes through |
@@ -47,7 +48,12 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 .venv/bin/python -m coverage run -m pytest
 .venv/bin/python -m coverage report
 claude plugin validate .
+claude plugin test .
 ```
+
+`claude plugin validate .` also reads the mod. In the hooks module, `$` stays
+in the file: helpers that take it are declared at its top level, and imported
+helpers never get it.
 
 The coverage floor lives in one place, `[tool.coverage.report] fail_under` in
 `pyproject.toml`. Raise it when the real number rises; never lower it to pass.
@@ -167,5 +173,14 @@ yields the default kind, not a guess.
   on a branch not merged yet is not a change. Filing notes never fails a run,
   and a GET in the UI never reviews them. Tests run with `CAUCE_NOTES=off`; a
   test that wants notes turns them on and passes a fake `ask`.
+- The mod adds a way in, never a power. Every tool runs `bin/cauce`. `resume`
+  runs with `--unattended`, which refuses what only a person may clear, and
+  no model input ever reaches `--allow` or `--allow-approval`: only a button
+  the person presses does. Without the mod, everything still works through
+  the classic hooks.
+- An ending is claimed, not just read, when it is delivered
+  (`Store.claim_unreported`). The Stop hook, the next prompt and the mod's
+  wake may run at the same moment, and each ending is still handed over once.
+  The mod wakes a session only while no turn runs.
 - The capability registry is read from the user's cauce home only. A
   repository must never be able to add an MCP server by committing a file.
