@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-10-06
+
+### Fixed
+
+- **An audit that found problems was read as failed work.** A read-only task
+  (review, explore, plan) whose worker found the audited code broken answered
+  `fail` / `code_bug`, about the code it read. cauce reads `code_bug` as
+  shallow work, so it climbed effort and model. One audit gave the same
+  findings seven times, from opus/high to opus/max, for $6.60, and then
+  suggested resuming it. Now:
+  - A reading worker is told that the answer is the deliverable. Findings,
+    broken code included, are a `pass`, with each finding in the summary and
+    what shows it in the evidence. `code_bug` is never about the code it
+    read.
+  - Two cells of a reading task that report the same findings stop the run
+    as `converged`. The findings are confirmed and the answer is in the
+    worker's account. The task suggests acting on them, not resuming, which
+    would repeat them.
+  - The notice that tells the main session a task ended now carries what the
+    worker found.
+
 ## [0.4.8] - 2026-10-06
 
 From a session where one read-only audit went five attempts deep, each refused

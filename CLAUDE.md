@@ -117,6 +117,9 @@ yields the default kind, not a guess.
   changes with `cauce config mode`.
 - A refused attempt blocks; it never climbs, whatever else it ended with,
   unless the worker found the task wrong.
+- A reading task's answer is its deliverable: findings, broken code included,
+  are a pass, and two cells reporting the same findings stop it as
+  `converged` instead of climbing.
 - A worker that stopped before its own check (refused, out of turns or
   money) is checked with `--verify` by cauce when the task changed something;
   a red check is evidence for the next brief, never a pass.

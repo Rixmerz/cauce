@@ -50,7 +50,8 @@ def test_a_refusal_names_the_rules_and_the_command_that_allows_them(git_repo, st
 
 
 def test_approval_and_budget_say_how_to_go_on(tmp_path, store):
-    script = Script(bad(Failure.CODE_BUG), bad(Failure.CODE_BUG))
+    script = Script(bad(Failure.INCONCLUSIVE, "could not read the queue"),
+                    bad(Failure.INCONCLUSIVE, "the scheduler is unclear"))
     report = run("design it", tmp_path, store, registry={}, launcher=script, classifier=kind("plan"))
     stop = _stop(store, report.task_id)
     assert stop.cause == "approval" and stop.next_cell == "fable/high"

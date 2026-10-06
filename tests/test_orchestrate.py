@@ -203,7 +203,8 @@ def test_runs_end_with_a_status_that_says_why(git_repo, store, results, status):
 
 
 def test_fable_waits_for_approval(tmp_path, store):
-    script = Script(bad(Failure.CODE_BUG), bad(Failure.CODE_BUG))
+    script = Script(bad(Failure.INCONCLUSIVE, "could not read the queue"),
+                    bad(Failure.INCONCLUSIVE, "the scheduler is unclear"))
     report = run("design the system", tmp_path, store, registry={}, launcher=script, classifier=kind("plan"))
     assert report.status == "needs_approval" and report.cells == ["opus/xhigh", "opus/max"]
 
@@ -613,3 +614,14 @@ def test_a_worker_gets_its_mode_the_repository_s_rules_and_the_tools_it_was_hand
 def test_a_refused_attempt_tells_how_to_keep_its_rules(git_repo, store):
     report = run("x", git_repo, store, registry={}, launcher=Script(refused()), classifier=kind("implement"))
     assert "or, for every task in this repository: cauce allow 'Bash(node:*)'" in report.text()
+
+
+def test_a_reading_task_is_told_its_findings_are_the_answer_and_stops_when_cells_agree(git_repo, store):
+    said = "the API still allows the old role in two files"
+    script = Script(bad(Failure.CODE_BUG, said), bad(Failure.CODE_BUG, said + "."))
+    report = run("audit the role rename", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("review-critical"))
+    assert "also when what you found is broken" in script.specs[0].prompt
+    assert report.status == "failed" and report.cells == ["opus/high", "opus/xhigh"]
+    assert report.stop.cause == "converged" and report.stop.account == said + "."
+    assert "resuming would only repeat them" in report.text() and "cauce resume" not in report.text()

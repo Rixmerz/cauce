@@ -50,6 +50,7 @@ CAUSES = {
     "signal": ("cancelled", "outside"),
     "died": ("interrupted", "cauce"),
     "crashed": ("failed", "cauce"),
+    "converged": ("failed", "worker"),
 }
 
 #: The turns a task that outgrew its turns is resumed with.
@@ -132,7 +133,7 @@ def read(data: dict[str, Any] | None) -> Stop | None:
 def next_step(task_id: int, stop: Stop, *, resumable: bool = True) -> str | None:
     """The command that continues the task, or None when none would: a task the
     worker found wrong is rewritten, and one that never ran cannot resume."""
-    if not resumable or stop.cause in ("spec", "ladder", "missing_dir"):
+    if not resumable or stop.cause in ("spec", "ladder", "missing_dir", "converged"):
         return None
     base = f"cauce resume {task_id}"
     if stop.cause == "turns":
@@ -166,6 +167,8 @@ def what_to_do(stop: Stop) -> str:
         "signal": "resume it if you still want it",
         "died": "its process went away mid-run: resume it",
         "crashed": "cauce itself failed: the reason has the error; resume once it is fixed",
+        "converged": "the findings are the answer: read them in the worker's account and act on them; "
+                     "resuming would only repeat them",
     }.get(stop.cause, "read the attempts")
 
 
