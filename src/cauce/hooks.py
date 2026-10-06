@@ -181,7 +181,7 @@ def pre_tool_use(event: Mapping[str, Any], store: Store) -> dict | None:
     tool_input = event.get("tool_input") or {}
     body = str(tool_input.get("prompt") or tool_input.get("description") or "delegated work")
     store.create_task(body, status="running", source="delegation", session_id=event["session_id"],
-                      parent_id=parent["id"] if parent else None, cwd=event.get("cwd"),
+                      author="orchestrator", parent_id=parent["id"] if parent else None, cwd=event.get("cwd"),
                       title=str(tool_input.get("description") or "") or None,
                       repo=parent["repo"] if parent else None, prompt_id=event.get("tool_use_id"))
     return None

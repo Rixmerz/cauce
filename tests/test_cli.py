@@ -446,6 +446,18 @@ def test_queue_add_keeps_the_rules_a_person_granted(capsys, git_repo):
     store.close()
     from cauce import flow
     assert flow.queued_options(task, orchestrate.Options()).allow_tools == ("Bash(npm run build)",)
+    store = Store.open()
+    assert store.messages(task_id)[0]["role"] == "user"
+    store.close()
+
+
+def test_queue_add_from_a_session_is_the_orchestrator_s(capsys, git_repo, monkeypatch):
+    monkeypatch.setenv("CAUCE_SESSION_ID", "s1")
+    assert cli.main(["queue", "add", "build it", "--repo", str(git_repo), "--json"]) == 0
+    task_id = json.loads(capsys.readouterr().out)["id"]
+    store = Store.open()
+    assert store.messages(task_id)[0]["role"] == "orchestrator"
+    store.close()
 
 
 @pytest.mark.parametrize(("found", "code", "says"), [

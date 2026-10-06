@@ -556,3 +556,26 @@ def test_the_plan_names_the_rules_workers_here_were_refused_before(git_repo, sto
     assert "Bash(npx tsc:*) ×2" in note and "Bash(make lint:*) ×1" in note and "npm run build" not in note
     blocked = store.list_tasks(status=["blocked"])[-1]
     assert "--allow 'Bash(npx tsc:*)' --allow 'Bash(npm run build:*)'" in store.get_task(blocked["id"])["result"]
+
+
+def test_the_task_text_says_who_wrote_it(git_repo, store):
+    """Sent by the main session through its own Bash, the text is the orchestrator's,
+    not something the person typed."""
+    sent = run("x", git_repo, store, registry={}, launcher=Script(ok()), classifier=kind("implement"), session_id="s1")
+    typed = run("y", git_repo, store, registry={}, launcher=Script(ok()), classifier=kind("implement"))
+    assert store.messages(sent.task_id)[0]["role"] == "orchestrator"
+    assert store.messages(typed.task_id)[0]["role"] == "user"
+
+
+def test_the_plan_says_when_a_task_needs_a_browser_or_running_servers(git_repo, store, tmp_path):
+    text = "Start both dev servers (app on 4200) and open the browser at localhost:4200 to check the admin panel"
+    dry = run(text, git_repo, store, Options(dry_run=True), registry={}, classifier=kind("test"))
+    notes = [r for r in dry.plan.reasons if r.startswith("this task needs")]
+    assert len(notes) == 2 and "browser MCP server" in notes[0] and "--allow 'mcp__browser'" in notes[0]
+    assert "start them yourself" in notes[1]
+    (tmp_path / "caps.json").write_text(json.dumps({"browser": caps.EXAMPLE["browser"]}))
+    registry = caps.load(tmp_path / "caps.json")
+    dry = run(text, git_repo, store, Options(dry_run=True), registry=registry, classifier=kind("explore"))
+    assert [r for r in dry.plan.reasons if r.startswith("this task needs")] == [notes[1]]
+    plain = run("fix the parser", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"))
+    assert not any(r.startswith("this task needs") for r in plain.plan.reasons)
