@@ -107,6 +107,8 @@ class Report:
     plan: Plan
     cells: list[str] = field(default_factory=list)
     moves: list[str] = field(default_factory=list)
+    #: Each move's full account: where it went, along which dial, and why.
+    decisions: list[Decision] = field(default_factory=list)
     final_cell: str | None = None
     cost_usd: float = 0.0
     branch: str | None = None
@@ -134,6 +136,10 @@ class Report:
             lines.append(f"capabilities {', '.join(self.plan.capabilities)}")
         for i, (cell, move) in enumerate(zip(self.cells, [*self.moves, ""], strict=False), 1):
             lines.append(f"attempt {i} {cell}" + (f" → {move}" if move else ""))
+            if i <= len(self.decisions):
+                d = self.decisions[i - 1]
+                lines += [f"    · {line}" for line in d.because[1:]]
+                lines += [f"    · skipped {line}" for line in d.skipped]
         if self.final_cell:
             lines.append(f"passed at {self.final_cell}")
         if self.cost_usd:
@@ -412,9 +418,16 @@ def run(
                 _remember(store, task, key, attempt, "failed", result)
             decision = decide(the_plan.ladder, attempts, allow_approval=options.allow_approval)
             store.set_move(task["id"], seq, decision.move.value, decision.reason)
-            report.moves.append(f"{decision.move.value}: {decision.reason}")
-            store.add_event(task["id"], "moved", move=decision.move.value, reason=decision.reason,
-                            next_cell=decision.cell.label if decision.cell else None)
+            to = decision.cell.label if decision.cell and decision.continues else None
+            report.moves.append(f"{decision.move.value}" + (f" to {to}" if to else "") + f": {decision.reason}")
+            report.decisions.append(decision)
+            store.add_event(task["id"], "moved", seq=seq, move=decision.move.value, reason=decision.reason,
+                            next_cell=decision.cell.label if decision.cell else None,
+                            from_cell=cell.label, to_cell=to, axis=decision.axis,
+                            trigger=(result.failure or Failure.INCONCLUSIVE).value,
+                            because=list(decision.because), skipped=list(decision.skipped),
+                            turns_from=turns, turns_to=decision.max_turns if decision.continues else None,
+                            budget_left=round(options.budget_usd - report.cost_usd, 4))
             if not decision.continues:
                 # The worker's own account goes with the reason: "the task is
                 # wrong" is only actionable next to what it found wrong.

@@ -91,6 +91,9 @@ yields the default kind, not a guess.
   without one is read back and marked `recovered`, never presented as recorded.
   A cancel says where it came from; "a person did it" is never a guess.
 - The model's stated confidence about its own work is not an input.
+- A move explains itself: `Decision.because` is the evidence chain (what the
+  attempt ended with, the rule, where it goes) and `skipped` the rungs passed
+  over. A new branch in `decide` gives both; the `moved` event keeps them.
 - History may raise where a task starts, never lower it below its ladder.
 - Fable needs a person: `#fable` or `--allow-approval`.
 - An adopted neighbour is read, never written: the livespec index is opened

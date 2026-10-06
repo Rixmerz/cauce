@@ -596,6 +596,21 @@ class Store:
             "FROM tasks t WHERE t.source = 'cauce' AND t.kind IS NOT NULL").fetchall()
         return [dict(r) for r in rows]
 
+    def moves(self) -> list[dict]:
+        """Every move a run made after a failed attempt, with the task's kind, the
+        cell it left, the failure that moved it, and the cell the next attempt ran
+        at and whether that one passed: how each ladder is really climbed."""
+        rows = self._conn.execute(
+            "SELECT t.kind, a.cell, a.failure, a.move, b.cell AS next_cell, b.passed AS next_passed "
+            "FROM attempts a JOIN tasks t ON t.id = a.task_id "
+            "LEFT JOIN attempts b ON b.task_id = a.task_id AND b.seq = a.seq + 1 "
+            "WHERE a.move IS NOT NULL AND t.source = 'cauce' AND t.kind IS NOT NULL").fetchall()
+        return [dict(r) for r in rows]
+
+    def events_of(self, task_id: int, kind: str) -> list[dict]:
+        rows = self._conn.execute("SELECT * FROM events WHERE task_id = ? AND kind = ? ORDER BY id", (task_id, kind))
+        return [{**dict(r), "data": json.loads(r["data"])} for r in rows]
+
     def last_event(self, task_id: int, kind: str) -> dict | None:
         row = self._conn.execute(
             "SELECT * FROM events WHERE task_id = ? AND kind = ? ORDER BY id DESC LIMIT 1", (task_id, kind)).fetchone()

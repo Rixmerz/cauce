@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-06
+
+### Added
+
+- **Every climb says where it went and why.** A move after a failed attempt
+  used to keep only its name and a short reason ("code_bug: same model, more
+  thorough"). Its destination could only be read off the next attempt. Each
+  decision (`escalate.decide`) now carries the full account:
+  - the dial it turned: effort, model, turns, retry, or stop;
+  - from which cell to which, and the turns before and after;
+  - the evidence chain: what the attempt ended with and what that failure
+    means, the rule it was read against (shallow work climbs effort; a wrong
+    approach or two cells agreeing changes model; a refusal is a setting),
+    and the cell it goes to with that effort's purpose;
+  - the ladder cells it skipped, and why;
+  - the budget left.
+
+  The `moved` event keeps all of it (with its attempt's `seq`).
+- **Where it shows:**
+  - The run's report and `cauce show` print the account under each attempt.
+  - The task drawer shows each move as from → to, with the numbered evidence
+    and the skipped cells.
+  - The task drawer's plan draws the ladder with each attempt on the cell it
+    ran at: red where it failed, green where it passed.
+- **Routing** gains *How each ladder was climbed*: per kind, every move with
+  the cell it left, the failure behind it, where the next attempt ran, how
+  many times, and how often that next attempt passed. This is the evidence
+  for raising a start or dropping a rung. It is built from the attempts, so
+  tasks from before 0.4.3 count too.
+- A task from before 0.4.3 shows its moves from what its attempts recorded,
+  marked as such.
+
 ## [0.4.2] - 2026-10-06
 
 ### Added

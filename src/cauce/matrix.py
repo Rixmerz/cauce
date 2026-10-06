@@ -32,6 +32,15 @@ from dataclasses import dataclass
 
 EFFORTS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
 
+#: Each effort's purpose in a few words, as a climb explains where it went.
+EFFORT_PURPOSE: dict[str, str] = {
+    "low": "direct answers, few tool calls, no self-checks",
+    "medium": "saving where quality holds: work from a clear plan",
+    "high": "the floor for work that needs judgment",
+    "xhigh": "long-horizon work: several parts, no clear cause",
+    "max": "correctness over cost",
+}
+
 
 @dataclass(frozen=True)
 class Model:
