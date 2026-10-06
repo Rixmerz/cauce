@@ -2,6 +2,54 @@
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-10-06
+
+From a review of real sessions where most blocked tasks were finished by
+hand.
+
+### Fixed
+
+- **The suggested `--allow` rules could not be used.** A refusal was suggested
+  as the whole call, chained and cut at 120 characters, e.g.
+  `Bash(search -n "x" src; echo "exit $?"; g...)`. Allowing that allowed
+  nothing. Refusals now become one rule per program, read from the full call
+  (`src/cauce/allow.py`):
+  - a shell line is split into the commands it chains, and each one gets a
+    prefix rule: `Bash(npx tsc:*)`, `Bash(npm run build:*)`,
+    `Bash(git status:*)`. `bash -c` is read for its script;
+  - an absolute file path gets two slashes (`Read(//abs/path)`). With one,
+    Claude Code reads it relative to the settings file;
+  - a URL becomes its domain.
+
+  The report, the `blocked` reason, `cauce show`, the board and the resume
+  command use these rules. Tasks recorded before get them read back from what
+  was refused.
+- **A task started with `--no-isolate` resumed in a worktree.** There it could
+  not see the uncommitted work it was continuing. The choice is now kept with
+  the task's options; `cauce resume --no-isolate` also sets it.
+- **One click on Cancel in the task drawer stopped a run.** Cancel now takes
+  a second click within four seconds.
+
+### Changed
+
+- **A worker that runs out of turns or money is checked by cauce.** Before,
+  such a worker never reached `--verify`, and a large change ended without
+  its tests ever running. Now cauce runs `--verify` itself whenever the task
+  changed something: a green check passes the attempt, and a red one gives
+  the next attempt the failing output, at the end of its brief. Every failing
+  attempt's output now reaches the next brief this way.
+- **Turns are raised while the work keeps moving.** A run that hit its turn
+  ceiling twice used to be sent back to be split, even when the raised
+  attempt had changed dozens of files. Now a raised attempt that changed files
+  is raised again (30 → 60 → 120 → 200). A raised attempt that changed
+  nothing, or the 200 cap, still means split it.
+- **The plan names the rules workers in this repository lacked before**, with
+  counts, leaving out those already granted. `cauce run --dry-run` shows them,
+  so they can be passed with `--allow` from the start.
+- **Workers are told how refusals work.** Nobody can approve a command while
+  they run: read and search with the Read, Grep and Glob tools, and run one
+  shell command per call, since one refused part refuses the whole chain.
+
 ## [0.4.3] - 2026-10-06
 
 ### Added

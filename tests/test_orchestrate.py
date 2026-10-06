@@ -481,3 +481,56 @@ def test_a_resumed_worker_that_finds_the_work_done_is_settled_by_the_check(git_r
     assert report.status == "done" and report.changed == ["routes.js"]
     assert "(unverified" in git(git_repo, "log", "-2", "--format=%s", report.branch).splitlines()[1]
     assert "(unverified" not in git(git_repo, "log", "-1", "--format=%s", report.branch)
+
+
+def test_a_worker_that_ran_out_of_turns_is_checked_by_cauce_and_a_red_check_reaches_the_next_brief(git_repo, store):
+    """A large change used every turn before it ran the tests; the tests were never run
+    and the run was sent back to be split. The repository's check now runs for it."""
+    out_of_turns = WorkerResult(False, Failure.TURNS_EXHAUSTED, "used all 30 turns without a verdict", cost_usd=0.1)
+    report = run("remove the old module", git_repo, store, Options(verify="test -f gone.txt"), registry={},
+                 launcher=Script(out_of_turns, write="gone.txt"), classifier=kind("refactor"))
+    assert report.status == "done" and report.cells == ["sonnet/medium"]
+    assert "ran out of turns before checking its work; `test -f gone.txt` passed in its place" in report.summary
+
+    specs = []
+
+    def launcher(spec):
+        specs.append(spec)
+        (spec.target_dir / ("half.txt" if len(specs) == 1 else "done.txt")).write_text("x\n")
+        return out_of_turns if len(specs) == 1 else ok()
+
+    check = "test -f done.txt || { echo 2 tests failed; exit 1; }"
+    report = run("remove the old module", git_repo, store, Options(verify=check), registry={}, launcher=launcher,
+                 classifier=kind("refactor"))
+    first = store.attempts(report.task_id)[0]
+    assert first["failure"] == "turns_exhausted" and "2 tests failed" in first["evidence"]
+    assert f"cauce ran `{check}`, which exited 1" in first["summary"]
+    assert specs[1].max_turns == 60 and report.status == "done"
+    assert "The output that failed the last attempt, last lines:" in specs[1].prompt
+    assert "2 tests failed" in specs[1].prompt
+
+
+def test_a_run_in_the_checkout_resumes_in_the_checkout(git_repo, store):
+    assert Options(isolate=False).stored()["no_isolate"] is True
+    assert "no_isolate" not in Options().stored()
+    from cauce import flow
+
+    task = {"options": '{"no_isolate": true}'}
+    assert flow.queued_options(task, Options()).isolate is False
+    assert flow.queued_options({"options": "{}"}, Options()).isolate is True
+
+
+def test_the_plan_names_the_rules_workers_here_were_refused_before(git_repo, store):
+    for i in range(2):
+        refusal = WorkerResult(False, Failure.PERMISSION, "refused", verdict="inconclusive",
+                               denied=("Bash(npx tsc --noEmit; npm run build)",),
+                               allow=("Bash(npx tsc:*)", "Bash(npm run build:*)"))
+        run(f"task {i}", git_repo, store, registry={}, launcher=Script(refusal), classifier=kind("implement"))
+    old = store.create_task("older", status="blocked", source="cauce", repo=str(git_repo.resolve()))
+    store.add_event(old["id"], "attempt_finished", seq=1, denied=["Bash(make lint)"])  # before rules were kept
+    dry = run("next", git_repo, store, Options(dry_run=True, allow_tools=("Bash(npm run build:*)",)), registry={},
+              classifier=kind("implement"))
+    note = next(r for r in dry.plan.reasons if r.startswith("workers here were refused before"))
+    assert "Bash(npx tsc:*) ×2" in note and "Bash(make lint:*) ×1" in note and "npm run build" not in note
+    blocked = store.list_tasks(status=["blocked"])[-1]
+    assert "--allow 'Bash(npx tsc:*)' --allow 'Bash(npm run build:*)'" in store.get_task(blocked["id"])["result"]

@@ -92,6 +92,12 @@ class Attempt:
     summary: str = ""
     #: The tool calls the permission settings refused, as `Bash(npm run build)`.
     denied: tuple[str, ...] = ()
+    #: The `--allow` rules that would let them through, one per program.
+    allow: tuple[str, ...] = ()
+    #: What this attempt itself changed: work that moved, even when it ran out.
+    changed: tuple[str, ...] = ()
+    #: The output that failed it, for the next attempt's brief.
+    evidence: str = ""
 
 
 @dataclass(frozen=True)
@@ -198,9 +204,13 @@ def decide(
     if failure is Failure.PERMISSION:
         more = len(last.denied) - 3
         refused = (", ".join(last.denied[:3]) + (f" and {more} more" if more > 0 else "")) or "a tool call"
-        return Decision(Move.BLOCKED, reason=f"the worker was refused {refused}; allow it (`--allow`), then resume",
+        grant = " ".join(f"--allow '{rule}'" for rule in last.allow)
+        how = f"allow it ({grant})" if grant else "allow it (`--allow`)"
+        return Decision(Move.BLOCKED, reason=f"the worker was refused {refused}; {how}, then resume",
                         because=(seen, f"refused: {', '.join(last.denied) or 'a tool call'}",
-                                 "a refusal is a setting: a retry, or a stronger model, gets the same refusal"))
+                                 "a refusal is a setting: a retry, or a stronger model, gets the same refusal",
+                                 *([f"the rules that let it through, one per program: {', '.join(last.allow)}"]
+                                   if last.allow else [])))
 
     if failure is Failure.ENVIRONMENT:
         retries = sum(1 for a in attempts if a.failure is Failure.ENVIRONMENT)
@@ -215,13 +225,20 @@ def decide(
 
     if failure is Failure.TURNS_EXHAUSTED:
         raised = sum(1 for a in attempts if a.failure is Failure.TURNS_EXHAUSTED)
-        if raised <= 1 and last.max_turns < MAX_TURNS_CEILING:
+        moving = raised > 1 and bool(last.changed)
+        if (raised <= 1 or moving) and last.max_turns < MAX_TURNS_CEILING:
             turns = min(last.max_turns * 2, MAX_TURNS_CEILING)
+            rule = (f"a turn ceiling is not a fault of the model or its effort: the same cell gets {turns} turns "
+                    f"instead of {last.max_turns}" + (", once" if not moving else "")
+                    + f" (the cap is {MAX_TURNS_CEILING})")
             return Decision(Move.MORE_TURNS, last.cell, turns, f"hit {last.max_turns} turns; raised to {turns}",
-                            because=(seen, f"a turn ceiling is not a fault of the model or its effort: the same "
-                                           f"cell gets {turns} turns instead of {last.max_turns}, once "
-                                           f"(the cap is {MAX_TURNS_CEILING})"))
-        why = "the turns were already raised once" if raised > 1 else f"{last.max_turns} turns is the cap"
+                            because=(seen, *([f"the raised attempt still moved the work: it changed "
+                                              f"{len(last.changed)} file(s), so it is raised again"]
+                                             if moving else []), rule))
+        if last.max_turns >= MAX_TURNS_CEILING:
+            why = f"{last.max_turns} turns is the cap"
+        else:
+            why = "the turns were raised and the raised attempt changed nothing"
         return Decision(Move.REPLAN, reason="the task does not fit even the raised turn budget; split it",
                         because=(seen, f"{why}: the task is bigger than one worker, so it is split, not climbed"))
 

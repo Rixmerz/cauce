@@ -41,6 +41,8 @@ export function stopSection(stop) {
     h("div", { class: "text" }, stop.reason),
     stop.denied?.length ? h("div", {}, h("b", {}, "Refused by your permission settings"),
       h("ul", {}, stop.denied.map((rule) => h("li", {}, h("code", {}, rule))))) : null,
+    stop.allow?.length ? h("div", {}, h("b", {}, "The rules that let it through, one per program"),
+      h("ul", {}, stop.allow.map((rule) => h("li", {}, h("code", {}, rule))))) : null,
     stop.next_cell ? h("div", { class: "meta" }, `the next cell would be ${stop.next_cell}`) : null,
     stop.account ? h("div", {}, h("b", {}, "The last worker's own account"), h("div", { class: "text" }, stop.account)) : null,
     h("div", { class: "asks" }, stop.todo),

@@ -81,6 +81,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         options.verify = args.verify or options.verify
         options.budget_usd = args.budget or options.budget_usd
         options.allow_approval = options.allow_approval or args.allow_approval
+        options.isolate = options.isolate and not args.no_isolate
         attempts = store.attempts(args.id)
         moved = store.last_event(args.id, "moved")
         waiting = moved["data"].get("next_cell") if moved and task["status"] == "needs_approval" else None
@@ -90,9 +91,11 @@ def cmd_resume(args: argparse.Namespace) -> int:
             return 1
         start = args.start or waiting or (attempts[-1]["cell"] if attempts else None)
         options.start = Cell.parse(start) if start else None
-        denied = store.denials(args.id)
+        denied, granted = store.denials(args.id), store.allowances(args.id)
         history = [Attempt(Cell.parse(a["cell"]), int(a["max_turns"] or 0), bool(a["passed"]),
-                           _failure_of(a["failure"]), a["summary"] or "", tuple(denied.get(a["seq"], ())))
+                           _failure_of(a["failure"]), a["summary"] or "", tuple(denied.get(a["seq"], ())),
+                           allow=tuple(granted.get(a["seq"], ())),
+                           changed=tuple(json.loads(a["changed_paths"] or "[]")))
                    for a in attempts]
         store.update_task(args.id, options=json.dumps(options.stored()), dispatched=0, cancel_requested=0)
         report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=args.id, history=history)
@@ -679,8 +682,9 @@ def cmd_hook(args: argparse.Namespace) -> int:
     return hooks.main(args.event, sys.stdin, sys.stdout, os.environ)
 
 
-ALLOW_HELP = ("a permission rule the workers get, e.g. 'Bash(npm run build)' or 'Bash(node:*)'; repeatable. "
-              "A one-shot worker is refused whatever its settings do not allow")
+ALLOW_HELP = ("a permission rule the workers get, e.g. 'Bash(npm run build:*)' or 'Bash(node:*)', and "
+              "'Read(//abs/path)' with two slashes for an absolute path; repeatable. A one-shot worker is "
+              "refused whatever its settings do not allow; a blocked task's report prints the rules it needs")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -694,7 +698,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--launch-dir", help="start the worker here, and let it work in the repository")
         p.add_argument("--budget", type=float, default=5.0, help="dollars this task may spend (default 5)")
         p.add_argument("--max-attempts", type=int, default=6)
-        p.add_argument("--max-turns", type=int, default=30, help="turns per attempt before it is raised once")
+        p.add_argument("--max-turns", type=int, default=30,
+                       help="turns per attempt; raised once, then again while the work moves")
         p.add_argument("--verify", help="command whose exit code decides a claimed pass")
         p.add_argument("--kind", choices=KINDS, help="skip classification")
         p.add_argument("--start", help="pin the first cell, e.g. sonnet/high")
@@ -720,6 +725,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--budget", type=float, help="dollars this run may spend (default: the task's own)")
     p.add_argument("--start", help="the cell to resume at (default: where it stopped)")
     p.add_argument("--allow-approval", action="store_true", help="allow cells that need approval (Fable)")
+    p.add_argument("--no-isolate", action="store_true",
+                   help="work in the checkout (a task started with --no-isolate already resumes there)")
     p.add_argument("--no-model", action="store_true")
     p.set_defaults(func=cmd_resume)
 

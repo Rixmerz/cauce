@@ -36,9 +36,22 @@ Request: $ARGUMENTS
    itself, so it needs no permission. `--budget` (default $5) bounds the task;
    `--kind` skips classification when you already know it.
 
+   Before dispatching, `cauce run --dry-run` lists the rules workers in this
+   repository were refused before. Pass the ones the task and its `--verify`
+   need with `--allow` from the start (`Bash(npm run build:*)`, `Bash(npx tsc:*)`,
+   and `Read(//abs/path)` with two slashes for an absolute path).
    A worker runs unattended: any command its settings do not allow is refused,
    with nobody to ask. When the work needs one (`npm run build`, `node`, a test
-   runner), grant it up front: `--allow "Bash(npm run build)"`, repeatable.
+   runner), grant it up front: `--allow "Bash(npm run build:*)"`, repeatable.
+
+   A worker works in its own worktree on `cauce/task-<id>`: your checkout has
+   none of it until the branch is merged, and the worker does not see your
+   uncommitted changes. When the task builds on uncommitted work, or you will
+   go on in this checkout right after, add `--no-isolate`; a resume keeps it.
+
+   A worker that runs out of turns is checked with `--verify` by cauce itself,
+   so a large change still gets its tests run; give one whenever a command can
+   tell whether the work is done.
 
    For work that can wait, queue it instead — `cauce queue add "<task>"` — and
    start `cauce work` (in the background); if a dispatcher already runs for the

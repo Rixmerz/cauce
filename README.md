@@ -63,7 +63,7 @@ docs             haiku → sonnet/low → sonnet/medium
 | wrong approach, or two cells gave the same answer | **next model**, worktree reset |
 | timeout, missing tool | **retry** once at the same cell |
 | a command the permission settings refused | **blocked** at once — a stronger model gets the same refusal |
-| hit its turn ceiling | **more turns** once, then split |
+| hit its turn ceiling | `--verify` run by cauce; **more turns**, again while the work keeps moving (cap 200), then split |
 | the task contradicts itself or its check | **replan** — no model fixes a wrong task |
 
 A worker's claim of success is not evidence: a pass needs verbatim output, and
@@ -211,8 +211,11 @@ budget, the environment, the approval gate, a cancel from the UI or
 and the session that asked for it say which, and give the command that goes on. The worktree gets the checkout's
 ignored `node_modules` / `.venv` and your `.claude/settings.local.json` as
 links, so a build can run and a worker is allowed what you allowed; anything
-else a worker needs to run, grant with `--allow "Bash(npm run build)"`
-(repeatable). A one-shot worker has nobody to ask: what its settings do not
+else a worker needs to run, grant with `--allow "Bash(npm run build:*)"`
+(repeatable; an absolute path takes two slashes: `Read(//abs/path)`). A blocked
+report prints the rules it needs, one per program, and `--dry-run` lists the
+ones workers in the repository lacked before. A task started with `--no-isolate`
+resumes in the checkout too. A one-shot worker has nobody to ask: what its settings do not
 allow is refused, and the report names it. `--launch-dir` starts the worker in another
 directory (its settings and instructions) while it works in the repository.
 

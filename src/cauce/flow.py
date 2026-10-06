@@ -112,6 +112,7 @@ def queued_options(task: dict, defaults: Options) -> Options:
         livespec=raw.get("livespec", defaults.livespec),
         use_model_classifier=defaults.use_model_classifier,
         allow_tools=tuple(raw.get("allow_tools") or defaults.allow_tools),
+        isolate=defaults.isolate and not raw.get("no_isolate"),
     )
 
 

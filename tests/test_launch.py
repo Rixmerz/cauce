@@ -154,6 +154,8 @@ def test_a_refused_command_is_read_from_the_cli_not_the_worker(tmp_path):
     assert not result.passed and result.failure is Failure.PERMISSION and result.verdict == "inconclusive"
     assert result.denied[:3] == ("Bash(npm run build)", "Write(src/app.ts)", "WebFetch")
     assert len(result.denied) == 4 and result.denied[3].endswith("...)") and len(result.denied[3]) == 126
+    assert result.allow == ("Bash(npm run build:*)", "Write(src/app.ts)", "WebFetch", f"Bash({'x' * 200}:*)")
+    assert launch.allow_rules(None) == ()
     # no block at all, or a pass it could not show: the refusal still decides
     assert parse(proc(envelope("stopped", permission_denials=refusals[:1])), s).failure is Failure.PERMISSION
     bare = parse(proc(envelope(block(verdict="pass", summary="done"), permission_denials=refusals[:1])), s)

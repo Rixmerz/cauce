@@ -127,7 +127,7 @@ def test_every_move_says_what_the_attempt_ended_with_the_rule_and_where_it_goes(
         (IMPLEMENT, [fail("sonnet/medium", Failure.ENVIRONMENT)], "retry", "a retry is not an escalation"),
         (IMPLEMENT, [fail("sonnet/medium", Failure.ENVIRONMENT)] * 2, "stop", "failed to run 2 times"),
         (IMPLEMENT, [fail("sonnet/medium", Failure.TURNS_EXHAUSTED)], "turns", "60 turns instead of 30"),
-        (IMPLEMENT, [fail("sonnet/medium", Failure.TURNS_EXHAUSTED)] * 2, "stop", "already raised once"),
+        (IMPLEMENT, [fail("sonnet/medium", Failure.TURNS_EXHAUSTED)] * 2, "stop", "raised attempt changed nothing"),
         (IMPLEMENT, [fail("sonnet/medium", Failure.TURNS_EXHAUSTED, turns=200)], "stop", "200 turns is the cap"),
         (IMPLEMENT, [fail("sonnet/medium", Failure.SPEC_BUG)], "stop", "rewritten or split"),
         (IMPLEMENT, [Attempt(Cell("sonnet", "medium"), 30, False, Failure.PERMISSION, "", ("Bash(make)",))],
@@ -141,3 +141,27 @@ def test_moves_that_stop_or_stay_explain_themselves(ladder, attempts, axis, phra
     d = decide(ladder, attempts)
     assert d.axis == axis and d.because[0].startswith(f"attempt {len(attempts)} at ")
     assert any(phrase in line for line in d.because), d.because
+
+
+def test_a_raised_attempt_that_still_moved_the_work_is_raised_again_up_to_the_cap():
+    """A large removal used all its turns twice while changing dozens of files each
+    time; it was sent back to be split when the work was nearly done."""
+    def ran_out(turns, changed=()):
+        return Attempt(Cell("sonnet", "medium"), turns, False, Failure.TURNS_EXHAUSTED, "", changed=changed)
+
+    d = decide(IMPLEMENT, [ran_out(30, ("a.ts",)), ran_out(60, ("b.ts", "c.ts"))])
+    assert d.move is Move.MORE_TURNS and d.max_turns == 120
+    assert "changed 2 file(s), so it is raised again" in d.because[1] and "once" not in d.because[2]
+    d = decide(IMPLEMENT, [ran_out(30, ("a.ts",)), ran_out(60, ("b.ts",)), ran_out(120, ("c.ts",))])
+    assert d.move is Move.MORE_TURNS and d.max_turns == 200
+    d = decide(IMPLEMENT, [ran_out(30), ran_out(60), ran_out(120), ran_out(200, ("d.ts",))])
+    assert d.move is Move.REPLAN and "200 turns is the cap" in d.because[1]
+    assert decide(IMPLEMENT, [ran_out(30, ("a.ts",)), ran_out(60)]).move is Move.REPLAN
+
+
+def test_a_refusal_names_the_rules_that_let_it_through():
+    refused = Attempt(Cell("sonnet", "medium"), 30, False, Failure.PERMISSION, "",
+                      ("Bash(tg -n x src; npx tsc --noEmit)",), allow=("Bash(tg:*)", "Bash(npx tsc:*)"))
+    d = decide(IMPLEMENT, [refused])
+    assert "allow it (--allow 'Bash(tg:*)' --allow 'Bash(npx tsc:*)'), then resume" in d.reason
+    assert d.because[-1] == "the rules that let it through, one per program: Bash(tg:*), Bash(npx tsc:*)"

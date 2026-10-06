@@ -65,7 +65,21 @@ export async function openTask(id, quiet = false) {
   el.dataset.task = String(id);
   const actions = [];
   if (t.status === "running" || t.status === "queued") {
-    actions.push(h("button", { onclick: async () => { await post(`/api/tasks/${id}/cancel`); openTask(id); } }, "Cancel"));
+    // Two steps: a stray click in the drawer must not stop a run. The second click
+    // has to come within a few seconds of the first.
+    let armed = null;
+    const cancel = h("button", { onclick: async () => {
+      if (!armed) {
+        cancel.textContent = `Stop task #${id}? Click again`;
+        cancel.classList.add("danger");
+        armed = setTimeout(() => { armed = null; cancel.textContent = "Cancel"; cancel.classList.remove("danger"); }, 4000);
+        return;
+      }
+      clearTimeout(armed);
+      await post(`/api/tasks/${id}/cancel`);
+      openTask(id);
+    } }, "Cancel");
+    actions.push(cancel);
   }
   if (d.branch) {
     const cmd = `git -C ${t.cwd} diff HEAD...${d.branch}`;

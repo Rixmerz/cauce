@@ -708,13 +708,34 @@ class Store:
     def denials(self, task_id: int) -> dict[int, list[str]]:
         """What the permission settings refused, per attempt `seq`: kept on the
         attempt's event, not in the attempts table."""
+        return self._per_attempt(task_id, "denied")
+
+    def allowances(self, task_id: int) -> dict[int, list[str]]:
+        """The `--allow` rules that would have let each attempt's refusals through."""
+        return self._per_attempt(task_id, "allow")
+
+    def _per_attempt(self, task_id: int, key: str) -> dict[int, list[str]]:
         rows = self._conn.execute(
             "SELECT data FROM events WHERE task_id = ? AND kind = 'attempt_finished' ORDER BY id", (task_id,))
         out: dict[int, list[str]] = {}
         for row in rows:
             data = json.loads(row[0])
-            if data.get("seq") is not None and data.get("denied"):
-                out[int(data["seq"])] = list(data["denied"])
+            if data.get("seq") is not None and data.get(key):
+                out[int(data["seq"])] = list(data[key])
+        return out
+
+    def refusals(self, repo: str, *, limit: int = 200) -> list[dict]:
+        """The latest attempts in a repository the permission settings refused
+        something to: what was refused, and the rules if they were recorded."""
+        rows = self._conn.execute(
+            "SELECT e.task_id, e.data FROM events e JOIN tasks t ON t.id = e.task_id "
+            "WHERE t.repo = ? AND e.kind = 'attempt_finished' AND e.data LIKE '%\"denied\": [\"%' "
+            "ORDER BY e.id DESC LIMIT ?", (repo, limit))
+        out = []
+        for task_id, raw in rows:
+            data = json.loads(raw)
+            if data.get("denied"):
+                out.append({"task_id": task_id, "denied": data["denied"], "allow": data.get("allow") or []})
         return out
 
     def cancel_requested(self, task_id: int) -> bool:
