@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-06
+
+### Fixed
+
+- **A worker ran an older Node than the project's tools need.** The project
+  declared no Node, but one of its dependencies did: a CLI with
+  `engines.node >=22.22.3`. The worker got the PATH's 22.16, and every `npm
+  test` failed before running. When a project declares no Node, cauce now
+  reads the `engines.node` of its installed direct dependencies. When the Node
+  on the PATH fails them, it puts first an installed Node that fits, of the
+  same major when there is one, so native modules still load. When none fits,
+  the plan warns at once, naming the dependency and the version. A spec cauce
+  cannot read, a dependency that is not installed, or an unknown current Node
+  changes nothing.
+- **An environment failure was retried after the work had already run.** The
+  retry met the same wall. An environment failure on an attempt that changed
+  files now blocks at once, and the work is kept on its branch. Work that
+  never ran is still retried once.
+- **A check that could not run counted as a bug in the work.** Examples: a
+  missing npm script, a missing `package.json`, a tool's minimum Node, or
+  exit 127. The task climbed to stronger models against a wall none of them
+  could pass, and the failure was kept as a dead end. Such a check is now
+  `environment`. A failing test that only quotes such text, or that runs
+  after npm's EBADENGINE warning, is still a bug in the work.
+- **Unrelated failures reached workers as dead ends.** The brief matched any
+  word of the task, so tasks in the same repository that shared a word or two
+  showed up as if they were this problem's. It now matches as strictly as the
+  prompt hook does.
+- **A resumed task numbered its attempts from 1 again** in its progress lines
+  and its `attempt_started` events. They now go on from the task's last
+  attempt.
+
 ## [0.6.1] - 2026-10-06
 
 ### Fixed

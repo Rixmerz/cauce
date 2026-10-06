@@ -27,7 +27,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away |
 | `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
 | `src/cauce/grants.py` | what workers may do: the permission mode per model (auto; Haiku bypasses) and the rules a person keeps per repository with `cauce allow` |
-| `src/cauce/runtime.py` | the Node a project declares (`.nvmrc`, `.node-version`, `engines.node`), found among nvm's and put first on a worker's PATH |
+| `src/cauce/runtime.py` | the Node a project declares (`.nvmrc`, `.node-version`, `engines.node`), or its installed dependencies need when it declares none, found among nvm's and put first on a worker's PATH |
 | `src/cauce/allow.py` | a refused call → the `--allow` rules that let it through, one per program; suggestions only, nothing is granted |
 | `src/cauce/stops.py` | why a task stopped, who made the call, and the command that continues it; one account on its `finished` event; light, the hooks and the UI read it |
 | `src/cauce/project.py` | a project's `.cauce/` folder: enrollment (only enrolled projects show in the UI) and `sessions.json`, the session names; stdlib, no git call |
@@ -92,7 +92,13 @@ yields the default kind, not a guess.
   approach or a repeated answer changes model. Do not collapse them into one
   ladder walk.
 - A retry is for work that never ran; it is never an escalation. A refused
-  command is neither: it blocks at once, because it is a setting.
+  command is neither: it blocks at once, because it is a setting. An
+  environment failure on an attempt that changed files is not work that never
+  ran: it blocks at once too, its work kept.
+- A check that could not run at all (exit 127, npm's missing script or
+  manifest, a tool's minimum Node) is `environment`, never a `code_bug`: its
+  exit says nothing about the work, and it is no dead end. npm's EBADENGINE
+  warning is not such a line. Dead ends reach a brief only on a strict match.
 - A request that opens with a verb of change is never read as a read-only
   kind unless a tag or `--kind` says so.
 - Work that stopped for a person (blocked, needs approval) is kept on its

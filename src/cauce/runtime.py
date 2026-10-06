@@ -9,6 +9,13 @@ new `--allow` to pass. So cauce reads the version the project declares —
 among the versions nvm installed, and puts its `bin` first on the PATH of the
 worker and of its `--verify` check. Nothing is installed or switched.
 
+A project that declares nothing still has dependencies that do: a CLI that
+refuses to start on an older Node says so in its own `engines.node`. When
+the Node on the PATH fails what the installed dependencies require, cauce
+puts one that meets them first instead, of the same major when one is
+installed, so native modules built for it still load. When none installed
+fits, the plan says which dependency needs what, before any money is spent.
+
 Standard library only.
 """
 from __future__ import annotations
@@ -16,11 +23,16 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Mapping
+import shutil
+import subprocess
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 VERSION_FILES = (".nvmrc", ".node-version")
+#: Dependencies read for their `engines.node`, at most: a manifest is small,
+#: and a project with more direct dependencies than this is rare.
+MAX_DEPENDENCIES = 400
 _PARTS = re.compile(r"v?(\d+)(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?")
 
 
@@ -70,9 +82,12 @@ def installed(env: Mapping[str, str] | None = None) -> list[tuple[tuple[int, ...
     return sorted(found)
 
 
-def node_bin(workdir: Path, env: Mapping[str, str] | None = None) -> Node | None:
+def node_bin(workdir: Path, env: Mapping[str, str] | None = None, *,
+             current: Callable[[Mapping[str, str]], tuple[int, ...] | None] | None = None) -> Node | None:
     """The installed Node that satisfies what the project declares, the newest
-    that does. None when it declares nothing, or nothing installed fits."""
+    that does; when it declares nothing, one its dependencies need and the
+    Node on the PATH is not. None when nothing is declared or needed, or
+    nothing installed fits."""
     found = wanted(workdir)
     if found is not None:
         specs, source = [found[0]], found[1]
@@ -83,13 +98,103 @@ def node_bin(workdir: Path, env: Mapping[str, str] | None = None) -> Node | None
 
         inner = [w for w in (wanted(sub) for sub in nested_checkouts(workdir)) if w is not None]
         if not inner:
-            return None
+            return needed(workdir, env, current=current)[0]
         specs, source = [w[0] for w in inner], "the projects in this folder"
     fits = [(v, b) for v, b in installed(env) if all(satisfies(v, spec) for spec in specs)]
     if not fits:
         return None
     version, binary = fits[-1]
     return Node(".".join(map(str, version)), binary, source)
+
+
+def needed(workdir: Path, env: Mapping[str, str] | None = None, *,
+           current: Callable[[Mapping[str, str]], tuple[int, ...] | None] | None = None,
+           ) -> tuple[Node | None, str | None]:
+    """For a project that declares no Node: (the installed one its dependencies
+    need, or None; what is unmet when none installed fits, or None).
+
+    Only when the Node on the PATH fails a dependency's `engines.node`, and
+    never on a guess: an unknown current Node, or a spec cauce cannot read (a
+    name, a typo), changes nothing."""
+    env = os.environ if env is None else env
+    engines = dependency_engines(workdir)
+    if not engines:
+        return None, None
+    now = (current or on_path)(env)
+    if now is None:
+        return None, None
+    have = installed(env)
+    # A spec cauce cannot read (a name, a typo) says nothing about which Node to run.
+    meaningful = [(name, spec) for name, spec in engines if readable(spec)]
+    failing = [(name, spec) for name, spec in meaningful if not satisfies(now, spec)]
+    if not failing:
+        return None, None
+    fits = [(v, b) for v, b in have if all(satisfies(v, spec) for _, spec in meaningful)]
+    name, spec = failing[0]
+    if not fits:
+        shown = ".".join(map(str, now))
+        return None, (f"this task needs Node {spec} ({name} requires it) and the Node workers get is {shown}: "
+                      f"install one that fits (`nvm install <version>`), or the worker cannot run the project's tools")
+    same = [(v, b) for v, b in fits if v[0] == now[0]]
+    version, binary = (same or fits)[-1]
+    return Node(".".join(map(str, version)), binary, f"{name} requires {spec}"), None
+
+
+def dependency_engines(workdir: Path) -> list[tuple[str, str]]:
+    """`(package, engines.node)` for each direct dependency installed in the
+    project's `node_modules`, looking from `workdir` up to its checkout's top."""
+    for d in (workdir, *workdir.parents):
+        manifest = d / "package.json"
+        if manifest.is_file():
+            names = _dependency_names(manifest)
+            out = []
+            for name in names[:MAX_DEPENDENCIES]:
+                spec = _engines_node(d / "node_modules" / name / "package.json")
+                if spec:
+                    out.append((name, spec))
+            return out
+        if (d / ".git").exists():
+            break
+    return []
+
+
+def _dependency_names(manifest: Path) -> list[str]:
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    names: list[str] = []
+    for field in ("dependencies", "devDependencies"):
+        group = data.get(field)
+        if isinstance(group, dict):
+            # A name is a path below node_modules: one that climbs out is no package.
+            names += [n for n in group if isinstance(n, str) and re.fullmatch(r"(@[\w.-]+/)?[\w.-]+", n)
+                      and ".." not in n]
+    return list(dict.fromkeys(names))
+
+
+def _engines_node(manifest: Path) -> str | None:
+    try:
+        engines = json.loads(manifest.read_text(encoding="utf-8")).get("engines")
+    except (OSError, ValueError, AttributeError):
+        return None
+    node = engines.get("node") if isinstance(engines, dict) else None
+    return node.strip() if isinstance(node, str) and node.strip() else None
+
+
+def on_path(env: Mapping[str, str]) -> tuple[int, ...] | None:
+    """The version of the `node` a worker would run, or None when there is none
+    or it does not answer."""
+    binary = shutil.which("node", path=env.get("PATH", ""))
+    if binary is None:
+        return None
+    try:
+        proc = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return _version(proc.stdout.strip()) if proc.returncode == 0 else None
 
 
 def env_for(workdir: Path, env: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -105,11 +210,23 @@ def satisfies(version: tuple[int, ...], spec: str) -> bool:
     """Whether a version meets a spec as `.nvmrc` and `engines` write them: `22`,
     `v22.23.2`, `22.x`, `^22.12.0`, `~22.22`, `>=22.22.3`, `>=22 <24`, `a || b`.
     A name (`lts/*`, `node`) matches nothing: cauce does not guess."""
-    spec = spec.strip()
+    spec = _tight(spec)
     if "||" in spec:
         return any(satisfies(version, part) for part in spec.split("||"))
     terms = spec.split()
     return bool(terms) and all(_term(version, term) for term in terms)
+
+
+def readable(spec: str) -> bool:
+    """Whether every term of a spec is a version cauce can compare."""
+    alternatives = [part.split() for part in _tight(spec).split("||")]
+    return all(alternatives) and all(_version(re.sub(r"^(>=|<=|>|<|\^|~|=)", "", term), partial=True) is not None
+                                     for terms in alternatives for term in terms)
+
+
+def _tight(spec: str) -> str:
+    """`>= 18.0.0` as `>=18.0.0`: engines often put a space after the operator."""
+    return re.sub(r"(>=|<=|>|<|=|\^|~)\s+", r"\1", spec.strip())
 
 
 def _term(version: tuple[int, ...], term: str) -> bool:

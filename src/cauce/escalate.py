@@ -220,6 +220,14 @@ def decide(
 
     if failure is Failure.ENVIRONMENT:
         retries = sum(1 for a in attempts if a.failure is Failure.ENVIRONMENT)
+        if last.changed:
+            # The work ran: it changed files before the environment stopped it.
+            # A retry is for work that never ran; the same cell in the same
+            # environment meets the same wall, so a person looks at it now.
+            return Decision(Move.BLOCKED, reason="the environment stopped work that had started; fix it, then resume",
+                            because=(seen, f"it changed {len(last.changed)} file(s) first: the work ran, so this is "
+                                           "no launch that broke, and the same environment stops a retry the same way",
+                                     "its work is kept; a resume goes on from it"))
         if retries <= MAX_ENV_RETRIES:
             return Decision(Move.RETRY, last.cell, last.max_turns, "the work never ran; same cell",
                             because=(seen, "a retry is not an escalation: nothing was tried, so nothing says a "
