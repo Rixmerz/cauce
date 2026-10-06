@@ -58,6 +58,27 @@ def test_choose_start_rises_with_complexity_and_history_never_falls():
     assert choose_start(IMPLEMENT, "medium", ["haiku"] * 3, [])[0] == Cell("sonnet", "medium")
 
 
+def test_the_model_that_served_is_recorded_and_a_pin_reaches_the_worker(git_repo, store, monkeypatch):
+    from cauce import models
+
+    served = WorkerResult(True, None, "done", "1 passed", served_model="claude-sonnet-5")
+    report = run("x", git_repo, store, registry={}, launcher=Script(served), classifier=kind("implement"))
+    assert report.served == ["claude-sonnet-5"] and "attempt 1 sonnet/medium [claude-sonnet-5]" in report.text()
+    assert store.attempts(report.task_id)[0]["served_model"] == "claude-sonnet-5"
+    assert store.last_event(report.task_id, "attempt_finished")["data"]["served_model"] == "claude-sonnet-5"
+    # the person's sessions run a newer sonnet: the plan says so, with the pin
+    store.add_usage(message_id="m1", session_id="s", model="claude-sonnet-5-5", output_tokens=1, ts="2099-01-01")
+    dry = run("y", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"))
+    assert any("workers last ran claude-sonnet-5 for `sonnet` while your sessions use claude-sonnet-5-5" in r
+               and "cauce config model sonnet claude-sonnet-5-5" in r for r in dry.plan.reasons)
+    models.pin("sonnet", "claude-sonnet-5-5")
+    script = Script(ok())
+    run("z", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert script.specs[0].model_id == "claude-sonnet-5-5"
+    dry = run("w", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"))
+    assert not any("workers last ran" in r for r in dry.plan.reasons)
+
+
 def test_a_first_try_pass_leaves_a_branch(git_repo, store):
     script = Script(ok(), write="feature.py")
     report = run("add the feature", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
@@ -255,7 +276,8 @@ def _livespec(tmp_path, *, runner=None):
     bindir.mkdir(exist_ok=True)
     (bindir / "uvx").write_text("#!/bin/sh\n")
     (bindir / "uvx").chmod(0o755)
-    env = {"PATH": str(bindir), "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path / "cc")}
+    env = {"PATH": str(bindir), "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path / "cc"),
+           "CAUCE_HOME": str(tmp_path / "cauce")}
     return Livespec(env=env, runner=runner or (lambda argv, **kw: sp.CompletedProcess(argv, 0, "", "")))
 
 

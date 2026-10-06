@@ -58,6 +58,12 @@ def test_model_classification_is_used_when_confident():
     assert (got.kind, got.complexity, got.source, got.cost_usd) == ("ui", "low", "model", 0.001)
     argv, kwargs = run.calls[0]
     assert argv[argv.index("--model") + 1] == "haiku"
+    from cauce import models
+
+    models.pin("haiku", "claude-haiku-4-5", None)
+    by_model("the header looks wrong", runner=run)
+    assert run.calls[-1][0][run.calls[-1][0].index("--model") + 1] == "claude-haiku-4-5"
+    models.pin("haiku", None, None)
     assert argv[argv.index("--tools") + 1] == ""
     assert "--strict-mcp-config" in argv and "--no-session-persistence" in argv
     assert json.loads(argv[argv.index("--json-schema") + 1]) == SCHEMA

@@ -48,6 +48,7 @@ function attempt(a) {
   return h("li", { class: a.passed ? "pass" : "fail" },
     h("div", { class: "row" },
       h("b", {}, `#${a.seq} ${a.cell}`),
+      a.served_model ? h("span", { class: "chip", title: "the model that served it, as the CLI reported" }, a.served_model) : null,
       h("span", {}, a.passed ? "pass" : (a.failure || "fail")),
       h("span", {}, `${a.turns} turns`), h("span", {}, usd(a.cost_usd))),
     a.summary ? h("div", {}, a.summary) : null,

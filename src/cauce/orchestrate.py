@@ -25,7 +25,7 @@ from pathlib import Path
 
 from cauce import allow as allow_rules
 from cauce import capabilities as caps
-from cauce import config, habits, isolate, launch, project, repo, stops
+from cauce import config, habits, isolate, launch, models, project, repo, stops
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify
 from cauce.escalate import Attempt, Decision, Failure, Move, decide
@@ -109,6 +109,8 @@ class Report:
     status: str
     plan: Plan
     cells: list[str] = field(default_factory=list)
+    #: The model that served each attempt, as the CLI reported it ("" when it did not).
+    served: list[str] = field(default_factory=list)
     moves: list[str] = field(default_factory=list)
     #: Each move's full account: where it went, along which dial, and why.
     decisions: list[Decision] = field(default_factory=list)
@@ -138,7 +140,8 @@ class Report:
         if self.plan.capabilities:
             lines.append(f"capabilities {', '.join(self.plan.capabilities)}")
         for i, (cell, move) in enumerate(zip(self.cells, [*self.moves, ""], strict=False), 1):
-            lines.append(f"attempt {i} {cell}" + (f" → {move}" if move else ""))
+            model = self.served[i - 1] if i <= len(self.served) and self.served[i - 1] else ""
+            lines.append(f"attempt {i} {cell}" + (f" [{model}]" if model else "") + (f" → {move}" if move else ""))
             if i <= len(self.decisions):
                 d = self.decisions[i - 1]
                 lines += [f"    · {line}" for line in d.because[1:]]
@@ -274,6 +277,10 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     if learned:
         context.append("Steps that came before passing attempts on this kind of task here: "
                        + "; ".join(learned) + ". Use them unless the task says otherwise.")
+    for lag in models.lagging(store):
+        neighbour_notes.append(f"workers last ran {lag['workers']} for `{lag['alias']}` while your sessions use "
+                               f"{lag['sessions']}: the installed Claude Code's alias is older. Pin it with "
+                               f"`{lag['command']}`, or update Claude Code")
     seen = _refused_here(store, repo.key(repo_dir), options.allow_tools)
     if seen:
         neighbour_notes.append("workers here were refused before: " + ", ".join(f"{r} ×{n}" for r, n in seen)
@@ -373,6 +380,7 @@ def run(
             selection = _equip(caps.select(registry, the_plan.kind, failed_before=bool(attempts), workdir=workdir),
                                the_plan, repo_dir, workdir)
             spec = launch.LaunchSpec(
+                model_id=models.pinned(cell.model),
                 prompt=brief(text, the_plan.kind, workdir, [*history, *attempts], dead, options.verify, writes,
                              context),
                 cell=cell,
@@ -390,6 +398,7 @@ def run(
             )
             store.update_task(task["id"], current_cell=cell.label)
             store.add_event(task["id"], "attempt_started", seq=len(attempts) + 1, cell=cell.label,
+                            model=spec.model_id or cell.model,
                             max_turns=turns, budget_usd=spec.max_budget_usd, capabilities=list(selection.names))
             result = launcher(spec)
             if result.passed and options.verify:
@@ -399,6 +408,7 @@ def run(
                 result = _settled(result, options.verify, workdir)
             changed.update(result.changed_paths)
             report.cells.append(cell.label)
+            report.served.append(result.served_model)
             report.cost_usd += result.cost_usd
             seq = store.add_attempt(
                 task["id"], cell=cell.label, max_turns=turns, passed=int(result.passed),
@@ -406,12 +416,13 @@ def run(
                 evidence=result.evidence[:4000], cost_usd=result.cost_usd,
                 input_tokens=result.input_tokens, output_tokens=result.output_tokens, turns=result.turns,
                 duration_s=result.duration_s, changed_paths=result.changed_paths,
+                served_model=result.served_model or None,
                 capabilities=selection.names,
             )
             store.add_event(task["id"], "attempt_finished", seq=seq, cell=cell.label, passed=result.passed,
                             failure=result.failure.value if result.failure else None, cost_usd=result.cost_usd,
                             turns=result.turns, summary=result.summary[:500], denied=list(result.denied),
-                            allow=list(result.allow),
+                            allow=list(result.allow), served_model=result.served_model,
                             changed=list(result.changed_paths)[:50])
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:])

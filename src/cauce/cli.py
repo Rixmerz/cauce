@@ -217,7 +217,8 @@ def cmd_show(args: argparse.Namespace) -> int:
         climbed = {e["data"]["seq"]: e["data"] for e in store.events_of(args.id, "moved") if "seq" in e["data"]}
         for a in store.attempts(args.id):
             verdict = "pass" if a["passed"] else (a["failure"] or "fail")
-            print(f"  attempt {a['seq']} {a['cell']} ({a['turns']} turns, ${a['cost_usd']:.2f}) {verdict}"
+            model = f" [{a['served_model']}]" if a.get("served_model") else ""
+            print(f"  attempt {a['seq']} {a['cell']}{model} ({a['turns']} turns, ${a['cost_usd']:.2f}) {verdict}"
                   + (f" → {a['move']}: {a['move_reason']}" if a["move"] else ""))
             if a["summary"]:
                 print(f"    {a['summary'][:300]}")
@@ -377,6 +378,8 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
 
 
 def cmd_config(args: argparse.Namespace) -> int:
+    if args.key == "model":
+        return _config_model(args)
     if args.key is None:
         for key, value in sorted(config.load().items()):
             print(f"{key} = {json.dumps(value)}")
@@ -393,6 +396,36 @@ def cmd_config(args: argparse.Namespace) -> int:
         return 1
     config.save({args.key: value})
     print(f"{args.key} = {json.dumps(value)}")
+    return 0
+
+
+def _config_model(args: argparse.Namespace) -> int:
+    """`cauce config model [alias [id|default]]`: what each alias runs as."""
+    from cauce import models
+    from cauce.matrix import MODELS
+
+    if args.value is not None and args.value not in MODELS:
+        print(f"unknown model {args.value!r}; known: {', '.join(MODELS)}", file=sys.stderr)
+        return 1
+    if args.value is not None and args.extra is not None:
+        try:
+            models.pin(args.value, None if args.extra == "default" else args.extra)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+    store = Store.open()
+    try:
+        served, lag = store.worker_models(), {x["alias"]: x for x in models.lagging(store)}
+    finally:
+        store.close()
+    for alias in [args.value] if args.value else MODELS:
+        pin = models.pinned(alias)
+        line = f"{alias:<7} {'pinned to ' + pin if pin else 'follows Claude Code'}"
+        if served.get(alias):
+            line += f"; workers last ran {served[alias]}"
+        if alias in lag:
+            line += f"; your sessions use {lag[alias]['sessions']}: `{lag[alias]['command']}` pins it"
+        print(line)
     return 0
 
 
@@ -855,9 +888,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--example", action="store_true")
     p.set_defaults(func=cmd_capabilities)
 
-    p = sub.add_parser("config", help="show or change a setting: cauce config livespec off")
+    p = sub.add_parser("config", help="show or change a setting: cauce config livespec off; "
+                                      "cauce config model sonnet <model id>|default")
     p.add_argument("key", nargs="?")
     p.add_argument("value", nargs="?")
+    p.add_argument("extra", nargs="?", help="for `model`: the model id to pin the alias to, or `default`")
     p.set_defaults(func=cmd_config)
 
     p = sub.add_parser("neighbours", help="what cauce sees of the neighbours it adopts")
