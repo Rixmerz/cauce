@@ -232,3 +232,18 @@ def test_a_cli_that_does_not_take_the_mode_runs_the_attempt_in_the_old_one(tmp_p
     failing = lambda argv, **kw: calls.append(1) or proc("", 1, "network down")  # noqa: E731
     assert launch.run(spec(tmp_path, permission_mode="auto"), runner=failing).failure is Failure.ENVIRONMENT
     assert calls == [1]
+
+
+def test_what_the_worker_learned_is_read_from_its_block_and_kept_short(tmp_path):
+    facts = ["Prices are stored in cents", "  Prices are stored in cents ", 7, "", *(f"fact {i}" for i in range(9)),
+             "x" * 2000]
+    out = parse(proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed", learned=facts))),
+                spec(tmp_path))
+    assert out.learned[0] == "Prices are stored in cents" and len(out.learned) == launch.MAX_LEARNED
+    assert "fact 0" in out.learned and 7 not in out.learned
+    assert launch.learned({"learned": ["y" * 2000]}) == ("y" * launch.LEARNED_CHARS,)
+    assert launch.learned({"learned": "not a list"}) == () and launch.learned({}) == ()
+    failed = parse(proc(envelope(block(verdict="fail", failure="code_bug", summary="no", learned=["A fact"]))),
+                   spec(tmp_path))
+    assert failed.learned == ("A fact",)  # read on any verdict; only a pass files it
+    assert '"learned"' in launch.RESULT_INSTRUCTIONS

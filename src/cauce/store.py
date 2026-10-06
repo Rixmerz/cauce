@@ -18,6 +18,10 @@ Four things are kept:
   starts;
 - **problems and fixes** — what was tried against a failure, and whether it
   worked. Searched across repositories, so a dead end is not rediscovered.
+
+And, apart from those, each project's **notes**: what it knows, by topic, with
+the links between notes and the code they are about (see `cauce.notes`). Unlike
+fixes they are never searched from another project.
 """
 from __future__ import annotations
 
@@ -106,6 +110,29 @@ CREATE TABLE IF NOT EXISTS events (
   kind TEXT NOT NULL, data TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS events_task ON events (task_id, id);
+CREATE TABLE IF NOT EXISTS notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL, topic TEXT NOT NULL,
+  title TEXT NOT NULL, text TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'current', state_reason TEXT,
+  author TEXT NOT NULL, filed_by TEXT NOT NULL, source TEXT NOT NULL DEFAULT '',
+  task_id INTEGER, session_id TEXT, proposed_topic TEXT, replaced_by INTEGER,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS notes_project ON notes (project, topic, state);
+CREATE TABLE IF NOT EXISTS note_links (
+  from_id INTEGER NOT NULL, to_id INTEGER NOT NULL, kind TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY (from_id, to_id, kind)
+);
+CREATE INDEX IF NOT EXISTS note_links_to ON note_links (to_id);
+CREATE TABLE IF NOT EXISTS note_anchors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, note_id INTEGER NOT NULL, path TEXT NOT NULL, symbol TEXT,
+  commit_sha TEXT, blob TEXT, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS note_anchors_note ON note_anchors (note_id);
+CREATE INDEX IF NOT EXISTS note_anchors_path ON note_anchors (path);
+CREATE TABLE IF NOT EXISTS note_topics (
+  project TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY (project, name)
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
   kind UNINDEXED, ref_id UNINDEXED, repo UNINDEXED, text, tokenize = 'unicode61 remove_diacritics 2'
 );
@@ -898,7 +925,8 @@ class Store:
         for joiner in (" ", " OR "):
             match = joiner.join(f'"{t}"' for t in terms)
             hits = self._conn.execute(
-                "SELECT kind, ref_id FROM memory_fts WHERE memory_fts MATCH ? ORDER BY bm25(memory_fts) LIMIT 100",
+                "SELECT kind, ref_id FROM memory_fts WHERE memory_fts MATCH ? AND kind IN ('problem', 'fix') "
+                "ORDER BY bm25(memory_fts) LIMIT 100",
                 (match,),
             ).fetchall()
             if hits:
@@ -960,6 +988,157 @@ class Store:
             [*params, limit],
         ).fetchall()
         return [p for p in (self.problem(int(r[0])) for r in rows) if p]
+
+    # --- notes: what a project knows, by topic ------------------------------
+    #
+    # The logic (topics, filing, recall, review) is in `cauce.notes`; these are
+    # the rows. A note belongs to one project and is never searched from another.
+
+    def add_note(self, project: str, topic: str, title: str, text: str, *, author: str, filed_by: str,
+                 source: str = "", task_id: int | None = None, session_id: str | None = None,
+                 proposed_topic: str | None = None) -> int:
+        stamp = now()
+        cur = self._conn.execute(
+            "INSERT INTO notes (project, topic, title, text, author, filed_by, source, task_id, session_id, "
+            "proposed_topic, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (project, topic, title, text, author, filed_by, source, task_id, session_id, proposed_topic, stamp,
+             stamp))
+        note_id = int(cur.lastrowid)
+        self._index("note", note_id, project, f"{title}\n{text}")
+        return note_id
+
+    def get_note(self, note_id: int) -> dict | None:
+        row = self._conn.execute("SELECT * FROM notes WHERE id = ?", (note_id,)).fetchone()
+        return dict(row) if row else None
+
+    def update_note(self, note_id: int, **fields: Any) -> dict | None:
+        allowed = {"topic", "title", "text", "state", "state_reason", "replaced_by", "proposed_topic", "source"}
+        fields = {k: v for k, v in fields.items() if k in allowed}
+        if fields:
+            sets = ", ".join(f"{k} = ?" for k in fields)
+            self._conn.execute(f"UPDATE notes SET {sets}, updated_at = ? WHERE id = ?",  # noqa: S608 - known keys
+                               [*fields.values(), now(), note_id])
+        note = self.get_note(note_id)
+        if note and ("title" in fields or "text" in fields):
+            self._conn.execute("DELETE FROM memory_fts WHERE kind = 'note' AND ref_id = ?", (note_id,))
+            self._index("note", note_id, note["project"], f"{note['title']}\n{note['text']}")
+        return note
+
+    def notes(self, project: str, *, topics: Iterable[str] | None = None, states: Iterable[str] | None = None,
+              ids: Iterable[int] | None = None, limit: int = 200) -> list[dict]:
+        """A project's notes, latest first."""
+        where, params = ["project = ?"], [project]
+        for column, values in (("topic", topics), ("state", states), ("id", ids)):
+            if values is not None:
+                values = list(values)
+                if not values:
+                    return []
+                where.append(f"{column} IN ({', '.join('?' * len(values))})")
+                params += values
+        rows = self._conn.execute(
+            f"SELECT * FROM notes WHERE {' AND '.join(where)} ORDER BY updated_at DESC, id DESC LIMIT ?",  # noqa: S608
+            [*params, limit]).fetchall()
+        return [dict(r) for r in rows]
+
+    def search_notes(self, project: str, query: str, *, limit: int = 20) -> list[int]:
+        """Note ids of a project matching `query`, best first: every word, else any."""
+        terms = [w.replace('"', "") for w in words(query)][:12]
+        if not terms:
+            return []
+        for joiner in (" ", " OR "):
+            rows = self._conn.execute(
+                "SELECT ref_id FROM memory_fts WHERE memory_fts MATCH ? AND kind = 'note' AND repo = ? "
+                "ORDER BY bm25(memory_fts) LIMIT ?", (joiner.join(f'"{t}"' for t in terms), project, limit),
+            ).fetchall()
+            if rows:
+                return [int(r[0]) for r in rows]
+        return []
+
+    def note_counts(self, project: str) -> dict[str, dict[str, int]]:
+        """topic -> state -> how many."""
+        out: dict[str, dict[str, int]] = {}
+        for topic, state, n in self._conn.execute(
+                "SELECT topic, state, COUNT(*) FROM notes WHERE project = ? GROUP BY topic, state", (project,)):
+            out.setdefault(topic, {})[state] = int(n)
+        return out
+
+    def note_projects(self) -> list[str]:
+        return [r[0] for r in self._conn.execute("SELECT DISTINCT project FROM notes ORDER BY project")]
+
+    def link_notes(self, from_id: int, to_id: int, kind: str) -> bool:
+        if from_id == to_id:
+            return False
+        cur = self._conn.execute("INSERT OR IGNORE INTO note_links (from_id, to_id, kind, created_at) "
+                                 "VALUES (?, ?, ?, ?)", (from_id, to_id, kind, now()))
+        return cur.rowcount > 0
+
+    def unlink_notes(self, from_id: int, to_id: int) -> int:
+        return self._conn.execute("DELETE FROM note_links WHERE (from_id = ? AND to_id = ?) "
+                                  "OR (from_id = ? AND to_id = ?)", (from_id, to_id, to_id, from_id)).rowcount
+
+    def note_links(self, note_ids: Iterable[int]) -> list[dict]:
+        """Every link touching these notes, in either direction."""
+        ids = list(note_ids)
+        if not ids:
+            return []
+        marks = ", ".join("?" * len(ids))
+        rows = self._conn.execute(
+            f"SELECT * FROM note_links WHERE from_id IN ({marks}) OR to_id IN ({marks})",  # noqa: S608
+            [*ids, *ids]).fetchall()
+        return [dict(r) for r in rows]
+
+    def add_anchor(self, note_id: int, path: str, *, symbol: str | None = None, commit_sha: str | None = None,
+                   blob: str | None = None) -> int:
+        found = self._conn.execute("SELECT id FROM note_anchors WHERE note_id = ? AND path = ? AND symbol IS ?",
+                                   (note_id, path, symbol)).fetchone()
+        if found:
+            self._conn.execute("UPDATE note_anchors SET commit_sha = ?, blob = ? WHERE id = ?",
+                               (commit_sha, blob, found[0]))
+            return int(found[0])
+        cur = self._conn.execute(
+            "INSERT INTO note_anchors (note_id, path, symbol, commit_sha, blob, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (note_id, path, symbol, commit_sha, blob, now()))
+        return int(cur.lastrowid)
+
+    def update_anchor(self, anchor_id: int, *, commit_sha: str | None, blob: str | None) -> None:
+        self._conn.execute("UPDATE note_anchors SET commit_sha = ?, blob = ? WHERE id = ?",
+                           (commit_sha, blob, anchor_id))
+
+    def note_anchors(self, note_ids: Iterable[int]) -> list[dict]:
+        ids = list(note_ids)
+        if not ids:
+            return []
+        rows = self._conn.execute(
+            f"SELECT * FROM note_anchors WHERE note_id IN ({', '.join('?' * len(ids))}) ORDER BY id",  # noqa: S608
+            ids).fetchall()
+        return [dict(r) for r in rows]
+
+    def project_anchors(self, project: str, *, states: Sequence[str] = ("current",)) -> list[dict]:
+        """The anchors of a project's notes in these states, with the note's state."""
+        rows = self._conn.execute(
+            f"SELECT a.*, n.state FROM note_anchors a JOIN notes n ON n.id = a.note_id "  # noqa: S608
+            f"WHERE n.project = ? AND n.state IN ({', '.join('?' * len(states))}) ORDER BY a.id",
+            [project, *states]).fetchall()
+        return [dict(r) for r in rows]
+
+    def notes_at(self, project: str, paths: Iterable[str]) -> list[int]:
+        """Notes anchored to any of these paths."""
+        paths = list(dict.fromkeys(paths))
+        if not paths:
+            return []
+        rows = self._conn.execute(
+            f"SELECT DISTINCT a.note_id FROM note_anchors a JOIN notes n ON n.id = a.note_id "  # noqa: S608
+            f"WHERE n.project = ? AND a.path IN ({', '.join('?' * len(paths))})", [project, *paths]).fetchall()
+        return [int(r[0]) for r in rows]
+
+    def note_topics(self, project: str) -> list[dict]:
+        rows = self._conn.execute("SELECT * FROM note_topics WHERE project = ? ORDER BY name", (project,))
+        return [dict(r) for r in rows]
+
+    def add_note_topic(self, project: str, name: str, description: str) -> None:
+        self._conn.execute("INSERT INTO note_topics (project, name, description, created_at) VALUES (?, ?, ?, ?) "
+                           "ON CONFLICT (project, name) DO UPDATE SET description = excluded.description",
+                           (project, name, description, now()))
 
     def _problem_of_fix(self, fix_id: int) -> int | None:
         row = self._conn.execute("SELECT problem_id FROM fixes WHERE id = ?", (fix_id,)).fetchone()

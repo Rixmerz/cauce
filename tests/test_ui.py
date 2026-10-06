@@ -461,3 +461,40 @@ def test_each_message_says_who_wrote_it_and_older_ones_say_it_is_inferred(store:
     assert label(old)[0].startswith("main session (orchestrator, inferred")
     assert label(terminal) == ["you"] and label(prompt) == ["you"]
     assert api.author("system", {}) == "system"
+
+
+def test_a_project_s_notes_by_topic_with_their_links(store: Store, ui):
+    from cauce import notes
+
+    rule, _ = notes.add(store, "r", "Orders over 100 USD need approval", topic="business", author="person",
+                        filed_by="person")
+    code, _ = notes.add(store, "r", "approve_order checks the threshold", topic="code", author="worker",
+                        filed_by="haiku", links=[(rule, "explains")])
+    store.update_note(code, state="review", state_reason="app.py changed")
+    notes.add(store, "r", "A rule Haiku wanted its own topic for", topic="business", author="worker",
+              filed_by="haiku", proposed_topic="approvals")
+    view = api.notes_view(store, "r")
+    assert {t["name"]: (t["live"], t["review"]) for t in view["topics"]}["code"] == (1, 1)
+    linked = next(n for n in view["notes"] if n["id"] == code)
+    assert linked["links"] == [{"to": rule, "kind": "explains", "out": True, "title": rule_title(store, rule)}]
+    assert view["proposals"] == [{"id": 3, "title": "A rule Haiku wanted its own topic for", "topic": "approvals"}]
+    assert [n["id"] for n in api.notes_view(store, "r", topic="code")["notes"]] == [code]
+    assert [n["id"] for n in api.notes_view(store, "r", state="review")["notes"]] == [code]
+    assert api.notes_view(store, "r", query="threshold")["notes"][0]["id"] == code
+    assert api.notes_view(store, "other")["notes"] == []
+
+    res, data = call(ui, "GET", "/api/notes?repo=r&topic=business")
+    assert res.status == 200 and {n["topic"] for n in json.loads(data)["notes"]} == {"business"}
+    assert call(ui, "GET", "/api/notes")[0].status == 400
+    assert call(ui, "GET", "/static/notes.js")[0].status == 200
+    key = token(ui)
+    assert call(ui, "POST", f"/api/notes/{code}/ok", {})[0].status == 403
+    res, data = call(ui, "POST", f"/api/notes/{code}/ok", {}, headers={"X-Cauce-Token": key})
+    assert res.status == 200 and json.loads(data)["state"] == "current"
+    res, data = call(ui, "POST", f"/api/notes/{rule}/drop", {}, headers={"X-Cauce-Token": key})
+    assert json.loads(data)["state"] == "dropped"
+    assert call(ui, "POST", "/api/notes/999/ok", {}, headers={"X-Cauce-Token": key})[0].status == 404
+
+
+def rule_title(store, note_id):
+    return store.get_note(note_id)["title"]

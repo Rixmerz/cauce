@@ -29,6 +29,9 @@ DEFAULTS: dict[str, Any] = {
     "autowork": True,
     # Haiku names each session of an enrolled project in `.cauce/sessions.json`.
     "names": True,
+    # Each project keeps notes of what it knows, by topic: workers and sessions
+    # add to them (Haiku files them), workers and sessions read them back.
+    "notes": True,
 }
 
 _TRUE = {"1", "true", "on", "yes"}

@@ -16,14 +16,15 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/launch.py` | one attempt as `claude -p`: argv, the result contract, parsing, git-read changes |
 | `src/cauce/capabilities.py` | which MCP servers a worker gets, from the user-level registry |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, all on/off), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, all on/off), copied from plugin options by SessionStart |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
 | `src/cauce/habits.py` | mining sequences, recipes for the brief, and approval-gated habit hooks |
 | `src/cauce/usage.py` | tokens per model from session transcripts, and spend by model and cell |
 | `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, the stale sweep |
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
-| `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes |
+| `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
+| `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away |
 | `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
 | `src/cauce/grants.py` | what workers may do: the permission mode per model (auto; Haiku bypasses) and the rules a person keeps per repository with `cauce allow` |
 | `src/cauce/runtime.py` | the Node a project declares (`.nvmrc`, `.node-version`, `engines.node`), found among nvm's and put first on a worker's PATH |
@@ -156,5 +157,15 @@ yields the default kind, not a guess.
   last, after the semantic scrubbing.
 - Nothing in cauce writes to a settings file except `cauce habits install`,
   run by a person.
+- Problems and fixes are global; notes belong to one project and are never
+  read from another. A note is written by a passing worker (`learned`), by
+  Haiku before a session compacts or ends, or by a person — never by a failed
+  attempt, whose facts no pass confirmed. Haiku files under topics that
+  exist and never invents a link; without Haiku a fact is kept by its words.
+  A fact that looks like a secret is never kept.
+- A note's anchor is reviewed only against this checkout's history: a change
+  on a branch not merged yet is not a change. Filing notes never fails a run,
+  and a GET in the UI never reviews them. Tests run with `CAUCE_NOTES=off`; a
+  test that wants notes turns them on and passes a fake `ask`.
 - The capability registry is read from the user's cauce home only. A
   repository must never be able to add an MCP server by committing a file.

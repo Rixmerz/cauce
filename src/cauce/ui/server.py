@@ -59,6 +59,7 @@ _STATIC_NAME = re.compile(r"^[a-z0-9_-]+\.(js|css|html|svg)$")
 _TASK_ROUTE = re.compile(r"^/api/tasks/(\d+)$")
 _CANCEL_ROUTE = re.compile(r"^/api/tasks/(\d+)/cancel$")
 _SESSION_ROUTE = re.compile(r"^/api/sessions/([A-Za-z0-9_-]{1,128})$")
+_NOTE_ROUTE = re.compile(r"^/api/notes/(\d+)/(ok|drop)$")
 
 
 def token_path(root: Path) -> Path:
@@ -272,6 +273,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(HTTPStatus.OK, api.spend(store, days=_int(query, "days", 7, 1, 365)))
         if path == "/api/routing":
             return self._json(HTTPStatus.OK, api.routing(store))
+        if path == "/api/notes":
+            repo_key = (query.get("repo") or [""])[0]
+            if not repo_key:
+                return self._error(HTTPStatus.BAD_REQUEST, "pick a project: /api/notes?repo=<key>")
+            return self._json(HTTPStatus.OK, api.notes_view(
+                store, repo_key, topic=(query.get("topic") or [""])[0], query=(query.get("q") or [""])[0],
+                state=(query.get("state") or [""])[0]))
         if path == "/api/memory":
             return self._json(HTTPStatus.OK, api.memory(store, (query.get("q") or [""])[0]))
         if path == "/api/habits":
@@ -336,6 +344,19 @@ class Handler(BaseHTTPRequestHandler):
                     with contextlib.suppress(ProcessLookupError, PermissionError):
                         os.kill(int(task["pid"]), signal.SIGTERM)
             return self._json(HTTPStatus.OK, {"id": task["id"], "cancel": True})
+        if match := _NOTE_ROUTE.match(path):
+            from cauce import notes
+
+            note = store.get_note(int(match.group(1)))
+            if note is None:
+                return self._error(HTTPStatus.NOT_FOUND, "no such note")
+            if match.group(2) == "drop":
+                store.update_note(note["id"], state="dropped", state_reason="dropped from the UI")
+            else:
+                place = next((p["dir"] for p in api.projects(store, enrolled_only=False)
+                              if p["repo"] == note["project"] and p["exists"]), "")
+                notes.confirm(store, note["id"], Path(place) if place else None)
+            return self._json(HTTPStatus.OK, {"id": note["id"], "state": store.get_note(note["id"])["state"]})
         if path == "/api/lanes/unpause":
             repo_key = str(data.get("repo") or "")
             store.unpause_lane(repo_key)

@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_every_hook_registered_is_one_cauce_handles():
     registered = json.loads((ROOT / "hooks" / "hooks.json").read_text())["hooks"]
-    assert set(registered) == {"SessionStart", *hooks.HANDLERS}
+    assert set(registered) == {*hooks.WITH_ENV, *hooks.HANDLERS}
     for event, entries in registered.items():
         command = entries[0]["hooks"][0]["command"]
         assert command.endswith(f"hook {event}") and "${CLAUDE_PLUGIN_ROOT}/bin/cauce" in command

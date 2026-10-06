@@ -602,6 +602,175 @@ def cmd_name_session(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- notes: what a project knows, by topic ------------------------------------
+
+
+def _project(args: argparse.Namespace) -> tuple[str, Path]:
+    where = Path(getattr(args, "repo", None) or os.getcwd()).resolve()
+    key = repo.key(where)
+    if key is None:
+        raise SystemExit(f"cauce: {where} is not a directory")
+    return key, where
+
+
+def _print_notes(found: list[dict], as_json: bool) -> None:
+    from cauce import notes
+
+    if as_json:
+        print(notes.to_json(found))
+        return
+    if not found:
+        print("no notes match")
+    for n in found:
+        state = "" if n["state"] == "current" else f" [{n['state']}]"
+        why = f"  ({n['why']})" if n.get("why") else ""
+        print(f"#{n['id']} [{n['topic']}]{state} {n['title']}{why}")
+        if not n["text"].startswith(n["title"].rstrip("…")):
+            print(f"  {n['text']}")
+        if n["state"] == "review" and n.get("state_reason"):
+            print(f"  to review: {n['state_reason']}")
+        if n.get("anchors"):
+            print("  about: " + ", ".join(f"{a['symbol']} ({a['path']})" if a["symbol"] else a["path"]
+                                          for a in n["anchors"]))
+        if n.get("links"):
+            print("  links: " + ", ".join(f"{x['kind']} #{x['to']}" if x["out"] else f"#{x['to']} {x['kind']} this"
+                                          for x in n["links"]))
+
+
+def cmd_note(args: argparse.Namespace) -> int:
+    """A person keeps a fact about this project."""
+    from cauce import notes
+
+    key, where = _project(args)
+    store = Store.open()
+    try:
+        try:
+            topic = (notes.resolve_topic(store, key, args.topic) if args.topic
+                     else (notes.topics_in(_text(args.text)) or ["code"])[0])
+            links = []
+            for spec in args.link or []:
+                target, _, kind = spec.partition(":")
+                links.append((int(target.lstrip("#")), kind or "depends_on"))
+            note_id, new = notes.add(store, key, _text(args.text), topic=topic, title=args.title,
+                                     author="session" if os.environ.get("CAUCE_SESSION_ID") else "person",
+                                     filed_by="person" if args.topic else "rule",
+                                     source="cauce note", session_id=os.environ.get("CAUCE_SESSION_ID"),
+                                     links=links, paths=args.anchor or [], repo_dir=where)
+        except ValueError as exc:
+            print(f"cauce: {exc}", file=sys.stderr)
+            return 2
+        note = store.get_note(note_id)
+    finally:
+        store.close()
+    print(f"{'kept' if new else 'already known as'} #{note_id} [{note['topic']}] {note['title']}")
+    return 0
+
+
+def cmd_recall(args: argparse.Namespace) -> int:
+    """The notes a question needs: by topic, by the code it is about, one link away."""
+    from cauce import notes
+
+    key, where = _project(args)
+    store = Store.open()
+    try:
+        notes.review(store, key, where)
+        try:
+            in_topics = [notes.resolve_topic(store, key, t) for t in args.topic] if args.topic else None
+        except ValueError as exc:
+            print(f"cauce: {exc}", file=sys.stderr)
+            return 2
+        states = notes.STATES if args.all_states else notes.LIVE
+        found = notes.recall(store, key, _text(args.text or ""), in_topics=in_topics, paths=args.path or [],
+                             limit=args.limit, hops=args.hops, states=states)
+    finally:
+        store.close()
+    _print_notes(found, args.json)
+    return 0
+
+
+def cmd_notes(args: argparse.Namespace) -> int:
+    from cauce import notes
+
+    key, where = _project(args)
+    store = Store.open()
+    try:
+        command = args.notes_command or "list"
+        try:
+            if command == "list":
+                notes.review(store, key, where)
+                in_topics = [notes.resolve_topic(store, key, t) for t in args.topic] if args.topic else None
+                states = ["review"] if args.review else (notes.STATES if args.all_states else notes.LIVE)
+                rows = store.notes(key, topics=in_topics, states=states, limit=args.limit)
+                _print_notes(notes.expand(store, [r["id"] for r in rows]), args.json)
+            elif command == "show":
+                found = notes.expand(store, [args.id])
+                if not found or found[0]["project"] != key:
+                    print(f"cauce: no note #{args.id} in this project", file=sys.stderr)
+                    return 1
+                _print_notes(found, args.json)
+            elif command == "topics":
+                counts = store.note_counts(key)
+                for name, about in notes.topics(store, key).items():
+                    by = counts.get(name, {})
+                    print(f"{name:<14} {sum(by.get(s, 0) for s in notes.LIVE):>3} note(s)  {about}")
+                proposed = [n for n in store.notes(key, states=notes.LIVE) if n["proposed_topic"]]
+                for n in proposed:
+                    print(f"  proposed topic {n['proposed_topic']!r} for #{n['id']} {n['title']} "
+                          f"(add it with `cauce notes topic add {n['proposed_topic']} \"<what it holds>\"`)")
+            elif command == "topic":
+                name = notes.add_topic(store, key, args.name, args.description)
+                print(f"topic {name} added to this project")
+            else:
+                note = store.get_note(args.id)
+                if note is None or note["project"] != key:
+                    print(f"cauce: no note #{args.id} in this project", file=sys.stderr)
+                    return 1
+                if command == "ok":
+                    notes.confirm(store, args.id, where)
+                    print(f"#{args.id} is current again, anchored to the code as it is now")
+                elif command == "drop":
+                    store.update_note(args.id, state="dropped", state_reason=args.why or "dropped by a person")
+                    print(f"#{args.id} dropped")
+                elif command == "move":
+                    topic = notes.resolve_topic(store, key, args.topic)
+                    store.update_note(args.id, topic=topic, proposed_topic=None)
+                    print(f"#{args.id} moved to {topic}")
+                elif command == "link":
+                    notes.link(store, args.id, args.to, args.kind)
+                    print(f"#{args.id} {args.kind} #{args.to}")
+                elif command == "unlink":
+                    gone = store.unlink_notes(args.id, args.to)
+                    print(f"{gone} link(s) between #{args.id} and #{args.to} removed")
+        except ValueError as exc:
+            print(f"cauce: {exc}", file=sys.stderr)
+            return 2
+    finally:
+        store.close()
+    return 0
+
+
+def cmd_extract_notes(args: argparse.Namespace) -> int:
+    """Run detached by PreCompact and SessionEnd: Haiku keeps what a session established."""
+    from cauce import dispatch, notes
+
+    where = Path(args.cwd).resolve()
+    key = repo.key(where)
+    if key is None:
+        return 0
+    with dispatch.hold(home(), f"notes:{args.session}") as mine:
+        if not mine:
+            return 0
+        store = Store.open()
+        try:
+            filed = notes.extract(store, key, args.session, Path(args.transcript), repo_dir=where,
+                                  symbols_of=notes.livespec_symbols(where))
+        finally:
+            store.close()
+    for f in filed:
+        print(f"{'kept' if f['new'] else 'already known'} #{f['id']} [{f['topic']}] {f['title']}")
+    return 0
+
+
 def cmd_run_queued(args: argparse.Namespace) -> int:
     """One task the dispatcher claimed, in its own process."""
     store = Store.open()
@@ -939,6 +1108,70 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("fix_id", type=int)
     p.add_argument("--why", required=True)
     p.set_defaults(func=cmd_memory_invalidate)
+
+    p = sub.add_parser("note", help="keep a fact about this project in its notes: "
+                                     "cauce note \"<fact>\" --topic business|code|decisions|conventions|environment")
+    p.add_argument("text", help="the fact; - reads it from stdin")
+    p.add_argument("--topic", help="where it is filed (default: the topic its words point to)")
+    p.add_argument("--title")
+    p.add_argument("--anchor", action="append", metavar="PATH",
+                   help="a file the fact is about, relative to the checkout's top (repeatable)")
+    p.add_argument("--link", action="append", metavar="ID[:KIND]",
+                   help="a note it relates to: depends_on (default), explains, replaces, contradicts, example_of")
+    p.add_argument("--repo")
+    p.set_defaults(func=cmd_note)
+
+    p = sub.add_parser("recall", help="what this project's notes say: by topic, by file, one link away")
+    p.add_argument("text", nargs="?", help="the question; empty for the latest notes")
+    p.add_argument("--topic", action="append", help="only this topic (repeatable)")
+    p.add_argument("--path", action="append", help="notes about this file (repeatable)")
+    p.add_argument("--limit", type=int, default=8)
+    p.add_argument("--hops", type=int, default=1, help="how many links away to follow (default 1)")
+    p.add_argument("--all-states", action="store_true", help="also notes replaced or dropped")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--repo")
+    p.set_defaults(func=cmd_recall)
+
+    notes_p = sub.add_parser("notes", help="this project's notes: list, show, ok, drop, move, link, topics")
+    notes_p.add_argument("--repo")
+    notes_p.set_defaults(func=cmd_notes, notes_command=None, topic=None, review=False, all_states=False,
+                         limit=100, json=False)
+    nsub = notes_p.add_subparsers(dest="notes_command")
+    p = nsub.add_parser("list", help="notes, latest first")
+    p.add_argument("--topic", action="append")
+    p.add_argument("--review", action="store_true", help="only notes whose code changed since they were written")
+    p.add_argument("--all-states", action="store_true")
+    p.add_argument("--limit", type=int, default=100)
+    p.add_argument("--json", action="store_true")
+    p = nsub.add_parser("show", help="one note, its anchors and links")
+    p.add_argument("id", type=int)
+    p.add_argument("--json", action="store_true")
+    p = nsub.add_parser("ok", help="you checked a note to review: it is current again")
+    p.add_argument("id", type=int)
+    p = nsub.add_parser("drop", help="a note that is wrong or no longer matters")
+    p.add_argument("id", type=int)
+    p.add_argument("--why")
+    p = nsub.add_parser("move", help="file a note under another topic")
+    p.add_argument("id", type=int)
+    p.add_argument("topic")
+    p = nsub.add_parser("link", help="link two notes: cauce notes link 12 9 explains")
+    p.add_argument("id", type=int)
+    p.add_argument("to", type=int)
+    p.add_argument("kind", choices=["depends_on", "explains", "replaces", "contradicts", "example_of"])
+    p = nsub.add_parser("unlink", help="remove the links between two notes")
+    p.add_argument("id", type=int)
+    p.add_argument("to", type=int)
+    nsub.add_parser("topics", help="the topics, how many notes each, and topics Haiku proposed")
+    p = nsub.add_parser("topic", help="add a topic to this project: cauce notes topic add api \"<what it holds>\"")
+    p.add_argument("action", choices=["add"])
+    p.add_argument("name")
+    p.add_argument("description")
+
+    p = sub.add_parser("extract-notes", help=argparse.SUPPRESS)
+    p.add_argument("session")
+    p.add_argument("transcript")
+    p.add_argument("cwd")
+    p.set_defaults(func=cmd_extract_notes)
 
     p = sub.add_parser("spend", help="tokens and dollars by model and by cell")
     p.add_argument("--days", type=int, default=7)

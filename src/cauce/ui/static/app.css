@@ -121,3 +121,22 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .rung sup { font-size: 9px; } .rung-gap { color: var(--muted); font-size: 11px; }
 h2.spaced { margin-top: 24px; }
 button.danger { border-color: var(--bad); color: var(--bad); font-weight: 600; }
+
+/* Notes: one project's knowledge, by topic. */
+.notes-layout { display: grid; grid-template-columns: 220px 1fr; gap: var(--gap); margin-top: var(--gap); }
+@media (max-width: 760px) { .notes-layout { grid-template-columns: 1fr; } }
+.topics { display: flex; flex-direction: column; gap: 6px; }
+.topic { text-align: left; display: flex; justify-content: space-between; gap: 6px; align-items: center; }
+.topic.on { border-color: var(--accent); background: var(--accent-soft); }
+.note { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px;
+        margin-bottom: 10px; transition: box-shadow .3s; }
+.note .text { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 14px;
+              background: none; border: 0; padding: 0; }
+.note.state-review { border-left: 3px solid var(--warn); }
+.note.state-replaced, .note.state-dropped { opacity: .7; }
+.note.focused { box-shadow: 0 0 0 2px var(--accent); }
+.note .links { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.note .link { font-size: 12px; padding: 2px 8px; }
+code.anchor { font-family: var(--mono); font-size: 12px; margin-right: 6px; overflow-wrap: anywhere; }
+.tag.review { color: var(--warn); font-size: 11px; font-weight: 700; }
+.tag.replaced, .tag.dropped { color: var(--muted); font-size: 11px; font-weight: 700; }

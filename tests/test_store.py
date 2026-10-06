@@ -174,3 +174,18 @@ def test_many_openers_at_once_migrate_without_tripping(tmp_path):
     for t in threads:
         t.join()
     assert errors == []
+
+
+def test_notes_never_reach_the_problem_search_and_an_edit_is_searchable(store):
+    p = store.open_problem("websocket reconnect loop", repo="r")
+    store.add_fix(p, "raise the backoff", "failed", repo="r")
+    note = store.add_note("r", "code", "websocket", "the websocket reconnect loop lives in the client",
+                          author="person", filed_by="person")
+    assert [x["id"] for x in store.search("websocket reconnect")] == [p]
+    assert store.search_notes("r", "websocket client") == [note]
+    store.update_note(note, text="the socket retries with jitter", title="retries")
+    assert store.search_notes("r", "websocket client") == [] and store.search_notes("r", "jitter") == [note]
+    assert store.update_note(note, unknown="x")["title"] == "retries"
+    assert store.notes("r", ids=[]) == [] and store.note_links([]) == [] and store.note_anchors([]) == []
+    assert store.notes_at("r", []) == [] and store.search_notes("r", "") == []
+    assert store.note_projects() == ["r"]
