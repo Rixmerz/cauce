@@ -52,8 +52,8 @@ def rules(tool_name: str, tool_input: dict[str, Any] | None) -> list[str]:
 
 def from_refusals(refused: Iterable[str]) -> tuple[str, ...]:
     """Rules read back from refusals already written as `Tool(target)`, for a
-    task recorded before the rules were. A target cut at its end loses the
-    commands chained after the cut, never the ones before it."""
+    task recorded before the rules were. A target cut at its end keeps every
+    command before the cut, and the cut one too when its program was whole."""
     out: list[str] = []
     for text in refused:
         found = _RULE.match(text.strip())
@@ -62,8 +62,14 @@ def from_refusals(refused: Iterable[str]) -> tuple[str, ...]:
             continue
         tool, target = found["tool"], found["target"]
         if tool == "Bash" and target.endswith("..."):
-            # The last command was cut mid-word: what is left of it names nothing.
-            out += [f"Bash({prefix}:*)" for prefix in commands(target.removesuffix("..."))[:-1]]
+            segments = _segments(target.removesuffix("..."))
+            prefixes = [p for seg in segments[:-1] for p in _prefix(seg)]
+            last = segments[-1] if segments else []
+            whole = _prefix(last)
+            # The prefix is whole only when words follow it: then the cut fell in its arguments.
+            if whole and len(last) > len(whole[0].split()):
+                prefixes += whole
+            out += [f"Bash({prefix}:*)" for prefix in prefixes]
             continue
         key = {"Bash": "command", "WebFetch": "url"}.get(tool, "file_path")
         out += rules(tool, {key: target})
@@ -72,23 +78,35 @@ def from_refusals(refused: Iterable[str]) -> tuple[str, ...]:
 
 def commands(command: str) -> list[str]:
     """The program prefix of every command a shell line chains, harmless ones aside."""
+    return list(dict.fromkeys(p for segment in _segments(command) for p in _prefix(segment)))
+
+
+def _segments(command: str) -> list[list[str]]:
+    """The words of each command a shell line chains. A line cut inside a quote
+    is read with the quote closed: the commands before the cut still count."""
     if "<<" in command:
         command = command.split("\n", 1)[0]  # a heredoc's body is data, not commands
-    try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
-    except ValueError:
+    tokens = None
+    for closing in ("", '"', "'", "\"'", "'\""):
+        try:
+            lexer = shlex.shlex(command + closing, posix=True, punctuation_chars=True)
+            lexer.whitespace_split = True
+            tokens = list(lexer)
+            break
+        except ValueError:
+            continue
+    if tokens is None:
         tokens = command.split()
-    out: list[str] = []
+    out: list[list[str]] = []
     part: list[str] = []
     for token in [*tokens, ";"]:
         if token in _SEPARATORS:
-            out += _prefix(part)
+            if part:
+                out.append(part)
             part = []
         else:
             part.append(token)
-    return list(dict.fromkeys(out))
+    return out
 
 
 def _prefix(words: list[str]) -> list[str]:

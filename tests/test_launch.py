@@ -178,3 +178,39 @@ def test_a_refused_command_is_read_from_the_cli_not_the_worker(tmp_path):
     shown = block(verdict="pass", summary="done", evidence="ok")
     assert parse(proc(envelope(shown, permission_denials=refusals[:1])), s).passed
     assert launch.denials(None) == () and launch.denials({"permission_denials": None}) == ()
+
+
+def test_work_in_checkouts_nested_in_the_work_directory_is_seen(tmp_path):
+    """A task run in a folder that holds several repositories edited two of them;
+    the folder is no checkout itself, and the report said it changed nothing."""
+    from .conftest import git
+
+    def checkout(path):
+        path.mkdir(parents=True)
+        git(path, "init", "-q")
+        git(path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init")
+        return path
+
+    holder = tmp_path / "workspace"
+    api, web = checkout(holder / "api"), checkout(holder / "apps" / "web")
+    (holder / "node_modules" / "dep").mkdir(parents=True)
+    (holder / "node_modules" / "dep" / ".git").mkdir()  # never looked into
+    assert launch.nested_checkouts(holder) == [api, web]
+    before = launch.tracked_state(holder)
+    (api / "routes.js").write_text("x\n")
+    (web / "app.ts").write_text("y\n")
+    git(web, "add", "app.ts")
+    git(web, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "worker committed")
+    after = launch.tracked_state(holder)
+    assert launch.changed_paths(before, after, holder) == ("api/routes.js", "apps/web/app.ts")
+
+    # a checkout holding another one: the nested one is read, not listed as one untracked folder
+    outer = checkout(tmp_path / "outer")
+    inner = checkout(outer / "vendor" / "lib")
+    before = launch.tracked_state(outer)
+    (inner / "fix.py").write_text("z\n")
+    assert launch.changed_paths(before, launch.tracked_state(outer), outer) == ("vendor/lib/fix.py",)
+    assert launch.tracked_state(tmp_path / "outer" / "vendor") is not None
+    empty = tmp_path / "plain"
+    empty.mkdir()
+    assert launch.tracked_state(empty) is None

@@ -16,6 +16,19 @@
   Outside a checkout only its own directory counts. The home directory and `/`
   are never a project, and `cauce init` refuses them. A stray `.cauce/` left
   in a high folder no longer lists anything below it, with no cleanup needed.
+- **Work in nested repositories read as "changed nothing".** A task run in a
+  folder that holds several git repositories reported `changed (from git):
+  nothing` while its worker had edited two of them. The folder is not a
+  checkout itself, and a checkout's own status never looks inside a nested
+  one. Each attempt now also reads every git checkout up to two levels below
+  its work directory (dependency folders aside), with paths prefixed by
+  where each one lives, including what a worker committed in them.
+- **Rules read back from older refusals missed programs.** A refusal cut at
+  120 characters lost its last command even when only that command's
+  arguments were cut, so `~/.local/bin/x -n "…" src/...` gave no rule.
+  A refusal cut inside a quote lost everything after the quote opened. Now
+  the program is kept whenever it is whole, and a cut quote is closed before
+  the line is read.
 
 ## [0.4.5] - 2026-10-06
 

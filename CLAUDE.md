@@ -72,7 +72,7 @@ the next `SessionStart` reports. Failing open is not failing silently.
 **Verdicts fail closed.** A worker with no result block, two blocks, or a pass
 without evidence is `inconclusive`, never a pass. Changed files come from git,
 never from the worker, and every report prints them beside the worker's
-summary. `--verify` overrides a claimed pass; it is the only thing that can
+summary — the work directory's checkout and every checkout nested in it. `--verify` overrides a claimed pass; it is the only thing that can
 pass an attempt whose worker was refused its own check. Refusals come from the
 CLI's `permission_denials`, never from the worker. A classifier that cannot run
 yields the default kind, not a guess.

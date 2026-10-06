@@ -19,7 +19,7 @@ from cauce import allow
         ('sed -i "s/a/b/" src/x.ts', ["sed"]),
         ("echo hi; cd x; true", []),
         ("$(which node) app.js", []),
-        ('npm "unterminated', ["npm"]),
+        ('npm "unterminated', ["npm unterminated"]),
     ],
 )
 def test_a_shell_line_becomes_one_prefix_per_command_it_chains(command, prefixes):
@@ -45,3 +45,17 @@ def test_refusals_recorded_as_calls_are_read_back_to_rules():
     assert allow.from_refusals([cut, "Bash(npx tsc --noEmit)", "Read(/abs/file)", "Glob", "Bash(npx tsc -p x)"]) == (
         "Bash(~/bin/search:*)", "Bash(npx tsc:*)", "Read(//abs/file)", "Glob")
     assert allow.from_refusals(["WebFetch(https://example.org/x)"]) == ("WebFetch(domain:example.org)",)
+
+
+def test_a_refusal_cut_short_keeps_every_whole_program_it_names():
+    refused = [
+        'Bash(~/bin/search -n -i "role" app/src/core api/src/middleware api/src/rou...)',  # cut in its arguments
+        "Bash(sed -n 1,14p a.js; cd ..; git status --short; git log -...)",
+        "Bash(cd /work/api && grep -rn \"onlyAdmin\" src; sed -i \"s/, 're...)",  # cut inside a quote
+        "Bash(cd /work/api && source ~/.nvm/nvm.sh >/dev/null; nvm use ...)",
+        'Bash(cd /work/app && PATH="$HOME/.nvm/versions/node/v22/b...)',  # only an assignment before the cut
+        "Bash(g...)",  # the program itself was cut
+    ]
+    assert allow.from_refusals(refused) == (
+        "Bash(~/bin/search:*)", "Bash(sed:*)", "Bash(git status:*)", "Bash(git log:*)", "Bash(grep:*)",
+        "Bash(source ~/.nvm/nvm.sh:*)", "Bash(nvm:*)")
