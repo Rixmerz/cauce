@@ -52,6 +52,9 @@ CAUSES = {
     "crashed": ("failed", "cauce"),
 }
 
+#: The turns a task that outgrew its turns is resumed with.
+RESUME_TURNS = 120
+
 #: How a person's cancel arrived, as the account says it.
 CANCEL_VIA = {
     "ui": "from the UI",
@@ -129,9 +132,11 @@ def read(data: dict[str, Any] | None) -> Stop | None:
 def next_step(task_id: int, stop: Stop, *, resumable: bool = True) -> str | None:
     """The command that continues the task, or None when none would: a task the
     worker found wrong is rewritten, and one that never ran cannot resume."""
-    if not resumable or stop.cause in ("spec", "turns", "ladder", "missing_dir"):
+    if not resumable or stop.cause in ("spec", "ladder", "missing_dir"):
         return None
     base = f"cauce resume {task_id}"
+    if stop.cause == "turns":
+        return f"{base} --max-turns {RESUME_TURNS}"
     rules = stop.allow or allow.from_refusals(stop.denied)
     if stop.cause == "permission" and rules:
         return base + "".join(f" --allow {shlex.quote(rule)}" for rule in rules)
@@ -151,7 +156,8 @@ def what_to_do(stop: Stop) -> str:
         "missing_dir": "the task's directory is gone: restore it, or queue the task again where it now lives",
         "approval": "approve the next cell by resuming with --allow-approval",
         "spec": "the task as written cannot be done: rewrite or split it as a new task",
-        "turns": "the task is too big for one worker: split it into smaller tasks",
+        "turns": "the work outgrew a worker's turns, not the task: resume it with more turns (what it did "
+                 "stays), or split what is left into smaller tasks",
         "ladder": "no stronger model is left: rewrite the task, or read the attempts for what kept failing",
         "exhausted": "every cell failed: read the attempts, then resume or rewrite it",
         "attempts": "the attempt limit was reached: read the attempts, then resume",

@@ -727,6 +727,23 @@ class Store:
         ).fetchall()
         return [{**dict(r), "data": json.loads(r["data"])} for r in rows]
 
+    def unreported(self, session_id: str, *, hours: int = 24, limit: int = 10) -> list[dict]:
+        """Work a session sent that has ended since the session last heard of it:
+        its latest `finished` event is newer than its latest `reported` one. Only
+        endings of the last `hours`, so a first look does not bring back old work."""
+        rows = self._conn.execute(
+            "SELECT t.*, f.id AS finished_id, f.data AS finished_data FROM tasks t "
+            "JOIN events f ON f.id = (SELECT MAX(id) FROM events WHERE task_id = t.id AND kind = 'finished') "
+            "WHERE t.session_id = ? AND t.source IN ('cauce', 'queue') AND t.status NOT IN ('queued', 'running') "
+            "AND f.ts >= ? AND f.id > COALESCE((SELECT MAX(id) FROM events WHERE task_id = t.id "
+            "AND kind = 'reported'), 0) ORDER BY f.id LIMIT ?",
+            (session_id, (datetime.now(UTC) - timedelta(hours=hours)).isoformat(timespec="seconds"), limit))
+        return [{**dict(r), "finished_data": json.loads(r["finished_data"])} for r in rows]
+
+    def mark_reported(self, task_ids: Iterable[int], *, via: str) -> None:
+        for task_id in task_ids:
+            self.add_event(task_id, "reported", via=via)
+
     def request_cancel(self, task_id: int, via: str = "cli") -> dict | None:
         """Flag a run to stop, and say where the request came from: the run that
         stops reads it back, so its account can say a person cancelled it, and how."""

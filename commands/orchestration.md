@@ -78,6 +78,15 @@ Request: $ARGUMENTS
    - `failed` — every cell on the ladder tried. Report what each attempt found
      (`cauce show <id>`); do not try it yourself in this context.
 
+   - `replan` because it outgrew its turns — the task is not wrong: continue it
+     with `cauce resume <id> --max-turns 120` (its work stays), or split what
+     the report says is left.
+
+   Work you queued, or ran in the background, reports back on its own: when
+   it ends, a `cauce:` notice reaches you at the end of your turn or with the
+   person's next message. Act on it then, as each line says. Tell the person,
+   then resume, split or show the branch; do not wait to be asked.
+
    Use only the commands `cauce --help` lists; there is no `cauce continue`.
 
 5. **Memory.** Before debugging, `cauce memory search "<symptom>"` shows fixes

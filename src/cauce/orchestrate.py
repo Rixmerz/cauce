@@ -479,8 +479,10 @@ def run(
             report.isolated = True
             report.changed = list(isolate.changed(workspace))
             unverified = "" if report.status == "done" else f" {isolate.UNVERIFIED}, {report.status})"
+            # Work that outgrew its turns is kept too: the task was not wrong, only big.
+            outgrew = report.stop is not None and report.stop.cause == "turns"
             report.branch = isolate.finish(
-                workspace, keep=report.status in KEEPS_WORK,
+                workspace, keep=report.status in KEEPS_WORK or outgrew,
                 message=f"cauce task #{task['id']}{unverified}: {task['title']}",
             )
             if report.branch and report.status == "done":

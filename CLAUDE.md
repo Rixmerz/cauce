@@ -87,7 +87,12 @@ yields the default kind, not a guess.
 - A request that opens with a verb of change is never read as a read-only
   kind unless a tag or `--kind` says so.
 - Work that stopped for a person (blocked, needs approval) is kept on its
-  branch, unverified; only `failed`, `replan` and `cancelled` drop it.
+  branch, unverified, and so is work that outgrew its turns (a `replan` for
+  turns resumes with more); only `failed`, a `replan` for a wrong task and
+  `cancelled` drop it.
+- Work a session sent is reported to it once when it ends: by the report a
+  `cauce run` prints, else by the Stop hook (which blocks the turn's end once
+  with the endings) or the next prompt.
 - Every ending short of a pass records a `stops.Stop` on its `finished`
   event: a new way for a task to stop adds its cause there, and a status set
   without one is read back and marked `recovered`, never presented as recorded.

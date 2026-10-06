@@ -432,6 +432,19 @@ def test_resume_continues_a_stopped_task_with_what_it_was_refused_granted(capsys
     assert cli.main(["resume", str(odd["id"]), "--verify", "true", "--budget", "2", "--no-isolate"]) == 0
     assert calls[-1][2].isolate is False
     assert calls[-1][3]["history"][0].failure is None and calls[-1][2].budget_usd == 2
+    from cauce import stops
+
+    store = Store.open()
+    big = store.create_task("reduce it", status="running", source="cauce", repo="r", cwd=str(git_repo), kind="refactor")
+    stops.record(store, big["id"], stops.Stop("turns", "outgrew"))
+    wrong = store.create_task("impossible", status="running", source="cauce", repo="r", cwd=str(git_repo))
+    stops.record(store, wrong["id"], stops.Stop("spec", "no such API"))
+    store.close()
+    assert cli.main(["resume", str(big["id"])]) == 0
+    assert calls[-1][2].max_turns == 120
+    assert cli.main(["resume", str(big["id"]), "--max-turns", "200"]) == 0 and calls[-1][2].max_turns == 200
+    assert cli.main(["resume", str(wrong["id"])]) == 1
+    assert "rewrite it as a new task" in capsys.readouterr().err
     for refused in (hook["id"], done["id"], 999):
         assert cli.main(["resume", str(refused)]) == 1
     assert "only a task that stopped" in capsys.readouterr().err
@@ -498,3 +511,22 @@ def test_ui_on_a_port_this_cauce_already_serves_opens_it(monkeypatch, capsys):
     monkeypatch.setattr(server, "serve", broken)
     with pytest.raises(OSError):
         cli.main(["ui", "--port", "80"])
+
+
+def test_a_report_the_caller_read_is_not_reported_again(capsys, git_repo, monkeypatch):
+    store = Store.open()
+    t = store.create_task("x", status="running", source="cauce", session_id="s", cwd=str(git_repo))
+    store.close()
+
+    def fake_run(text, repo_dir, store, options, **kw):
+        store.add_event(t["id"], "finished", status="done")
+        store.update_task(t["id"], status="done")
+        return orchestrate.Report(t["id"], "done", None)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(orchestrate, "run", fake_run)
+    monkeypatch.setattr(orchestrate.Report, "text", lambda self: "task: done")
+    monkeypatch.setenv("CAUCE_SESSION_ID", "s")
+    assert cli.main(["run", "x", "--repo", str(git_repo), "--no-model"]) == 0
+    store = Store.open()
+    assert store.unreported("s") == []
+    store.close()

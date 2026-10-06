@@ -50,6 +50,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     try:
         report = orchestrate.run(_text(args.text), Path(args.repo or os.getcwd()), store, options,
                                  session_id=os.environ.get("CAUCE_SESSION_ID"))
+        if getattr(report, "task_id", None):
+            store.mark_reported([report.task_id], via="cli")  # its caller reads the report below
     finally:
         signal.signal(signal.SIGTERM, previous)
         store.close()
@@ -71,7 +73,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
         if task is None or task["source"] != "cauce" or not task["cwd"]:
             print(f"no task #{args.id} that cauce ran", file=sys.stderr)
             return 1
-        if task["status"] not in RESUMABLE:
+        outgrew = task["status"] == "replan" and (stop := stops.of(store, task)) is not None and stop.cause == "turns"
+        if task["status"] not in RESUMABLE and not outgrew:
             print(f"task #{args.id} is {task['status']}; only a task that stopped ({', '.join(RESUMABLE)}) resumes"
                   + ("; rewrite it as a new task" if task["status"] == "replan" else ""), file=sys.stderr)
             return 1
@@ -82,6 +85,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
         options.budget_usd = args.budget or options.budget_usd
         options.allow_approval = options.allow_approval or args.allow_approval
         options.isolate = options.isolate and not args.no_isolate
+        if args.max_turns or outgrew:
+            # A task that outgrew its turns is not wrong: it goes on with more.
+            options.max_turns = args.max_turns or stops.RESUME_TURNS
         attempts = store.attempts(args.id)
         moved = store.last_event(args.id, "moved")
         waiting = moved["data"].get("next_cell") if moved and task["status"] == "needs_approval" else None
@@ -99,6 +105,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
                    for a in attempts]
         store.update_task(args.id, options=json.dumps(options.stored()), dispatched=0, cancel_requested=0)
         report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=args.id, history=history)
+        store.mark_reported([args.id], via="cli")
     finally:
         signal.signal(signal.SIGTERM, previous)
         store.close()
@@ -765,6 +772,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--allow-approval", action="store_true", help="allow cells that need approval (Fable)")
     p.add_argument("--no-isolate", action="store_true",
                    help="work in the checkout (a task started with --no-isolate already resumes there)")
+    p.add_argument("--max-turns", type=int,
+                   help="turns per attempt; a task that outgrew its turns resumes with 120 by default")
     p.add_argument("--no-model", action="store_true")
     p.set_defaults(func=cmd_resume)
 

@@ -579,3 +579,13 @@ def test_the_plan_says_when_a_task_needs_a_browser_or_running_servers(git_repo, 
     assert [r for r in dry.plan.reasons if r.startswith("this task needs")] == [notes[1]]
     plain = run("fix the parser", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"))
     assert not any(r.startswith("this task needs") for r in plain.plan.reasons)
+
+
+def test_work_that_outgrew_its_turns_is_kept_for_the_resume(git_repo, store):
+    out = WorkerResult(False, Failure.TURNS_EXHAUSTED, "ran out", cost_usd=0.1)
+    report = run("reduce it", git_repo, store, registry={}, launcher=Script(out, out, write="half.py"),
+                 classifier=kind("refactor"))
+    assert report.status == "replan" and report.stop.cause == "turns"
+    assert report.branch == f"cauce/task-{report.task_id}"
+    assert "half.py" in git(git_repo, "show", "--name-only", report.branch)
+    assert f"cauce resume {report.task_id} --max-turns 120" in report.text()
