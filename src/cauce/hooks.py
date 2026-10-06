@@ -311,6 +311,8 @@ def _endings(store: Store, session_id: str, *, via: str) -> str | None:
         stop = stops.view(store, t)
         if stop:
             lines.append(f"  stopped by {stop['who']}: {stop['reason'][:300]}")
+            if stop.get("account"):
+                lines.append(f"  the worker found: {stop['account'][:800]}")
         if changed:
             shown = ", ".join(changed[:5]) + (f" and {len(changed) - 5} more" if len(changed) > 5 else "")
             lines.append(f"  changed so far: {shown}")

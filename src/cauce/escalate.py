@@ -72,6 +72,7 @@ class Move(StrEnum):
     NEEDS_APPROVAL = "needs_approval"
     EXHAUSTED = "exhausted"
     BLOCKED = "blocked"
+    CONVERGED = "converged"
 
 
 #: The moves after which another attempt runs.
@@ -186,8 +187,10 @@ def decide(
     attempts: Sequence[Attempt],
     *,
     allow_approval: bool = False,
+    reading: bool = False,
 ) -> Decision:
-    """The move after the last attempt, with the evidence it rests on."""
+    """The move after the last attempt, with the evidence it rests on. `reading`
+    is a task that only finds out: its answer is what it is for."""
     if not attempts:
         raise ValueError("decide() needs at least one attempt")
     last = attempts[-1]
@@ -246,6 +249,15 @@ def decide(
                         because=(seen, f"{why}: the task is bigger than one worker, so it is split, not climbed"))
 
     pair = _repeated_pair(attempts)
+    if pair and reading:
+        # Two cells that only read came back with the same findings: that is the
+        # answer, confirmed, not an approach to replace. A stronger model would
+        # read the same code and say it a third time, at a higher price.
+        first, second = attempts[pair[0] - 1], attempts[pair[1] - 1]
+        return Decision(Move.CONVERGED, reason="two cells found the same thing: that is the answer",
+                        because=(seen, f"attempts {pair[0]} ({first.cell.label}) and {pair[1]} "
+                                       f"({second.cell.label}) of a task that only reads reported the same "
+                                       "findings: the answer is confirmed, and climbing would repeat it"))
     if pair or failure is Failure.APPROACH:
         if failure is Failure.APPROACH:
             why = "the approach was wrong"

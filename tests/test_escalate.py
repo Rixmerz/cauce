@@ -176,3 +176,15 @@ def test_an_attempt_that_was_refused_blocks_whatever_else_it_ended_with():
     assert d.move is Move.BLOCKED and "--allow 'Bash(node:*)'" in d.reason
     wrong = Attempt(Cell("opus", "high"), 30, False, Failure.SPEC_BUG, "", ("Bash(x)",))
     assert decide(LADDERS["debug-unclear"], [wrong]).move is Move.REPLAN  # a wrong task is still wrong
+
+
+def test_a_reading_task_whose_cells_agree_has_its_answer():
+    """An audit found the same stray references at three cells and climbed to the top
+    of its ladder; finding them was the job, done at the first cell."""
+    said = "the API still has 'admin' in the baseline migration and the seed script"
+    attempts = [fail("opus/high", Failure.CODE_BUG, said), fail("opus/xhigh", Failure.CODE_BUG, said + ".")]
+    d = decide(LADDERS["review-critical"], attempts, reading=True)
+    assert d.move is Move.CONVERGED and not d.continues and d.axis == "stop"
+    assert "the answer is confirmed" in d.because[1]
+    # a task that writes still changes model on a repeated answer
+    assert decide(LADDERS["review-critical"], attempts).move is Move.REPLAN  # no stronger model left

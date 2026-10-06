@@ -48,6 +48,7 @@ _FINAL_STATUS = {
     Move.NEEDS_APPROVAL: "needs_approval",
     Move.EXHAUSTED: "failed",
     Move.BLOCKED: "blocked",
+    Move.CONVERGED: "failed",
 }
 
 #: Endings that wait on a person, not on the task being rewritten: the work done
@@ -461,7 +462,7 @@ def run(
                 break
             if result.failure in _MEMORABLE and result.summary:
                 _remember(store, task, key, attempt, "failed", result)
-            decision = decide(the_plan.ladder, attempts, allow_approval=options.allow_approval)
+            decision = decide(the_plan.ladder, attempts, allow_approval=options.allow_approval, reading=not writes)
             store.set_move(task["id"], seq, decision.move.value, decision.reason)
             to = decision.cell.label if decision.cell and decision.continues else None
             report.moves.append(f"{decision.move.value}" + (f" to {to}" if to else "") + f": {decision.reason}")
@@ -570,6 +571,8 @@ def _cause(decision: Decision, attempt: Attempt) -> str:
         return "permission" if attempt.failure is Failure.PERMISSION or attempt.denied else "environment"
     if decision.move is Move.NEEDS_APPROVAL:
         return "approval"
+    if decision.move is Move.CONVERGED:
+        return "converged"
     if decision.move is Move.REPLAN:
         if attempt.failure in (Failure.SPEC_BUG, Failure.ARCHITECTURE_BUG):
             return "spec"
@@ -604,8 +607,12 @@ def brief(
     if context:
         parts.append("\n".join(context))
     if not writes:
-        parts.append("This task is read-only: find out and report. Do not change files. If it asks for a "
-                     "change, you cannot make it here: answer `fail` with `spec_bug` and say so.")
+        parts.append("This task is read-only: find out and report. Do not change files. The answer is the "
+                     "deliverable, whatever it says: when you checked what was asked, the verdict is `pass`, also "
+                     "when what you found is broken, missing or failing. Put each finding in `summary` and what "
+                     "shows it (file:line, a command and its output) in `evidence`. `code_bug` is never about the "
+                     "code you read: use `inconclusive` for something you could not check, and `fail` with "
+                     "`spec_bug` when the task asks for a change, which you cannot make here.")
     if verify:
         parts.append(f"When you report a pass, it is checked by running: {verify}")
     if dead_ends:
