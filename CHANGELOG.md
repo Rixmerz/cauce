@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-10-06
+
+### Fixed
+
+- **Tasks from before 0.4.6 said "you" for text the main session wrote.**
+  Back then every task's text was recorded as `user`, and 0.4.6 read `user`
+  as the person. Now:
+  - text a person typed (`++`, or `cauce run` / `cauce queue add` outside a
+    session) is recorded as `person`, so `user` only means a session's own
+    prompt, or an older record;
+  - on an older task sent from a session, the drawer shows
+    "main session (orchestrator, inferred …)", marked as inferred, since
+    cauce did not record who wrote it;
+  - a session's own prompts, and older tasks run from a terminal, still say
+    "you".
+
 ## [0.4.6] - 2026-10-06
 
 ### Fixed

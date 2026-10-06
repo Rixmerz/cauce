@@ -441,3 +441,19 @@ def test_each_move_says_where_it_went_and_why_and_routing_adds_them_up(store: St
                                       "after": "code_bug", "times": 2, "then_passed": 2}
     stopped = next(c for c in implement["climbs"] if c["move"] == "exhausted")
     assert stopped["to"] is None and stopped["then_passed"] is None
+
+
+def test_each_message_says_who_wrote_it_and_older_ones_say_it_is_inferred(store: Store):
+    sent = store.create_task("reduce the app", status="blocked", source="cauce", session_id="s",
+                             author="orchestrator")
+    typed = store.create_task("write the changelog", status="done", source="cauce", author="person")
+    old = store.create_task("remove the role", status="blocked", source="cauce", session_id="s")  # before authors
+    terminal = store.create_task("old, from a terminal", status="done", source="cauce")
+    prompt = store.create_task("why is it slow?", status="done", source="hook", session_id="s")
+    store.add_message(sent["id"], "worker", "task #1: blocked")
+    label = lambda t: [m["author"] for m in api.task_detail(store, t["id"])["messages"]]  # noqa: E731
+    assert label(sent) == ["main session (orchestrator)", "cauce report"]
+    assert label(typed) == ["you"]
+    assert label(old)[0].startswith("main session (orchestrator, inferred")
+    assert label(terminal) == ["you"] and label(prompt) == ["you"]
+    assert api.author("system", {}) == "system"

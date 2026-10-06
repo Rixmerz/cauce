@@ -136,6 +136,7 @@ def test_using_cauce_in_a_project_enrolls_it(store: Store, git_repo):
     event = {"session_id": "s", "prompt_id": "1", "cwd": str(git_repo), "prompt": "++ write the changelog"}
     hooks.user_prompt_submit(event, store)
     assert (git_repo / ".cauce").is_dir()
+    assert store.messages(store.list_tasks()[0]["id"])[0]["role"] == "person"  # typed by the person
 
 
 def test_the_ui_lists_only_enrolled_sessions_with_their_names(store: Store, git_repo, tmp_path):

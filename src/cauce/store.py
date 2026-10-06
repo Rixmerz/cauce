@@ -321,7 +321,9 @@ class Store:
 
     def create_task(self, body: str, *, status: str, source: str, author: str = "user", **fields: Any) -> dict:
         """A task, with its text as its first message. `author` is who wrote that
-        text: `user` for a person, `orchestrator` for the main session that sent it."""
+        text: `person` for someone who typed it, `orchestrator` for the main
+        session that sent it. `user` is a session's own prompt — and, on work
+        recorded before authors were kept, unknown."""
         if status not in TASK_STATES:
             raise ValueError(f"unknown task status {status!r}")
         stamp = now()

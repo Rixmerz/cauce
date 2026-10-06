@@ -564,7 +564,7 @@ def test_the_task_text_says_who_wrote_it(git_repo, store):
     sent = run("x", git_repo, store, registry={}, launcher=Script(ok()), classifier=kind("implement"), session_id="s1")
     typed = run("y", git_repo, store, registry={}, launcher=Script(ok()), classifier=kind("implement"))
     assert store.messages(sent.task_id)[0]["role"] == "orchestrator"
-    assert store.messages(typed.task_id)[0]["role"] == "user"
+    assert store.messages(typed.task_id)[0]["role"] == "person"
 
 
 def test_the_plan_says_when_a_task_needs_a_browser_or_running_servers(git_repo, store, tmp_path):
