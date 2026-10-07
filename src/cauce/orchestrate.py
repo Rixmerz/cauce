@@ -31,7 +31,7 @@ from cauce import config, grants, habits, isolate, launch, models, notes, projec
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify
 from cauce.escalate import Attempt, Decision, Failure, Move, decide
-from cauce.matrix import READ_ONLY_KINDS, Cell, ladder_for
+from cauce.matrix import DEFAULT_TURNS, READ_ONLY_KINDS, Cell, ladder_for, turns_for
 from cauce.store import Store, home
 
 #: Failures that describe something tried against the problem, worth keeping
@@ -71,7 +71,8 @@ class Options:
     isolate: bool = True
     verify: str | None = None
     launch_dir: Path | None = None
-    max_turns: int = launch.DEFAULT_MAX_TURNS
+    #: None: the kind's own (`matrix.turns_for`).
+    max_turns: int | None = None
     use_model_classifier: bool = True
     kind: str | None = None
     start: Cell | None = None
@@ -403,6 +404,9 @@ def run(
     # Said as it happens: a run in a background shell is otherwise silent until
     # its report, and silence reads as a run that never started.
     say(f"cauce: task #{task['id']} started: {the_plan.kind}, at {the_plan.start.label}")
+    if not options.max_turns and turns_for(the_plan.kind) != DEFAULT_TURNS:
+        the_plan.reasons.append(f"{the_plan.kind} work starts with {turns_for(the_plan.kind)} turns: "
+                                f"at {DEFAULT_TURNS} its attempts ran out")
     for reason in the_plan.reasons:
         if reason.startswith(("this task needs", "workers here were refused before")):
             say(f"cauce: #{task['id']} warning: {reason}")
@@ -435,7 +439,7 @@ def run(
     # The runtime the project declares goes first on the worker's PATH, and on its
     # check's: a worker given the wrong Node hunts for another and is refused each one.
     run_env = runtime.env_for(workdir)
-    cell, turns = the_plan.start, options.max_turns
+    cell, turns = the_plan.start, options.max_turns or turns_for(the_plan.kind)
     attempts: list[Attempt] = []
     changed: set[str] = set()
     decision: Decision | None = None
@@ -520,7 +524,8 @@ def run(
                             changed=list(result.changed_paths)[:50],
                             **({"refused_but_written": list(result.overcome)} if result.overcome else {}))
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
-                              allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:])
+                              allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
+                              transient=result.transient)
             attempts.append(attempt)
             say(f"cauce: #{task['id']} attempt {seq} " + ("passed" if result.passed else
                 f"ended {(result.failure or Failure.INCONCLUSIVE).value}: {result.summary[:160]}"))

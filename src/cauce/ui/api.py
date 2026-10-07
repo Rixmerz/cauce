@@ -232,9 +232,12 @@ def spend(store: Store, days: int = 7) -> dict[str, Any]:
     return report
 
 
-def routing(store: Store) -> list[dict[str, Any]]:
+def routing(store: Store, days: int = 0) -> list[dict[str, Any]]:
+    """`days` keeps the last few days only (0: everything): a rule fixed last
+    week should not keep showing as a rung that fails."""
+    since = _days_ago_iso(days) if days else ""
     stats: dict[str, dict[str, Any]] = {}
-    for row in store.routing_stats():
+    for row in store.routing_stats(since):
         kind = stats.setdefault(row["kind"], {"kind": row["kind"], "tasks": 0, "passed": 0, "climbed": 0,
                                               "pinned": 0, "cost_usd": 0.0, "starts": Counter(), "passes": Counter()})
         kind["tasks"] += 1
@@ -248,8 +251,12 @@ def routing(store: Store) -> list[dict[str, Any]]:
             kind["climbed"] += 1
     moves: dict[str, Counter] = defaultdict(Counter)
     landed: dict[str, Counter] = defaultdict(Counter)
-    for m in store.moves():
+    for m in store.moves(since):
         to = m["next_cell"] if m["move"] in _AXIS else None
+        if m["move"] in _AXIS and to is None:
+            # A move that goes on but has no next attempt: still running, or
+            # cancelled or dismissed first. Not a stop the router made.
+            to = f"— {m['task_status']}, no next attempt"
         key = (m["cell"], m["move"], to, m["failure"] or "inconclusive")
         moves[m["kind"]][key] += 1
         if to and m["next_passed"]:
@@ -267,7 +274,7 @@ def routing(store: Store) -> list[dict[str, Any]]:
             # How this ladder is really climbed: each move with the failure behind it, how often, and how
             # often the next attempt passed. The evidence for moving a start or a rung.
             "climbs": [{"from": f, "move": mv, "to": to, "after": why, "times": n,
-                        "then_passed": landed[name][(f, mv, to, why)] if to else None}
+                        "then_passed": landed[name][(f, mv, to, why)] if to and not to.startswith("—") else None}
                        for (f, mv, to, why), n in moves[name].most_common()],
         })
     return out

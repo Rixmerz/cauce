@@ -4,10 +4,25 @@ import { h, usd } from "./util.js";
 const pct = (a, b) => (b ? `${Math.round((100 * a) / b)}%` : "—");
 const cells = (counts) => Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} ×${n}`).join(", ") || "—";
 
-export async function renderRouting() {
-  const rows = await get("/api/routing");
+// The period, kept per viewer: rules change, and last week's failures of a rule
+// fixed since are not evidence about it any more.
+const PERIOD_KEY = "cauce.routing.days";
+
+function period() {
+  try { return localStorage.getItem(PERIOD_KEY) ?? "7"; } catch { return "7"; }
+}
+
+export async function renderRouting(ctx) {
+  const days = period();
+  const rows = await get(`/api/routing?days=${encodeURIComponent(days)}`);
   const climbs = rows.flatMap((r) => (r.climbs || []).map((c) => ({ kind: r.kind, c })));
+  const picker = h("select", { "aria-label": "period", onchange: (e) => {
+    try { localStorage.setItem(PERIOD_KEY, e.target.value); } catch { /* the choice just is not kept */ }
+    ctx?.refresh?.();
+  } }, [["7", "last 7 days"], ["30", "last 30 days"], ["0", "everything"]].map(([v, label]) =>
+    h("option", { value: v, ...(v === days ? { selected: "" } : {}) }, label)));
   return h("div", {},
+    h("div", { class: "toolbar" }, picker),
     h("p", { class: "empty" }, "Where each kind of task started, where it passed, and how often it had to climb. "
       + "The ladders are code; this is the evidence for changing them. Pinned runs are counted but never teach the router."),
     h("table", {},
@@ -28,6 +43,6 @@ export async function renderRouting() {
       climbs.map(({ kind, c }) => h("tr", {},
         h("td", {}, h("span", { class: "chip" }, kind)), h("td", {}, c.from), h("td", {}, c.after), h("td", {}, c.move),
         h("td", {}, c.to || "— stopped"), h("td", { class: "num" }, c.times),
-        h("td", { class: "num" }, c.to ? pct(c.then_passed, c.times) : "—"))))
+        h("td", { class: "num" }, c.then_passed === null ? "—" : pct(c.then_passed, c.times)))))
       : h("div", { class: "empty" }, "No task has climbed yet."));
 }

@@ -278,3 +278,12 @@ def test_a_refused_write_the_attempt_got_past_blocks_nothing(tmp_path):
     outside = parse(proc(refused("/elsewhere/src/a.ts")), spec(tmp_path), changed=("src/a.ts",))
     assert outside.denied == ("Write(/elsewhere/src/a.ts)",)
     assert outside.overcome == ()
+
+
+def test_only_a_launch_that_broke_is_transient(tmp_path):
+    assert parse(proc("not json"), spec(tmp_path)).transient
+    errored = json.dumps({"is_error": True, "subtype": "success", "result": "limit"})
+    assert parse(proc(errored), spec(tmp_path)).transient
+    named = parse(proc(envelope(block(verdict="fail", failure="environment", summary="old Node"))), spec(tmp_path))
+    assert named.failure is Failure.ENVIRONMENT
+    assert not named.transient

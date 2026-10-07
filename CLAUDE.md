@@ -91,7 +91,9 @@ yields the default kind, not a guess.
 - Effort and model are different dials. Shallow work climbs effort; a wrong
   approach or a repeated answer changes model. Do not collapse them into one
   ladder walk.
-- A retry is for work that never ran; it is never an escalation. A refused
+- A retry is for a launch that broke (a timeout, no JSON, an errored
+  session); it is never an escalation. An environment the worker named, or
+  a check cauce could not run, blocks at once. A refused
   command is neither: it blocks at once, because it is a setting. An
   environment failure on an attempt that changed files is not work that never
   ran: it blocks at once too, its work kept.

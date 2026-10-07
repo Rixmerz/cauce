@@ -274,7 +274,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/spend":
             return self._json(HTTPStatus.OK, api.spend(store, days=_int(query, "days", 7, 1, 365)))
         if path == "/api/routing":
-            return self._json(HTTPStatus.OK, api.routing(store))
+            return self._json(HTTPStatus.OK, api.routing(store, days=_int(query, "days", 0, 0, 3650)))
         if path == "/api/notes":
             repo_key = (query.get("repo") or [""])[0]
             if not repo_key:

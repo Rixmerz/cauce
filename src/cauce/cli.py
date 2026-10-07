@@ -1134,8 +1134,9 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--launch-dir", help="start the worker here, and let it work in the repository")
         p.add_argument("--budget", type=float, default=5.0, help="dollars this task may spend (default 5)")
         p.add_argument("--max-attempts", type=int, default=6)
-        p.add_argument("--max-turns", type=int, default=30,
-                       help="turns per attempt; raised once, then again while the work moves")
+        p.add_argument("--max-turns", type=int,
+                       help="turns per attempt (default: 30; a feature, 60); raised once, then again while "
+                            "the work moves")
         p.add_argument("--verify", help="command whose exit code decides a claimed pass")
         p.add_argument("--kind", choices=KINDS, help="skip classification")
         p.add_argument("--start", help="pin the first cell, e.g. sonnet/high", type=_cell)
