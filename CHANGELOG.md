@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-10-07
+
+### Fixed
+
+- **A refused write the worker got past blocked the task anyway.** Auto mode
+  refused two `Write` calls in a task's own worktree; the worker wrote both
+  files afterwards, and git shows them on its branch. cauce still read the
+  refusal as a setting, blocked the task, and asked a person to allow two
+  absolute paths in a temporary worktree, where the same attempt, out of
+  turns, would otherwise have gone on with more. A refused write to a file
+  in the worker's own directory that git shows changed after all is now no
+  refusal: the attempt moves as its failure says, and the `attempt_finished`
+  event lists it as `refused_but_written`. A refusal of anything else, or of
+  a file the attempt never wrote, still blocks.
+- A test of the checkout lock released the lock on a timer and could pass
+  without the run ever waiting; it now releases when the run says it waits.
+
 ## [0.6.5] - 2026-10-07
 
 ### Fixed

@@ -166,6 +166,8 @@ class WorkerResult:
     permission_mode: str = ""
     #: Facts about the project the worker says it confirmed: filed in its notes on a pass.
     learned: tuple[str, ...] = ()
+    #: Refused writes to files the attempt changed anyway, per git: no block.
+    overcome: tuple[str, ...] = ()
 
 
 def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path: Path | None = None) -> list[str]:
@@ -271,8 +273,10 @@ def parse(
 ) -> WorkerResult:
     envelope = _json(proc.stdout)
     usage = _usage(envelope)
+    envelope, overcome = _overcome(envelope, changed, spec.target_dir)
     denied = denials(envelope)
-    common = dict(changed_paths=changed, duration_s=duration_s, denied=denied, allow=allow_rules(envelope), **usage)
+    common = dict(changed_paths=changed, duration_s=duration_s, denied=denied, allow=allow_rules(envelope),
+                  overcome=overcome, **usage)
     if envelope is None:
         detail = (proc.stderr or "").strip()[:300]
         return WorkerResult(False, Failure.ENVIRONMENT,
@@ -325,6 +329,36 @@ def _refused(failure: Failure, denied: Sequence[str]) -> Failure:
     the task itself wrong: no model gets past a setting, and a stronger one sent
     into the same refusal only costs more."""
     return Failure.PERMISSION if denied and failure not in REPLAN else failure
+
+
+#: The tools that write a file: a refusal of one is overcome when git shows the file written.
+_WRITES = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+
+
+def _overcome(envelope: dict[str, Any] | None, changed: Sequence[str],
+              workdir: Path) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
+    """The envelope without the refused writes the attempt got past: a write to a
+    file in its own work directory that git shows changed after all (a retry, an
+    Edit after a refused Write). Such a refusal stopped nothing, and blocking on
+    it asks a person to allow what is done. The refusals dropped, as `Tool(path)`."""
+    entries = (envelope or {}).get("permission_denials") or ()
+    if not entries or not changed:
+        return envelope, ()
+    done = set(changed)
+    root = workdir.resolve()
+    kept, dropped = [], []
+    for entry in entries:
+        given = entry.get("tool_input") if isinstance(entry, dict) else None
+        path = str((given or {}).get("file_path") or (given or {}).get("notebook_path") or "")
+        if isinstance(entry, dict) and entry.get("tool_name") in _WRITES and path:
+            full = (root / path).resolve() if not path.startswith("/") else Path(path).resolve()
+            if full.is_relative_to(root) and full.relative_to(root).as_posix() in done:
+                dropped.append(f"{entry['tool_name']}({full.relative_to(root).as_posix()})")
+                continue
+        kept.append(entry)
+    if not dropped:
+        return envelope, ()
+    return {**(envelope or {}), "permission_denials": kept}, tuple(dict.fromkeys(dropped))
 
 
 def allow_rules(envelope: Mapping[str, Any] | None) -> tuple[str, ...]:

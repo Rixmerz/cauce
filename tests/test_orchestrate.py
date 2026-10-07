@@ -898,10 +898,16 @@ def test_one_run_at_a_time_works_in_a_checkout_without_a_worktree(git_repo, stor
     thread = threading.Thread(target=holder)
     thread.start()
     held.wait(5)
-    threading.Timer(0.3, release.set).start()
     lines = []
+
+    def said(line):
+        # The holder lets go only once the run says it waits: no race on timing.
+        lines.append(line)
+        if "waits" in line:
+            release.set()
+
     report = run("create the routes", git_repo, store, Options(isolate=False), registry={},
-                 launcher=Script(ok()), classifier=kind("implement"), progress=lines.append)
+                 launcher=Script(ok()), classifier=kind("implement"), progress=said)
     thread.join()
     assert report.status == "done"
     assert any("waits: task #41 is working in this checkout" in line for line in lines)
@@ -935,3 +941,13 @@ def test_a_run_in_a_worktree_never_waits_for_the_checkout(git_repo, store):
         report = run("create the routes", git_repo, store, registry={}, launcher=Script(ok(), write="a.py"),
                      classifier=kind("implement"))
     assert report.status == "done"
+
+
+def test_a_refusal_the_worker_got_past_does_not_stop_a_climb(git_repo, store):
+    got_past = WorkerResult(False, Failure.TURNS_EXHAUSTED, "out of turns", cost_usd=0.1,
+                            changed_paths=("routes.ts",), overcome=("Write(routes.ts)",))
+    report = run("x", git_repo, store, registry={}, launcher=Script(got_past, ok()), classifier=kind("implement"))
+    assert report.status == "done"
+    assert report.moves[0].startswith("more_turns")
+    finished = next(e for e in store.events(task_id=report.task_id) if e["kind"] == "attempt_finished")
+    assert finished["data"]["refused_but_written"] == ["Write(routes.ts)"]
