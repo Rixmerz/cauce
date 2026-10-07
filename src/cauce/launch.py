@@ -168,6 +168,9 @@ class WorkerResult:
     learned: tuple[str, ...] = ()
     #: Refused writes to files the attempt changed anyway, per git: no block.
     overcome: tuple[str, ...] = ()
+    #: The launch broke (a timeout, no JSON, an errored session), not the work:
+    #: the one failure a retry can help.
+    transient: bool = False
 
 
 def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path: Path | None = None) -> list[str]:
@@ -234,7 +237,7 @@ def run(
     except subprocess.TimeoutExpired:
         return WorkerResult(
             False, Failure.ENVIRONMENT, f"the worker exceeded its {spec.timeout_s}s timeout",
-            duration_s=float(spec.timeout_s),
+            duration_s=float(spec.timeout_s), transient=True,
         )
     except FileNotFoundError as exc:
         raise LaunchError(f"{claude_bin!r} is not on PATH: a worker that cannot start is a "
@@ -280,7 +283,7 @@ def parse(
     if envelope is None:
         detail = (proc.stderr or "").strip()[:300]
         return WorkerResult(False, Failure.ENVIRONMENT,
-                            f"the CLI produced no JSON (exit {proc.returncode}): {detail}", **common)
+                            f"the CLI produced no JSON (exit {proc.returncode}): {detail}", transient=True, **common)
     text = str(envelope.get("result") or "")
     if envelope.get("is_error"):
         subtype = str(envelope.get("subtype") or "")
@@ -293,7 +296,8 @@ def parse(
         # An API error (a usage limit, an overload) arrives as `is_error` with
         # subtype "success": the reason is in the result text, never the subtype.
         why = text.strip()[:200] if subtype in ("", "success") and text.strip() else subtype or "no reason given"
-        return WorkerResult(False, Failure.ENVIRONMENT, f"the session errored: {why}", raw=text, **common)
+        return WorkerResult(False, Failure.ENVIRONMENT, f"the session errored: {why}", raw=text, transient=True,
+                            **common)
     block = result_block(text)
     if block is None:
         return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),

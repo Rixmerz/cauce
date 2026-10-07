@@ -557,3 +557,20 @@ def test_dismiss_and_forget_from_the_ui(ui):
     assert store.problem(problem) is None
     assert not store.search("clash node_modules")
     store.close()
+
+
+def test_routing_keeps_a_period_and_says_why_a_move_has_no_next_attempt(store: Store):
+    old = store.create_task("old", status="blocked", source="cauce", repo="r", kind="test")
+    store.add_attempt(old["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="permission")
+    store.set_move(old["id"], 1, "blocked", "refused")
+    store._conn.execute("UPDATE tasks SET created_at = '2020-01-01T00:00:00+00:00' WHERE id = ?", (old["id"],))
+    store._conn.execute("UPDATE attempts SET created_at = '2020-01-01T00:00:00+00:00' WHERE task_id = ?", (old["id"],))
+    going = store.create_task("going", status="running", source="cauce", repo="r", kind="test")
+    store.add_attempt(going["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="turns_exhausted")
+    store.set_move(going["id"], 1, "more_turns", "raised")
+    test = next(r for r in api.routing(store, days=7) if r["kind"] == "test")
+    assert test["tasks"] == 1
+    assert [(c["move"], c["to"], c["then_passed"]) for c in test["climbs"]] == [
+        ("more_turns", "— running, no next attempt", None)]
+    everything = next(r for r in api.routing(store) if r["kind"] == "test")
+    assert everything["tasks"] == 2

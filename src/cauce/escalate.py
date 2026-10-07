@@ -99,6 +99,8 @@ class Attempt:
     changed: tuple[str, ...] = ()
     #: The output that failed it, for the next attempt's brief.
     evidence: str = ""
+    #: The launch broke, not the work (see `WorkerResult.transient`).
+    transient: bool = False
 
 
 @dataclass(frozen=True)
@@ -228,6 +230,14 @@ def decide(
                             because=(seen, f"it changed {len(last.changed)} file(s) first: the work ran, so this is "
                                            "no launch that broke, and the same environment stops a retry the same way",
                                      "its work is kept; a resume goes on from it"))
+        if not last.transient:
+            # The worker ran, looked, and named the wall (an old Node, a server it
+            # cannot start), or cauce's own check could not run: the same cell
+            # meets it again at once. Of 18 such retries, none passed.
+            return Decision(Move.BLOCKED, reason="the worker found the environment in the way; fix it, then resume",
+                            because=(seen, "the worker ran and named what stops it: no launch broke, so a retry "
+                                           "in the same environment meets the same wall",
+                                     "what it found is in its account; a resume goes on once it is fixed"))
         if retries <= MAX_ENV_RETRIES:
             return Decision(Move.RETRY, last.cell, last.max_turns, "the work never ran; same cell",
                             because=(seen, "a retry is not an escalation: nothing was tried, so nothing says a "

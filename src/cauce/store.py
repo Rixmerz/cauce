@@ -643,24 +643,27 @@ class Store:
             "FROM attempts WHERE created_at >= ? GROUP BY day ORDER BY day", (_days_ago(days),)).fetchall()
         return [{"kind": "session", **dict(r)} for r in sessions] + [{"kind": "worker", **dict(r)} for r in workers]
 
-    def routing_stats(self) -> list[dict]:
+    def routing_stats(self, since: str = "") -> list[dict]:
         """Per kind of task: how many ran, where they started and passed, how often
-        they had to climb, and what they cost. The evidence for changing a ladder."""
+        they had to climb, and what they cost. The evidence for changing a ladder.
+        `since` (ISO time) keeps only tasks created from then on."""
         rows = self._conn.execute(
             "SELECT t.kind, t.start_cell, t.final_cell, t.status, t.cost_usd, t.pinned, "
             "(SELECT count(*) FROM attempts a WHERE a.task_id = t.id) AS attempts "
-            "FROM tasks t WHERE t.source = 'cauce' AND t.kind IS NOT NULL").fetchall()
+            "FROM tasks t WHERE t.source = 'cauce' AND t.kind IS NOT NULL AND t.created_at >= ?", (since,)).fetchall()
         return [dict(r) for r in rows]
 
-    def moves(self) -> list[dict]:
+    def moves(self, since: str = "") -> list[dict]:
         """Every move a run made after a failed attempt, with the task's kind, the
         cell it left, the failure that moved it, and the cell the next attempt ran
-        at and whether that one passed: how each ladder is really climbed."""
+        at and whether that one passed: how each ladder is really climbed. The
+        task's status says why a move that goes on has no next attempt yet."""
         rows = self._conn.execute(
-            "SELECT t.kind, a.cell, a.failure, a.move, b.cell AS next_cell, b.passed AS next_passed "
-            "FROM attempts a JOIN tasks t ON t.id = a.task_id "
+            "SELECT t.kind, t.status AS task_status, a.cell, a.failure, a.move, b.cell AS next_cell, "
+            "b.passed AS next_passed FROM attempts a JOIN tasks t ON t.id = a.task_id "
             "LEFT JOIN attempts b ON b.task_id = a.task_id AND b.seq = a.seq + 1 "
-            "WHERE a.move IS NOT NULL AND t.source = 'cauce' AND t.kind IS NOT NULL").fetchall()
+            "WHERE a.move IS NOT NULL AND t.source = 'cauce' AND t.kind IS NOT NULL AND a.created_at >= ?",
+            (since,)).fetchall()
         return [dict(r) for r in rows]
 
     def events_of(self, task_id: int, kind: str) -> list[dict]:

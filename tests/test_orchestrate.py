@@ -839,12 +839,34 @@ def test_a_worker_that_says_the_environment_stopped_it_after_changing_files_is_n
                  classifier=kind("implement"), progress=lines.append)
     assert report.status == "blocked" and len(script.specs) == 1
     assert lines[-1].startswith(f"cauce: #{report.task_id} attempt 1 ended environment")
-    # nothing changed: it never ran, and the one retry stands
-    never = WorkerResult(False, Failure.ENVIRONMENT, "transport error", "", (), 0.0)
+    # a launch that broke, nothing changed: the one retry stands
+    never = WorkerResult(False, Failure.ENVIRONMENT, "transport error", "", (), 0.0, transient=True)
     script = Script(never, ok())
     report = run("upgrade the vulnerable dependencies", git_repo, store, registry={}, launcher=script,
                  classifier=kind("implement"))
     assert report.status == "done" and report.cells == ["sonnet/medium", "sonnet/medium"]
+    # the worker named the wall, nothing changed: blocked at once, no retry
+    named = WorkerResult(False, Failure.ENVIRONMENT, "Node v22.16 is below the CLI's minimum", "", (), 0.1)
+    script = Script(named, ok())
+    report = run("upgrade the vulnerable dependencies", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"))
+    assert report.status == "blocked"
+    assert len(script.specs) == 1
+
+
+def test_a_feature_starts_with_more_turns_and_a_pin_still_wins(git_repo, store):
+    feature = Script(ok())
+    report = run("add the export", git_repo, store, registry={}, launcher=feature, classifier=kind("feature"))
+    assert feature.specs[0].max_turns == 60
+    assert any("feature work starts with 60 turns" in r for r in report.plan.reasons)
+    implement = Script(ok())
+    run("fix the export", git_repo, store, registry={}, launcher=implement, classifier=kind("implement"))
+    assert implement.specs[0].max_turns == 30
+    pinned = Script(ok())
+    report = run("add the import", git_repo, store, Options(max_turns=45), registry={}, launcher=pinned,
+                 classifier=kind("feature"))
+    assert pinned.specs[0].max_turns == 45
+    assert not any("starts with 60 turns" in r for r in report.plan.reasons)
 
 
 def test_a_dead_end_that_shares_only_a_word_or_two_stays_out_of_the_brief(git_repo, store):

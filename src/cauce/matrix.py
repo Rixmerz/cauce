@@ -10,19 +10,19 @@ one ladder spends the top tier on work that only needed a second look.
 Every effort level has a purpose. None of them is a rung that exists only to
 be climbed past:
 
-==========  ===================================================================
-``low``     Direct answers, few tool calls, no preamble. Chat, explanations,
-            commit messages, trivial edits. It drops self-checks, which is fine
-            where there is nothing to check and wrong anywhere else.
-``medium``  Saving where quality holds. The starting point for agentic coding on
-            Sonnet: implementing from a clear plan, tests, refactors, docs.
-``high``    The floor for work that needs judgment: debugging with a repro, UI,
-            integration, routine review. Usually the best balance.
-``xhigh``   Most agentic coding and long-horizon work: a feature that crosses
-            several parts, a bug with no clear cause, a hard plan.
-``max``     Correctness over cost. Only where the level below showed headroom,
-            or the change is critical.
-==========  ===================================================================
+  ==========  ===================================================================
+  ``low``     Direct answers, few tool calls, no preamble. Chat, explanations,
+              commit messages, trivial edits. It drops self-checks, which is fine
+              where there is nothing to check and wrong anywhere else.
+  ``medium``  Saving where quality holds. The starting point for agentic coding on
+              Sonnet: implementing from a clear plan, tests, refactors, docs.
+  ``high``    The floor for work that needs judgment: debugging with a repro, UI,
+              integration, routine review. Usually the best balance.
+  ``xhigh``   Most agentic coding and long-horizon work: a feature that crosses
+              several parts, a bug with no clear cause, a hard plan.
+  ``max``     Correctness over cost. Only where the level below showed headroom,
+              or the change is critical.
+  ==========  ===================================================================
 
 Haiku has no effort dial at all; Fable is reserved for work a person asked for.
 """
@@ -133,6 +133,16 @@ LADDERS: dict[str, tuple[Cell, ...]] = {
 #: What a task nothing recognised runs on: the middle of the matrix, with room
 #: to climb both ways it can fail.
 DEFAULT_KIND = "implement"
+
+#: The turns a first attempt starts with. A feature's attempts used 29.7 of 30
+#: on average and a quarter ran out, each costing a fresh worker's orientation;
+#: with 60 they passed. Every other kind uses far fewer than 30.
+DEFAULT_TURNS = 30
+TURNS = {"feature": 60}
+
+
+def turns_for(kind: str) -> int:
+    return TURNS.get(kind, DEFAULT_TURNS)
 
 KINDS: tuple[str, ...] = tuple(LADDERS)
 

@@ -13,6 +13,11 @@ def fail(cell: str, failure: Failure, summary: str = "", turns: int = 30) -> Att
     return Attempt(Cell.parse(cell), turns, False, failure, summary)
 
 
+def broke(cell: str) -> Attempt:
+    """A launch that broke (a timeout, no JSON, an errored session): not the work."""
+    return Attempt(Cell.parse(cell), 30, False, Failure.ENVIRONMENT, "the CLI produced no JSON", transient=True)
+
+
 def test_shallow_work_climbs_effort_on_the_same_model():
     d = decide(IMPLEMENT, [fail("sonnet/medium", Failure.CODE_BUG)])
     assert d.move is Move.MORE_EFFORT and d.cell == Cell("sonnet", "high")
@@ -44,11 +49,20 @@ def test_the_same_cell_agreeing_with_itself_is_not_a_repeat():
     assert not repeated_answer(empty)
 
 
-def test_environment_failures_retry_once_then_block():
-    first = decide(IMPLEMENT, [fail("sonnet/medium", Failure.ENVIRONMENT)])
-    assert first.move is Move.RETRY and first.cell == Cell("sonnet", "medium")
-    second = decide(IMPLEMENT, [fail("sonnet/medium", Failure.ENVIRONMENT)] * 2)
+def test_a_broken_launch_retries_once_then_blocks():
+    first = decide(IMPLEMENT, [broke("sonnet/medium")])
+    assert first.move is Move.RETRY
+    assert first.cell == Cell("sonnet", "medium")
+    second = decide(IMPLEMENT, [broke("sonnet/medium")] * 2)
     assert second.move is Move.BLOCKED
+
+
+def test_an_environment_the_worker_named_blocks_at_once():
+    found = decide(IMPLEMENT, [fail("sonnet/medium", Failure.ENVIRONMENT, "Node v22.16 is below the CLI's minimum")])
+    assert found.move is Move.BLOCKED
+    assert found.cell is None
+    assert "the worker found the environment in the way" in found.reason
+    assert any("no launch broke" in step for step in found.because)
 
 
 def test_turn_ceiling_is_raised_once_then_the_task_is_split():
@@ -124,8 +138,8 @@ def test_every_move_says_what_the_attempt_ended_with_the_rule_and_where_it_goes(
 @pytest.mark.parametrize(
     ("ladder", "attempts", "axis", "phrase"),
     [
-        (IMPLEMENT, [fail("sonnet/medium", Failure.ENVIRONMENT)], "retry", "a retry is not an escalation"),
-        (IMPLEMENT, [fail("sonnet/medium", Failure.ENVIRONMENT)] * 2, "stop", "failed to run 2 times"),
+        (IMPLEMENT, [broke("sonnet/medium")], "retry", "a retry is not an escalation"),
+        (IMPLEMENT, [broke("sonnet/medium")] * 2, "stop", "failed to run 2 times"),
         (IMPLEMENT, [fail("sonnet/medium", Failure.TURNS_EXHAUSTED)], "turns", "60 turns instead of 30"),
         (IMPLEMENT, [fail("sonnet/medium", Failure.TURNS_EXHAUSTED)] * 2, "stop", "raised attempt changed nothing"),
         (IMPLEMENT, [fail("sonnet/medium", Failure.TURNS_EXHAUSTED, turns=200)], "stop", "200 turns is the cap"),
@@ -199,9 +213,9 @@ def test_an_environment_failure_after_work_ran_blocks_at_once():
     assert "stopped work that had started" in d.reason
     assert any("changed 1 file(s) first" in step for step in d.because)
     # after a retry that never ran, work that then ran still blocks, with no third attempt
-    assert decide(IMPLEMENT, [fail("sonnet/medium", Failure.ENVIRONMENT), ran]).move is Move.BLOCKED
-    # what never ran is retried once, as before
-    assert decide(IMPLEMENT, [fail("sonnet/medium", Failure.ENVIRONMENT)]).move is Move.RETRY
+    assert decide(IMPLEMENT, [broke("sonnet/medium"), ran]).move is Move.BLOCKED
+    # a launch that broke is retried once, as before
+    assert decide(IMPLEMENT, [broke("sonnet/medium")]).move is Move.RETRY
     # changed files on another failure change nothing about how it climbs
     bug = dataclasses.replace(fail("sonnet/medium", Failure.CODE_BUG), changed=("a.py",))
     assert decide(IMPLEMENT, [bug]).move is Move.MORE_EFFORT

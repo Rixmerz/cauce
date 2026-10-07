@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-10-07
+
+### Changed
+
+- **An environment the worker named blocks at once.** Of 18 retries after an
+  `environment` failure, none passed: 16 were the worker's own diagnosis (an
+  old Node, a server it could not start, a missing CLI), which the same cell
+  meets again at once. The one retry is now kept for a launch that broke (a
+  timeout, no JSON from the CLI, an errored session); a worker's own
+  `environment` verdict, or cauce's check that could not run, blocks with its
+  account.
+- **A feature starts with 60 turns.** Its attempts used 29.7 of 30 turns on
+  average and a quarter ran out, each costing a fresh worker's orientation;
+  the raised ones passed at 31 to 45. Other kinds keep 30, and `--max-turns`
+  still wins. The plan says so in its reasons.
+- **Routing has a period** (last 7 days by default, 30, or everything, kept
+  per viewer): a rule fixed last week no longer shows as a rung that fails.
+  A move that goes on but has no next attempt says why (`running`,
+  `cancelled`) instead of "stopped".
+
 ## [0.6.6] - 2026-10-07
 
 ### Fixed
