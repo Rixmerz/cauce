@@ -33,6 +33,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/project.py` | a project's `.cauce/` folder: enrollment (only enrolled projects show in the UI) and `sessions.json`, the session names; stdlib, no git call |
 | `src/cauce/naming.py` | Haiku names a session, started detached by the Stop hook; a name a person wrote is never replaced |
 | `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step |
+| `src/cauce/compact.py` | the facts of a session (requests verbatim, failed calls, changed files), written before a compaction and put back after it; no model call |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
 | `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, status, band, `/cauce` pane; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
 | `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified |
@@ -185,6 +186,9 @@ yields the default kind, not a guess.
   write, a git call or an orchestrator import to it.
 - A signature never holds an argument. The final `[a-z0-9:._-]` filter stays
   last, after the semantic scrubbing.
+- A compaction digest is read from the transcript and git, never written by
+  a model: it may leave things out to fit, never paraphrase. A person's
+  words are kept as typed; harness text (commands, reminders) is not theirs.
 - Nothing in cauce writes to a settings file except `cauce habits install`,
   run by a person.
 - Problems and fixes are global; notes belong to one project and are never

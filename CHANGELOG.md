@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-10-07
+
+### Added
+
+- **cauce compact.** Before a compaction (`/compact` or automatic), cauce reads
+  the session's transcript and git and keeps a digest of facts: the person's
+  requests verbatim, the cauce tasks of the session, the calls that failed
+  with their exact error, the files git shows changed and the files the
+  session wrote. The SessionStart after the compaction puts it back beside
+  Claude Code's own summary, which paraphrases from memory. No model call,
+  so it invents nothing; it fits a budget, newest first, and requests never
+  take more than half of it. It runs in any directory, notes setting or not.
+
 ## [0.6.8] - 2026-10-07
 
 ### Changed
