@@ -56,7 +56,8 @@ function card(note, ctx, reload, focus) {
     note.state === "review" && note.state_reason ? h("div", { class: "asks" }, `to review: ${note.state_reason}`) : null,
     anchors(note),
     links(note, focus),
-    h("div", { class: "meta" }, `${note.author} · filed by ${note.filed_by}${note.source ? ` · ${note.source}` : ""} · ${when(note.updated_at)}`),
+    h("div", { class: "meta" }, h("span", {}, note.author), h("span", {}, `filed by ${note.filed_by}`),
+      note.source ? h("span", {}, note.source) : null, h("span", {}, when(note.updated_at))),
     actions(note, ctx, reload));
 }
 
