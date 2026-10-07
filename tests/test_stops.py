@@ -236,3 +236,26 @@ def test_a_dismissed_blocked_task_resumes(git_repo, store, monkeypatch):
     monkeypatch.setattr(orchestrate.Report, "text", lambda self: "done")
     assert cli.main(["resume", str(blocked.task_id)]) == 0
     assert seen == [blocked.task_id]
+
+
+def test_a_dismissal_or_a_supersession_is_no_ending_a_session_is_told_of(git_repo, store):
+    from .test_orchestrate import ok
+
+    sent = run("same text", git_repo, store, registry={}, launcher=Script(bad(Failure.SPEC_BUG, "wrong")),
+               classifier=kind("explore"), session_id="s1")
+    other = run("other text", git_repo, store, registry={}, launcher=Script(bad(Failure.SPEC_BUG, "wrong")),
+                classifier=kind("explore"), session_id="s1")
+    store.claim_unreported("s1", via="stop")
+    stops.dismiss(store, store.get_task(other.task_id), via="mod")
+    run("same text", git_repo, store, registry={}, launcher=Script(ok()), classifier=kind("explore"))
+    assert store.get_task(sent.task_id)["status"] == "dismissed"
+    assert store.unreported("s1") == []
+
+
+def test_a_dismissed_replan_offers_no_resume_unless_it_only_outgrew_its_turns(store):
+    for cause, offered in (("spec", None), ("turns", "cauce resume")):
+        task = store.create_task(f"t-{cause}", status="replan", source="cauce", repo="r", cwd="/x")
+        store.add_event(task["id"], "finished", status="replan", stop=stops.Stop(cause, "r").data())
+        stops.dismiss(store, store.get_task(task["id"]), via="cli")
+        nxt = stops.view(store, store.get_task(task["id"]))["next"]
+        assert (nxt or "").startswith(offered) if offered else nxt is None
