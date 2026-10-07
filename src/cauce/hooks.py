@@ -283,6 +283,12 @@ def session_start(
                                    source=("cauce",))
         if stopped:
             blocks.append(_stopped_text(store, stopped))
+    if event.get("source") == "compact":
+        from cauce import compact
+
+        kept = compact.recall(root, str(session_id))
+        if kept:
+            blocks.append(kept)
     # Only a project that uses cauce: indexing writes `.mcp-docs/` into the
     # checkout, and a session opened anywhere else is none of cauce's business.
     if cwd and repo.toplevel(Path(cwd)) is not None and project.find(cwd) is not None:
@@ -302,6 +308,19 @@ def session_start(
         if index:
             blocks.append(index)
     return _context("SessionStart", "\n\n".join(blocks)) if blocks else None
+
+
+def keep_digest(event: Mapping[str, Any], store: Store, root: Path) -> Path | None:
+    """PreCompact: write the facts of the session (`cauce.compact`) that the
+    SessionStart after the compaction puts back. Anywhere, notes setting or not:
+    it is this session's own memory, not a project's."""
+    session_id, transcript, cwd = event.get("session_id"), event.get("transcript_path"), event.get("cwd")
+    if not (session_id and transcript):
+        return None
+    from cauce import compact
+
+    tasks = store.list_tasks(session_id=str(session_id), limit=15)
+    return compact.keep(root, str(session_id), Path(str(transcript)), Path(str(cwd)) if cwd else None, tasks)
 
 
 def keep_notes(event: Mapping[str, Any], root: Path, env: Mapping[str, str], *,
@@ -470,6 +489,8 @@ def handle(
 ) -> dict | None:
     if event_name == "SessionStart":
         return session_start(event, store, root, env)
+    if event_name == "PreCompact":
+        keep_digest(event, store, root)
     if event_name in ("PreCompact", "SessionEnd"):
         keep_notes(event, root, dict(os.environ if env is None else env))
         return None
