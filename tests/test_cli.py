@@ -691,3 +691,25 @@ def test_note_and_topics_answer_in_json(git_repo, capsys, monkeypatch):
     topics = json.loads(capsys.readouterr().out)
     assert topics[0] == {"name": "business", "description": topics[0]["description"], "notes": 1}
     assert [t["name"] for t in topics] == ["business", "code", "decisions", "conventions", "environment"]
+
+
+def test_memory_forget_takes_a_problem_and_its_fixes_out(capsys):
+    store = Store.open()
+    problem = store.open_problem("Cannot find module vite", repo="r")
+    store.add_fix(problem, "reinstalled node_modules", "worked", repo="r")
+    store.close()
+    assert cli.main(["memory", "forget", str(problem)]) == 0
+    assert f"forgot problem #{problem} and its 1 fix(es)" in capsys.readouterr().out
+    assert cli.main(["memory", "forget", str(problem)]) == 1
+    store = Store.open()
+    assert store.problem(problem) is None
+    store.close()
+
+
+def test_a_start_cell_with_no_such_dial_is_a_usage_error(capsys):
+    import pytest
+
+    with pytest.raises(SystemExit) as exit_:
+        cli.main(["run", "--start", "haiku/low", "x"])
+    assert exit_.value.code == 2
+    assert "haiku has no effort dial" in capsys.readouterr().err

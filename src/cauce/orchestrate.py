@@ -133,6 +133,8 @@ class Report:
     isolated: bool = False
     #: Why it stopped short of a pass, and who made that call.
     stop: stops.Stop | None = None
+    #: Earlier copies of this task, same text, taken off the board by its pass.
+    superseded: list[int] = field(default_factory=list)
     #: What the passing worker learned, and where each fact was filed in the notes.
     learned: tuple[str, ...] = ()
     noted: list[dict] = field(default_factory=list)
@@ -177,6 +179,9 @@ class Report:
         elif self.task_id and self.status != "done" and self.changed:
             lines.append("nothing of it was kept")
         lines += self.impact
+        if self.superseded:
+            lines.append("off the board: " + ", ".join(f"#{i}" for i in self.superseded)
+                         + ", earlier copies of this task that had stopped")
         if self.noted:
             lines.append("notes: " + "; ".join(
                 f"{'kept' if n['new'] else 'already known as'} #{n['id']} [{n['topic']}] {n['title']}"
@@ -585,6 +590,9 @@ def run(
             report.summary = report.summary or report.stop.reason
         store.update_task(task["id"], status=status, final_cell=report.final_cell, result=report.summary,
                           pid=None, current_cell=None)
+        if status == "done":
+            # Its earlier copies that stopped waited on this work; it is done.
+            report.superseded = stops.supersede(store, store.get_task(task["id"]))
         # A person's cancel is their call on this task, not a broken state the
         # next one would start on: the queue behind it goes on.
         by_a_person = report.stop is not None and report.stop.cause == "cancelled" and report.stop.who == "you"

@@ -163,3 +163,76 @@ def test_the_view_says_who_in_words_and_what_to_do(store: Store):
     assert stops.read(None) is None and stops.read({"reason": "no cause"}) is None
     assert stops.what_to_do(stops.Stop("mystery", "x")) == "read the attempts"
     assert stops.Stop("mystery", "x").status == "failed"
+
+
+def test_a_dismissed_task_leaves_the_board_and_says_who_and_what_it_was(store):
+    from cauce.ui import api
+
+    task = store.create_task("audit it", status="blocked", source="cauce", repo="r", cwd="/x")
+    store.add_event(task["id"], "finished", status="blocked",
+                    stop=stops.Stop("environment", "the environment failed twice", attempt=2).data())
+    stop = stops.dismiss(store, store.get_task(task["id"]), via="ui")
+    assert stop is not None
+    assert stop.who == "you"
+    assert stop.extra["was"] == "blocked"
+    assert stop.extra["had"] == "the environment failed twice"
+    task = store.get_task(task["id"])
+    assert task["status"] == "dismissed"
+    assert stops.of(store, task) == stop
+    assert "from the UI" in stops.view(store, task)["reason"]
+    assert not api.board(store, {"r"})["needs_you"]
+    assert stops.dismiss(store, task, via="ui") is None  # waits on no one now
+
+
+def test_a_pass_takes_its_stopped_copies_off_the_board(git_repo, store):
+    text = "audit the roles across both repos"
+    first = run(text, git_repo, store, registry={}, launcher=Script(bad(Failure.SPEC_BUG, "wrong")),
+                classifier=kind("explore"))
+    other = run("something else entirely", git_repo, store, registry={},
+                launcher=Script(bad(Failure.SPEC_BUG, "wrong")), classifier=kind("explore"))
+    assert first.status == "replan"
+    from .test_orchestrate import ok
+
+    passed = run(f"  {text}\n", git_repo, store, registry={}, launcher=Script(ok()), classifier=kind("explore"))
+    assert passed.status == "done"
+    assert passed.superseded == [first.task_id]
+    assert f"off the board: #{first.task_id}" in passed.text()
+    gone = store.get_task(first.task_id)
+    assert gone["status"] == "dismissed"
+    stop = stops.of(store, gone)
+    assert stop.cause == "superseded"
+    assert stop.who == "cauce"
+    assert stop.extra["by_task"] == passed.task_id
+    assert store.get_task(other.task_id)["status"] == "replan"
+
+
+def test_a_dismissed_task_resumes_as_what_it_was(git_repo, store, capsys):
+    from cauce import cli
+
+    replanned = run("x", git_repo, store, registry={}, launcher=Script(bad(Failure.SPEC_BUG, "wrong")),
+                    classifier=kind("implement"))
+    store.close()
+    assert cli.main(["dismiss", str(replanned.task_id)]) == 0
+    assert "dismissed task" in capsys.readouterr().out
+    # found wrong before it was dismissed: still rewritten, never resumed
+    assert cli.main(["resume", str(replanned.task_id)]) == 1
+    assert "is replan" in capsys.readouterr().err
+    assert cli.main(["dismiss", "999"]) == 1
+    assert cli.main(["dismiss", str(replanned.task_id)]) == 1
+    assert "only a task that waits on you" in capsys.readouterr().err
+
+
+def test_a_dismissed_blocked_task_resumes(git_repo, store, monkeypatch):
+    from cauce import cli
+
+    blocked = run("x", git_repo, store, registry={},
+                  launcher=Script(bad(Failure.ENVIRONMENT), bad(Failure.ENVIRONMENT)), classifier=kind("implement"))
+    assert blocked.status == "blocked"
+    stops.dismiss(store, store.get_task(blocked.task_id), via="cli")
+    store.close()
+    seen = []
+    monkeypatch.setattr(cli.orchestrate, "run", lambda *a, **kw: seen.append(kw["task_id"]) or orchestrate.Report(
+        kw["task_id"], "done", None))
+    monkeypatch.setattr(orchestrate.Report, "text", lambda self: "done")
+    assert cli.main(["resume", str(blocked.task_id)]) == 0
+    assert seen == [blocked.task_id]

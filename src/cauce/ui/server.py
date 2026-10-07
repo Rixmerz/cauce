@@ -58,6 +58,8 @@ CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' 
 _STATIC_NAME = re.compile(r"^[a-z0-9_-]+\.(js|css|html|svg)$")
 _TASK_ROUTE = re.compile(r"^/api/tasks/(\d+)$")
 _CANCEL_ROUTE = re.compile(r"^/api/tasks/(\d+)/cancel$")
+_DISMISS_ROUTE = re.compile(r"^/api/tasks/(\d+)/dismiss$")
+_FORGET_ROUTE = re.compile(r"^/api/problems/(\d+)/forget$")
 _SESSION_ROUTE = re.compile(r"^/api/sessions/([A-Za-z0-9_-]{1,128})$")
 _NOTE_ROUTE = re.compile(r"^/api/notes/(\d+)/(ok|drop)$")
 
@@ -344,6 +346,18 @@ class Handler(BaseHTTPRequestHandler):
                     with contextlib.suppress(ProcessLookupError, PermissionError):
                         os.kill(int(task["pid"]), signal.SIGTERM)
             return self._json(HTTPStatus.OK, {"id": task["id"], "cancel": True})
+        if match := _DISMISS_ROUTE.match(path):
+            task = store.get_task(int(match.group(1)))
+            if task is None:
+                return self._error(HTTPStatus.NOT_FOUND, "no such task")
+            if stops.dismiss(store, task, via="ui") is None:
+                return self._error(HTTPStatus.CONFLICT, f"task #{task['id']} is {task['status']}: it waits on no one")
+            return self._json(HTTPStatus.OK, {"id": task["id"], "dismissed": True})
+        if match := _FORGET_ROUTE.match(path):
+            problem = store.forget_problem(int(match.group(1)))
+            if problem is None:
+                return self._error(HTTPStatus.NOT_FOUND, "no such problem")
+            return self._json(HTTPStatus.OK, {"id": problem["id"], "forgotten": True})
         if match := _NOTE_ROUTE.match(path):
             from cauce import notes
 

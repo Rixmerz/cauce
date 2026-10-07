@@ -170,7 +170,9 @@ A fix that worked is recorded with the time it was trusted from and, when the
 run kept a branch, the commit it is about. When the same problem turns up
 again it is **recurring** and that fix is marked disproved — the most useful
 dead end there is, because it looked solved. `cauce memory invalidate <fix>
---why "..."` does the same by hand.
+--why "..."` does the same by hand. A problem that was never the work's (the
+environment, two runs in one checkout) leaves memory with `cauce memory forget
+<id>`, or the Forget button in the UI's Memory view.
 
 ### Habits
 
@@ -312,6 +314,8 @@ unattended `cauce work` starts.
 A run whose process died leaves no task stuck in `running`: a sweep (at session
 start and before every `cauce work`) marks it interrupted and pauses its lane.
 `cauce cancel <id>` stops a run; `cauce events --follow` shows runs as they go.
+`cauce dismiss <id>` takes a task that waits on you off the board (a resume
+brings it back), and a task that passes takes its stopped copies with it.
 
 A turn that delegated to a subagent is not done while the subagent still runs,
 including one started in the background. A cell a person pinned (`--start`)

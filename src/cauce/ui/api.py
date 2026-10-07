@@ -151,7 +151,8 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
         "running": running,
         "answering": answering,
         "queued": sorted(queued.values(), key=lambda lane: lane["repo"]),
-        "done": done[:60],
+        # By when each ended: a task resumed today belongs to today, whatever its id.
+        "done": sorted(done, key=lambda t: t["updated_at"] or "", reverse=True)[:60],
         "last_event": store.last_event_id(),
     }
 

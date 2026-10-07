@@ -108,6 +108,10 @@ yields the default kind, not a guess.
 - A run in the checkout itself (no worktree, and it writes or has a check)
   holds it: a second one there waits, says for which task, and a cancel
   still stops it. A run in a worktree never waits.
+- A task that waits on a person leaves the board by a resume, by their
+  dismissal (`cauce dismiss`, a button they press), or by a later task with
+  the same text that passed (`superseded`); each records its `stops.Stop`. A
+  dismissed task resumes as what it was: one found wrong is still rewritten.
 - Work a session sent is reported to it once when it ends: by the report a
   `cauce run` prints, else by the Stop hook (which blocks the turn's end once
   with the endings) or the next prompt.

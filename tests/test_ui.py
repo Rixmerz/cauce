@@ -528,3 +528,32 @@ def test_a_branch_that_landed_waits_on_nobody(store: Store, git_repo):
     (git_repo / "squashed.txt").write_text("changed later")
     git(git_repo, "commit", "-qam", "later")
     assert ids["squashed"] in {c["id"] for c in api.board(store, {"r"})["needs_you"]}
+
+
+def test_done_is_ordered_by_when_each_ended_not_by_id(store: Store):
+    old = store.create_task("resumed today", status="done", source="cauce", repo="r")
+    new = store.create_task("ended yesterday", status="done", source="cauce", repo="r")
+    store.update_task(new["id"], status="done")
+    store._conn.execute("UPDATE tasks SET updated_at = '2026-01-01T00:00:00+00:00' WHERE id = ?", (new["id"],))
+    store._conn.execute("UPDATE tasks SET updated_at = '2026-01-02T00:00:00+00:00' WHERE id = ?", (old["id"],))
+    assert [t["id"] for t in api.board(store, {"r"})["done"]] == [old["id"], new["id"]]
+
+
+def test_dismiss_and_forget_from_the_ui(ui):
+    key = {"X-Cauce-Token": token(ui)}
+    store = Store(ui.root / "cauce.db")
+    blocked = store.create_task("x", status="blocked", source="cauce", repo="r")
+    done = store.create_task("y", status="done", source="cauce", repo="r")
+    problem = store.open_problem("a clash, not the work", repo="r")
+    store.add_fix(problem, "reinstalled node_modules", "worked", repo="r")
+    assert call(ui, "POST", f"/api/tasks/{blocked['id']}/dismiss", {})[0].status == 403
+    assert call(ui, "POST", f"/api/tasks/{blocked['id']}/dismiss", {}, headers=key)[0].status == 200
+    assert call(ui, "POST", f"/api/tasks/{done['id']}/dismiss", {}, headers=key)[0].status == 409
+    assert call(ui, "POST", "/api/tasks/999/dismiss", {}, headers=key)[0].status == 404
+    assert store.get_task(blocked["id"])["status"] == "dismissed"
+    assert store.last_event(blocked["id"], "finished")["data"]["stop"]["via"] == "ui"
+    assert call(ui, "POST", f"/api/problems/{problem}/forget", {}, headers=key)[0].status == 200
+    assert call(ui, "POST", f"/api/problems/{problem}/forget", {}, headers=key)[0].status == 404
+    assert store.problem(problem) is None
+    assert not store.search("clash node_modules")
+    store.close()

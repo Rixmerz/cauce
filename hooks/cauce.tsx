@@ -67,6 +67,18 @@ function signature(cards: readonly CauceCard[]): string {
   return cards.map(card => `${card.id}:${card.status}`).join(',')
 }
 
+/** The cards Hide put away, one by one: a card comes back only when its own
+ * status changes, never because another card came or went. */
+function unhidden(cards: readonly CauceCard[], hidden: string): CauceCard[] {
+  const away = new Set(hidden.split(',').filter(Boolean))
+  return cards.filter(card => !away.has(`${card.id}:${card.status}`))
+}
+
+/** Takes a card that waits on the person off the board; a resume brings it back. */
+function dismissArgs(card: { id: number }): string[] {
+  return ['dismiss', String(card.id), '--via', 'mod']
+}
+
 // How the mod reaches cauce: the plugin's own launcher, run by argv. The core
 // stays in Python; this layer only asks it and draws what it answers.
 
@@ -382,8 +394,9 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const found = await read($, boardState)
-    const cards = waiting(found?.needs_you ?? [])
-    if (!cards.length || (await read($, hiddenState)) === signature(cards)) return next(e)
+    const all = waiting(found?.needs_you ?? [])
+    const cards = unhidden(all, (await read($, hiddenState)) ?? '')
+    if (!cards.length) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
     const shown = cards.slice(0, 3)
     return (
@@ -411,13 +424,18 @@ export const register: Register = (on, options) => {
                   onPress={() => press($, keep, `cauce: kept for this repository; resuming #${card.id}`)}
                 />
               )}
+              <Button
+                key={`dismiss-${card.id}`}
+                label="Dismiss"
+                onPress={() => press($, dismissArgs(card), `cauce: #${card.id} dismissed`)}
+              />
             </Box>
           )
         })}
         <Box flexDirection="row" gap={1}>
           {cards.length > shown.length && <Text dimColor>and {cards.length - shown.length} more</Text>}
           <Text dimColor>/cauce for the board</Text>
-          <Button key="hide" label="Hide" onPress={() => update($, hiddenState, () => signature(cards))} />
+          <Button key="hide" label="Hide" onPress={() => update($, hiddenState, () => signature(all))} />
         </Box>
       </Box>
     )
@@ -447,6 +465,10 @@ export const register: Register = (on, options) => {
               {keep && (
                 <Button key={`keep-${card.id}`} label="Always allow here"
                   onPress={() => press($, keep, `cauce: kept for this repository; resuming #${card.id}`)} />
+              )}
+              {card.stop && (
+                <Button key={`dismiss-${card.id}`} label="Dismiss"
+                  onPress={() => press($, dismissArgs(card), `cauce: #${card.id} dismissed`)} />
               )}
             </Box>
           )

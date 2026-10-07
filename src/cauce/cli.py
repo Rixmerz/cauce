@@ -21,6 +21,16 @@ from cauce.matrix import KINDS, LADDERS, Cell
 from cauce.store import FIX_OUTCOMES, Store, home
 
 
+def _cell(value: str) -> str:
+    """A `--start` cell, checked where it is read: a cell cauce has no such dial
+    for (`haiku/low`) is a usage error, never a traceback mid-run."""
+    try:
+        Cell.parse(value)
+    except ValueError as err:
+        raise argparse.ArgumentTypeError(f"{value!r}: {err}") from None
+    return value
+
+
 def _text(value: str) -> str:
     return sys.stdin.read() if value == "-" else value
 
@@ -82,7 +92,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 #: Endings a task can be resumed from: it stopped, and was not judged wrong.
-RESUMABLE = ("blocked", "needs_approval", "failed", "cancelled", "interrupted")
+RESUMABLE = ("blocked", "needs_approval", "failed", "cancelled", "interrupted", "dismissed")
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
@@ -96,10 +106,16 @@ def cmd_resume(args: argparse.Namespace) -> int:
         if task is None or task["source"] != "cauce" or not task["cwd"]:
             print(f"no task #{args.id} that cauce ran", file=sys.stderr)
             return 1
-        outgrew = task["status"] == "replan" and (stop := stops.of(store, task)) is not None and stop.cause == "turns"
-        if task["status"] not in RESUMABLE and not outgrew:
-            print(f"task #{args.id} is {task['status']}; only a task that stopped ({', '.join(RESUMABLE)}) resumes"
-                  + ("; rewrite it as a new task" if task["status"] == "replan" else ""), file=sys.stderr)
+        # A dismissed task resumes as what it was before: a dismissal hides a
+        # task, it never makes one that was found wrong resumable.
+        was = task["status"]
+        if was == "dismissed" and (stop := stops.of(store, task)) is not None:
+            was = str(stop.extra.get("was") or was)
+            task = {**task, "status": was}
+        outgrew = was == "replan" and (stop := stops.of(store, task)) is not None and stop.cause == "turns"
+        if was not in RESUMABLE and not outgrew:
+            print(f"task #{args.id} is {was}; only a task that stopped ({', '.join(RESUMABLE)}) resumes"
+                  + ("; rewrite it as a new task" if was == "replan" else ""), file=sys.stderr)
             return 1
         if args.keep:
             # Kept for every task in this repository, so the next one is not
@@ -253,6 +269,25 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     finally:
         store.close()
     print(f"cancel requested for task #{args.id}")
+    return 0
+
+
+def cmd_dismiss(args: argparse.Namespace) -> int:
+    """A task that waits on a person, taken off the board on their word."""
+    store = Store.open()
+    try:
+        for task_id in args.ids:
+            task = store.get_task(task_id)
+            if task is None:
+                print(f"no task #{task_id}", file=sys.stderr)
+                return 1
+            if stops.dismiss(store, task, via=args.via) is None:
+                print(f"task #{task_id} is {task['status']}; only a task that waits on you "
+                      f"({', '.join(stops.DISMISSABLE)}) is dismissed", file=sys.stderr)
+                return 1
+            print(f"dismissed task #{task_id}; `cauce resume {task_id}` brings it back")
+    finally:
+        store.close()
     return 0
 
 
@@ -443,6 +478,20 @@ def cmd_memory_invalidate(args: argparse.Namespace) -> int:
         print(f"no fix #{args.fix_id}", file=sys.stderr)
         return 1
     print(f"fix #{args.fix_id} disproved; problem #{problem['id']} is {problem['state']}")
+    return 0
+
+
+def cmd_memory_forget(args: argparse.Namespace) -> int:
+    store = Store.open()
+    try:
+        for problem_id in args.problem_ids:
+            problem = store.forget_problem(problem_id)
+            if problem is None:
+                print(f"no problem #{problem_id}", file=sys.stderr)
+                return 1
+            print(f"forgot problem #{problem_id} and its {len(problem['fixes'])} fix(es): {problem['title'][:100]}")
+    finally:
+        store.close()
     return 0
 
 
@@ -1089,7 +1138,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="turns per attempt; raised once, then again while the work moves")
         p.add_argument("--verify", help="command whose exit code decides a claimed pass")
         p.add_argument("--kind", choices=KINDS, help="skip classification")
-        p.add_argument("--start", help="pin the first cell, e.g. sonnet/high")
+        p.add_argument("--start", help="pin the first cell, e.g. sonnet/high", type=_cell)
         p.add_argument("--allow-approval", action="store_true", help="allow cells that need approval (Fable)")
         p.add_argument("--allow", action="append", metavar="RULE", help=ALLOW_HELP)
         p.add_argument("--no-isolate", action="store_true", help="work in the checkout, not a worktree")
@@ -1110,7 +1159,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--allow", action="append", metavar="RULE", help=ALLOW_HELP)
     p.add_argument("--verify", help="command whose exit code decides a claimed pass (default: the task's own)")
     p.add_argument("--budget", type=float, help="dollars this run may spend (default: the task's own)")
-    p.add_argument("--start", help="the cell to resume at (default: where it stopped)")
+    p.add_argument("--start", help="the cell to resume at (default: where it stopped)", type=_cell)
     p.add_argument("--allow-approval", action="store_true", help="allow cells that need approval (Fable)")
     p.add_argument("--no-isolate", action="store_true",
                    help="work in the checkout (a task started with --no-isolate already resumes there)")
@@ -1152,7 +1201,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--budget", type=float)
     p.add_argument("--verify")
     p.add_argument("--kind", choices=KINDS)
-    p.add_argument("--start")
+    p.add_argument("--start", type=_cell)
     p.add_argument("--allow", action="append", metavar="RULE", help=ALLOW_HELP)
     p.add_argument("--json", action="store_true", help="print the queued task as JSON")
     p.set_defaults(func=cmd_queue)
@@ -1196,6 +1245,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", type=int)
     p.set_defaults(func=cmd_cancel)
 
+    p = sub.add_parser("dismiss", help="take tasks that wait on you off the board (a resume brings one back)")
+    p.add_argument("ids", type=int, nargs="+")
+    p.add_argument("--via", choices=sorted(stops.DISMISS_VIA), default="cli", help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_dismiss)
+
     p = sub.add_parser("events", help="what runs are doing, as they do it")
     p.add_argument("--task", type=int)
     p.add_argument("--after", type=int, default=0, help="only events after this id")
@@ -1237,6 +1291,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("fix_id", type=int)
     p.add_argument("--why", required=True)
     p.set_defaults(func=cmd_memory_invalidate)
+    p = mem.add_parser("forget", help="problems that were never the work's (the environment, a clash): "
+                                      "they and their fixes leave memory")
+    p.add_argument("problem_ids", type=int, nargs="+")
+    p.set_defaults(func=cmd_memory_forget)
 
     p = sub.add_parser("note", help="keep a fact about this project in its notes: "
                                      "cauce note \"<fact>\" --topic business|code|decisions|conventions|environment")

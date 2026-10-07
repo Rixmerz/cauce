@@ -455,7 +455,7 @@ test('a failed resume press says why', async ($, on) => {
   expect(seen.toasts).toContain('cauce: task #12 is running')
 })
 
-test('a survey keeps the band; Hide holds until the list changes', async ($, on) => {
+test('a survey keeps the band; Hide puts each card away until its own status changes', async ($, on) => {
   let board = BOARD
   engineBand(on)
   const { clock } = await started($, on, { board: () => ({ exitCode: 0, stdout: JSON.stringify(board) }) })
@@ -471,6 +471,27 @@ test('a survey keeps the band; Hide holds until the list changes', async ($, on)
     stop: { cause: 'environment', who: 'the environment', reason: 'docker is down', todo: 'fix it', next: 'cauce resume 30', allow: [] } }] } as never
   await clock.advance(15_000)
   expect(await ui.find({ key: 'card-30' })).toBeDefined()
+  // a new card shows alone: the ones put away stay away
+  expect(await ui.find({ key: 'card-12' })).toBeUndefined()
+  // one that left the list and another whose status changed: only the changed one is back
+  board = { ...BOARD, needs_you: BOARD.needs_you.filter(c => c.id !== 13).map(c => c.id === 12 ? { ...c, status: 'failed' } : c) } as never
+  await clock.advance(15_000)
+  expect(await ui.find({ key: 'card-12' })).toBeDefined()
+  expect(await ui.find({ key: 'card-30' })).toBeUndefined()
+})
+
+test('Dismiss takes a waiting card off the board, from the band and the pane', async ($, on) => {
+  const { seen } = await withBoard($, on, BOARD, { dismiss: { exitCode: 0, stdout: 'dismissed task #12' } })
+  const band = await $.ui.mount({ plugin: 'cauce', surface: 'terminal', ...BAND } as never)
+  await band.press({ key: 'dismiss-12' })
+  expect(seen.argv).toContainEqual(['dismiss', '12', '--via', 'mod'])
+  expect(seen.toasts).toContain('cauce: #12 dismissed')
+  await band.unmount()
+  const pane = await $.ui.mount({ plugin: 'cauce', surface: 'desktop', component: 'Pane', requestId: 'cauce',
+    props: { title: 'cauce', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { bodyRows: 30, offset: 0 } } } as never)
+  await pane.press({ key: 'dismiss-13' })
+  expect(seen.argv).toContainEqual(['dismiss', '13', '--via', 'mod'])
+  expect(await pane.find({ key: 'dismiss-9' })).toBeUndefined() // a branch to review is no stop
 })
 
 test('/cauce opens the board; its buttons cancel and confirm notes, with the project named', async ($, on) => {

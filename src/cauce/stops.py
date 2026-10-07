@@ -51,7 +51,13 @@ CAUSES = {
     "died": ("interrupted", "cauce"),
     "crashed": ("failed", "cauce"),
     "converged": ("failed", "worker"),
+    "dismissed": ("dismissed", "you"),
+    "superseded": ("dismissed", "cauce"),
 }
+
+#: Endings a person may dismiss: they wait on someone, and nothing else takes
+#: them off the board but a resume.
+DISMISSABLE = ("failed", "blocked", "replan", "needs_approval", "interrupted")
 
 #: The turns a task that outgrew its turns is resumed with.
 RESUME_TURNS = 120
@@ -62,6 +68,13 @@ CANCEL_VIA = {
     "cli": "with `cauce cancel`",
     "queue": "with `cauce queue rm`",
     "keyboard": "with Ctrl-C",
+}
+
+#: How a person's dismissal arrived.
+DISMISS_VIA = {
+    "ui": "from the UI",
+    "cli": "with `cauce dismiss`",
+    "mod": "from the session's cauce band",
 }
 
 
@@ -169,6 +182,8 @@ def what_to_do(stop: Stop) -> str:
         "crashed": "cauce itself failed: the reason has the error; resume once it is fixed",
         "converged": "the findings are the answer: read them in the worker's account and act on them; "
                      "resuming would only repeat them",
+        "dismissed": "nothing: you took it off the board; resume it if you want it after all",
+        "superseded": "nothing: a later task with the same text passed; resume it if you want it after all",
     }.get(stop.cause, "read the attempts")
 
 
@@ -208,6 +223,37 @@ def record(store: Any, task_id: int, stop: Stop, *, result: bool = True, **field
     started, the dispatcher, the sweep): its status, its result and the account."""
     store.update_task(task_id, status=stop.status, **({"result": stop.reason} if result else {}), **fields)
     store.add_event(task_id, "finished", status=stop.status, reason=stop.reason, stop=stop.data())
+
+
+def dismiss(store: Any, task: dict[str, Any], *, via: str) -> Stop | None:
+    """Take a task that waits on a person off the board, on their word. Its result
+    and attempts stay; the account says what it had stopped on. None when the
+    task waits on no one."""
+    if task["status"] not in DISMISSABLE:
+        return None
+    before = of(store, task)
+    stop = Stop("dismissed", f"you dismissed it {DISMISS_VIA.get(via, via)}", by="you",
+                attempt=before.attempt if before else None,
+                extra={"via": via, "was": task["status"], **({"had": before.reason} if before else {})})
+    record(store, task["id"], stop, result=False)
+    return stop
+
+
+def supersede(store: Any, task: dict[str, Any]) -> list[int]:
+    """Copies of a task that passed, with the same text in the same repository,
+    that stopped short of a pass: the work they waited on is done, so they no
+    longer wait on anyone. The ids taken off the board."""
+    body = " ".join(str(task.get("body") or "").split())
+    if not body or not task.get("repo"):
+        return []
+    gone = []
+    for other in store.list_tasks(repo=task["repo"], status=DISMISSABLE, source=("cauce",), limit=500):
+        if other["id"] == task["id"] or " ".join(str(other.get("body") or "").split()) != body:
+            continue
+        record(store, other["id"], Stop("superseded", f"task #{task['id']} passed the same work", by="cauce",
+                                        extra={"by_task": task["id"], "was": other["status"]}), result=False)
+        gone.append(other["id"])
+    return gone
 
 
 def of(store: Any, task: dict[str, Any]) -> Stop | None:
