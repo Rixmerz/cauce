@@ -103,3 +103,15 @@ def test_a_kept_branch_is_where_a_resumed_task_continues(git_repo, tmp_path):
     assert again.base == git(git_repo, "rev-parse", "HEAD")
     assert isolate.has_changes(again)  # the kept work alone keeps the branch
     assert isolate.finish(again, keep=True, message="m") == "cauce/task-13"
+
+
+def test_a_run_in_a_folder_holds_the_checkouts_inside_it(tmp_path):
+    from cauce import isolate
+
+    (tmp_path / "api" / ".git").mkdir(parents=True)
+    (tmp_path / "web" / ".git").mkdir(parents=True)
+    (tmp_path / "notes").mkdir()
+    folder = isolate.held_by(tmp_path, None)
+    assert folder == sorted([tmp_path.resolve(), (tmp_path / "api").resolve(), (tmp_path / "web").resolve()])
+    assert isolate.held_by(tmp_path / "api", tmp_path / "api") == [(tmp_path / "api").resolve()]
+    assert isolate.held_by(tmp_path / "gone", None) == [(tmp_path / "gone").resolve()]

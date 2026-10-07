@@ -207,6 +207,19 @@ def landed(repo_dir: Path, branch: str, paths: Sequence[str] = ()) -> bool:
 WAIT_POLL_S = 2.0
 
 
+def held_by(directory: Path, toplevel: Path | None) -> list[Path]:
+    """What a run in `directory` holds: its checkout; or, in a folder that is no
+    checkout, the folder and every checkout right inside it, since its work can
+    reach them all. Sorted, so runs that hold several take them in one order and
+    never wait on each other in a ring."""
+    if toplevel is not None:
+        return [toplevel.resolve()]
+    inside = []
+    with contextlib.suppress(OSError):
+        inside = [child.resolve() for child in directory.iterdir() if (child / ".git").exists()]
+    return sorted({directory.resolve(), *inside})
+
+
 def checkout_lock(root: Path, checkout: Path) -> Path:
     digest = hashlib.sha256(str(checkout.resolve()).encode()).hexdigest()[:16]
     return root / "work" / f"checkout-{digest}.lock"

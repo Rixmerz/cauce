@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-10-07
+
+### Fixed
+
+- **A dismissal reached the session as an ending.** Dismissing (or a pass
+  superseding) wrote a new `finished` event, so the Stop hook handed the
+  session that sent the task "#192 ended dismissed" and blocked its turn's
+  end. The person did it, or the pass's report already names it: both are
+  now marked reported as they are written.
+- **A run in a folder that is no checkout did not hold the checkouts inside
+  it.** A run in a parent folder and one in a repository inside it worked at
+  once. A run in such a folder now holds the folder and every checkout right
+  inside it, in one sorted order.
+- **A dismissed task that had been replanned offered `cauce resume`,** which
+  refuses it. It now offers nothing, unless it had only outgrown its turns.
+
 ## [0.6.4] - 2026-10-07
 
 ### Added

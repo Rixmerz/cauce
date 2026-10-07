@@ -145,8 +145,12 @@ def read(data: dict[str, Any] | None) -> Stop | None:
 
 def next_step(task_id: int, stop: Stop, *, resumable: bool = True) -> str | None:
     """The command that continues the task, or None when none would: a task the
-    worker found wrong is rewritten, and one that never ran cannot resume."""
+    worker found wrong is rewritten, and one that never ran cannot resume. A
+    dismissed task resumes as what it was, so one that was replanned does not."""
     if not resumable or stop.cause in ("spec", "ladder", "missing_dir", "converged"):
+        return None
+    if (stop.cause in ("dismissed", "superseded") and stop.extra.get("was") == "replan"
+            and stop.extra.get("had_cause") != "turns"):
         return None
     base = f"cauce resume {task_id}"
     if stop.cause == "turns":
@@ -234,8 +238,11 @@ def dismiss(store: Any, task: dict[str, Any], *, via: str) -> Stop | None:
     before = of(store, task)
     stop = Stop("dismissed", f"you dismissed it {DISMISS_VIA.get(via, via)}", by="you",
                 attempt=before.attempt if before else None,
-                extra={"via": via, "was": task["status"], **({"had": before.reason} if before else {})})
+                extra={"via": via, "was": task["status"],
+                       **({"had": before.reason, "had_cause": before.cause} if before else {})})
     record(store, task["id"], stop, result=False)
+    # The person did it: no session is told of it as an ending.
+    store.add_event(task["id"], "reported", via="dismiss")
     return stop
 
 
@@ -250,8 +257,12 @@ def supersede(store: Any, task: dict[str, Any]) -> list[int]:
     for other in store.list_tasks(repo=task["repo"], status=DISMISSABLE, source=("cauce",), limit=500):
         if other["id"] == task["id"] or " ".join(str(other.get("body") or "").split()) != body:
             continue
+        before = of(store, other)
         record(store, other["id"], Stop("superseded", f"task #{task['id']} passed the same work", by="cauce",
-                                        extra={"by_task": task["id"], "was": other["status"]}), result=False)
+                                        extra={"by_task": task["id"], "was": other["status"],
+                                               **({"had_cause": before.cause} if before else {})}), result=False)
+        # The pass's own report names it; no session is told of it twice.
+        store.add_event(other["id"], "reported", via="superseded")
         gone.append(other["id"])
     return gone
 

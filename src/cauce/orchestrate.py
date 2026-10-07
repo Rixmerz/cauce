@@ -445,10 +445,10 @@ def run(
     held = contextlib.ExitStack()
     try:
         if in_place:
-            held.enter_context(isolate.in_place(
-                home(), repo.toplevel(repo_dir) or repo_dir, task["id"],
-                waiting=lambda who: _waits(store, task["id"], who, say),
-                check=lambda: _check_cancel(store, task["id"])))
+            for place in isolate.held_by(repo_dir, repo.toplevel(repo_dir)):
+                held.enter_context(isolate.in_place(
+                    home(), place, task["id"], waiting=lambda who: _waits(store, task["id"], who, say),
+                    check=lambda: _check_cancel(store, task["id"])))
         while True:
             remaining = options.budget_usd - report.cost_usd
             if remaining < 0.01:
