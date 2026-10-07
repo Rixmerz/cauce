@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-10-07
+
+### Added
+
+- **`cauce dismiss <id>…`** takes a task that waits on you (blocked, replan,
+  failed, needs approval, interrupted) off the board. Until now only a resume
+  did, and a stale audit stayed in "Needs you" for good. Its attempts and
+  result stay; the account says you did it and what it had stopped on, and
+  `cauce resume` brings it back as what it was (a task found wrong is still
+  rewritten, never resumed). A **Dismiss** button in the UI's task view, the
+  session's cauce band and the `/cauce` pane does the same.
+- **A pass takes its stopped copies off the board.** Earlier tasks with the
+  same text in the same repository that stopped short of a pass are dismissed
+  as `superseded`, naming the task that passed; its report lists them.
+- **`cauce memory forget <id>…`** and a **Forget** button in the UI's Memory
+  view: a problem that was never the work's (the environment, two runs in one
+  checkout) leaves memory with its fixes, and no brief shows it again.
+
+### Fixed
+
+- **Hide in the session's band brought every card back** as soon as any one
+  changed: it remembered the whole list at once. It now puts each card away
+  on its own; a card comes back only when its own status changes.
+- **"Done" grouped by day but listed by id**, so a task resumed today showed
+  under an older day. It is now ordered by when each task ended.
+- **`--start haiku/low` crashed with a traceback** mid-run. A cell with no
+  such dial is now a usage error, said before anything runs.
+
 ## [0.6.3] - 2026-10-07
 
 ### Fixed

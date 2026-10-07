@@ -82,6 +82,21 @@ export async function openTask(id, quiet = false) {
     } }, "Cancel");
     actions.push(cancel);
   }
+  if (["failed", "blocked", "replan", "needs_approval", "interrupted"].includes(t.status)) {
+    // It waits on you; this takes it off the board. A resume brings it back.
+    const dismiss = h("button", { onclick: async () => {
+      if (dismiss.dataset.armed !== "1") {
+        dismiss.dataset.armed = "1";
+        dismiss.textContent = `Dismiss #${id}? Click again`;
+        dismiss.classList.add("danger");
+        setTimeout(() => { dismiss.dataset.armed = ""; dismiss.textContent = "Dismiss"; dismiss.classList.remove("danger"); }, 4000);
+        return;
+      }
+      await post(`/api/tasks/${id}/dismiss`);
+      openTask(id);
+    } }, "Dismiss");
+    actions.push(dismiss);
+  }
   if (d.branch) {
     const cmd = `git -C ${t.cwd} diff HEAD...${d.branch}`;
     actions.push(h("button", { onclick: () => navigator.clipboard?.writeText(cmd) }, "Copy diff command"));

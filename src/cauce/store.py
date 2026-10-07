@@ -142,7 +142,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
 STRICT_OVERLAP = 3
 
 TASK_STATES = ("queued", "running", "done", "failed", "interrupted", "blocked", "replan", "needs_approval",
-               "cancelled")
+               "cancelled", "dismissed")
 
 #: Columns added after a table first shipped. `CREATE TABLE IF NOT EXISTS` never
 #: alters a table that exists, so each one is added here when it is missing.
@@ -909,6 +909,21 @@ class Store:
             (stamp, row[0]))
         self._index("fix", fix_id, None, why)
         return self.problem(int(row[0]))
+
+    def forget_problem(self, problem_id: int) -> dict | None:
+        """A problem a person says was never one (a failure the environment or a
+        clash caused, filed as the work's): it and its fixes leave memory, and
+        no brief shows them again. The problem as it was, or None."""
+        problem = self.problem(problem_id)
+        if problem is None:
+            return None
+        fix_ids = [f["id"] for f in problem["fixes"]]
+        self._conn.execute("DELETE FROM fixes WHERE problem_id = ?", (problem_id,))
+        self._conn.execute("DELETE FROM problems WHERE id = ?", (problem_id,))
+        self._conn.execute("DELETE FROM memory_fts WHERE kind = 'problem' AND ref_id = ?", (problem_id,))
+        for fix_id in fix_ids:
+            self._conn.execute("DELETE FROM memory_fts WHERE kind = 'fix' AND ref_id = ?", (fix_id,))
+        return problem
 
     def set_fix_commit(self, task_id: int, commit_sha: str) -> None:
         self._conn.execute(
