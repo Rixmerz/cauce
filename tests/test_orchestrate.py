@@ -879,3 +879,59 @@ def test_a_resumed_task_numbers_its_attempts_on_from_its_last(git_repo, store):
     assert f"cauce: #{n} attempt 2 at sonnet/medium" in lines and lines[-1] == f"cauce: #{n} attempt 2 passed"
     assert seen == ["2"] and again.status == "done"
     assert [e["data"]["seq"] for e in store.events_of(n, "attempt_started")] == [1, 2]
+
+
+def test_one_run_at_a_time_works_in_a_checkout_without_a_worktree(git_repo, store, monkeypatch):
+    import threading
+
+    from cauce import isolate
+    from cauce.store import home
+
+    monkeypatch.setattr(isolate, "WAIT_POLL_S", 0.05)
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with isolate.in_place(home(), git_repo, 41, waiting=lambda who: None, check=lambda: None):
+            held.set()
+            release.wait(5)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    held.wait(5)
+    threading.Timer(0.3, release.set).start()
+    lines = []
+    report = run("create the routes", git_repo, store, Options(isolate=False), registry={},
+                 launcher=Script(ok()), classifier=kind("implement"), progress=lines.append)
+    thread.join()
+    assert report.status == "done"
+    assert any("waits: task #41 is working in this checkout" in line for line in lines)
+    assert store.last_event(report.task_id, "waiting") is not None
+    assert isolate.checkout_lock(home(), git_repo).read_text() == ""
+
+
+def test_a_cancel_while_waiting_for_the_checkout_stops_the_run(git_repo, store, monkeypatch):
+    from cauce import isolate
+    from cauce.store import home
+
+    monkeypatch.setattr(isolate, "WAIT_POLL_S", 0.05)
+    def launcher(spec):
+        raise AssertionError("a run that never got the checkout launches nothing")
+
+    with isolate.in_place(home(), git_repo, 7, waiting=lambda who: None, check=lambda: None):
+        def asked(line):
+            if "waits" in line:
+                store.request_cancel(store.list_tasks()[0]["id"])
+
+        report = run("create the routes", git_repo, store, Options(isolate=False), registry={},
+                     launcher=launcher, classifier=kind("implement"), progress=asked)
+    assert report.status == "cancelled"
+
+
+def test_a_run_in_a_worktree_never_waits_for_the_checkout(git_repo, store):
+    from cauce import isolate
+    from cauce.store import home
+
+    with isolate.in_place(home(), git_repo, 7, waiting=lambda who: None, check=lambda: None):
+        report = run("create the routes", git_repo, store, registry={}, launcher=Script(ok(), write="a.py"),
+                     classifier=kind("implement"))
+    assert report.status == "done"

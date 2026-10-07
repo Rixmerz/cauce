@@ -92,6 +92,15 @@ def test_every_failure_is_typed(tmp_path, stdout, failure):
     assert not result.passed and result.failure is failure
 
 
+def test_an_errored_session_says_why_not_its_subtype(tmp_path):
+    limited = json.dumps({"is_error": True, "subtype": "success", "result": "Claude AI usage limit reached"})
+    assert parse(proc(limited), spec(tmp_path)).summary == "the session errored: Claude AI usage limit reached"
+    bare = json.dumps({"is_error": True, "subtype": "success"})
+    assert parse(proc(bare), spec(tmp_path)).summary == "the session errored: success"
+    crashed = json.dumps({"is_error": True, "subtype": "error_during_execution", "result": ""})
+    assert parse(proc(crashed), spec(tmp_path)).summary == "the session errored: error_during_execution"
+
+
 def test_result_block_rejects_garbage():
     assert result_block("```cauce-result\n[1]\n```") is None
     assert result_block("```cauce-result\n{bad\n```") is None

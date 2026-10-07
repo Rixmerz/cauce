@@ -434,7 +434,16 @@ def run(
     attempts: list[Attempt] = []
     changed: set[str] = set()
     decision: Decision | None = None
+    # In the checkout itself, one run at a time: the work and its check share the
+    # person's files. A run in a worktree has its own.
+    in_place = workspace is None and (writes or bool(options.verify))
+    held = contextlib.ExitStack()
     try:
+        if in_place:
+            held.enter_context(isolate.in_place(
+                home(), repo.toplevel(repo_dir) or repo_dir, task["id"],
+                waiting=lambda who: _waits(store, task["id"], who, say),
+                check=lambda: _check_cancel(store, task["id"])))
         while True:
             remaining = options.budget_usd - report.cost_usd
             if remaining < 0.01:
@@ -447,8 +456,7 @@ def run(
                                          attempt=len(attempts))
                 report.status, report.summary = "failed", report.stop.reason
                 break
-            if store.cancel_requested(task["id"]):
-                raise Cancelled
+            _check_cancel(store, task["id"])
             selection = _equip(caps.select(registry, the_plan.kind, failed_before=bool(attempts), workdir=workdir),
                                the_plan, repo_dir, workdir)
             # Numbered as the store numbers it: a resumed task's attempts go on from its last.
@@ -554,6 +562,7 @@ def run(
                                  attempt=len(attempts) or None, extra={"via": "keyboard"})
         report.status, report.summary = "cancelled", report.stop.reason
     finally:
+        held.close()
         if workspace is not None:
             report.isolated = True
             report.changed = list(isolate.changed(workspace))
@@ -649,6 +658,18 @@ def _cause(decision: Decision, attempt: Attempt) -> str:
             return "spec"
         return "turns" if attempt.failure is Failure.TURNS_EXHAUSTED else "ladder"
     return "exhausted"
+
+
+def _check_cancel(store: Store, task_id: int) -> None:
+    if store.cancel_requested(task_id):
+        raise Cancelled
+
+
+def _waits(store: Store, task_id: int, who: str, say: Callable[[str], None]) -> None:
+    """Said once, when a run finds its checkout taken: a wait that says nothing
+    reads as a run that hung."""
+    say(f"cauce: #{task_id} waits: {who} is working in this checkout without a worktree")
+    store.add_event(task_id, "waiting", reason=f"{who} is working in this checkout")
 
 
 def _cancelled(store: Store, task_id: int, attempt: int | None) -> stops.Stop:

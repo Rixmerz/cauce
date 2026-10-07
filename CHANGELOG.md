@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-07
+
+### Fixed
+
+- **A session kept running the cauce it started with after an update.**
+  Its Bash put the old version's `bin/` first on the PATH, so its runs went
+  on without the update's fixes: an environment failure that had changed ten
+  files was retried, a rule 0.6.2 had already fixed. `cauce run` and
+  `cauce resume` now say at once when a newer cauce is installed, and ask for
+  `/reload-plugins`.
+- **Two runs without a worktree worked in one checkout at once.** One
+  reinstalled `node_modules` while the other's check ran, and the check
+  failed with `Cannot find module 'vite'`: a `code_bug` that was neither
+  task's work, and a climb to more effort. A run in the checkout itself (no
+  worktree, and it writes or has a check) now holds it: a second one waits,
+  says which task it waits for, and still stops on a cancel.
+- **An errored session said "the session errored: success".** An API error,
+  such as a usage limit, arrives with subtype `success`; the reason is in the
+  result text, and that is what the summary now shows.
+
 ## [0.6.2] - 2026-10-06
 
 ### Fixed
