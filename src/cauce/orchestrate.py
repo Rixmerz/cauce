@@ -517,7 +517,8 @@ def run(
                             turns=result.turns, summary=result.summary[:500], denied=list(result.denied),
                             allow=list(result.allow), served_model=result.served_model,
                             permission_mode=result.permission_mode,
-                            changed=list(result.changed_paths)[:50])
+                            changed=list(result.changed_paths)[:50],
+                            **({"refused_but_written": list(result.overcome)} if result.overcome else {}))
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:])
             attempts.append(attempt)

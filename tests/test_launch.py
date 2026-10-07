@@ -256,3 +256,25 @@ def test_what_the_worker_learned_is_read_from_its_block_and_kept_short(tmp_path)
                    spec(tmp_path))
     assert failed.learned == ("A fact",)  # read on any verdict; only a pass files it
     assert '"learned"' in launch.RESULT_INSTRUCTIONS
+
+
+def test_a_refused_write_the_attempt_got_past_blocks_nothing(tmp_path):
+    def refused(*paths):
+        return json.dumps({"is_error": True, "subtype": "error_max_turns", "result": "", "permission_denials": [
+            {"tool_name": "Write", "tool_input": {"file_path": p}} for p in paths]})
+
+    # written after all, per git: the attempt ran out of turns, nothing more
+    got_past = parse(proc(refused(str(tmp_path / "src/routes/a.ts"))), spec(tmp_path), changed=("src/routes/a.ts",))
+    assert got_past.failure is Failure.TURNS_EXHAUSTED
+    assert got_past.denied == ()
+    assert got_past.allow == ()
+    assert got_past.overcome == ("Write(src/routes/a.ts)",)
+    # one written, one not: the one not written still blocks
+    half = parse(proc(refused(str(tmp_path / "src/a.ts"), str(tmp_path / "src/b.ts"))), spec(tmp_path),
+                 changed=("src/a.ts",))
+    assert len(half.denied) == 1
+    assert half.overcome == ("Write(src/a.ts)",)
+    # outside the work directory, a changed path of the same name is no evidence
+    outside = parse(proc(refused("/elsewhere/src/a.ts")), spec(tmp_path), changed=("src/a.ts",))
+    assert outside.denied == ("Write(/elsewhere/src/a.ts)",)
+    assert outside.overcome == ()

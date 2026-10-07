@@ -140,7 +140,9 @@ yields the default kind, not a guess.
   permission mode its model runs in (auto; Haiku bypasses), which a person
   changes with `cauce config mode`.
 - A refused attempt blocks; it never climbs, whatever else it ended with,
-  unless the worker found the task wrong.
+  unless the worker found the task wrong. A refused write to a file in the
+  worker's own directory that git shows changed anyway is no refusal: it
+  stopped nothing.
 - A reading task's answer is its deliverable: findings, broken code included,
   are a pass, and two cells reporting the same findings stop it as
   `converged` instead of climbing.
