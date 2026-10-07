@@ -31,7 +31,27 @@ def _repo_key(args: argparse.Namespace) -> str | None:
     return repo.key(Path(args.repo or os.getcwd()))
 
 
+def _behind(env: dict[str, str] | None = None) -> str | None:
+    """What to tell a session whose cauce is older than the newest installed one,
+    or None. A session keeps the plugin it started with: its runs go on without
+    every fix an update brought until it reloads."""
+    from cauce import link
+
+    mine = link.parse_version(__version__)
+    newest = max((version for version, _ in link.installed(os.environ if env is None else env)), default=None)
+    if not mine or not newest or newest <= mine:
+        return None
+    return (f"cauce: this session runs cauce {__version__}, but {'.'.join(map(str, newest))} is installed: "
+            "it started before the update. Run /reload-plugins (or restart the session) so its runs get it")
+
+
+def _warn_behind() -> None:
+    if warning := _behind():
+        _say(warning)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
+    _warn_behind()
     options = orchestrate.Options(
         budget_usd=args.budget,
         max_attempts=args.max_attempts,
@@ -68,6 +88,7 @@ RESUMABLE = ("blocked", "needs_approval", "failed", "cancelled", "interrupted")
 def cmd_resume(args: argparse.Namespace) -> int:
     """A task that stopped, run again under its own id: on the branch its work was
     kept on, from the cell it stopped at, its earlier attempts in the brief."""
+    _warn_behind()
     store = Store.open()
     previous = _cancel_on_sigterm()
     try:

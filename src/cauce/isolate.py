@@ -23,9 +23,12 @@ before anything is committed.
 """
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import shutil
 import subprocess
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -192,3 +195,58 @@ def landed(repo_dir: Path, branch: str, paths: Sequence[str] = ()) -> bool:
                           cwd=str(repo_dir), capture_output=True, check=False)
     return same.returncode == 0
 
+
+
+# --- one run at a time in a checkout ----------------------------------------
+#
+# A run without a worktree works in the person's checkout itself. Two of them at
+# once share its files and its node_modules: one reinstalls while the other's
+# check runs, and the check fails for a reason that is neither task's work.
+
+#: How often a run that waits for the checkout looks again, and for a cancel.
+WAIT_POLL_S = 2.0
+
+
+def checkout_lock(root: Path, checkout: Path) -> Path:
+    digest = hashlib.sha256(str(checkout.resolve()).encode()).hexdigest()[:16]
+    return root / "work" / f"checkout-{digest}.lock"
+
+
+@contextlib.contextmanager
+def in_place(root: Path, checkout: Path, task_id: int, *, waiting: Callable[[str], None],
+             check: Callable[[], None]) -> Iterator[None]:
+    """Holds `checkout` for task `task_id` while the block runs. Another run there
+    holds it: `waiting` is told who, once, and the run waits, calling `check`
+    (which raises to stop waiting, a cancel) between looks. Without `fcntl`, a
+    no-op: the platform has no lock to take."""
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - not on the platforms cauce runs on
+        yield
+        return
+    path = checkout_lock(root, checkout)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+") as fh:
+        told = False
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if not told:
+                    fh.seek(0)
+                    holder = fh.read().strip()
+                    waiting(f"task #{holder}" if holder.isdigit() else "another run")
+                    told = True
+                check()
+                time.sleep(WAIT_POLL_S)
+        try:
+            fh.seek(0)
+            fh.truncate()
+            fh.write(str(task_id))
+            fh.flush()
+            yield
+        finally:
+            fh.seek(0)
+            fh.truncate()
+            fcntl.flock(fh, fcntl.LOCK_UN)

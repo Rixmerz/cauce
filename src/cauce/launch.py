@@ -286,8 +286,10 @@ def parse(
         if "budget" in subtype:
             return WorkerResult(False, Failure.BUDGET_EXHAUSTED,
                                 f"reached its ${spec.max_budget_usd} cap without a verdict", raw=text, **common)
-        return WorkerResult(False, Failure.ENVIRONMENT,
-                            f"the session errored: {subtype or text[:200]}", raw=text, **common)
+        # An API error (a usage limit, an overload) arrives as `is_error` with
+        # subtype "success": the reason is in the result text, never the subtype.
+        why = text.strip()[:200] if subtype in ("", "success") and text.strip() else subtype or "no reason given"
+        return WorkerResult(False, Failure.ENVIRONMENT, f"the session errored: {why}", raw=text, **common)
     block = result_block(text)
     if block is None:
         return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),

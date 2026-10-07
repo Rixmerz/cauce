@@ -105,6 +105,9 @@ yields the default kind, not a guess.
   branch, unverified, and so is work that outgrew its turns (a `replan` for
   turns resumes with more); only `failed`, a `replan` for a wrong task and
   `cancelled` drop it.
+- A run in the checkout itself (no worktree, and it writes or has a check)
+  holds it: a second one there waits, says for which task, and a cancel
+  still stops it. A run in a worktree never waits.
 - Work a session sent is reported to it once when it ends: by the report a
   `cauce run` prints, else by the Stop hook (which blocks the turn's end once
   with the endings) or the next prompt.

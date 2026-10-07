@@ -126,3 +126,17 @@ def test_installs_are_ordered_by_the_version_they_say_not_by_their_dates(tmp_pat
     assert found == [((0, 9, 3), found[0][1]), ((0, 10, 0), newest)]
     assert link.installed({"HOME": str(tmp_path)}) == []
     assert link.parse_version("1.2") == (1, 2) and link.parse_version("1.x") is None
+
+
+def test_a_session_behind_the_newest_install_is_told_to_reload(tmp_path):
+    from cauce import __version__
+
+    config = tmp_path / "config"
+    _plugin(config, __version__)
+    assert cli._behind({"CLAUDE_CONFIG_DIR": str(config)}) is None
+    _plugin(config, "999.0.0")
+    warning = cli._behind({"CLAUDE_CONFIG_DIR": str(config)})
+    assert warning is not None
+    assert f"runs cauce {__version__}, but 999.0.0 is installed" in warning
+    assert "/reload-plugins" in warning
+    assert cli._behind({"CLAUDE_CONFIG_DIR": str(tmp_path / "none")}) is None
