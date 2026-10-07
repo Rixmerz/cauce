@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-10-07
+
+### Changed
+
+- **A new look for `cauce ui`.** The default blue and grey gave way to the
+  palette of a riverbed: wet stone for the ground, deep water for what
+  moves, ochre for what waits on you, iron oxide for what stopped. Every
+  text colour meets 4.5:1 against the surfaces it sits on, in both themes.
+  One typeface (Avenir Next, Segoe UI Variable, then the system's);
+  monospace only for real code. Cards carry a stripe in their status's
+  colour; "Needs you" is the one lane with an ochre count; tabs are
+  underlined; labels are sentence case; the brand mark is the channel
+  itself. Task text and worker accounts read as prose, command output as
+  code. Destructive buttons stay quiet until hovered.
+- Switching to a view says "Loading…" at once: Spend reads every session's
+  transcript and could take seconds with no sign the click landed.
+
 ## [0.6.7] - 2026-10-07
 
 ### Changed

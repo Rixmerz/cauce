@@ -11,7 +11,7 @@ function decision(task) {
 }
 
 function card(task, openTask, extra = []) {
-  return h("div", { class: "card", onclick: () => openTask(task.id), tabindex: 0,
+  return h("div", { class: `card s-${task.status}`, onclick: () => openTask(task.id), tabindex: 0,
                     onkeydown: (e) => { if (e.key === "Enter") openTask(task.id); } },
     h("div", { class: "title" }, short(task.title, 120)),
     h("div", { class: "meta" },
@@ -24,8 +24,8 @@ function card(task, openTask, extra = []) {
     task.status === "queued" && task.parallel_reason ? h("div", { class: "reason" }, short(task.parallel_reason, 160)) : null);
 }
 
-function column(title, count, children) {
-  return h("section", { class: "column" },
+function column(title, count, children, cls = "") {
+  return h("section", { class: `column ${cls}`.trim() },
     h("h2", {}, title, h("span", { class: "count" }, String(count))),
     children.length ? children : h("div", { class: "empty" }, "nothing here"));
 }
@@ -41,7 +41,7 @@ export async function renderBoard(ctx) {
   const picker = h("select", { "aria-label": "session", onchange: (e) => { sessionFilter.set(ctx.project, e.target.value); ctx.refresh(); } },
     h("option", { value: "" }, "every session of this project"),
     ...sessions.map((s) => h("option", { value: s.id, selected: s.id === chosen },
-      `${short(s.name || s.last_prompt || s.id, 60)} · ${when(s.last_seen_at)}`)));
+      `${short(s.name || s.last_prompt || s.id, 60)}, ${when(s.last_seen_at)}`)));
 
   const lanes = b.queued.map((lane) => h("div", { class: "lane" },
     h("div", { class: "lane-head" },
@@ -68,7 +68,8 @@ export async function renderBoard(ctx) {
   return h("div", {},
     h("div", { class: "toolbar" }, picker),
     h("div", { class: "columns" },
-      column("Needs you", needs.length, needs.map((t) => card(t, ctx.openTask, [h("span", { class: `status-${t.status}` }, t.status)]))),
+      column("Needs you", needs.length, needs.map((t) => card(t, ctx.openTask, [h("span", { class: `status-${t.status}` }, t.status)])),
+        needs.length ? "needs" : ""),
       column("Running", running.length, [
         ...running.map((t) => card(t, ctx.openTask, [h("span", {}, `attempt ${t.attempt ?? 1}`), h("span", {}, when(t.updated_at))])),
         ...(answering ? [h("div", { class: "empty" }, `${answering} session${answering === 1 ? "" : "s"} answering a prompt now`)] : [])]),

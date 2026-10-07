@@ -38,6 +38,9 @@ export function toast(text) {
 const ctx = () => ({ project, openTask, openSession, refresh: () => show(current), toast });
 
 export async function show(name = current) {
+  // A new view says it is on its way at once: Spend reads every session's
+  // transcript and can take seconds, and an unchanged page reads as a dead click.
+  if (name !== current) main.replaceChildren(h("div", { class: "empty" }, "Loading…"));
   current = name;
   for (const tab of document.querySelectorAll(".tabs button")) {
     tab.setAttribute("aria-selected", String(tab.dataset.view === name));
