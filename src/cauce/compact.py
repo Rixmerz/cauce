@@ -29,7 +29,11 @@ COMMAND_CHARS = 160
 MAX_LINE = 4 * 1024 * 1024
 WRITERS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 #: Text the harness puts in a user turn that the person never typed.
-NOT_TYPED = ("<command-", "<local-command", "<system-reminder>", "<task-notification>", "Caveat:")
+NOT_TYPED = ("<command-", "<local-command", "<system-reminder>", "<task-notification>", "Caveat:",
+             "[Request interrupted")
+#: A prompt a plugin submitted between turns, or a bare slash command: in the
+#: person's place, not in their words.
+NOT_TYPED_RE = re.compile(r"^(?:The [\w.:@-]+ plugin sent a message|/[\w:-]+$)")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
@@ -62,7 +66,7 @@ def _typed(entry: dict[str, Any]) -> str | None:
     if not isinstance(content, str):
         return None
     text = content.strip()
-    if not text or text.startswith(NOT_TYPED):
+    if not text or text.startswith(NOT_TYPED) or NOT_TYPED_RE.match(text):
         return None
     return text
 

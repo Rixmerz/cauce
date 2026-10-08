@@ -287,3 +287,9 @@ def test_only_a_launch_that_broke_is_transient(tmp_path):
     named = parse(proc(envelope(block(verdict="fail", failure="environment", summary="old Node"))), spec(tmp_path))
     assert named.failure is Failure.ENVIRONMENT
     assert not named.transient
+
+
+def test_changed_paths_leave_out_tool_artifacts():
+    before = {"a.py": " M"}
+    after = {"a.py": "M ", ".playwright-mcp/page.yml": "??", "web/.playwright-mcp/c.log": "??"}
+    assert launch.changed_paths(before, after) == ("a.py",)

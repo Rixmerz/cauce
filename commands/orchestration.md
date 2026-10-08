@@ -19,6 +19,13 @@ Request: $ARGUMENTS
 2. **Split it when it has independent parts.** One `cauce run` per part. Parts
    that touch different files can run at the same time (each gets its own
    worktree); run them as background commands and collect the reports.
+   Never send copies of the same task to compare answers: each costs a full
+   run and they say the same thing — cauce already stops a task whose cells
+   agree. Parts that share state a run uses up (a demo user, its quiz
+   attempts, a seeded record) get one run between them, or data of their
+   own: parallel runs on one account spoil each other's results. A run that
+   says it `waits` for the checkout is queued, not hung: let it wait, or run
+   it in a worktree (no `--no-isolate`); never cancel it for that.
 
    When the `mcp__cauce__*` tools are in your list (Claude Code loaded
    cauce's mod), use them instead of the commands below: `queue` for work

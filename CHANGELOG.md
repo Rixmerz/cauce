@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [0.6.10] - 2026-10-08
+
+### Fixed
+
+- **A validation that says it is read-only is read as one.** A task whose own
+  text says "read-only", "solo lectura" or "do not edit files" gets the
+  reading brief (its findings are the answer, broken code included), and two
+  cells that changed nothing and found the same thing stop as `converged`
+  instead of climbing to a stronger model. It does not hold the checkout.
+- **Tool artifacts are no work.** Files a worker's tools write for themselves
+  (`.playwright-mcp/` page snapshots and console logs, `__pycache__/`) are never a changed
+  file and never committed to a kept branch: they made read-only tasks look
+  like writing ones.
+- **"needs running servers" is said only when it is true.** A task that names
+  its servers by `localhost:<port>`, all of them answering, is not warned.
+- A run waiting for the checkout says how to work beside it (a worktree) and
+  that a wait is not a hang.
+- The compaction digest leaves out what the person never typed: a prompt a
+  plugin submitted, a bare slash command, "[Request interrupted…]".
+
+### Changed
+
+- The orchestration guide: never send copies of one task to compare
+  answers; parallel runs that share state a run uses up (a demo user, its
+  attempts) spoil each other; never cancel a run because it waits.
+
 ## [0.6.9] - 2026-10-07
 
 ### Added

@@ -19,6 +19,7 @@ import json
 import os
 import re
 import shlex
+import socket
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -416,6 +417,7 @@ def run(
 
     workspace = None
     writes = the_plan.kind not in READ_ONLY_KINDS
+    declared_read_only = bool(_READ_ONLY.search(task.get("body") or task.get("title") or ""))
     context = list(the_plan.context)
     if options.isolate and writes and repo.toplevel(repo_dir) is not None:
         resumed = isolate.kept(repo_dir, task["id"])
@@ -445,7 +447,7 @@ def run(
     decision: Decision | None = None
     # In the checkout itself, one run at a time: the work and its check share the
     # person's files. A run in a worktree has its own.
-    in_place = workspace is None and (writes or bool(options.verify))
+    in_place = workspace is None and ((writes and not declared_read_only) or bool(options.verify))
     held = contextlib.ExitStack()
     try:
         if in_place:
@@ -473,8 +475,8 @@ def run(
             spec = launch.LaunchSpec(
                 model_id=models.pinned(cell.model),
                 permission_mode=grants.mode_for(cell.model),
-                prompt=brief(text, the_plan.kind, workdir, [*history, *attempts], dead, options.verify, writes,
-                             context),
+                prompt=brief(text, the_plan.kind, workdir, [*history, *attempts], dead, options.verify,
+                             writes and not declared_read_only, context),
                 cell=cell,
                 launch_dir=launch_dir,
                 workdir=workdir if workdir != launch_dir else None,
@@ -539,7 +541,8 @@ def run(
                 break
             if result.failure in _MEMORABLE and result.summary:
                 _remember(store, task, key, attempt, "failed", result)
-            decision = decide(the_plan.ladder, attempts, allow_approval=options.allow_approval, reading=not writes)
+            reading = not writes or (declared_read_only and not any(a.changed for a in attempts))
+            decision = decide(the_plan.ladder, attempts, allow_approval=options.allow_approval, reading=reading)
             store.set_move(task["id"], seq, decision.move.value, decision.reason)
             to = decision.cell.label if decision.cell and decision.continues else None
             report.moves.append(f"{decision.move.value}" + (f" to {to}" if to else "") + f": {decision.reason}")
@@ -625,6 +628,29 @@ _SERVER = re.compile(r"(\bdev servers?\b|\blevanta\w*\b|\bstart (?:both |the )?(
 _BROWSER_CAPS = ("browser", "playwright", "chrome", "puppeteer")
 
 
+#: A task that says in its own words it must change nothing: a validation whose
+#: findings are its answer, whatever kind it was filed under.
+_READ_ONLY = re.compile(r"\b(?:read[- ]only|solo lectura|s[oó]lo de lectura|do not (?:edit|modify|change) "
+                        r"(?:any )?(?:files?|code)|no (?:edites|modifiques) (?:ning[uú]n )?(?:archivos?|c[oó]digo))\b",
+                        re.IGNORECASE)
+_PORT = re.compile(r"(?:localhost|127\.0\.0\.1):(\d{2,5})\b")
+
+
+def _listening(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+def _all_listening(text: str) -> bool:
+    """A task that names its local servers by port, every one of them up: the
+    servers it needs are running, and saying otherwise is noise."""
+    ports = {int(p) for p in _PORT.findall(text) if 0 < int(p) < 65536}
+    return bool(ports) and all(_listening(p) for p in ports)
+
+
 def _unmet(text: str, registry: Mapping[str, caps.Capability]) -> list[str]:
     """What a task asks for that a one-shot worker does not have, said before any
     money is spent: a worker has no browser unless a capability gives it one,
@@ -634,7 +660,7 @@ def _unmet(text: str, registry: Mapping[str, caps.Capability]) -> list[str]:
         notes.append("this task needs a browser and workers have none: register a browser MCP server in "
                      "your cauce capabilities.json (`cauce capabilities --example` has one) and allow its tools "
                      "(--allow 'mcp__browser'), or check the pages yourself")
-    if _SERVER.search(text):
+    if _SERVER.search(text) and not _all_listening(text):
         notes.append("this task needs running servers: start them yourself before dispatching, or pass the "
                      "--allow rules that start them; a server a worker starts stops when it finishes")
     return notes
@@ -682,7 +708,8 @@ def _check_cancel(store: Store, task_id: int) -> None:
 def _waits(store: Store, task_id: int, who: str, say: Callable[[str], None]) -> None:
     """Said once, when a run finds its checkout taken: a wait that says nothing
     reads as a run that hung."""
-    say(f"cauce: #{task_id} waits: {who} is working in this checkout without a worktree")
+    say(f"cauce: #{task_id} waits: {who} is working in this checkout without a worktree; to work beside it, "
+        "run it in its own worktree (without --no-isolate) — a wait is not a hang, do not cancel it for one")
     store.add_event(task_id, "waiting", reason=f"{who} is working in this checkout")
 
 

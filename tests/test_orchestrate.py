@@ -973,3 +973,45 @@ def test_a_refusal_the_worker_got_past_does_not_stop_a_climb(git_repo, store):
     assert report.moves[0].startswith("more_turns")
     finished = next(e for e in store.events(task_id=report.task_id) if e["kind"] == "attempt_finished")
     assert finished["data"]["refused_but_written"] == ["Write(routes.ts)"]
+
+
+def test_servers_named_by_a_port_that_answers_need_no_warning():
+    import socket
+
+    from cauce import orchestrate
+
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+        port = server.getsockname()[1]
+        assert orchestrate._unmet(f"the dev server is up at localhost:{port}", {}) == []
+    warned = orchestrate._unmet(f"the dev server is up at localhost:{port}", {})
+    assert len(warned) == 1
+    assert "running servers" in warned[0]
+    assert orchestrate._unmet("start the dev server", {})  # no port named: still said
+
+
+@pytest.mark.parametrize("text", ["TASK: Final browser validation (READ-ONLY)", "Valida el flujo, solo lectura",
+                                  "do not edit any files, just report", "no modifiques ningún archivo"])
+def test_a_task_that_says_it_changes_nothing_is_read_only(text):
+    from cauce import orchestrate
+
+    assert orchestrate._READ_ONLY.search(text)
+
+
+def test_a_task_that_writes_is_not_read_only():
+    from cauce import orchestrate
+
+    assert orchestrate._READ_ONLY.search("fix the reader so it reads only once") is None
+
+
+def test_a_validation_that_says_it_is_read_only_is_read_as_one(git_repo, store):
+    """A browser validation filed as `test` found a real bug in the app, twice, and
+    climbed to opus as if the worker had failed."""
+    said = "check 7 fails: the quiz bank is missing"
+    script = Script(bad(Failure.CODE_BUG, said), bad(Failure.CODE_BUG, said + "."))
+    report = run("Validate the student path in the browser (READ-ONLY)", git_repo, store, registry={},
+                 launcher=script, classifier=kind("test"))
+    assert "what you found is broken" in script.specs[0].prompt
+    assert report.stop.cause == "converged"
+    assert len(report.cells) == 2

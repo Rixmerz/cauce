@@ -148,7 +148,10 @@ yields the default kind, not a guess.
   stopped nothing.
 - A reading task's answer is its deliverable: findings, broken code included,
   are a pass, and two cells reporting the same findings stop it as
-  `converged` instead of climbing.
+  `converged` instead of climbing. A task whose own text says it changes
+  nothing is read as reading while it changes nothing, and holds no checkout.
+- Files a worker's tools write for themselves (`isolate.ARTIFACT_DIRS`) are
+  never a changed file and never committed.
 - A worker that stopped before its own check (refused, out of turns or
   money) is checked with `--verify` by cauce when the task changed something;
   a red check is evidence for the next brief, never a pass.

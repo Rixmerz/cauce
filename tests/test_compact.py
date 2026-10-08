@@ -21,6 +21,9 @@ ENTRIES = [
     user("fix the login redirect, keep `?next=`"),
     user("<command-name>/model</command-name>"),
     user("Caveat: harness text"),
+    user("[Request interrupted by user]"),
+    user("/compact"),
+    user("The cauce plugin sent a message: cauce: work ended"),
     user("summary", isCompactSummary=True),
     user([{"type": "text", "text": "meta"}], isMeta=True),
     {"type": "assistant", "message": {"content": [
