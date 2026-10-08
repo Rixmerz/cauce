@@ -135,12 +135,22 @@ def reset(ws: Workspace) -> None:
     link(ws)
 
 
+#: Folders a worker's tools write for their own use (a browser server's page
+#: snapshots and console logs, an interpreter's bytecode). They are no work: never a changed file, never
+#: committed to a kept branch.
+ARTIFACT_DIRS = frozenset({".playwright-mcp", "__pycache__"})
+
+
+def is_artifact(path: str) -> bool:
+    return any(part in ARTIFACT_DIRS for part in path.split("/")[:-1])
+
+
 def changed(ws: Workspace) -> tuple[str, ...]:
     """What the task changed against its base, from git: committed or not."""
     status = _git(ws.path, "status", "--porcelain", "-uall", "-z", strip=False)
     paths = {e[3:] for e in status.split("\0") if len(e) > 3}
     paths |= set(_git(ws.path, "diff", "--name-only", ws.base, "HEAD").splitlines())
-    return tuple(sorted(p for p in paths if p and not _linked(ws, p)))
+    return tuple(sorted(p for p in paths if p and not _linked(ws, p) and not is_artifact(p)))
 
 
 def has_changes(ws: Workspace) -> bool:
@@ -157,6 +167,8 @@ def finish(ws: Workspace, *, keep: bool, message: str) -> str | None:
     if keep and has_changes(ws):
         if _git(ws.path, "status", "--porcelain"):
             _git(ws.path, "add", "-A")
+            _git(ws.path, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--",
+                 *(f":(glob)**/{d}/**" for d in sorted(ARTIFACT_DIRS)), check=False)
             _commit(ws, message)
         elif UNVERIFIED in _git(ws.path, "log", "-1", "--format=%s") and UNVERIFIED not in message:
             # Work kept unverified has passed since, unchanged: the branch says so.

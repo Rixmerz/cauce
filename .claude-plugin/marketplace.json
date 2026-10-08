@@ -9,7 +9,7 @@
       "name": "cauce",
       "source": "./",
       "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
-      "version": "0.6.9"
+      "version": "0.6.10"
     }
   ]
 }

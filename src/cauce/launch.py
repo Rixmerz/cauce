@@ -37,6 +37,7 @@ from typing import Any
 
 from cauce import allow, grants, models
 from cauce.escalate import REPLAN, Failure
+from cauce.isolate import is_artifact
 from cauce.matrix import Cell
 
 RESULT_FENCE = "cauce-result"
@@ -538,7 +539,8 @@ def changed_paths(
 ) -> tuple[str, ...]:
     if before is None or after is None:
         return ()
-    changed = {p for p in set(before) | set(after) if before.get(p) != after.get(p) and not p.startswith("\0HEAD")}
+    changed = {p for p in set(before) | set(after)
+               if before.get(p) != after.get(p) and not p.startswith("\0HEAD") and not is_artifact(p)}
     if directory is not None:
         for key in {k for k in set(before) | set(after) if k.startswith("\0HEAD")}:
             old, new = before.get(key), after.get(key)
@@ -549,7 +551,8 @@ def changed_paths(
             rel = key.removeprefix("\0HEAD").removeprefix(":")
             diff = subprocess.run(["git", "diff", "--name-only", old, new], cwd=str(directory / rel),
                                   capture_output=True, text=True, check=False)
-            changed |= {f"{rel}/{line}" if rel else line for line in diff.stdout.splitlines() if line}
+            changed |= {f"{rel}/{line}" if rel else line for line in diff.stdout.splitlines()
+                        if line and not is_artifact(line)}
     return tuple(sorted(changed))
 
 

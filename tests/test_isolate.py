@@ -115,3 +115,22 @@ def test_a_run_in_a_folder_holds_the_checkouts_inside_it(tmp_path):
     assert folder == sorted([tmp_path.resolve(), (tmp_path / "api").resolve(), (tmp_path / "web").resolve()])
     assert isolate.held_by(tmp_path / "api", tmp_path / "api") == [(tmp_path / "api").resolve()]
     assert isolate.held_by(tmp_path / "gone", None) == [(tmp_path / "gone").resolve()]
+
+
+def test_tool_artifacts_are_no_work():
+    assert isolate.is_artifact(".playwright-mcp/page-1.yml")
+    assert isolate.is_artifact("web/.playwright-mcp/console.log")
+    assert not isolate.is_artifact("src/playwright-mcp.ts")
+    assert not isolate.is_artifact(".playwright-mcp")
+
+
+def test_a_kept_branch_never_commits_tool_artifacts(git_repo, tmp_path):
+    ws = isolate.prepare(git_repo, 14, tmp_path / "home")
+    (ws.path / ".playwright-mcp").mkdir()
+    (ws.path / ".playwright-mcp" / "page.yml").write_text("snapshot")
+    assert not isolate.has_changes(ws)
+    (ws.path / "fix.py").write_text("x = 1\n")
+    assert isolate.finish(ws, keep=True, message="m") == "cauce/task-14"
+    shown = git(git_repo, "show", "--name-only", "cauce/task-14")
+    assert "fix.py" in shown
+    assert ".playwright-mcp" not in shown
