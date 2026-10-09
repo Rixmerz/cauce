@@ -28,6 +28,15 @@
   template copies it to the user scope first. A definition holds no
   permission rule, approval or capability: those are flags of `cauce workflow
   run`.
+- **Global workflows are held while in use.** A user-scope workflow is one
+  definition reused by several projects, and each run keeps its state with
+  its own project. Every definition has a version, and a run runs the copy
+  and version it started with. While any active run uses a definition:
+  - a change becomes a pending revision, and later changes build on it;
+  - the revision applies by itself when the last such run ends or is
+    cancelled (`cauce workflow pending [--apply|--drop]`, `--now` to write
+    at once);
+  - removing it needs `--force`.
 - **Memory per step.** A step can carry cauce memory into its brief: `note:<id>`
   (a replaced note is read as the one that replaced it), `topic:<name>` (every
   live note in it) and `problem:<id>` (with every fix tried on it). Notes are

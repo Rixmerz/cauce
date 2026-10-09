@@ -80,6 +80,23 @@ How to write the steps:
 - **Changing a bundled template:** it is copied to the user scope first, and
   the template itself stays as it was.
 
+### While it is in use
+
+A workflow that active runs use (in any project, as happens with a global
+one in the user scope) is held. A change you make to it is kept as a
+**pending revision** and applies by itself when the last run using it ends
+or is cancelled. Further changes build on that pending revision.
+
+```bash
+cauce workflow show <name>        # its version, the runs using it, a pending change
+cauce workflow pending [<name>]   # what waits, and for which runs
+cauce workflow pending <name> --apply|--drop
+```
+
+Pass `--now` to a change only when the person wants it at once. The runs
+keep the copy they started with either way. A held workflow is removed only
+with `--force`.
+
 ## Run one
 
 Running spends money, so do it only when the person asked for this work:

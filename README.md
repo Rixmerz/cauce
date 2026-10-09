@@ -404,6 +404,18 @@ A definition holds steps (`id`, `prompt` with `{input}` names, `needs`,
 permission rule, an approval or a capability. Those are the person's flags on
 `run`.
 
+A workflow in the user scope is global: one definition that several projects
+reuse, each run's state kept with its own project. A run never changes under
+its definition, because it runs the copy (and version) it started with. While
+any active run, in any project, uses the definition, it is also **held**:
+
+- A change to it is kept as a pending revision. Later changes build on that
+  revision, and it applies by itself when the last run using the workflow
+  ends or is cancelled.
+- `cauce workflow pending` lists the waiting changes. `--apply` or `--drop`
+  settles one, and `--now` on any change writes it at once.
+- Removing a held workflow needs `--force`.
+
 A step can carry memory into its brief, on top of what its task asks:
 
 - `note:12` (or `12`): one note of the project. A replaced note is read as the

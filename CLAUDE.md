@@ -251,6 +251,10 @@ yields the default kind, not a guess.
   those are the person's flags on `cauce workflow run`, so a definition a
   repository commits runs with what the person gives. A bundled template is
   never written: a change copies it to the user scope.
+- A run runs the copy of its definition it started with, never the file. A
+  definition an active run uses (in any project) is held: a change becomes a
+  pending revision that applies when the last such run ends or is cancelled,
+  unless a person passes `--now`; removing it needs `--force`.
 - A step's `memory` is read when the step is queued, never written. A note
   comes only from the run's own project; a run whose memory cannot be read
   there does not start, and a note gone since says so in the brief.

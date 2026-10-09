@@ -12,12 +12,15 @@ import os
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from cauce import project, workflows
 from cauce.store import Store
 
+NOW_HELP = ("write the change at once even while runs use the workflow (they go on with the copy they started "
+            "with); without it the change waits for them")
 STEP_FLAGS = (("title", str), ("prompt", str), ("kind", str), ("verify", str), ("start", str),
               ("budget_usd", float), ("max_turns", int))
 
@@ -39,12 +42,22 @@ def _step_fields(args: argparse.Namespace) -> dict[str, Any]:
     return out
 
 
-def _say_saved(where: str, path: Path) -> None:
-    print(f"saved in the {where} scope: {path}")
+def _say_saved(where: str, path: Path | workflows.Saved) -> None:
+    if isinstance(path, workflows.Saved) and path.held_by:
+        runs = ", ".join(f"#{r}" for r in path.held_by)
+        print(f"in use by run {runs}: the change is kept as a pending revision ({path.path}) and applies when they "
+              "end — they go on with the copy they started with. `cauce workflow pending` lists it; --now applies "
+              "it at once.")
+        return
+    print(f"saved in the {where} scope: {path.path if isinstance(path, workflows.Saved) else path}")
 
 
 def _print_definition(defn: dict[str, Any]) -> None:
-    print(f"{defn['name']} ({defn['scope']}: {defn['path']})")
+    print(f"{defn['name']} v{defn['version']} ({defn['scope']}: {defn['path']})")
+    if defn.get("held_by"):
+        print(f"  in use by run {', '.join(f'#{r}' for r in defn['held_by'])}: a change waits for them to end")
+    if defn.get("pending"):
+        print(f"  a pending change waits: {defn['pending']} (`cauce workflow pending {defn['name']} --apply|--drop`)")
     if defn.get("description"):
         print(f"  {defn['description']}")
     print(f"  inputs: {', '.join(defn['inputs']) or 'none'}")
@@ -94,6 +107,10 @@ def cmd_workflow(args: argparse.Namespace) -> int:
             return 0
         if what == "show":
             defn = workflows.load(args.name, _cwd(args), args.scope)
+            if defn["scope"] != "bundled":
+                waiting = workflows.pending_path(Path(defn["path"]))
+                defn.update(held_by=workflows.in_use(defn["path"]),
+                            pending=str(waiting) if waiting.is_file() else None)
             if args.json:
                 print(json.dumps(defn, ensure_ascii=False, indent=2))
             else:
@@ -119,12 +136,12 @@ def cmd_workflow(args: argparse.Namespace) -> int:
                 raise workflows.WorkflowError(f"not JSON: {exc}") from exc
             if args.name:
                 defn["name"] = args.name
-            _say_saved(args.scope, workflows.save(defn, _cwd(args), args.scope, replace=args.replace))
+            _say_saved(args.scope, workflows.save(defn, _cwd(args), args.scope, replace=args.replace, now=args.now))
             return 0
         if what == "edit":
             return _edit_in_editor(args)
         if what == "rm":
-            print(f"removed {workflows.remove(args.name, _cwd(args), args.scope)}")
+            print(f"removed {workflows.remove(args.name, _cwd(args), args.scope, force=args.force)}")
             return 0
         if what == "validate":
             if args.file:
@@ -135,6 +152,24 @@ def cmd_workflow(args: argparse.Namespace) -> int:
             return 0
         if what == "step":
             return _step(args)
+        if what == "pending":
+            if args.name and args.apply:
+                print(f"applied: {workflows.apply_pending(args.name, _cwd(args), args.scope, now=args.now)}")
+                return 0
+            if args.name and args.drop:
+                print(f"dropped the pending change: {workflows.drop_pending(args.name, _cwd(args), args.scope)}")
+                return 0
+            found = [w for w in workflows.pending(_cwd(args)) if not args.name or w["name"] == args.name]
+            if args.json:
+                print(json.dumps(found, ensure_ascii=False))
+                return 0
+            for w in found:
+                held = (f"waits for run {', '.join(f'#{r}' for r in w['held_by'])}" if w["held_by"]
+                        else "nothing uses it now: --apply")
+                print(f"{w['name']:<18} {w['scope']:<8} {held}")
+            if not found:
+                print("no change waits for a run to end")
+            return 0
         if what == "run":
             return _run(args)
         if what == "status":
@@ -176,8 +211,8 @@ def _step(args: argparse.Namespace) -> int:
     else:
         def change(defn: dict[str, Any]) -> None:
             workflows.remove_step(defn, args.step_id)
-    where, path = workflows.edit(args.name, _cwd(args), change, args.scope)
-    _say_saved(where, path)
+    saved = workflows.edit(args.name, _cwd(args), change, args.scope, now=args.now)
+    _say_saved(saved.scope, saved)
     return 0
 
 
@@ -189,18 +224,18 @@ def _edit_in_editor(args: argparse.Namespace) -> int:
     if not editor or not sys.stdin.isatty():
         raise workflows.WorkflowError("no editor here: change it with `cauce workflow step set|add|rm`, or "
                                       f"`cauce workflow show {args.name} --json` and `cauce workflow save --replace`")
-    draft = Path(defn["path"]) if where == defn["scope"] else None
-    if draft is None:
-        draft = workflows.save(defn, _cwd(args), where)
-        print(f"copied the bundled template to the {where} scope: {draft}")
-    before = draft.read_text(encoding="utf-8")
+    # The person edits a copy; what they keep is saved like any change, so a
+    # workflow in use gets a pending revision instead of changing under its runs.
+    waiting = workflows.pending_path(Path(defn["path"]))
+    source = waiting if where == defn["scope"] and waiting.is_file() else Path(defn["path"])
+    draft = Path(tempfile.mkdtemp(prefix="cauce-workflow-")) / f"{args.name}.json"
+    draft.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     subprocess.run([*shlex.split(editor), str(draft)], check=False)
     try:
-        workflows.normalize(json.loads(draft.read_text(encoding="utf-8")), args.name)
+        changed = workflows.normalize(json.loads(draft.read_text(encoding="utf-8")), args.name)
     except (ValueError, workflows.WorkflowError) as exc:
-        draft.write_text(before, encoding="utf-8")
-        raise workflows.WorkflowError(f"not kept, the file is as it was: {exc}") from exc
-    _say_saved(where, draft)
+        raise workflows.WorkflowError(f"not kept, nothing changed: {exc} (your edit is in {draft})") from exc
+    _say_saved(where, workflows.save(changed, _cwd(args), where, replace=True, now=args.now))
     return 0
 
 
@@ -291,14 +326,17 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("file")
     p.add_argument("--name", help="save it under this name")
     p.add_argument("--replace", action="store_true", help="overwrite one of the same name in that scope")
+    p.add_argument("--now", action="store_true", help=NOW_HELP)
     scoped(p, workflows.DEFAULT_SCOPE)
     p = wsub.add_parser("edit", help="open it in $EDITOR; kept only if it is still valid")
     p.add_argument("name")
+    p.add_argument("--now", action="store_true", help=NOW_HELP)
     scoped(p)
     p = wsub.add_parser("rm", help="remove a saved workflow")
     p.add_argument("name")
     p.add_argument("--scope", choices=("project", "user"), required=True)
     p.add_argument("--repo")
+    p.add_argument("--force", action="store_true", help="remove it although runs use it (they keep their copy)")
     p = wsub.add_parser("validate", help="check a saved workflow, or a file (--file)")
     p.add_argument("name", nargs="?")
     p.add_argument("--file")
@@ -312,6 +350,7 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         p = ssub.add_parser(verb, help=helptext)
         p.add_argument("name")
         p.add_argument("step_id", metavar="STEP")
+        p.add_argument("--now", action="store_true", help=NOW_HELP)
         scoped(p)
         if verb == "rm":
             continue
@@ -327,6 +366,13 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         else:
             p.add_argument("--clear", action="append", choices=[*(f for f, _ in STEP_FLAGS if f != "prompt"), "memory"])
 
+    p = wsub.add_parser("pending", help="changes waiting for the runs that use their workflow to end")
+    p.add_argument("name", nargs="?")
+    p.add_argument("--apply", action="store_true", help="apply it now that nothing uses it (with --now, anyway)")
+    p.add_argument("--drop", action="store_true", help="throw the waiting change away")
+    p.add_argument("--now", action="store_true", help=NOW_HELP)
+    p.add_argument("--json", action="store_true")
+    scoped(p)
     p = wsub.add_parser("run", help="start a run here: its first steps are queued and the rest follow by themselves")
     p.add_argument("name")
     p.add_argument("text", nargs="?", help="the value of its one input (- reads stdin)")

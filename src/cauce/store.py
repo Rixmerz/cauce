@@ -560,6 +560,12 @@ class Store:
                                   [*params, limit]).fetchall()
         return [dict(r) for r in rows]
 
+    def runs_from(self, source: str) -> list[dict]:
+        """The runs still active that were started from this definition file."""
+        rows = self._conn.execute("SELECT * FROM workflow_runs WHERE source = ? AND status = 'active' ORDER BY id",
+                                  (source,)).fetchall()
+        return [dict(r) for r in rows]
+
     def run_tasks(self, run_id: int) -> list[dict]:
         """A run's step tasks, oldest first: a step retried has more than one, the newest counts."""
         rows = self._conn.execute("SELECT * FROM tasks WHERE workflow_run = ? ORDER BY id", (run_id,)).fetchall()

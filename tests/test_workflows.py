@@ -46,7 +46,7 @@ def _runner(results, seen):
 
 
 def _save(defn, cwd, scope="user"):
-    return workflows.save(defn, cwd, scope)
+    return workflows.save(defn, cwd, scope).path
 
 
 CHAIN = {"name": "chain", "inputs": ["goal"], "steps": [
@@ -87,7 +87,7 @@ def test_make_copy_change_and_remove_workflows(git_repo):
     assert workflows.load("feature", git_repo)["scope"] == "project"
 
     # A change to a bundled template lands in the user scope; the template stays.
-    where, path = workflows.edit("bugfix", git_repo, lambda d: d.update(description="mine"))
+    where, path, _ = workflows.edit("bugfix", git_repo, lambda d: d.update(description="mine"))
     assert where == "user" and json.loads(path.read_text())["description"] == "mine"
     assert workflows.load("bugfix", git_repo, "bundled")["description"] != "mine"
 
@@ -350,3 +350,66 @@ def test_the_cli_attaches_and_clears_memory(git_repo, store: Store, kicks, capsy
     assert cli.main(["workflow", "step", "set", "z", "do", "--memory", "zone:3"]) == 1
     assert cli.main(["workflow", "step", "set", "z", "do", "--clear", "memory"]) == 0
     assert "memory" not in workflows.load("z", git_repo)["steps"][0]
+
+
+def test_a_global_workflow_in_use_is_held_and_its_changes_wait(git_repo, tmp_path, store: Store, kicks, capsys,
+                                                                monkeypatch):
+    """One workflow in the user scope, used by two projects at once: no change reaches it under them."""
+    other = tmp_path / "other"
+    other.mkdir()
+    import subprocess
+
+    for args in (["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *args], cwd=other, check=True, capture_output=True)
+    path = _save(CHAIN, git_repo)
+    assert json.loads(path.read_text())["version"] == 1
+    first = workflows.start(store, "chain", git_repo, {"goal": "a"})
+    second = workflows.start(store, "chain", other, {"goal": "b"})
+    assert workflows.in_use(path) == [first["id"], second["id"]]
+
+    saved = workflows.edit("chain", git_repo, lambda d: workflows.set_step(d, "polish", {"title": "Shine"}))
+    assert saved.held_by == [first["id"], second["id"]] and saved.path == workflows.pending_path(path)
+    assert json.loads(path.read_text())["version"] == 1  # the definition itself did not move
+    # A second change builds on the waiting one.
+    workflows.edit("chain", git_repo, lambda d: workflows.set_step(d, "check", {"title": "Look"}))
+    waiting = json.loads(workflows.pending_path(path).read_text())
+    assert waiting["version"] == 2 and {s["id"]: s.get("title") for s in waiting["steps"]} == {
+        "build": None, "check": "Look", "polish": "Shine"}
+    with pytest.raises(workflows.WorkflowError, match="in use by run"):
+        workflows.remove("chain", git_repo, "user")
+    with pytest.raises(workflows.WorkflowError, match="in use by run"):
+        workflows.apply_pending("chain", git_repo)
+    assert [w["held_by"] for w in workflows.pending(git_repo)] == [[first["id"], second["id"]]]
+
+    # A run keeps the copy it started with; the change waits for the last run to end.
+    workflows.cancel(store, second["id"])
+    assert workflows.pending_path(path).is_file()
+    flow.work(store, runner=_runner([ok(), ok(), ok()], []))
+    assert workflows.status(store, first["id"])["state"] == "done"
+    assert workflows.status(store, first["id"])["steps"][2]["title"] == "polish"
+    assert not workflows.pending_path(path).exists()
+    live = json.loads(path.read_text())
+    assert live["version"] == 2 and live["steps"][2]["title"] == "Shine"
+    assert workflows.in_use(path) == []
+
+    # --now writes at once, and a run started now uses the new version.
+    third = workflows.start(store, "chain", git_repo, {"goal": "c"})
+    assert workflows.edit("chain", git_repo, lambda d: d.update(description="now"), now=True).held_by == []
+    assert json.loads(path.read_text())["version"] == 3
+    assert workflows.status(store, third["id"])["version"] == 2
+
+    monkeypatch.chdir(git_repo)
+    assert cli.main(["workflow", "step", "set", "chain", "build", "--title", "Make"]) == 0
+    assert "in use by run" in capsys.readouterr().out
+    assert cli.main(["workflow", "show", "chain"]) == 0
+    out = capsys.readouterr().out
+    assert "chain v3" in out and f"in use by run #{third['id']}" in out and "a pending change waits" in out
+    assert cli.main(["workflow", "pending"]) == 0
+    assert f"waits for run #{third['id']}" in capsys.readouterr().out
+    assert cli.main(["workflow", "pending", "chain", "--apply"]) == 1
+    assert cli.main(["workflow", "pending", "chain", "--drop"]) == 0
+    assert cli.main(["workflow", "pending", "chain", "--drop"]) == 1
+    assert cli.main(["workflow", "step", "set", "chain", "build", "--title", "Make", "--now"]) == 0
+    assert cli.main(["workflow", "rm", "chain", "--scope", "user"]) == 1
+    assert cli.main(["workflow", "rm", "chain", "--scope", "user", "--force"]) == 0
+    assert workflows.status(store, third["id"])["state"] == "running"  # it goes on with its copy

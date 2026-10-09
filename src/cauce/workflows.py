@@ -33,7 +33,7 @@ import re
 import signal
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from cauce import dispatch, isolate, project, repo
 from cauce.matrix import KINDS, Cell
@@ -44,7 +44,7 @@ SCOPES = ("project", "user", "bundled")
 DEFAULT_SCOPE = "user"
 NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 INPUT = re.compile(r"\{([a-z][a-z0-9_]{0,31})\}")
-TOP_KEYS = frozenset({"name", "description", "inputs", "steps"})
+TOP_KEYS = frozenset({"name", "description", "inputs", "steps", "version"})
 #: What a step may say. Nothing here widens what a worker may do: rules,
 #: approvals and capabilities are the person's flags on `run`, never a file's.
 STEP_KEYS = frozenset({"id", "title", "prompt", "kind", "needs", "verify", "start", "budget_usd", "max_turns",
@@ -156,6 +156,11 @@ def normalize(defn: Mapping[str, Any], name: str | None = None) -> dict[str, Any
     data["name"] = name or data.get("name") or ""
     if not NAME.match(str(data["name"])):
         errors.append(f"{data['name']!r} is no workflow name")
+    version = data.get("version", 1)
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        errors.append("version is a whole number from 1")
+        version = 1
+    data["version"] = version
     if not isinstance(data.get("description", ""), str):
         errors.append("description is text")
     inputs = data.get("inputs", [])
@@ -303,9 +308,60 @@ def memory_text(store: Store, project_key: str | None, refs: list[str]) -> str:
             + "\n".join(lines))
 
 
+class Saved(NamedTuple):
+    """Where a change went: the definition itself, or — while runs use it — its pending revision."""
+
+    scope: str
+    path: Path
+    held_by: list[int]
+
+
+def pending_path(path: Path) -> Path:
+    """Where a change to a definition in use waits: beside it, out of every listing."""
+    return path.parent / ".pending" / path.name
+
+
+def in_use(path: Path | str, store: Store | None = None) -> list[int]:
+    """The active runs started from this definition, in any project."""
+    own = store is None
+    store = store or Store.open()
+    try:
+        return [r["id"] for r in store.runs_from(str(path))]
+    finally:
+        if own:
+            store.close()
+
+
+def promote(path: Path | str, store: Store | None = None) -> bool:
+    """Apply a pending revision once no active run uses the definition. Never raises."""
+    path = Path(path)
+    waiting = pending_path(path)
+    if not waiting.is_file():
+        return False
+    try:
+        if in_use(path, store):
+            return False
+        normalize(_read(waiting), path.stem)
+        waiting.replace(path)
+        return True
+    except (OSError, WorkflowError):
+        return False
+
+
+def _write(path: Path, data: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(_stored(data), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
 def save(defn: Mapping[str, Any], cwd: str | Path | None, scope: str = DEFAULT_SCOPE, *,
-         replace: bool = False) -> Path:
-    """Write a definition, checked first. A bundled template is never written: copy it."""
+         replace: bool = False, now: bool = False, store: Store | None = None) -> Saved:
+    """Write a definition, checked first, one version on from the one it replaces.
+    While an active run (of any project) uses it, the change is kept as its
+    pending revision and applied when the last such run ends; `now` writes it
+    at once. A run never sees either: it runs the copy it started with.
+    A bundled template is never written: copy it."""
     if scope not in ("project", "user"):
         raise WorkflowError(f"a workflow is saved in the project or the user scope, not {scope!r}")
     checked = normalize(defn)
@@ -316,11 +372,17 @@ def save(defn: Mapping[str, Any], cwd: str | Path | None, scope: str = DEFAULT_S
     path = folder / f"{checked['name']}.json"
     if path.exists() and not replace:
         raise WorkflowError(f"{checked['name']!r} exists in the {scope} scope; edit it, or remove it first")
-    folder.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(_stored(checked), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(path)
-    return path
+    if not path.exists():
+        _write(path, {**checked, "version": 1})
+        return Saved(scope, path, [])
+    live = normalize(_read(path), checked["name"])
+    held = [] if now else in_use(path, store)
+    if held:
+        _write(pending_path(path), {**checked, "version": live["version"] + 1})
+        return Saved(scope, pending_path(path), held)
+    _write(path, {**checked, "version": live["version"] + 1})
+    pending_path(path).unlink(missing_ok=True)
+    return Saved(scope, path, [])
 
 
 def _stored(defn: Mapping[str, Any]) -> dict[str, Any]:
@@ -334,8 +396,8 @@ def _stored(defn: Mapping[str, Any]) -> dict[str, Any]:
             out.pop("needs")
         steps.append(out)
         before.append(step["id"])
-    return {"name": defn["name"], "description": defn.get("description", ""), "inputs": defn.get("inputs", []),
-            "steps": steps}
+    return {"name": defn["name"], "version": defn.get("version", 1), "description": defn.get("description", ""),
+            "inputs": defn.get("inputs", []), "steps": steps}
 
 
 def copy_to(source: str, target: str, cwd: str | Path | None, *, scope: str = DEFAULT_SCOPE,
@@ -343,26 +405,74 @@ def copy_to(source: str, target: str, cwd: str | Path | None, *, scope: str = DE
     """A saved workflow under a new name, to edit without starting from nothing."""
     defn = load(source, cwd, from_scope)
     _check_name(target)
-    return save({**defn, "name": target}, cwd, scope)
+    return save({**defn, "name": target, "version": 1}, cwd, scope).path
 
 
-def remove(name: str, cwd: str | Path | None, scope: str) -> Path:
+def remove(name: str, cwd: str | Path | None, scope: str, *, force: bool = False) -> Path:
     if scope == "bundled":
         raise WorkflowError("a bundled template is not removed; a workflow of the same name in the user or project "
                             "scope hides it")
     _, path = locate(name, cwd, scope)
+    held = in_use(path)
+    if held and not force:
+        raise WorkflowError(f"{name} is in use by run {', '.join(f'#{r}' for r in held)}; remove it when they end, "
+                            "or pass --force (they go on with the copy they started with)")
     path.unlink()
+    pending_path(path).unlink(missing_ok=True)
     return path
 
 
 def edit(name: str, cwd: str | Path | None, change: Callable[[dict[str, Any]], None],
-         scope: str | None = None) -> tuple[str, Path]:
+         scope: str | None = None, *, now: bool = False) -> Saved:
     """Load, change, check, write back where it was. A bundled template is copied
-    to the user scope first: the change is the person's, the template stays."""
+    to the user scope first: the change is the person's, the template stays.
+    While runs use it, changes build on its pending revision (see `save`)."""
     defn = load(name, cwd, scope)
     where = defn["scope"] if defn["scope"] != "bundled" else DEFAULT_SCOPE
+    if where == defn["scope"]:
+        promote(defn["path"])
+        waiting = pending_path(Path(defn["path"]))
+        if waiting.is_file() and not now:
+            defn = {**normalize(_read(waiting), name), "scope": where, "path": defn["path"]}
     change(defn)
-    return where, save(defn, cwd, where, replace=True)
+    return save(defn, cwd, where, replace=True, now=now)
+
+
+def pending(cwd: str | Path | None) -> list[dict[str, Any]]:
+    """Every change waiting for the runs that use its workflow to end."""
+    out = []
+    for scope in ("project", "user"):
+        folder = dirs(cwd)[scope]
+        if folder is None or not (folder / ".pending").is_dir():
+            continue
+        for waiting in sorted((folder / ".pending").glob("*.json")):
+            live = folder / waiting.name
+            out.append({"name": waiting.stem, "scope": scope, "path": str(waiting), "held_by": in_use(live)})
+    return out
+
+
+def apply_pending(name: str, cwd: str | Path | None, scope: str | None = None, *, now: bool = False) -> Path:
+    """Apply a waiting change: when no run uses the workflow, or at once with `now`."""
+    where, path = locate(name, cwd, scope)
+    waiting = pending_path(path)
+    if not waiting.is_file():
+        raise WorkflowError(f"{name} ({where}) has no pending change")
+    held = in_use(path)
+    if held and not now:
+        raise WorkflowError(f"{name} is in use by run {', '.join(f'#{r}' for r in held)}; the change applies when "
+                            "they end, or now with --now (they go on with the copy they started with)")
+    normalize(_read(waiting), name)
+    waiting.replace(path)
+    return path
+
+
+def drop_pending(name: str, cwd: str | Path | None, scope: str | None = None) -> Path:
+    where, path = locate(name, cwd, scope)
+    waiting = pending_path(path)
+    if not waiting.is_file():
+        raise WorkflowError(f"{name} ({where}) has no pending change")
+    waiting.unlink()
+    return waiting
 
 
 def add_step(defn: dict[str, Any], step: dict[str, Any], *, after: str | None = None) -> None:
@@ -422,6 +532,7 @@ def start(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] | 
           kick: Kick | None = None) -> dict[str, Any]:
     """A run of a saved workflow in a directory: its first steps queued, the dispatcher started.
     `options` are the person's (`budget_usd` per step, `allow_tools`, `allow_approval`)."""
+    promote(locate(name, cwd, scope)[1], store)
     defn = load(name, cwd, scope)
     where = Path(cwd).resolve()
     given = {k: str(v) for k, v in (inputs or {}).items()}
@@ -554,7 +665,14 @@ def advance(store: Store, task: Mapping[str, Any] | None, env: Mapping[str, str]
             store.add_event(task["id"], "workflow_advanced", run=run["id"], queued=queued)
     if queued:
         (kick or _kick)(run["cwd"], run["repo"])
-    store.update_run(run["id"])
+        store.update_run(run["id"])
+    elif all(t["status"] == "done" for t in _latest(store, run["id"]).values()) and \
+            len(_latest(store, run["id"])) == len(_definition(run)["steps"]):
+        # The run is over: its definition is free, and a change that waited for it applies.
+        store.update_run(run["id"], status="done")
+        promote(run["source"], store)
+    else:
+        store.update_run(run["id"])
     return queued
 
 
@@ -579,7 +697,7 @@ def status(store: Store, run_id: int) -> dict[str, Any]:
     states = {s["state"] for s in steps}
     if run["status"] == "cancelled":
         state = "cancelled"
-    elif states == {"done"}:
+    elif run["status"] == "done" or states == {"done"}:
         state = "done"
     elif states & NEEDS_YOU or (states & STOPPED and not states & {"queued", "running"}):
         state = "waits on you"
@@ -588,7 +706,8 @@ def status(store: Store, run_id: int) -> dict[str, Any]:
     else:
         state = "stalled"
     branch = next((s["branch"] for s in reversed(steps) if s.get("branch")), None)
-    return {"id": run["id"], "name": run["name"], "scope": run["scope"], "repo": run["repo"], "cwd": run["cwd"],
+    return {"id": run["id"], "name": run["name"], "scope": run["scope"], "version": defn["version"],
+            "source": run["source"], "repo": run["repo"], "cwd": run["cwd"],
             "session_id": run["session_id"], "inputs": json.loads(run["inputs"]), "state": state,
             "now": [s["id"] for s in steps if s["state"] in ("queued", "running")],
             "waiting": [s["id"] for s in steps if s["state"] in NEEDS_YOU | STOPPED],
@@ -610,6 +729,7 @@ def cancel(store: Store, run_id: int, *, via: str = "cli") -> list[int]:
     if run is None:
         raise WorkflowError(f"no workflow run #{run_id}")
     store.update_run(run_id, status="cancelled", reason=f"cancelled {via}")
+    promote(run["source"], store)
     stopped = []
     for task in _latest(store, run_id).values():
         if task["status"] == "queued":
