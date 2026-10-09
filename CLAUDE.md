@@ -222,9 +222,10 @@ yields the default kind, not a guess.
 - The mod adds a way in, never a power. Every tool runs `bin/cauce`. `resume`
   runs with `--unattended`, which refuses what only a person may clear, and
   no model input ever reaches `--allow`, `--allow-approval` or `--keep`: only
-  a button the person presses in the web board does, and its rules are read
+  a button the person presses in the web board, or on a neighbour's page
+  through `cauce resume <id> --pressed`, does, and its rules are read
   from cauce's account of the stop (`stops.resume_args`), never from the
-  request. The board lives in the web UI only; the mod draws no copy of it. Tool schemas carry no `enum`: the handler
+  request; `--pressed` refuses any rule, approval or budget passed with it. The board lives in the web UI only; the mod draws no copy of it. Tool schemas carry no `enum`: the handler
   reads a value and says what cauce takes. Only the reading tools (`recall`,
   `tasks`, `note`) turn an `ask` into an allow; a deny stays a deny. Without the mod, everything still works through
   the classic hooks.

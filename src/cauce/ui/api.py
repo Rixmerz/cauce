@@ -158,13 +158,14 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
     }
 
 
-def overview(store: Store, hours: float = 24, limit: int = 20) -> dict[str, Any]:
+def overview(store: Store, hours: float = 24, limit: int = 20, repos: set[str] | None = None) -> dict[str, Any]:
     """Every session seen in the last `hours`, with how its cauce work stands: for
     one person, or one agent, watching sessions in several projects at once. Each
     task that is open (waits, runs, queued) is listed, and each that ended in the
-    window. A read: no ending is claimed, a session still hears of its own."""
+    window. A read: no ending is claimed, a session still hears of its own. With
+    `repos`, only those repositories' sessions and tasks."""
     since = _hours_ago_iso(hours)
-    full = board(store)
+    full = board(store, repos=repos)
     open_cards: dict[int, dict[str, Any]] = {}
     for card in full["needs_you"]:
         stop = card.get("stop") or {}
@@ -186,10 +187,12 @@ def overview(store: Store, hours: float = 24, limit: int = 20) -> dict[str, Any]
 
     by_session: dict[str | None, list[dict[str, Any]]] = defaultdict(list)
     for t in store.list_tasks(limit=1000, source=TASK_SOURCES):
+        if repos is not None and t["repo"] not in repos:
+            continue
         if t["id"] in open_cards or (t["updated_at"] or "") >= since:
             by_session[t.get("session_id")].append(line(t))
     out = []
-    for s in sessions(store, limit=limit * 5):
+    for s in sessions(store, repos=repos, limit=limit * 5):
         tasks = by_session.pop(s["id"], [])
         if (s["last_seen_at"] or "") < since and not any(t["state"] != "ended" for t in tasks):
             continue

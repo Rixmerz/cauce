@@ -132,9 +132,34 @@ def cmd_run(args: argparse.Namespace) -> int:
 RESUMABLE = ("blocked", "needs_approval", "failed", "cancelled", "interrupted", "dismissed")
 
 
+def _resume_pressed(args: argparse.Namespace) -> int:
+    """A person's press on a page that is not cauce's own UI: the same resume the
+    UI's button runs, read from cauce's account of the stop (`stops.resume_args`).
+    The caller names the task and nothing else: no rule, approval or budget."""
+    if args.allow or args.allow_approval or args.unattended or args.keep or any(
+            v is not None for v in (args.budget, args.verify, args.start, args.max_turns)):
+        print("--pressed takes the resume from cauce's account of the stop: give it the task id alone",
+              file=sys.stderr)
+        return 2
+    store = Store.open()
+    try:
+        task = store.get_task(args.id)
+        pressed = stops.resume_args(task["id"], stops.view(store, task)) if task else None
+    finally:
+        store.close()
+    if pressed is None:
+        print(f"task #{args.id} has no resume to press", file=sys.stderr)
+        return 1
+    if task["cwd"] and Path(task["cwd"]).is_dir():
+        os.chdir(task["cwd"])
+    return main(pressed)
+
+
 def cmd_resume(args: argparse.Namespace) -> int:
     """A task that stopped, run again under its own id: on the branch its work was
     kept on, from the cell it stopped at, its earlier attempts in the brief."""
+    if args.pressed:
+        return _resume_pressed(args)
     _warn_behind()
     store = Store.open()
     previous = _cancel_on_sigterm()
@@ -331,7 +356,19 @@ def cmd_dismiss(args: argparse.Namespace) -> int:
 
 def cmd_events(args: argparse.Namespace) -> int:
     store = Store.open()
+    if args.last_id:
+        print(store.last_event_id())
+        store.close()
+        return 0
     after = store.last_event_id() if args.new else args.after
+    repos = {repo.key(Path(d).resolve()) for d in args.repo} if args.repo else None
+    tasks: dict[int, dict | None] = {}
+
+    def task_of(task_id: int) -> dict | None:
+        if task_id not in tasks:
+            tasks[task_id] = store.get_task(task_id)
+        return tasks[task_id]
+
     try:
         while True:
             batch = store.events(after=after, task_id=args.task)
@@ -339,6 +376,13 @@ def cmd_events(args: argparse.Namespace) -> int:
                 after = e["id"]
                 if args.kind and e["kind"] not in args.kind:
                     continue
+                task = task_of(e["task_id"])
+                if repos is not None and (task is None or task["repo"] not in repos):
+                    continue
+                if args.json:
+                    # A watcher outside cauce names the task without asking again.
+                    e = {**e, "repo": task["repo"] if task else None, "title": task["title"] if task else None,
+                         "session_id": task["session_id"] if task else None}
                 print(json.dumps(e, ensure_ascii=False) if args.json else
                       f"{e['ts']} #{e['task_id']} {e['kind']} {json.dumps(e['data'], ensure_ascii=False)}")
             if batch:
@@ -527,7 +571,8 @@ def cmd_overview(args: argparse.Namespace) -> int:
 
     store = Store.open()
     try:
-        seen = api.overview(store, hours=args.hours, limit=args.limit)
+        repos = {repo.key(Path(d).resolve()) for d in args.repo} if args.repo else None
+        seen = api.overview(store, hours=args.hours, limit=args.limit, repos=repos)
     finally:
         store.close()
     if args.json:
@@ -1322,6 +1367,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="turns per attempt; a task that outgrew its turns resumes with 120 by default")
     p.add_argument("--no-model", action="store_true")
     p.add_argument("--detach", action="store_true", help="run it in the background; its ending reaches the session")
+    p.add_argument("--pressed", action="store_true",
+                   help="a person's press on another page: run the resume cauce's account of the stop names")
     p.add_argument("--keep", action="store_true",
                    help="also keep the --allow rules for every task in the task's repository (cauce allow)")
     p.add_argument("--unattended", action="store_true",
@@ -1411,6 +1458,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--follow", "-f", action="store_true", help="keep printing new events")
     p.add_argument("--kind", action="append", help="only events of this kind, e.g. finished (repeatable)")
     p.add_argument("--new", action="store_true", help="only events from now on (with --follow, a watch)")
+    p.add_argument("--repo", action="append", help="only tasks of this repository (repeatable)")
+    p.add_argument("--last-id", action="store_true", help="print the newest event id: where a watcher starts")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_events)
 
@@ -1612,6 +1661,7 @@ def build_parser() -> argparse.ArgumentParser:
                        "sessions in several projects at once")
     p.add_argument("--hours", type=float, default=24, help="sessions seen and tasks ended this recently")
     p.add_argument("--limit", type=int, default=20, help="the most sessions shown")
+    p.add_argument("--repo", action="append", help="only this repository's sessions and tasks (repeatable)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_overview)
 

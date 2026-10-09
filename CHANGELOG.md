@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.6.21] - 2026-10-09
+
+### Added
+
+- **A watcher outside cauce reads only its repositories.** `cauce overview
+  --repo DIR` and `cauce events --repo DIR` (both repeatable) keep those
+  repositories' sessions, tasks and events; `cauce events --last-id` prints
+  where a watcher starts, and each event `--json` prints carries its task's
+  title, repository and session. A page that shows some repositories (Tanka's)
+  no longer reads every one to filter them itself.
+- **`cauce resume <id> --pressed`.** A person's press on another page runs the
+  same resume the UI's button does, read from cauce's account of the stop
+  (`stops.resume_args`); a rule, approval, budget or `--keep` passed with it
+  is refused. `cauce dismiss --via tanka` says the dismissal came from Tanka's
+  page.
+
 ## [0.6.20] - 2026-10-09
 
 ### Changed

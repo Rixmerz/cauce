@@ -75,6 +75,7 @@ DISMISS_VIA = {
     "ui": "from the UI",
     "cli": "with `cauce dismiss`",
     "mod": "from the session's cauce band",
+    "tanka": "from Tanka's page",
 }
 
 
