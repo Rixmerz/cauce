@@ -28,7 +28,21 @@ from pathlib import Path
 
 from cauce import allow as allow_rules
 from cauce import capabilities as caps
-from cauce import config, dispatch, grants, habits, isolate, launch, models, notes, project, repo, runtime, stops
+from cauce import (
+    config,
+    dispatch,
+    grants,
+    habits,
+    isolate,
+    launch,
+    models,
+    notes,
+    project,
+    repo,
+    runtime,
+    stops,
+    workflows,
+)
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify
 from cauce.escalate import Attempt, Decision, Failure, Move, decide
@@ -85,6 +99,9 @@ class Options:
     #: None reads the `notes` setting (on by default): the project's notes in the
     #: brief, and what a passing worker learned filed into them.
     notes: bool | None = None
+    #: The commit a new worktree starts from instead of HEAD: a workflow step
+    #: builds on the work of the step before it.
+    base: str | None = None
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -420,9 +437,11 @@ def run(
     declared_read_only = the_plan.kind not in _BUILDS and bool(
         _READ_ONLY.search(task.get("body") or task.get("title") or ""))
     context = list(the_plan.context)
-    if options.isolate and writes and repo.toplevel(repo_dir) is not None:
+    # A reading step of a workflow reads the work of the steps before it: it gets
+    # their commit too, in a worktree its tools cannot write to.
+    if options.isolate and (writes or options.base) and repo.toplevel(repo_dir) is not None:
         resumed = isolate.kept(repo_dir, task["id"])
-        workspace = isolate.prepare(repo_dir, task["id"], home())
+        workspace = isolate.prepare(repo_dir, task["id"], home(), base=options.base)
         if resumed:
             context.append("This task was stopped before and is resumed: what its earlier attempts wrote is "
                            "already here. Check it, and finish it rather than starting over.")
@@ -621,6 +640,14 @@ def run(
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
                         changed=report.changed[:50], stop=report.stop.data() if report.stop else None)
         store.add_message(task["id"], "worker", report.text())
+        if task.get("workflow_run"):
+            # The next step starts here, from the engine: no session relays it.
+            # Advancing never fails the run that just ended, and never silently.
+            try:
+                workflows.advance(store, store.get_task(task["id"]), os.environ)
+            except Exception as exc:
+                store.add_event(task["id"], "workflow_error", error=str(exc)[:300])
+                say(f"cauce: #{task['id']} could not start the next workflow step: {exc}")
     return report
 
 

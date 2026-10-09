@@ -74,7 +74,10 @@ measured run of an orchestrator at low effort skipped its own self-check.
   request into a dependency graph is not here yet.
 - **The rest of tasky:** the queue and auto-pull, the dashboard, transcript
   ingest and token accounting, the architecture map.
-- **The rest of vise:** phase-gated workflows and their gates, as an input to
-  what a worker is allowed to do in each phase.
+- **The rest of vise:** gates on a workflow step (validators that must hold
+  before the next step starts, beyond the step's own check) and conditional
+  edges. Workflows themselves are here (`workflows.py`): saved chains of
+  tasks the engine advances, unlike vise's graphs, which the agent itself
+  traversed.
 - **An MCP surface** for reading tasks and memory from inside a session, kept
   small: reading tools for the orchestrator, authoring tools only in workers.

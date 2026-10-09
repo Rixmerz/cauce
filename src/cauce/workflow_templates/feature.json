@@ -1,0 +1,15 @@
+{
+  "name": "feature",
+  "description": "Plan a feature, build it, review the change, and fix what the review found",
+  "inputs": ["goal"],
+  "steps": [
+    {"id": "plan", "title": "Plan it", "kind": "plan",
+     "prompt": "Plan this feature without changing any file: {goal}\n\nRead the code it touches. Answer with the files to change, the order, the tests that prove it works, and the risks. Keep it short enough for the next worker to follow."},
+    {"id": "build", "title": "Build it", "kind": "feature",
+     "prompt": "Build this feature, following the plan below: {goal}\n\nAdd or update the tests the plan names and run them before you stop."},
+    {"id": "review", "title": "Review the change", "kind": "review-routine",
+     "prompt": "Review, without changing any file, the change the step before made for: {goal}\n\nRead what the workflow changed so far (the diff is named below). List each real problem with its file and line: bugs, missing tests, broken behaviour. Say plainly when there is none."},
+    {"id": "fix", "title": "Fix what the review found", "kind": "implement",
+     "prompt": "Fix every problem the review below found in the change for: {goal}\n\nIf the review found none, run the tests and stop. Run the tests before you stop."}
+  ]
+}

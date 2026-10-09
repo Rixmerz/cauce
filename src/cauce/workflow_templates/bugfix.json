@@ -1,0 +1,13 @@
+{
+  "name": "bugfix",
+  "description": "Reproduce a bug with a failing test, fix it, and review the fix",
+  "inputs": ["bug"],
+  "steps": [
+    {"id": "reproduce", "title": "Reproduce it", "kind": "debug-repro",
+     "prompt": "Write a test that fails because of this bug, and change nothing else: {bug}\n\nRun it and show that it fails for the reason described."},
+    {"id": "fix", "title": "Fix it", "kind": "implement",
+     "prompt": "Fix this bug so the failing test from the step before passes, without weakening that test: {bug}\n\nRun the whole test suite before you stop."},
+    {"id": "review", "title": "Review the fix", "kind": "review-routine",
+     "prompt": "Review, without changing any file, the fix for: {bug}\n\nCheck that it fixes the cause rather than the symptom and breaks nothing near it. List each real problem with its file and line; say plainly when there is none."}
+  ]
+}

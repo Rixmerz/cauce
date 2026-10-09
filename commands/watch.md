@@ -8,6 +8,10 @@ work. You read every session's cauce work; each session still runs its own.
 
 ## See how each session stands
 
+Workflow runs show there too, each with the state of every step: a run goes
+on by itself, so watch it rather than starting its steps. `cauce workflow
+status <run>` shows one in depth.
+
 Call the `overview` tool (or run `cauce overview`; `--hours N` widens or narrows
 the window, `--json` for fields). It lists every session cauce saw lately, with
 its directory and last prompt, and under it each task it sent: what waits on the

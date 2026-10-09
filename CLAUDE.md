@@ -35,10 +35,12 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step |
 | `src/cauce/compact.py` | the facts of a session (requests verbatim, failed calls, changed files), written before a compaction and put back after it; no model call |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
+| `src/cauce/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; `workflow_cli.py` is `cauce workflow …` |
 | `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
 | `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified |
 | `commands/orchestration.md` | the one entry point a user types |
 | `commands/habits.md` | review the habit candidates for this repository and install the ones the person picks |
+| `commands/workflow.md` | make, change, copy, run and watch workflows |
 | `commands/watch.md` | a session that watches every other one: `overview`, the endings as they happen, `SendMessage` to send work |
 | `bin/cauce` | the launcher every hook and command goes through |
 | `src/cauce/interpreter.py` | which Python runs cauce; imported before the version check, so it must run on any python3 |
@@ -237,5 +239,17 @@ yields the default kind, not a guess.
   (`Store.claim_unreported`). The Stop hook, the next prompt and the mod's
   wake may run at the same moment, and each ending is still handed over once.
   The mod wakes a session only while no turn runs.
+- A workflow advances on the engine, never on a session: `workflows.advance`
+  runs at the end of every run (`orchestrate.run`), queues what waited on a
+  step that passed, inside one write transaction, and starts the dispatcher;
+  advancing never fails the run that ended, and an error is a
+  `workflow_error` event. The session that started a run hears of it once —
+  at its end or when a step waits on the person — and steps the engine went
+  past are marked reported. A step that stops stops the run there; it goes on
+  by a resume to a pass or `cauce workflow retry`.
+- A workflow definition grants nothing: no rule, no approval, no capability;
+  those are the person's flags on `cauce workflow run`, so a definition a
+  repository commits runs with what the person gives. A bundled template is
+  never written: a change copies it to the user scope.
 - The capability registry is read from the user's cauce home only. A
   repository must never be able to add an MCP server by committing a file.
