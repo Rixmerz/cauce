@@ -76,7 +76,7 @@ test('the tools are registered with the project topics named, and no list the en
     'board': { exitCode: 0, stdout: EMPTY_BOARD },
   })
   await $.session.start({ cwd: '/work/shop', surface: 'terminal', isInteractive: true })
-  expect(seen.tools.map(t => t.name)).toEqual(['recall', 'note', 'queue', 'tasks', 'resume'])
+  expect(seen.tools.map(t => t.name)).toEqual(['recall', 'note', 'queue', 'tasks', 'resume', 'overview'])
   const note = seen.tools.find(t => t.name === 'note')!
   expect((note.inputSchema as any).properties.topic.description).toContain('business, billing;')
   expect((note.inputSchema as any).required).toEqual(['fact'])
@@ -245,7 +245,7 @@ test('the reading tools are not put to the person; queue, resume and a deny are 
   on('tool.check', () => ({ decision: base, reason: 'the engine' }))
   await started($, on, {})
   const verdict = (name: string) => $.tool.check({ tool: `mcp__cauce__${name}`, input: {} })
-  for (const name of ['recall', 'tasks', 'note']) {
+  for (const name of ['recall', 'tasks', 'note', 'overview']) {
     expect((await verdict(name)).decision).toBe('allow')
   }
   // queue and resume spend money: the person's rules and mode decide them
@@ -256,7 +256,7 @@ test('the reading tools are not put to the person; queue, resume and a deny are 
   expect((await $.tool.check({ tool: 'Bash', input: { command: 'cauce recall x' } })).decision).toBe('ask')
   // a deny stays a deny
   base = 'deny'
-  for (const name of ['recall', 'tasks', 'note']) {
+  for (const name of ['recall', 'tasks', 'note', 'overview']) {
     expect((await verdict(name)).decision).toBe('deny')
   }
 })
@@ -265,7 +265,7 @@ test('a cauce that cannot run is said, never a hang', async ($, on) => {
   mock.clock(on)
   const seen = world(on, {}, true)
   await $.session.start({ cwd: '/work/shop', surface: 'terminal', isInteractive: true })
-  expect(seen.tools.length).toBe(5)
+  expect(seen.tools.length).toBe(6)
   expect((await call($, 'tasks', {})).deny).toBe('cauce could not read its board')
   expect((await call($, 'recall', { question: 'x' })).deny).toContain('cauce did not run')
 })
@@ -292,6 +292,18 @@ test('tasks says what waits on the person and how it goes on', async ($, on) => 
   expect(answer.result).toContain('review branch cauce/task-9, then merge it')
   expect(answer.result).toContain('running: #14 write stats (sonnet/medium)')
   expect(answer.result).toContain('queued: #15 add median')
+})
+
+test('overview reads every session through cauce, 24 hours unless asked', async ($, on) => {
+  const text = 'cauce: sessions seen since 2026-10-09T00:00:00+00:00, and their work'
+  const { seen } = await started($, on, {
+    'overview --hours 24': { exitCode: 0, stdout: text },
+    'overview --hours 6': { exitCode: 0, stdout: text + ' (6h)' },
+  })
+  expect((await call($, 'overview', {})).result).toBe(text)
+  expect((await call($, 'overview', { hours: '6' })).result).toBe(text + ' (6h)')
+  expect((await call($, 'overview', { hours: -3 })).result).toBe(text)
+  expect(seen.argv.filter(a => a[0] === 'overview').length).toBe(3)
 })
 
 // --- waking the session -------------------------------------------------------------------

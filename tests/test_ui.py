@@ -630,3 +630,44 @@ def test_a_branch_of_tool_artifacts_only_waits_on_nobody(store: Store):
     work = done([".playwright-mcp/console.log", "src/app.ts"])
     unknown = done([])
     assert {c["id"] for c in api.board(store, {"r"})["needs_you"]} == {work, unknown}
+
+
+def test_overview_is_every_recent_session_and_how_its_work_stands(store: Store, tmp_path, capsys):
+    """One watcher, several projects: per session what waits, runs, is queued and ended."""
+    from cauce import cli
+
+    for name in ("shop", "api", "old"):
+        (tmp_path / name / ".cauce").mkdir(parents=True)
+        store.touch_session(name, str(tmp_path / name), name)
+    store._conn.execute("UPDATE sessions SET last_seen_at = '2020-01-01T00:00:00+00:00' WHERE id = 'old'")
+    waits = store.create_task("add the export", status="running", source="cauce", repo="shop", session_id="shop")
+    stops.record(store, waits["id"], stops.Stop("spec", "the API has no such field", by="worker"))
+    runs = store.create_task("write stats", status="running", source="cauce", repo="api", session_id="api")
+    store.add_event(runs["id"], "planned", kind="implement", start="sonnet/medium", ladder=["sonnet/medium"])
+    store.add_event(runs["id"], "attempt_started", seq=1, cell="sonnet/medium", model="sonnet")
+    ended = store.create_task("fix the date", status="done", source="cauce", repo="api", session_id="api")
+    long_ago = store.create_task("rename it", status="done", source="cauce", repo="api", session_id="api")
+    store._conn.execute("UPDATE tasks SET updated_at = '2020-01-01T00:00:00+00:00' WHERE id = ?", (long_ago["id"],))
+    old_open = store.create_task("old work", status="failed", source="cauce", repo="old", session_id="old")
+    store._conn.execute("UPDATE tasks SET updated_at = '2020-01-01T00:00:00+00:00' WHERE id = ?", (old_open["id"],))
+    queued = store.enqueue("tidy the lane", repo="api", cwd=str(tmp_path / "api"))
+    store._conn.commit()
+
+    seen = api.overview(store, hours=24)
+    by = {s["id"]: s for s in seen["sessions"]}
+    assert set(by) == {"shop", "api", "old"}  # "old" stays: it still has work waiting on the person
+    assert [(t["id"], t["state"], t["cause"]) for t in by["shop"]["tasks"]] == [(waits["id"], "needs_you", "spec")]
+    states = {t["id"]: t["state"] for t in by["api"]["tasks"]}
+    assert states == {runs["id"]: "running", ended["id"]: "ended"}
+    assert by["api"]["counts"] == {"running": 1, "ended": 1}
+    assert [(t["id"], t["state"]) for t in seen["other"]] == [(queued["id"], "queued")]
+    assert [t["id"] for t in store.unreported("shop")] == [waits["id"]]  # a read: nothing claimed
+
+    assert cli.main(["overview"]) == 0
+    out = capsys.readouterr().out
+    assert f"#{waits['id']} [replan] (spec) add the export" in out
+    assert "waits on the person:" in out
+    assert "attempt 1 on sonnet/medium" in out
+    assert "Work no listed session sent" in out
+    assert cli.main(["overview", "--json", "--hours", "1"]) == 0
+    assert json.loads(capsys.readouterr().out)["sessions"]

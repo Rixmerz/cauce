@@ -158,6 +158,53 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
     }
 
 
+def overview(store: Store, hours: float = 24, limit: int = 20) -> dict[str, Any]:
+    """Every session seen in the last `hours`, with how its cauce work stands: for
+    one person, or one agent, watching sessions in several projects at once. Each
+    task that is open (waits, runs, queued) is listed, and each that ended in the
+    window. A read: no ending is claimed, a session still hears of its own."""
+    since = _hours_ago_iso(hours)
+    full = board(store)
+    open_cards: dict[int, dict[str, Any]] = {}
+    for card in full["needs_you"]:
+        stop = card.get("stop") or {}
+        open_cards[card["id"]] = {"state": "needs_you", "asks": stop.get("todo") or card["asks"],
+                                  "cause": stop.get("cause"), "next": stop.get("next")}
+    for card in full["running"]:
+        worker = card.get("worker") or {}
+        open_cards[card["id"]] = {"state": "running", "attempt": card.get("attempt"),
+                                  "cell": worker.get("cell") or card.get("current_cell"),
+                                  "since": worker.get("started_at"), "alive": worker.get("alive")}
+    for lane in full["queued"]:
+        for card in lane["tasks"]:
+            open_cards[card["id"]] = {"state": "queued", "paused": lane["paused"], "reason": lane["reason"]}
+
+    def line(t: dict[str, Any]) -> dict[str, Any]:
+        return {"id": t["id"], "title": t["title"], "status": t["status"], "repo": t["repo"],
+                "cell": t.get("final_cell") or t.get("current_cell"), "cost_usd": round(t.get("cost_usd") or 0, 2),
+                "updated_at": t["updated_at"], **open_cards.get(t["id"], {"state": "ended"})}
+
+    by_session: dict[str | None, list[dict[str, Any]]] = defaultdict(list)
+    for t in store.list_tasks(limit=1000, source=TASK_SOURCES):
+        if t["id"] in open_cards or (t["updated_at"] or "") >= since:
+            by_session[t.get("session_id")].append(line(t))
+    out = []
+    for s in sessions(store, limit=limit * 5):
+        tasks = by_session.pop(s["id"], [])
+        if (s["last_seen_at"] or "") < since and not any(t["state"] != "ended" for t in tasks):
+            continue
+        counts = Counter(t["state"] for t in tasks)
+        out.append({"id": s["id"], "name": s["name"], "cwd": s["cwd"], "repo": s["repo"],
+                    "last_seen_at": s["last_seen_at"], "last_prompt": s["last_prompt"],
+                    "answering": bool(s.get("running")), "resume": s["resume"], "counts": dict(counts),
+                    "tasks": tasks})
+        if len(out) >= limit:
+            break
+    # Work no listed session sent: the queue's, a terminal's, a session not enrolled.
+    rest = [t for tasks in by_session.values() for t in tasks]
+    return {"since": since, "sessions": out, "other": sorted(rest, key=lambda t: t["id"], reverse=True)}
+
+
 def _holds_work(finished: dict | None) -> bool:
     """Whether a kept branch holds anything to review. A branch committed before
     tool artifacts were left out may hold only those: a browser's logs and
@@ -438,6 +485,12 @@ def habit_view(store: Store, days: int = 30) -> dict[str, Any]:
                         "success": c.success, "score": c.score} for c in found[:40]],
         "installed": [{**h, "steps": json.loads(h["steps"])} for h in store.habits()],
     }
+
+
+def _hours_ago_iso(hours: float) -> str:
+    from datetime import UTC, datetime, timedelta
+
+    return (datetime.now(UTC) - timedelta(hours=hours)).isoformat(timespec="seconds")
 
 
 def _days_ago_iso(days: int) -> str:

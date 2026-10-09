@@ -331,11 +331,13 @@ def cmd_dismiss(args: argparse.Namespace) -> int:
 
 def cmd_events(args: argparse.Namespace) -> int:
     store = Store.open()
-    after = args.after
+    after = store.last_event_id() if args.new else args.after
     try:
         while True:
             for e in store.events(after=after, task_id=args.task):
                 after = e["id"]
+                if args.kind and e["kind"] not in args.kind:
+                    continue
                 print(json.dumps(e, ensure_ascii=False) if args.json else
                       f"{e['ts']} #{e['task_id']} {e['kind']} {json.dumps(e['data'], ensure_ascii=False)}")
             if not args.follow:
@@ -474,6 +476,52 @@ def cmd_projects(args: argparse.Namespace) -> int:
     for p in found:
         mark = ("" if p["exists"] else "  (gone)") + ("" if p["enrolled"] else "  (not enrolled: cauce init)")
         print(f"{p['dir'] or p['repo']}  {p['sessions']} session(s), last {p['last_seen']}{mark}")
+    return 0
+
+
+def _overview_task(t: dict) -> str:
+    head = f"#{t['id']} [{t['status']}]"
+    if t["state"] == "needs_you":
+        why = f" ({t['cause']})" if t.get("cause") else ""
+        then = f" — {t['next']}" if t.get("next") else ""
+        return f"{head}{why} {t['title']}\n      waits on the person: {t['asks']}{then}"
+    if t["state"] == "running":
+        alive = "" if t.get("alive") is not False else ", its worker is not alive"
+        return (f"{head} {t['title']}\n      attempt {t.get('attempt') or '?'} on {t.get('cell') or '?'} "
+                f"since {t.get('since') or '?'}{alive}")
+    if t["state"] == "queued":
+        lane = f" (lane paused: {t['reason']})" if t.get("paused") else ""
+        return f"{head} {t['title']}{lane}"
+    return f"{head} {t['title']} — {t.get('cell') or '-'}, ${t['cost_usd']:.2f}, {t['updated_at']}"
+
+
+def cmd_overview(args: argparse.Namespace) -> int:
+    """Every session seen lately, and its work: what waits, runs, is queued, ended.
+    A read for a watcher; it claims no ending, so each session still hears its own."""
+    from cauce.ui import api
+
+    store = Store.open()
+    try:
+        seen = api.overview(store, hours=args.hours, limit=args.limit)
+    finally:
+        store.close()
+    if args.json:
+        print(json.dumps(seen, ensure_ascii=False, default=str))
+        return 0
+    order = {"needs_you": 0, "running": 1, "queued": 2, "ended": 3}
+    print(f"cauce: sessions seen since {seen['since']}, and their work")
+    for x in seen["sessions"]:
+        state = "answering a prompt" if x["answering"] else "idle"
+        print(f"\n{x['name'] or x['id']} — {x['cwd']} ({state}, last seen {x['last_seen_at']})")
+        print(f"  resume: {x['resume']}")
+        if x["last_prompt"]:
+            print(f"  last prompt: {x['last_prompt']}")
+        for t in sorted(x["tasks"], key=lambda t: (order[t["state"]], -t["id"])):
+            print(f"  {_overview_task(t)}")
+    if seen["other"]:
+        print("\nWork no listed session sent (the queue, a terminal, an older session):")
+        for t in sorted(seen["other"], key=lambda t: (order[t["state"]], -t["id"])):
+            print(f"  {_overview_task(t)}")
     return 0
 
 
@@ -1294,6 +1342,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--task", type=int)
     p.add_argument("--after", type=int, default=0, help="only events after this id")
     p.add_argument("--follow", "-f", action="store_true", help="keep printing new events")
+    p.add_argument("--kind", action="append", help="only events of this kind, e.g. finished (repeatable)")
+    p.add_argument("--new", action="store_true", help="only events from now on (with --follow, a watch)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_events)
 
@@ -1478,6 +1528,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--full", action="store_true", help="the whole board as JSON")
     p.add_argument("--repo", action="append", help="only this repository (repeatable)")
     p.set_defaults(func=cmd_board)
+
+    p = sub.add_parser("overview", help="every session seen lately and how its work stands: for watching "
+                       "sessions in several projects at once")
+    p.add_argument("--hours", type=float, default=24, help="sessions seen and tasks ended this recently")
+    p.add_argument("--limit", type=int, default=20, help="the most sessions shown")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_overview)
 
     p = sub.add_parser("projects", help="the enrolled projects (a .cauce/ folder) cauce has worked in")
     p.add_argument("--json", action="store_true")

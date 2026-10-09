@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.6.15] - 2026-10-09
+
+### Added
+
+- **One session watches the others.** `/cauce:watch` makes a session the
+  watcher of every session that uses cauce, one per project: `cauce overview`
+  (and the mod's `overview` tool) lists every session seen lately with its
+  directory, last prompt and work: what waits on the person and why, what runs
+  on which cell and since when, what is queued, what ended. It reads and
+  claims nothing, so each session still hears of its own endings. Sending a
+  session work is Claude Code's `ListAgents` and `SendMessage`.
+- `cauce events --kind <kind>` keeps one kind of event, and `--new` starts
+  from now: `cauce events --follow --new --kind finished` is every project's
+  endings as they happen.
+
+### Fixed
+
+- The README described the mod's band and pane, gone since 0.6.12.
+
 ## [0.6.14] - 2026-10-09
 
 ### Fixed

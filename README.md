@@ -328,10 +328,10 @@ On a Claude Code that loads mods (function hooks), the plugin also loads
 `hooks/cauce.tsx`, a thin layer over the same core. The classic hooks stay, so
 everything above works without it.
 
-- **Tools the model calls by name**: `recall`, `note`, `queue`, `tasks` and
-  `resume` (as `mcp__cauce__<name>`). There is no `cauce` on PATH to find, no
-  permission rule per command, and the reading tools (`recall`, `tasks`,
-  `note`) never ask. A value cauce does not take (a kind, a topic, a malformed
+- **Tools the model calls by name**: `recall`, `note`, `queue`, `tasks`,
+  `resume` and `overview` (as `mcp__cauce__<name>`). There is no `cauce` on
+  PATH to find, no permission rule per command, and the reading tools
+  (`recall`, `tasks`, `note`, `overview`) never ask. A value cauce does not take (a kind, a topic, a malformed
   link) is answered with what it takes, never refused as invalid parameters.
   `queue` returns at once: the ending comes back on its own. `resume`
   continues work in the background, and refuses what only a person may clear:
@@ -341,13 +341,22 @@ everything above works without it.
   tells you and goes on. Work that ends during a turn is still delivered by
   the Stop hook. Delivery is claimed atomically, so an ending is never handed
   over twice. Turn this off with the `wake` plugin setting.
-- **A status entry** (`cauce ⚠2 ▶1 ⏸0`), and **a band above the prompt** for
-  what waits on you. It has a button that continues each one, with exactly
-  the rule cauce suggests: *Allow & resume*, *Approve & resume*, *Resume*.
-  A refusal also offers *Always allow here*, which keeps the rule for every
-  task in the repository. The press is yours; the model has no such button.
-- **`/cauce`** opens a pane with the board: cancel what runs, and confirm or
-  drop the notes whose code changed.
+- **A status line** (`cauce · 2 waits on you · 1 running · 0 queued`).
+- **`/cauce`** opens the web board, where each stopped task has the button that
+  continues it with exactly the rule cauce suggests (*Allow & resume*,
+  *Approve & resume*, *Resume*, *Always allow here*). The press is yours; the
+  model has no such button.
+
+### Watching several sessions
+
+One session per project, and one more that watches them all: run
+`/cauce:watch` in it. It reads every session cauce saw lately and how its work
+stands, with `overview` (`cauce overview` in a terminal: per session, what
+waits on you and why, what runs on which model and since when, what is queued,
+what ended). It hears every ending as it happens through
+`cauce events --follow --new --kind finished`, and sends a session work with
+Claude Code's own `ListAgents` and `SendMessage`. It reads; it claims no
+ending, so each session still hears of its own work.
 
 ### The UI
 

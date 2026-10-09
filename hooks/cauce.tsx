@@ -1,6 +1,6 @@
 // cauce as a Claude Code mod: the same core, reached from inside the session.
 //
-// - Tools the model calls by name (recall, note, queue, tasks, resume) instead
+// - Tools the model calls by name (recall, note, queue, tasks, resume, overview) instead
 //   of `cauce` through Bash: no PATH to find, no permission rule per command.
 //   Their schemas are loose on purpose: a value outside a list is read by the
 //   handler and answered with what cauce takes, never refused as "Invalid tool
@@ -33,10 +33,12 @@ const NOTE = 'mcp__cauce__note'
 const QUEUE = 'mcp__cauce__queue'
 const TASKS = 'mcp__cauce__tasks'
 const RESUME = 'mcp__cauce__resume'
-/** The tools that only read the project's notes and board, or keep a note in
- * cauce's own store: asking the person for each is a prompt that protects
- * nothing. `queue` and `resume` spend money, and stay the person's call. */
-const QUIET = [RECALL, TASKS, NOTE]
+const OVERVIEW = 'mcp__cauce__overview'
+/** The tools that only read the project's notes and board, every session's
+ * work, or keep a note in cauce's own store: asking the person for each is a
+ * prompt that protects nothing. `queue` and `resume` spend money, and stay the
+ * person's call. */
+const QUIET = [RECALL, TASKS, NOTE, OVERVIEW]
 
 /** A plugin tool's arguments, as the model gave them: loose until read. */
 function input(e: object): Record<string, unknown> {
@@ -214,6 +216,16 @@ export const register: Register = (on, options) => {
         required: ['id'],
       },
     })
+    await $.tool.register({
+      name: 'overview',
+      description: "Every Claude Code session cauce saw lately, in every project, and how its work stands: what "
+        + 'waits on the person and why, what runs (attempt, model, since when), what is queued, what ended. For '
+        + 'watching sessions in several projects from one place; it reads, and each session still hears its own endings.',
+      inputSchema: {
+        type: 'object',
+        properties: { hours: { type: ['integer', 'string'], description: 'sessions seen and tasks ended this recently; 24 when left out' } },
+      },
+    })
     await $.command.register({ name: 'cauce', description: "cauce's board: what waits on you, runs and is queued" })
     $.clock.every(POLL_MS, () => {
       void poll($, wakes).catch(ignore)
@@ -332,6 +344,12 @@ export const register: Register = (on, options) => {
     if (!ran.ok) return { deny: ran.err || `cauce could not resume #${id}` }
     void refresh($).catch(ignore)
     return { result: ran.out }
+  }).catch(failed)
+
+  on('tool.call', { tool: OVERVIEW }, async ($, call) => {
+    const hours = whole(input(call).hours)
+    const ran = await cauce($, ['overview', '--hours', String(hours !== null && hours > 0 ? hours : 24)])
+    return ran.ok ? { result: ran.out } : { deny: ran.err || 'cauce overview failed' }
   }).catch(failed)
 
   // Only an `ask` turns into an allow: a rule or a setting that denies one of
