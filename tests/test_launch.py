@@ -57,9 +57,12 @@ def test_argv_carries_every_ceiling_and_restriction(tmp_path):
     assert "--strict-mcp-config" in argv and "--no-session-persistence" in argv
 
 
-def test_haiku_gets_no_effort_flag(tmp_path):
+def test_haiku_gets_its_effort_flag(tmp_path):
+    """Haiku 5.5 has the dial; a cell recorded without one runs at its default."""
     argv = build_argv(spec(tmp_path, cell=Cell("haiku")))
-    assert "--effort" not in argv and "--add-dir" not in argv and "--tools" not in argv
+    assert argv[argv.index("--effort") + 1] == "medium"
+    assert "--add-dir" not in argv
+    assert "--tools" not in argv
 
 
 def test_a_pass_needs_evidence(tmp_path):

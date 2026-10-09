@@ -200,6 +200,8 @@ def ask_haiku(
     argv = [
         claude_bin, "-p",
         "--model", models.resolve("haiku"),
+        # A short JSON answer to a narrow question: thinking longer buys nothing.
+        "--effort", "low",
         "--tools", "",
         "--strict-mcp-config",
         "--no-session-persistence",

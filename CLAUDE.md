@@ -10,7 +10,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 
 | Path | What lives there |
 |---|---|
-| `src/cauce/matrix.py` | models, the five efforts and their purpose, the ladder per kind |
+| `src/cauce/matrix.py` | models, the five efforts and their purpose, the ladder per kind; a model's default effort reads cells recorded before it had the dial |
 | `src/cauce/classify.py` | rules first, Haiku for the rest; `frontier` only by tag |
 | `src/cauce/escalate.py` | failure kind → move (retry, more effort, next model, more turns, replan) |
 | `src/cauce/launch.py` | one attempt as `claude -p`: argv, the result contract, parsing, git-read changes |

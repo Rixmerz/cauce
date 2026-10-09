@@ -5,11 +5,12 @@ import pytest
 from cauce.matrix import EFFORTS, KINDS, LADDERS, MODELS, READ_ONLY_KINDS, Cell, estimate_usd, ladder_for
 
 
-def test_every_effort_level_exists_and_haiku_has_none():
+def test_every_effort_level_exists_and_haiku_defaults_to_medium():
     assert EFFORTS == ("low", "medium", "high", "xhigh", "max")
-    assert Cell("haiku").label == "haiku"
+    assert Cell("haiku").label == "haiku/medium"  # how older runs recorded it
+    assert Cell("haiku", "low").label == "haiku/low"
     with pytest.raises(ValueError):
-        Cell("haiku", "low")
+        Cell("haiku", "turbo")
     with pytest.raises(ValueError):
         Cell("sonnet")
     with pytest.raises(ValueError):
@@ -17,7 +18,7 @@ def test_every_effort_level_exists_and_haiku_has_none():
 
 
 def test_parse_round_trips():
-    for label in ("haiku", "sonnet/low", "opus/xhigh", "fable/max"):
+    for label in ("haiku/low", "sonnet/low", "opus/xhigh", "fable/max"):
         assert Cell.parse(label).label == label
 
 

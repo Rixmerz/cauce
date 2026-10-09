@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.6.13] - 2026-10-09
+
+### Changed
+
+- **Haiku 5.5.** Haiku has the effort dial now (low to max, default medium)
+  and costs a tenth of what Haiku 4.5 did ($0.10 / $0.50 per MTok), so the
+  matrix gives it its dial and its rates: `classify` climbs haiku/low →
+  haiku/medium → sonnet/low, `explore` and `docs` haiku/medium → haiku/high →
+  sonnet/medium. A cell older runs recorded as plain `haiku` reads as
+  haiku/medium, the model's default. cauce's own questions to Haiku
+  (classifying, dispatch, notes, session names) ask at `--effort low`.
+  Spend is priced at the new rates. A real `explore` task in a sandbox
+  passed at haiku/medium on claude-haiku-5-5 for $0.01.
+- Pin Haiku with `cauce config model haiku claude-haiku-5-5` to keep workers
+  on it whatever the CLI's alias says.
+
 ## [0.6.12] - 2026-10-09
 
 ### Fixed
