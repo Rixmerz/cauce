@@ -86,3 +86,20 @@ def installed(env: Mapping[str, str]) -> list[tuple[tuple[int, ...], Path]]:
         if version and os.access(launcher, os.X_OK):
             found.append((version, launcher))
     return sorted(found)
+
+
+def forward_to(argv: list[str], env: Mapping[str, str], own: str, version: str) -> Path | None:
+    """The newer installed cauce a command should run instead of this copy, or None.
+
+    A session's PATH keeps the plugin version it started with, so `cauce <new
+    command>` one update later would be "invalid choice". A command runs the
+    newest install; a hook stays on the version that registered it, and a copy
+    outside Claude Code's plugin cache (a checkout being worked on) never forwards."""
+    marker = f"{os.sep}plugins{os.sep}cache{os.sep}"
+    if (argv[:1] == ["hook"]) or marker not in own:
+        return None
+    found = installed(env)
+    mine = parse_version(version)
+    if not found or mine is None or found[-1][0] <= mine:
+        return None
+    return found[-1][1]

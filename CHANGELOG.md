@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.6.17] - 2026-10-09
+
+### Fixed
+
+- **A typed command runs the newest cauce installed.** A session's PATH keeps
+  the plugin version it started with, and `/reload-plugins` does not change
+  it: one update later, `cauce prune` was an invalid choice. A command now
+  forwards, once, to the newest install in Claude Code's plugin cache. Hooks
+  stay on the version that registered them, and a copy outside the cache (a
+  checkout) never forwards.
+
 ## [0.6.16] - 2026-10-09
 
 ### Added
