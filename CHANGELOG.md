@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.6.18] - 2026-10-09
+
+### Fixed
+
+- `cauce events` without `--follow` printed the first 200 events and stopped,
+  so `--kind branch_pruned` found nothing in a store with more. It reads every
+  page now.
+
 ## [0.6.17] - 2026-10-09
 
 ### Fixed
