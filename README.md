@@ -379,6 +379,15 @@ what ended). It hears every ending as it happens through
 Claude Code's own `ListAgents` and `SendMessage`. It reads; it claims no
 ending, so each session still hears of its own work.
 
+A watcher outside Claude Code (a dashboard, an assistant) gets the same with
+fields: `cauce overview --json --repo DIR` keeps the repositories it may see,
+`cauce events --last-id` is where it starts and
+`cauce events --after N --kind finished --repo DIR --json` the endings since,
+each with its task's title, repository and session. A button a person presses
+there resumes a stopped task with `cauce resume <id> --pressed`: cauce reads the
+rules, approval or budget from its own account of the stop, as the UI's button
+does, and refuses anything else passed with it.
+
 ### The UI
 
 `cauce ui` (or `/cauce:ui` in a session) serves a local page (`http://127.0.0.1:8790/`, `--open` opens it)

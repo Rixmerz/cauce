@@ -757,3 +757,81 @@ def test_an_unknown_kind_names_the_kinds():
 
     with pytest.raises(argparse.ArgumentTypeError, match="leave --kind out"):
         cli._kind("whatever")
+
+
+def test_events_for_a_watcher_outside_cauce(tmp_path, capsys):
+    """A neighbour that watches some repositories starts at the newest event and reads only theirs, each
+    ending named without asking again."""
+    from cauce import repo
+
+    mine, theirs = tmp_path / "mine", tmp_path / "theirs"
+    mine.mkdir()
+    theirs.mkdir()
+    store = Store.open()
+    ours = store.create_task("fix the cart", status="done", source="cauce", repo=repo.key(mine), session_id="s1")
+    other = store.create_task("elsewhere", status="done", source="cauce", repo=repo.key(theirs))
+    store.add_event(ours["id"], "finished", status="done")
+    store.add_event(other["id"], "finished", status="done")
+    store.add_event(ours["id"], "reported", via="stop")
+    last = store.last_event_id()
+    store.close()
+    assert cli.main(["events", "--last-id"]) == 0
+    assert capsys.readouterr().out.strip() == str(last)
+    assert cli.main(["events", "--json", "--kind", "finished", "--repo", str(mine)]) == 0
+    [line] = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    assert (line["task_id"], line["repo"], line["title"], line["session_id"]) == (
+        ours["id"], repo.key(mine), "fix the cart", "s1")
+    assert cli.main(["events", "--json", "--after", str(last), "--repo", str(mine)]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_overview_keeps_the_repositories_asked_for(tmp_path, capsys):
+    from cauce import repo
+
+    for name in ("shop", "api"):
+        (tmp_path / name / ".cauce").mkdir(parents=True)
+    store = Store.open()
+    for name in ("shop", "api"):
+        store.touch_session(name, str(tmp_path / name), repo.key(tmp_path / name))
+        store.create_task(f"work in {name}", status="done", source="cauce", repo=repo.key(tmp_path / name),
+                          session_id=name)
+    store.enqueue("tidy the api", repo=repo.key(tmp_path / "api"), cwd=str(tmp_path / "api"))
+    store.close()
+    assert cli.main(["overview", "--json", "--repo", str(tmp_path / "shop")]) == 0
+    seen = json.loads(capsys.readouterr().out)
+    assert [s["id"] for s in seen["sessions"]] == ["shop"]
+    assert [t["title"] for t in seen["sessions"][0]["tasks"]] == ["work in shop"]
+    assert seen["other"] == []
+
+
+def test_a_press_elsewhere_runs_the_resume_cauce_names_and_nothing_else(tmp_path, monkeypatch, capsys):
+    """A page outside cauce sends the task id; the rules, approval or budget come from cauce's account."""
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(tmp_path)
+    store = Store.open()
+    refused = store.create_task("x", status="blocked", source="cauce", repo="r", cwd=str(work))
+    stops.record(store, refused["id"], stops.Stop("permission", "refused", allow=("Bash(npm:*)",)))
+    done = store.create_task("y", status="done", source="cauce", repo="r", cwd=str(work))
+    store.close()
+    ran = []
+    monkeypatch.setattr(cli, "_detach", lambda args: ran.append((args.id, args.allow, cli.os.getcwd())) or 0)
+    assert cli.main(["resume", str(refused["id"]), "--pressed"]) == 0
+    assert ran == [(refused["id"], ["Bash(npm:*)"], str(work))]
+    assert cli.main(["resume", str(refused["id"]), "--pressed", "--allow", "Bash(rm:*)"]) == 2
+    assert cli.main(["resume", str(refused["id"]), "--pressed", "--keep"]) == 2
+    assert "give it the task id alone" in capsys.readouterr().err
+    assert cli.main(["resume", str(done["id"]), "--pressed"]) == 1
+    assert cli.main(["resume", "999", "--pressed"]) == 1
+    assert "has no resume to press" in capsys.readouterr().err
+    assert len(ran) == 1
+
+
+def test_a_dismissal_from_tanka_says_where_it_came_from(capsys):
+    store = Store.open()
+    t = store.create_task("x", status="failed", source="cauce", repo="r")
+    store.close()
+    assert cli.main(["dismiss", str(t["id"]), "--via", "tanka"]) == 0
+    store = Store.open()
+    assert "from Tanka's page" in stops.of(store, store.get_task(t["id"])).reason
+    store.close()
