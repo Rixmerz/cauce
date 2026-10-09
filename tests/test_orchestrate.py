@@ -992,17 +992,38 @@ def test_servers_named_by_a_port_that_answers_need_no_warning():
 
 
 @pytest.mark.parametrize("text", ["TASK: Final browser validation (READ-ONLY)", "Valida el flujo, solo lectura",
-                                  "do not edit any files, just report", "no modifiques ningún archivo"])
+                                  "do not edit any files, just report", "no modifiques ningún archivo",
+                                  "THIS IS A READ-ONLY VALIDATION.",
+                                  "READ-ONLY: do not edit, create or delete any file",
+                                  "Do not modify any repo file.", "Investigate (read-only) a timezone bug",
+                                  "una tarea de solo lectura"])
 def test_a_task_that_says_it_changes_nothing_is_read_only(text):
     from cauce import orchestrate
 
     assert orchestrate._READ_ONLY.search(text)
 
 
-def test_a_task_that_writes_is_not_read_only():
+@pytest.mark.parametrize("text", [
+    "fix the reader so it reads only once",
+    "guardar crea una nueva version; historial de versiones solo lectura.",
+    "Spanish, matching the README's existing style. Do not change code. Commit it.",
+    "use the --space-* tokens; Do NOT edit any file under src/app/features/admin",
+    "three independent read-only investigations found the bug",
+])
+def test_a_task_that_writes_is_not_read_only(text):
+    """Each was a task that had to write, told by its brief that it could not."""
     from cauce import orchestrate
 
-    assert orchestrate._READ_ONLY.search("fix the reader so it reads only once") is None
+    assert orchestrate._READ_ONLY.search(text) is None
+
+
+def test_a_feature_that_names_something_read_only_still_writes(git_repo, store):
+    """A feature asking for a read-only version history was briefed as read-only,
+    three times, and stopped each time as a task found wrong."""
+    script = Script(ok())
+    run("Add the version history view (solo lectura)", git_repo, store, registry={},
+        launcher=script, classifier=kind("feature"))
+    assert "This task is read-only" not in script.specs[0].prompt
 
 
 def test_a_validation_that_says_it_is_read_only_is_read_as_one(git_repo, store):

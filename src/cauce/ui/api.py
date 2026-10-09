@@ -118,7 +118,8 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
             branch = finished["data"].get("branch") if finished else None
             item["branch"] = branch
             done.append(item)
-            if branch and t["updated_at"] >= _days_ago_iso(REVIEW_DAYS) and not _landed(t, branch, finished):
+            if (branch and _holds_work(finished) and t["updated_at"] >= _days_ago_iso(REVIEW_DAYS)
+                    and not _landed(t, branch, finished)):
                 needs.append({**item, "asks": f"review branch {branch}, then merge it"})
     # A prompt answered in a session is recorded as a task too (it carries the
     # session's follow-ups and result), but it is not work on the board: every
@@ -155,6 +156,16 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
         "done": sorted(done, key=lambda t: t["updated_at"] or "", reverse=True)[:60],
         "last_event": store.last_event_id(),
     }
+
+
+def _holds_work(finished: dict | None) -> bool:
+    """Whether a kept branch holds anything to review. A branch committed before
+    tool artifacts were left out may hold only those: a browser's logs and
+    snapshots, nothing a person merges. Unrecorded is still asked for."""
+    from cauce.isolate import is_artifact
+
+    changed = (finished or {}).get("data", {}).get("changed") or []
+    return not changed or not all(is_artifact(path) for path in changed)
 
 
 def _landed(task: dict, branch: str, finished: dict | None) -> bool:

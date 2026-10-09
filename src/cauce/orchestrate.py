@@ -417,7 +417,8 @@ def run(
 
     workspace = None
     writes = the_plan.kind not in READ_ONLY_KINDS
-    declared_read_only = bool(_READ_ONLY.search(task.get("body") or task.get("title") or ""))
+    declared_read_only = the_plan.kind not in _BUILDS and bool(
+        _READ_ONLY.search(task.get("body") or task.get("title") or ""))
     context = list(the_plan.context)
     if options.isolate and writes and repo.toplevel(repo_dir) is not None:
         resumed = isolate.kept(repo_dir, task["id"])
@@ -632,10 +633,21 @@ _BROWSER_CAPS = ("browser", "playwright", "chrome", "puppeteer")
 
 
 #: A task that says in its own words it must change nothing: a validation whose
-#: findings are its answer, whatever kind it was filed under.
-_READ_ONLY = re.compile(r"\b(?:read[- ]only|solo lectura|s[oó]lo de lectura|do not (?:edit|modify|change) "
-                        r"(?:any )?(?:files?|code)|no (?:edites|modifiques) (?:ning[uú]n )?(?:archivos?|c[oó]digo))\b",
-                        re.IGNORECASE)
+#: findings are its answer, whatever kind it was filed under. The words must be
+#: about the task: "a read-only version history" is a thing to build, and "do not
+#: edit any file under src/admin" bounds a change instead of forbidding one.
+_READ_ONLY = re.compile(
+    r"\bread[- ]only(?:\s*[:)]|\s+(?:validation|audit|review|investigation|check|pass|run|session|task)\b)"
+    r"|(?:tarea|validaci[oó]n|auditor[ií]a|revisi[oó]n|investigaci[oó]n|sesi[oó]n)\s+(?:de\s+)?s[oó]lo\s+"
+    r"(?:de\s+)?lectura|[,(:]\s*s[oó]lo\s+(?:de\s+)?lectura\s*(?:[).,;\n]|$)"
+    r"|\bdo not (?:edit|modify|change|touch)\b[\w ,]{0,25}?\bany (?:repo |repository )?files?\b"
+    r"(?!\s+(?:under|inside|outside|other|except|besides|but|in\s+(?!any\b|the\s+repo|this\s+repo)))"
+    r"|\bno (?:edites|modifiques|cambies|toques)\b[\w ,]{0,25}?\b(?:ning[uú]n\s+)?archivos?\b"
+    r"(?!\s+(?:de|en|bajo|dentro|fuera|salvo|excepto|que)\b)",
+    re.IGNORECASE)
+#: Kinds whose work is the change itself: whatever their text says is read-only,
+#: they write. Every misreading of a task as read-only was one of these.
+_BUILDS = frozenset({"feature", "implement", "refactor", "docs"})
 _PORT = re.compile(r"(?:localhost|127\.0\.0\.1):(\d{2,5})\b")
 
 

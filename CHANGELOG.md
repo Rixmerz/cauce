@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.6.14] - 2026-10-09
+
+### Fixed
+
+- **A task that builds something read-only still writes.** Since 0.6.10, a
+  task whose text said "read-only" anywhere was briefed as one: a feature
+  asking for a read-only version history ("historial de versiones solo
+  lectura") was told it could change nothing, three times, and each stopped as
+  a task found wrong; a docs task saying "do not change code" could not edit
+  its README. The words must now be about the task ("READ-ONLY VALIDATION",
+  "(read-only)", "do not edit any file"), a bound like "do not edit any file
+  under src/admin" is no such declaration, and `feature`, `implement`,
+  `refactor` and `docs` tasks are never read as read-only.
+- **No review card for a branch of tool artifacts.** Validations committed
+  before 0.6.10 left branches holding only a browser's logs and snapshots;
+  the board asked for each to be reviewed and merged. A kept branch whose
+  changed files are all `isolate.ARTIFACT_DIRS` waits on nobody.
+
 ## [0.6.13] - 2026-10-09
 
 ### Changed
