@@ -144,7 +144,7 @@ def test_read_only_work_gets_no_edit_tools_and_no_worktree(git_repo, store):
     assert spec.disallowed_tools == WRITE_TOOLS
     assert spec.launch_dir == git_repo.resolve()
     assert "read-only" in spec.prompt
-    assert report.branch is None and report.final_cell == "haiku"
+    assert report.branch is None and report.final_cell == "haiku/medium"
 
 
 def test_capabilities_are_handed_over_and_reactive_ones_join_after_a_failure(git_repo, store):

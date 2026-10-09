@@ -44,7 +44,8 @@ The model decides how well the work *notices* things; the effort decides how
 | `xhigh` | features that cross several parts, bugs without a clear cause, hard plans |
 | `max` | correctness over cost — only where the level below showed headroom |
 
-Haiku has no effort dial. Fable is reached only by an explicit `#fable` tag or
+Haiku has the dial too since Haiku 5.5 (a cell recorded as plain `haiku` runs at
+`medium`, its default); classifying asks it at `low`. Fable is reached only by an explicit `#fable` tag or
 with `--allow-approval`. `cauce matrix` prints every kind and its ladder:
 
 ```
@@ -52,7 +53,7 @@ implement        sonnet/medium → sonnet/high → sonnet/xhigh → opus/high
 debug-repro      sonnet/high → sonnet/xhigh → opus/high → opus/xhigh
 debug-unclear    opus/high → opus/xhigh → opus/max
 plan             opus/xhigh → opus/max → fable/high
-docs             haiku → sonnet/low → sonnet/medium
+docs             haiku/medium → haiku/high → sonnet/medium
 ```
 
 ### Escalation reads the failure, not the ladder

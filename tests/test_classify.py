@@ -145,3 +145,16 @@ def test_the_model_reading_a_change_as_a_search_is_overruled(monkeypatch):
     found = classify("Crear la estructura del frontend según el spec", runner=fake)
     assert found.kind == "implement" and found.source == "model" and found.cost_usd == 0.01
     assert found.reason == "read as explore, but it asks for a change (crear)"
+
+
+def test_haiku_answers_a_narrow_question_at_low_effort():
+    from cauce import classify
+
+    seen = {}
+
+    def runner(argv, **kw):
+        seen["argv"] = argv
+        raise OSError("no claude here")
+
+    classify.ask_haiku("s", {"type": "object"}, "q", runner=runner)
+    assert seen["argv"][seen["argv"].index("--effort") + 1] == "low"

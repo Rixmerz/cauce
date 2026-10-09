@@ -24,7 +24,9 @@ be climbed past:
               or the change is critical.
   ==========  ===================================================================
 
-Haiku has no effort dial at all; Fable is reserved for work a person asked for.
+Haiku has the dial since Haiku 5.5; a cell written without one (``haiku``, as
+older runs recorded it) is Haiku at ``medium``, the model's own default. Fable is
+reserved for work a person asked for.
 """
 from __future__ import annotations
 
@@ -50,12 +52,16 @@ class Model:
     has_effort: bool
     #: A model nothing routes to without a person saying so.
     needs_approval: bool = False
+    #: The effort a cell written without one runs at, where the model's dial is
+    #: newer than the cells cauce already recorded for it.
+    default_effort: str | None = None
 
 
 #: Cheapest first. Prices are first-party API rates per million tokens; on a
 #: subscription they are a proxy for how much of the plan a call uses.
 MODELS: dict[str, Model] = {
-    "haiku": Model("haiku", 1.0, 5.0, has_effort=False),
+    # Haiku 5.5: a tenth of Haiku 4.5's rates, with the effort dial (default medium).
+    "haiku": Model("haiku", 0.10, 0.50, has_effort=True, default_effort="medium"),
     "sonnet": Model("sonnet", 2.0, 10.0, has_effort=True),
     "opus": Model("opus", 4.0, 20.0, has_effort=True),
     "fable": Model("fable", 10.0, 50.0, has_effort=True, needs_approval=True),
@@ -75,6 +81,8 @@ class Cell:
         if self.model not in MODELS:
             raise ValueError(f"unknown model {self.model!r}")
         if MODELS[self.model].has_effort:
+            if self.effort is None and MODELS[self.model].default_effort:
+                object.__setattr__(self, "effort", MODELS[self.model].default_effort)
             if self.effort not in EFFORTS:
                 raise ValueError(f"{self.model} needs an effort, one of {EFFORTS}")
         elif self.effort is not None:
@@ -114,9 +122,9 @@ def ladder(*labels: str) -> tuple[Cell, ...]:
 #: jumps to the next model (see ``escalate``).
 LADDERS: dict[str, tuple[Cell, ...]] = {
     "chat": ladder("sonnet/low", "sonnet/medium"),
-    "classify": ladder("haiku", "sonnet/low"),
-    "explore": ladder("haiku", "sonnet/low", "sonnet/medium"),
-    "docs": ladder("haiku", "sonnet/low", "sonnet/medium"),
+    "classify": ladder("haiku/low", "haiku/medium", "sonnet/low"),
+    "explore": ladder("haiku/medium", "haiku/high", "sonnet/medium"),
+    "docs": ladder("haiku/medium", "haiku/high", "sonnet/medium"),
     "test": ladder("sonnet/medium", "sonnet/high", "opus/high"),
     "refactor": ladder("sonnet/medium", "sonnet/high", "opus/high"),
     "implement": ladder("sonnet/medium", "sonnet/high", "sonnet/xhigh", "opus/high"),

@@ -36,7 +36,8 @@ def test_run_reports_and_fails_on_a_non_pass(capsys, git_repo, monkeypatch):
     out, err = capsys.readouterr()
     assert code == 1 and "task #1: failed" in out
     # progress goes to stderr as it happens, so stdout stays the report alone
-    assert err.splitlines()[:2] == ["cauce: task #1 started: docs, at haiku", "cauce: #1 attempt 1 at haiku"]
+    assert err.splitlines()[:2] == ["cauce: task #1 started: docs, at haiku/medium",
+                                    "cauce: #1 attempt 1 at haiku/medium"]
     assert "cauce: task #1 started" not in out
 
 
@@ -710,9 +711,9 @@ def test_a_start_cell_with_no_such_dial_is_a_usage_error(capsys):
     import pytest
 
     with pytest.raises(SystemExit) as exit_:
-        cli.main(["run", "--start", "haiku/low", "x"])
+        cli.main(["run", "--start", "haiku/turbo", "x"])
     assert exit_.value.code == 2
-    assert "haiku has no effort dial" in capsys.readouterr().err
+    assert "haiku needs an effort" in capsys.readouterr().err
 
 
 def test_a_kind_alias_is_read_as_the_kind_it_means(capsys):
