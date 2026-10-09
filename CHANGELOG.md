@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.6.16] - 2026-10-09
+
+### Added
+
+- **Branches whose work landed are deleted.** A `cauce/task-N` branch of a
+  task that is done (or dismissed) goes once nothing would be lost: its
+  commits are on another branch (a merge), HEAD holds every file it changed as
+  it changed them (a squash or a cherry-pick), or all it changed is tool
+  artifacts. A branch checked out in a worktree, or of a task that may still
+  resume, stays. Each deletion is a `branch_pruned` event on the task with its
+  tip, so `git branch cauce/task-N <tip>` brings it back. It runs at a
+  session's start for its checkout and every ten minutes in the UI server;
+  `cauce prune [--dry-run] [--repo DIR]` runs it by hand, and the `prune`
+  setting (on by default) turns it off.
+
 ## [0.6.15] - 2026-10-09
 
 ### Added

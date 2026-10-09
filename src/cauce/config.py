@@ -32,6 +32,9 @@ DEFAULTS: dict[str, Any] = {
     # Each project keeps notes of what it knows, by topic: workers and sessions
     # add to them (Haiku files them), workers and sessions read them back.
     "notes": True,
+    # A branch cauce kept is deleted once its work landed: merged, squash-merged,
+    # or holding only tool artifacts. Its tip stays on the task's events.
+    "prune": True,
 }
 
 _TRUE = {"1", "true", "on", "yes"}

@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.6.15",
+  "version": "0.6.16",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -49,6 +49,12 @@
       "type": "boolean",
       "title": "Wake the session when queued work ends",
       "description": "With Claude Code's mods: when a task this session queued ends while the session is idle, cauce starts a turn with its notice, so the session tells you and continues without waiting for your next message. Off: the notice waits for the end of a turn or your next message.",
+      "default": true
+    },
+    "prune": {
+      "type": "boolean",
+      "title": "Delete merged branches",
+      "description": "A branch cauce kept for a task (cauce/task-N) is deleted once its work landed: merged into another branch, squash-merged (HEAD holds every file it changed), or holding only tool artifacts. Never one checked out or one a stopped task may resume from; its tip stays on the task's events. Off: branches stay until you delete them.",
       "default": true
     }
   },

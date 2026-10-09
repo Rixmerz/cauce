@@ -209,6 +209,48 @@ def landed(repo_dir: Path, branch: str, paths: Sequence[str] = ()) -> bool:
 
 
 
+def kept_branches(repo_dir: Path) -> dict[int, str]:
+    """Every `cauce/task-<id>` branch in a checkout, by task id, with its tip."""
+    out = _git(repo_dir, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/cauce/", check=False)
+    found = {}
+    for line in out.splitlines():
+        name, _, tip = line.partition(" ")
+        number = name.removeprefix("cauce/task-")
+        if number.isdigit() and tip:
+            found[int(number)] = tip
+    return found
+
+
+def prunable(repo_dir: Path, branch: str) -> str | None:
+    """Why a kept branch can be deleted with nothing lost, or None. Its commits are
+    on another branch (a merge); or HEAD holds every file it changed, as it
+    changed them (a squash or a cherry-pick); or all it changed is tool artifacts.
+    A branch checked out anywhere, or only on a remote's `cauce/` copy, stays."""
+    tip = _git(repo_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False)
+    if not tip:
+        return None
+    if f"branch refs/heads/{branch}\n" in _git(repo_dir, "worktree", "list", "--porcelain", strip=False, check=False):
+        return None
+    holders = _git(repo_dir, "for-each-ref", "--contains", tip, "--format=%(refname)", "refs/heads", "refs/remotes",
+                   check=False).splitlines()
+    if any("/cauce/task-" not in ref and not ref.endswith("/HEAD") for ref in holders):
+        return "merged"
+    base = _git(repo_dir, "merge-base", "HEAD", tip, check=False)
+    if not base:
+        return None
+    paths = _git(repo_dir, "diff", "--name-only", base, tip, check=False).splitlines()
+    if paths and all(is_artifact(path) for path in paths):
+        return "artifacts only"
+    same = subprocess.run(["git", "diff", "--quiet", "HEAD", tip, "--", *paths], cwd=str(repo_dir),
+                          capture_output=True, check=False)
+    return "squash-merged" if paths and same.returncode == 0 else None
+
+
+def delete_branch(repo_dir: Path, branch: str) -> bool:
+    return subprocess.run(["git", "branch", "-D", branch], cwd=str(repo_dir), capture_output=True,
+                          check=False).returncode == 0
+
+
 # --- one run at a time in a checkout ----------------------------------------
 #
 # A run without a worktree works in the person's checkout itself. Two of them at

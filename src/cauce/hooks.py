@@ -263,6 +263,10 @@ def session_start(
 
     flow.sweep(store)
     cwd = event.get("cwd")
+    # The branches of this checkout whose work landed since: merged ones go.
+    top = repo.toplevel(Path(cwd)) if cwd and Path(cwd).is_dir() else None
+    if top is not None:
+        flow.prune(store, [top])
     key = repo.key(cwd) if cwd else None
     store.touch_session(session_id, cwd, key)
     blocks: list[str] = []

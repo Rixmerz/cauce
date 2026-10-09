@@ -53,6 +53,8 @@ STATIC = Path(__file__).resolve().parent / "static"
 MAX_BODY = 1024 * 1024
 SOCKET_TIMEOUT = 10
 SWEEP_EVERY_S = 30
+#: Pruning reads every checkout cauce worked in: seconds, not milliseconds.
+PRUNE_EVERY_S = 600
 STREAM_SECONDS = 25
 MAX_STREAMS = 8
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
@@ -105,10 +107,14 @@ class UIServer(ThreadingHTTPServer):
         """The sweep, in the server, on a timer — never because a page is open.
         And the check for a newer cauce, which takes this server's place."""
         store = Store(self.root / "cauce.db")
+        pruned_at = 0.0
         try:
             while not self.stop_event.wait(SWEEP_EVERY_S):
                 try:
                     flow.sweep(store)
+                    if time.monotonic() - pruned_at >= PRUNE_EVERY_S:
+                        pruned_at = time.monotonic()
+                        flow.prune(store)
                     newer = newer_install(os.environ)
                     if newer is not None:
                         self.hand_over(*newer)

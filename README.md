@@ -284,6 +284,16 @@ workers got, the plan says so. Pin an alias with
 `cauce config model sonnet <model id>`; `cauce config model` lists every alias
 and what last served it.
 
+### Branches clean up after themselves
+
+A writing task's work is kept on `cauce/task-N` for you to review. Once it
+landed (merged, squash-merged, or it held only tool artifacts), the branch is
+deleted: at the next session start in that checkout, or within ten minutes
+while `cauce ui` runs. Nothing unmerged goes, nor a branch checked out or one a
+stopped task may resume from; the tip is kept on the task, so
+`git branch cauce/task-N <tip>` restores it. `cauce prune --dry-run` shows what
+would go; `cauce config prune off` keeps every branch.
+
 ### Queue and lanes
 
 Work arrives faster than it runs. Type `++ <task>` in a session and it is
