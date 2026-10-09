@@ -28,7 +28,7 @@ from pathlib import Path
 
 from cauce import allow as allow_rules
 from cauce import capabilities as caps
-from cauce import config, grants, habits, isolate, launch, models, notes, project, repo, runtime, stops
+from cauce import config, dispatch, grants, habits, isolate, launch, models, notes, project, repo, runtime, stops
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify
 from cauce.escalate import Attempt, Decision, Failure, Move, decide
@@ -602,6 +602,9 @@ def run(
         if status == "done":
             # Its earlier copies that stopped waited on this work; it is done.
             report.superseded = stops.supersede(store, store.get_task(task["id"]))
+            # A resumed task that had paused its lane passed: the queue behind it goes on.
+            if store.release_lane(key, task["id"]) or report.superseded:
+                dispatch.reopened(task, os.environ)
         # A person's cancel is their call on this task, not a broken state the
         # next one would start on: the queue behind it goes on.
         by_a_person = report.stop is not None and report.stop.cause == "cancelled" and report.stop.who == "you"

@@ -13,7 +13,20 @@ import sys
 import time
 from pathlib import Path
 
-from cauce import __version__, capabilities, config, flow, habits, hooks, orchestrate, project, repo, stops, usage
+from cauce import (
+    __version__,
+    capabilities,
+    config,
+    dispatch,
+    flow,
+    habits,
+    hooks,
+    orchestrate,
+    project,
+    repo,
+    stops,
+    usage,
+)
 from cauce.adapters import default_adapters
 from cauce.classify import classify
 from cauce.escalate import Attempt, Failure
@@ -310,6 +323,7 @@ def cmd_dismiss(args: argparse.Namespace) -> int:
                       f"({', '.join(stops.DISMISSABLE)}) is dismissed", file=sys.stderr)
                 return 1
             print(f"dismissed task #{task_id}; `cauce resume {task_id}` brings it back")
+            dispatch.reopened(task, os.environ)
     finally:
         store.close()
     return 0

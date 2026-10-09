@@ -35,7 +35,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step |
 | `src/cauce/compact.py` | the facts of a session (requests verbatim, failed calls, changed files), written before a compaction and put back after it; no model call |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
-| `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, status, band, `/cauce` pane; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
+| `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
 | `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified |
 | `commands/orchestration.md` | the one entry point a user types |
 | `bin/cauce` | the launcher every hook and command goes through |
@@ -176,7 +176,8 @@ yields the default kind, not a guess.
 - The UI shows one project at a time and takes no task: work is asked for in
   a session. Claude Code's own task files are read, never written.
 - A lane pauses only on a task the dispatcher started, and never on one a
-  person cancelled; a person's own `cauce run` never blocks the queue. A GET in the UI never starts work or
+  person cancelled; it opens again by itself when that task leaves the board
+  (dismissed, superseded, or resumed to a pass), and the queue starts again; a person's own `cauce run` never blocks the queue. A GET in the UI never starts work or
   sweeps — housekeeping runs in hooks, the dispatcher and the server thread.
 - The UI builds every node with `textContent` (`h()` in `static/util.js`),
   never `innerHTML`: task text and worker summaries are untrusted. The token
@@ -207,7 +208,9 @@ yields the default kind, not a guess.
 - The mod adds a way in, never a power. Every tool runs `bin/cauce`. `resume`
   runs with `--unattended`, which refuses what only a person may clear, and
   no model input ever reaches `--allow`, `--allow-approval` or `--keep`: only
-  a button the person presses does. Tool schemas carry no `enum`: the handler
+  a button the person presses in the web board does, and its rules are read
+  from cauce's account of the stop (`stops.resume_args`), never from the
+  request. The board lives in the web UI only; the mod draws no copy of it. Tool schemas carry no `enum`: the handler
   reads a value and says what cauce takes. Only the reading tools (`recall`,
   `tasks`, `note`) turn an `ask` into an allow; a deny stays a deny. Without the mod, everything still works through
   the classic hooks.

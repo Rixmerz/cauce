@@ -142,6 +142,14 @@ def kick(cwd: str | Path | None, key: str | None, env: Mapping[str, str]) -> str
     return "Starting a worker failed; `cauce work` runs the queue."
 
 
+def reopened(task: Mapping, env: Mapping[str, str]) -> None:
+    """After a person took a lane's stopping task off the board, start the queue
+    behind it again: its dispatcher stopped when the lane paused. Never raises."""
+    with contextlib.suppress(Exception):
+        if task.get("cwd") and Path(str(task["cwd"])).is_dir():
+            kick(str(task["cwd"]), task.get("repo"), env)
+
+
 def start(repo_dir: Path, root: Path, scope: str, *, popen: Callable[..., object] = subprocess.Popen) -> bool:
     """Start a detached `cauce work` for a repository, unless one already runs. Never raises."""
     try:

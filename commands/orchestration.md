@@ -123,6 +123,12 @@ Request: $ARGUMENTS
      with `cauce resume <id> --max-turns 120` (its work stays), or split what
      the report says is left.
 
+   A task that stops pauses its lane, and the queued work behind it waits.
+   When its ending says the lane is paused, deal with the stop first, then
+   tell the person which queued tasks wait; when they do not depend on the
+   stopped one, run `cauce lanes --unpause <repo>` so they start now, and say
+   you did. Never leave queued work waiting for the person to press play.
+
    Work you queued, or ran in the background, reports back on its own: when
    it ends, a `cauce:` notice reaches you at the end of your turn or with the
    person's next message. Act on it then, as each line says. Tell the person,

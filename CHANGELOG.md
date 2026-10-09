@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [0.6.12] - 2026-10-09
+
+### Fixed
+
+- **A lane paused on a task opens when that task leaves the board.** A queued
+  task waited 16 hours behind a lane paused on a task the person had already
+  dismissed. Dismissing, superseding, or resuming the stopped task to a pass
+  unpauses the lane and starts the queue again. A session's ending says when
+  a lane is paused on it and how many tasks wait, and the guide tells the
+  orchestrator to unpause it when the queued work does not depend on it.
+
+### Changed
+
+- **The board lives in the web UI only.** The mod's band above the prompt
+  and its `/cauce` pane were a poorer copy of the web board: they are gone.
+  The mod keeps its tools, waking the session on endings, and a status line
+  in words; `/cauce` starts the web board. The task drawer gains Resume,
+  Allow & resume, Approve & resume and Always allow here; the rules a press
+  resumes with come from cauce's account of the stop, never from the page.
+
 ## [0.6.11] - 2026-10-09
 
 ### Fixed

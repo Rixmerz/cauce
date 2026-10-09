@@ -7,6 +7,7 @@ import threading
 
 import pytest
 
+from cauce import stops
 from cauce.store import Store
 from cauce.ui import api, server
 
@@ -574,3 +575,43 @@ def test_routing_keeps_a_period_and_says_why_a_move_has_no_next_attempt(store: S
         ("more_turns", "— running, no next attempt", None)]
     everything = next(r for r in api.routing(store) if r["kind"] == "test")
     assert everything["tasks"] == 2
+
+
+def test_resume_from_the_ui_runs_the_rules_cauce_suggested_never_the_requests(ui, monkeypatch):
+    import subprocess
+
+    ran: list[list[str]] = []
+    monkeypatch.setattr(server, "resume", lambda args, cwd: ran.append(args) or subprocess.CompletedProcess(
+        args, 0, "resuming", ""))
+    key = {"X-Cauce-Token": token(ui)}
+    store = Store(ui.root / "cauce.db")
+    refused = store.create_task("x", status="blocked", source="cauce", repo="r", cwd="/x")
+    store.add_event(refused["id"], "finished", status="blocked", stop=stops.Stop(
+        "permission", "refused", allow=("Bash(npm:*)",)).data())
+    done = store.create_task("y", status="done", source="cauce", repo="r", cwd="/x")
+    path = f"/api/tasks/{refused['id']}/resume"
+    assert call(ui, "POST", path, {})[0].status == 403
+    sent = {"keep": True, "allow": ["Bash(rm:*)"]}
+    assert call(ui, "POST", path, sent, headers=key)[0].status == 202
+    assert ran[-1] == ["resume", str(refused["id"]), "--detach", "--allow", "Bash(npm:*)", "--keep"]
+    assert call(ui, "POST", f"/api/tasks/{done['id']}/resume", {}, headers=key)[0].status == 409
+    assert call(ui, "POST", "/api/tasks/999/resume", {}, headers=key)[0].status == 404
+    monkeypatch.setattr(server, "resume", lambda args, cwd: subprocess.CompletedProcess(args, 1, "", "it waits"))
+    response, body = call(ui, "POST", path, {}, headers=key)
+    assert response.status == 409
+    assert "it waits" in str(body)
+    store.close()
+
+
+@pytest.mark.parametrize(("cause", "extra", "keep", "expected"), [
+    ("approval", {}, False, ["--allow-approval"]),
+    ("budget", {"budget_usd": 5.0}, False, ["--budget", "10.0"]),
+    ("turns", {}, False, []),
+    ("turns", {}, True, None),
+    ("permission", {}, False, None),
+])
+def test_resume_args_follow_the_stop(cause, extra, keep, expected):
+    shown = {"cause": cause, "next": "cauce resume 3", "allow": [], **extra}
+    args = stops.resume_args(3, shown, keep=keep)
+    assert args == (None if expected is None else ["resume", "3", "--detach", *expected])
+    assert stops.resume_args(3, {**shown, "next": None}) is None
