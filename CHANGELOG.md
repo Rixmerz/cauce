@@ -2,6 +2,54 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-09
+
+### Added
+
+- **Workflows.** A workflow is a saved chain of tasks that goes on by itself.
+  A run queues its first steps. When a step passes, the engine queues the
+  steps that waited on it and starts the dispatcher, with no session relaying
+  anything:
+  - a writing step starts its worktree from the commit the step before it
+    kept;
+  - a reading step (a review, a plan) reads that work in a worktree its tools
+    cannot write to;
+  - every brief says what the earlier steps found.
+
+  Each step is an ordinary cauce task with its own cell, check, escalation
+  and stops. A step that stops stops the run there, and a resume to a pass or
+  `cauce workflow retry` goes on. The session that started the run hears of
+  it once, at its end or when a step waits on the person.
+- **Definitions** are JSON in three scopes, the nearest winning: the project
+  (`.cauce/workflows/`), the user (the cauce home) and the bundled templates
+  `feature`, `bugfix` and `review-fix`. `cauce workflow list|show|new
+  [--from]|copy|save|edit|rm|validate` and `step add|set|rm` make and change
+  them, and every change is checked before it is written. Changing a bundled
+  template copies it to the user scope first. A definition holds no
+  permission rule, approval or capability: those are flags of `cauce workflow
+  run`.
+- **Global workflows are held while in use.** A user-scope workflow is one
+  definition reused by several projects, and each run keeps its state with
+  its own project. Every definition has a version, and a run runs the copy
+  and version it started with. While any active run uses a definition:
+  - a change becomes a pending revision, and later changes build on it;
+  - the revision applies by itself when the last such run ends or is
+    cancelled (`cauce workflow pending [--apply|--drop]`, `--now` to write
+    at once);
+  - removing it needs `--force`.
+- **Memory per step.** A step can carry cauce memory into its brief: `note:<id>`
+  (a replaced note is read as the one that replaced it), `topic:<name>` (every
+  live note in it) and `problem:<id>` (with every fix tried on it). Notes are
+  read only from the run's own project. A run whose memory cannot be read
+  there does not start. Set it with `cauce workflow step add|set --memory`.
+- **Watching:** `cauce workflow status [<run>]` shows each step's state, task
+  and cell, what runs now, what waits on the person and the branch so far.
+  `cauce overview` lists the runs and names each step's run. `cauce workflow
+  cancel` stops a run.
+- **Guidance:** `/cauce:workflow` takes a session through all of it, and
+  `/cauce:orchestration` now sends a sequence of phases to a workflow instead
+  of relaying it by hand.
+
 ## [0.6.21] - 2026-10-09
 
 ### Added
