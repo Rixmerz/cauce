@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.6.19] - 2026-10-09
+
+### Added
+
+- **`/cauce:habits`.** One skill reviews the habit candidates for the
+  repository it runs in and installs the ones the person picks: it keeps those
+  whose file type the repository has, whose last step is a fast check it
+  really has (the exact command read from its own files), that pass now and
+  are not installed yet; it offers to remove habits that turned themselves off
+  or are installed twice. `cauce habits list --json` and
+  `cauce habits status --json` (with where each habit lives) are what it reads.
+
+### Fixed
+
+- **A failed habit is said to the session.** A habit ran its check after each
+  edit and kept the result to itself, so the session ran the check again by
+  hand and the habit saved nothing. A failure now exits 2 with the end of the
+  output, which Claude Code shows the session; a pass says nothing.
+- **A habit is installed once.** The same command on the same file type in one
+  settings file was installed twice, and ran twice after every edit.
+  `cauce habits install` now says it is already there.
+
 ## [0.6.18] - 2026-10-09
 
 ### Fixed

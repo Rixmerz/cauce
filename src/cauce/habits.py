@@ -214,8 +214,10 @@ def launcher() -> Path:
     return Path(__file__).resolve().parents[2] / "bin" / "cauce"
 
 
-def install(store: Store, candidate: Candidate, *, command: str, repo_dir: Path) -> int:
+def install(store: Store, candidate: Candidate, *, command: str, repo_dir: Path) -> tuple[int, bool]:
     """Write the habit as a PostToolUse hook in the repository's local settings.
+    Returns its id and whether it is new: the same command on the same file type
+    in the same settings is the habit already there, never a second hook.
 
     Only a habit that starts with an edit can be a hook: the trigger is an edit
     of that file type, and the command is what the person says to run after it.
@@ -224,6 +226,10 @@ def install(store: Store, candidate: Candidate, *, command: str, repo_dir: Path)
     if match is None:
         raise HabitError("only a habit that starts with an edit or a write can run as a hook")
     settings = repo_dir / ".claude" / "settings.local.json"
+    for habit in store.habits():
+        if (habit["settings_path"] == str(settings) and habit["command"] == command
+                and habit["trigger_suffix"] == match.group(2)):
+            return int(habit["id"]), False
     data = _read_settings(settings)
     habit_id = store.add_habit(steps=list(candidate.steps), command=command, trigger_suffix=match.group(2),
                                settings_path=str(settings), candidate=candidate.id)
@@ -231,7 +237,7 @@ def install(store: Store, candidate: Candidate, *, command: str, repo_dir: Path)
              "hooks": [{"type": "command", "command": f'"{launcher()}" habit-run {habit_id}', "timeout": 120}]}
     data.setdefault("hooks", {}).setdefault("PostToolUse", []).append(entry)
     _write_settings(settings, data)
-    return habit_id
+    return habit_id, True
 
 
 def uninstall(store: Store, habit_id: int) -> bool:
@@ -249,22 +255,38 @@ def uninstall(store: Store, habit_id: int) -> bool:
     return True
 
 
-def run_habit(store: Store, habit_id: int, event: Mapping[str, Any]) -> None:
+#: How much of a failed habit's output the session is shown.
+OUTPUT_CHARS = 2000
+
+
+def run_habit(store: Store, habit_id: int, event: Mapping[str, Any]) -> str | None:
     """The hook body. Runs the person's command after a matching edit; three
-    failures in a row and the habit turns itself off."""
+    failures in a row and the habit turns itself off. Returns what the session
+    should hear: the end of a failed run's output, so the check it ran saves the
+    model a turn instead of being run again by hand. None when it passed or did
+    not apply."""
     habit = store.habit(habit_id)
     if habit is None or habit["disabled_at"] or habit["removed"]:
-        return
+        return None
     path = str((event.get("tool_input") or {}).get("file_path") or "")
     if not path.endswith(habit["trigger_suffix"]):
-        return
+        return None
     try:
         proc = subprocess.run(habit["command"], shell=True, cwd=event.get("cwd") or None,  # noqa: S602
                               capture_output=True, text=True, timeout=110, check=False)
-        ok = proc.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        ok = False
+        ok, output = proc.returncode == 0, (proc.stdout + proc.stderr).strip()
+    except subprocess.TimeoutExpired:
+        ok, output = False, "it ran past 110 seconds and was stopped"
+    except OSError as exc:
+        ok, output = False, str(exc)
     store.habit_ran(habit_id, ok=ok, max_failures=MAX_FAILURES)
+    if ok:
+        return None
+    tail = output[-OUTPUT_CHARS:]
+    now = store.habit(habit_id)
+    off = (" It failed three times in a row and is off now (`cauce habits status` lists it)."
+           if now and now["disabled_at"] else "")
+    return f"cauce habit #{habit_id} ran `{habit['command']}` after this edit, and it failed:{off}\n{tail}"
 
 
 def _read_settings(path: Path) -> dict[str, Any]:

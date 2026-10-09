@@ -196,9 +196,16 @@ way of every call.
 - `cauce habits install <id> --command "ruff format"` turns a habit that starts
   with an edit into a `PostToolUse` hook in the repository's
   `.claude/settings.local.json`. **Only that command installs one**: nothing in
-  cauce does it by itself. A habit that fails three times in a row turns itself
-  off; `cauce habits uninstall <id>` removes it; `cauce habits status` shows
-  runs and failures.
+  cauce does it by itself. The same command on the same file type is installed
+  once. When the command fails, the session reads the end of its output right
+  away, so it does not spend a turn running the check itself. A habit that
+  fails three times in a row turns itself off; `cauce habits uninstall <id>`
+  removes it; `cauce habits status` shows runs, failures and where.
+- **`/cauce:habits`** does the review for you in a repository: it reads the
+  candidates, keeps the ones that fit there (its file types, a fast check it
+  really has, one that passes now, not installed yet), finds the exact command
+  in the repository's own files, offers to remove habits that are off or
+  installed twice, and installs what you pick.
 
 ## Install
 

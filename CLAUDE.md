@@ -38,6 +38,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
 | `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified |
 | `commands/orchestration.md` | the one entry point a user types |
+| `commands/habits.md` | review the habit candidates for this repository and install the ones the person picks |
 | `commands/watch.md` | a session that watches every other one: `overview`, the endings as they happen, `SendMessage` to send work |
 | `bin/cauce` | the launcher every hook and command goes through |
 | `src/cauce/interpreter.py` | which Python runs cauce; imported before the version check, so it must run on any python3 |
