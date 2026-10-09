@@ -38,6 +38,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
 | `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified |
 | `commands/orchestration.md` | the one entry point a user types |
+| `commands/watch.md` | a session that watches every other one: `overview`, the endings as they happen, `SendMessage` to send work |
 | `bin/cauce` | the launcher every hook and command goes through |
 | `src/cauce/interpreter.py` | which Python runs cauce; imported before the version check, so it must run on any python3 |
 | `src/cauce/link.py` | `cauce link`: a shim on a terminal's PATH that survives plugin updates |
@@ -217,6 +218,10 @@ yields the default kind, not a guess.
   reads a value and says what cauce takes. Only the reading tools (`recall`,
   `tasks`, `note`) turn an `ask` into an allow; a deny stays a deny. Without the mod, everything still works through
   the classic hooks.
+- A watcher reads, never claims: `overview` and `events` take nothing from a
+  session, and an ending is delivered only to the session that sent the work.
+  cauce has no channel of its own to another session; sending one work is
+  Claude Code's `SendMessage`.
 - An ending is claimed, not just read, when it is delivered
   (`Store.claim_unreported`). The Stop hook, the next prompt and the mod's
   wake may run at the same moment, and each ending is still handed over once.

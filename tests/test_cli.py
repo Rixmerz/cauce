@@ -199,6 +199,10 @@ def test_cancel_signals_the_run_and_events_print(capsys, monkeypatch):
     assert '"kind": "implement"' in capsys.readouterr().out
     assert cli.main(["events", "--json", "--task", str(running["id"])]) == 0
     assert json.loads(capsys.readouterr().out.splitlines()[0])["kind"] == "planned"
+    assert cli.main(["events", "--json", "--kind", "cancel_requested"]) == 0
+    assert {json.loads(x)["kind"] for x in capsys.readouterr().out.splitlines()} == {"cancel_requested"}
+    assert cli.main(["events", "--new"]) == 0
+    assert capsys.readouterr().out == ""
 
 
 def test_sigterm_becomes_a_cancel():
