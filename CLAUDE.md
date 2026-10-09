@@ -41,7 +41,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `commands/watch.md` | a session that watches every other one: `overview`, the endings as they happen, `SendMessage` to send work |
 | `bin/cauce` | the launcher every hook and command goes through |
 | `src/cauce/interpreter.py` | which Python runs cauce; imported before the version check, so it must run on any python3 |
-| `src/cauce/link.py` | `cauce link`: a shim on a terminal's PATH that survives plugin updates |
+| `src/cauce/link.py` | `cauce link`: a shim on a terminal's PATH that survives plugin updates; `forward_to`, which sends a typed command from an old install to the newest (never a hook, never a checkout) |
 
 ## Verify before reporting done
 

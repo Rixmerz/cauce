@@ -20,6 +20,16 @@ if sys.version_info < OLD_ENOUGH:
 # free to look for a newer one themselves.
 os.environ.pop("CAUCE_REEXEC", None)
 
+# A command typed one plugin update later runs the newest install, not the
+# version this session's PATH started with. Once: the newer copy never forwards.
+if not os.environ.pop("CAUCE_FORWARDED", None) and sys.argv[1:2] != ["hook"]:
+    from cauce import __version__, link
+
+    newer_install = link.forward_to(sys.argv[1:], os.environ, __file__, __version__)
+    if newer_install is not None:
+        os.environ["CAUCE_FORWARDED"] = "1"
+        os.execv(str(newer_install), [str(newer_install), *sys.argv[1:]])  # noqa: S606 — the same argv, a newer cauce
+
 if sys.argv[1:3] == ["hook", "PostToolUse"]:
     # The fastest path: every tool call lands here. One JSON line appended to
     # a file, no database; a delegation still takes the full hook below.

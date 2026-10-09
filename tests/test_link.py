@@ -140,3 +140,43 @@ def test_a_session_behind_the_newest_install_is_told_to_reload(tmp_path):
     assert f"runs cauce {__version__}, but 999.0.0 is installed" in warning
     assert "/reload-plugins" in warning
     assert cli._behind({"CLAUDE_CONFIG_DIR": str(tmp_path / "none")}) is None
+
+
+def _copy(config: Path, version: str, script: str | None = None) -> Path:
+    root = config / "plugins" / "cache" / "market" / "cauce" / version
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(f'{{"version": "{version}"}}')
+    (root / "bin").mkdir()
+    launcher = root / "bin" / "cauce"
+    launcher.write_text(script or "#!/bin/sh\necho old\n")
+    launcher.chmod(0o755)
+    return root
+
+
+def test_a_typed_command_runs_the_newest_copy(tmp_path):
+    """A session's PATH kept 0.6.13 after 0.6.16 was installed: `cauce prune` was
+    an invalid choice. A command forwards to the newest; a hook and a checkout never."""
+    config = tmp_path / "claude"
+    env = {"CLAUDE_CONFIG_DIR": str(config)}
+    old = _copy(config, "0.6.13")
+    newest = _copy(config, "0.6.16")
+    own = str(old / "src" / "cauce" / "__main__.py")
+    assert link.forward_to(["prune"], env, own, "0.6.13") == newest / "bin" / "cauce"
+    assert link.forward_to(["hook", "Stop"], env, own, "0.6.13") is None
+    assert link.forward_to(["prune"], env, own, "0.6.16") is None
+    assert link.forward_to(["prune"], env, "/work/cauce/src/cauce/__main__.py", "0.6.13") is None
+    assert link.forward_to(["prune"], {"CLAUDE_CONFIG_DIR": str(tmp_path / "none")}, own, "0.6.13") is None
+
+
+def test_an_old_launcher_execs_the_newest_once(tmp_path):
+    config = tmp_path / "claude"
+    old = _copy(config, "0.0.1")
+    (old / "src").symlink_to(Path(__file__).resolve().parents[1] / "src")
+    _copy(config, "999.0.0", "#!/bin/sh\necho \"newest ran: $* forwarded=${CAUCE_FORWARDED:-}\"\n")
+    (old / "bin" / "cauce").write_text((Path(__file__).resolve().parents[1] / "bin" / "cauce").read_text())
+    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(config), "CAUCE_PYTHON": sys.executable}
+    ran = subprocess.run([str(old / "bin" / "cauce"), "matrix"], env=env, capture_output=True, text=True, check=False)
+    assert ran.stdout.strip() == "newest ran: matrix forwarded=1"
+    hook = subprocess.run([str(old / "bin" / "cauce"), "hook", "Nope"], env={**env, "CAUCE_HOOKS_OFF": "1"},
+                          input="{}", capture_output=True, text=True, check=False)
+    assert "newest ran" not in hook.stdout
