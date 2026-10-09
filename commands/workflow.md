@@ -40,7 +40,8 @@ Change it one step at a time. Each change is checked before it is written:
 
 ```bash
 cauce workflow step add <name> <step> --prompt "..." [--after <step>] [--needs a,b] \
-    [--kind <kind>] [--verify "<check>"] [--start <model/effort>] [--budget-usd N] [--max-turns N]
+    [--kind <kind>] [--verify "<check>"] [--start <model/effort>] [--budget-usd N] [--max-turns N] \
+    [--memory note:12,topic:zones,problem:7]
 cauce workflow step set <name> <step> --prompt "..." [--clear verify]
 cauce workflow step rm <name> <step>
 cauce workflow validate <name>
@@ -64,6 +65,16 @@ How to write the steps:
   before it kept.
 - **Checks:** give a writing step a `verify` command when the repository has
   one. cauce runs it itself.
+- **Memory:** a step can carry cauce memory into its brief, for considerations
+  that step must keep:
+  - `--memory note:<id>` (or a bare id) for one project note
+  - `topic:<name>` for every live note in a topic
+  - `problem:<id>` for a problem with every fix tried on it
+
+  Find the ids with `cauce recall "<question>"` or `cauce memory search
+  "<symptom>"`, and remove them again with `--clear memory`. Notes are read
+  only from the project the run is in. A run whose memory cannot be read there
+  does not start.
 - **No grants:** a definition cannot hold permission rules, approvals or
   capabilities. Those are the person's flags on `run`.
 - **Changing a bundled template:** it is copied to the user scope first, and

@@ -47,7 +47,12 @@ INPUT = re.compile(r"\{([a-z][a-z0-9_]{0,31})\}")
 TOP_KEYS = frozenset({"name", "description", "inputs", "steps"})
 #: What a step may say. Nothing here widens what a worker may do: rules,
 #: approvals and capabilities are the person's flags on `run`, never a file's.
-STEP_KEYS = frozenset({"id", "title", "prompt", "kind", "needs", "verify", "start", "budget_usd", "max_turns"})
+STEP_KEYS = frozenset({"id", "title", "prompt", "kind", "needs", "verify", "start", "budget_usd", "max_turns",
+                       "memory"})
+#: What a step may carry from cauce's memory into its brief: a project note by
+#: id, every live note of a topic, or a problem with every fix tried on it.
+MEMORY_REF = re.compile(r"^(?:(note|problem):)?(\d{1,9})$|^topic:([a-z0-9][a-z0-9_-]{0,39})$")
+MEMORY_CHARS = 2000
 PROMPT_CHARS = 8000
 RESULT_CHARS = 1500
 
@@ -204,6 +209,15 @@ def normalize(defn: Mapping[str, Any], name: str | None = None) -> dict[str, Any
             if step.get(key) is not None and (not isinstance(step[key], kind) or isinstance(step[key], bool)
                                               or step[key] <= 0):
                 errors.append(f"{where}: {key} is a positive number")
+        if step.get("memory") is not None:
+            refs = step["memory"] if isinstance(step["memory"], list) else None
+            if refs is None or not all(isinstance(r, (str, int)) and not isinstance(r, bool)
+                                       and MEMORY_REF.match(str(r)) for r in refs):
+                errors.append(f"{where}: memory is a list of note:<id> (or a bare id), topic:<name> or problem:<id>")
+            else:
+                step["memory"] = list(dict.fromkeys(_memory_ref(r) for r in refs)) or None
+                if step["memory"] is None:
+                    step.pop("memory")
         if "needs" not in step:
             step["needs"] = ids[-1:]
         if not isinstance(step["needs"], list) or not all(isinstance(x, str) for x in step["needs"]):
@@ -218,6 +232,75 @@ def normalize(defn: Mapping[str, Any], name: str | None = None) -> dict[str, Any
         raise WorkflowError("; ".join(errors))
     data["steps"] = steps
     return data
+
+
+def _memory_ref(ref: str | int) -> str:
+    """`12` and `note:12` are the same note; a topic and a problem keep their prefix."""
+    match = MEMORY_REF.match(str(ref))
+    if match and match.group(3):
+        return f"topic:{match.group(3)}"
+    return f"{match.group(1) or 'note'}:{int(match.group(2))}"
+
+
+def memory_problems(store: Store, project_key: str | None, refs: list[str]) -> list[str]:
+    """Why each memory a step names cannot be read in this project: a note of
+    another project is not this one's, and a dropped note says nothing now."""
+    from cauce import notes as notes_mod
+
+    out = []
+    for ref in refs:
+        kind, _, value = ref.partition(":")
+        if kind == "note":
+            note = store.get_note(int(value))
+            if note is None or note["project"] != project_key:
+                out.append(f"no note #{value} in this project")
+            elif note["state"] == "dropped":
+                out.append(f"note #{value} was dropped")
+        elif kind == "topic":
+            if not store.notes(project_key or "", topics=[value], states=notes_mod.LIVE, limit=1):
+                out.append(f"topic {value!r} holds no live note in this project")
+        elif store.problem(int(value)) is None:
+            out.append(f"no problem #{value}")
+    return out
+
+
+def memory_text(store: Store, project_key: str | None, refs: list[str]) -> str:
+    """The memory a step carries, written for its worker. A replaced note is read
+    as the note that replaced it; one gone since the run started says so."""
+    from cauce import notes as notes_mod
+
+    lines: list[str] = []
+    for ref in refs:
+        kind, _, value = ref.partition(":")
+        if kind == "note":
+            note, seen = store.get_note(int(value)), set()
+            while note and note["state"] == "replaced" and note.get("replaced_by") and note["id"] not in seen:
+                seen.add(note["id"])
+                note = store.get_note(int(note["replaced_by"]))
+            if note is None or note["project"] != project_key or note["state"] == "dropped":
+                lines.append(f"- note #{value}: no longer kept; go on without it")
+            else:
+                lines.append("- " + notes_mod.line(note, text_chars=MEMORY_CHARS))
+        elif kind == "topic":
+            found = store.notes(project_key or "", topics=[value], states=notes_mod.LIVE, limit=20)
+            lines += [f"- {notes_mod.line(n, text_chars=MEMORY_CHARS)}" for n in found] or [
+                f"- topic {value}: no live note now"]
+        else:
+            problem = store.problem(int(value))
+            if problem is None:
+                lines.append(f"- problem #{value}: no longer kept")
+                continue
+            lines.append(f"- problem #{problem['id']} [{problem['state']}] {problem['title']}"
+                         + (f": {problem['symptom']}" if problem.get("symptom") else ""))
+            for fix in problem["fixes"]:
+                outcome = "worked, then stopped holding" if fix.get("invalidated_on") else fix["outcome"]
+                why = f" — {fix['why']}" if fix.get("why") else ""
+                lines.append(f"    · {outcome}: {fix['description']}{why}")
+    if not lines:
+        return ""
+    return ("Memory this workflow attaches to this step (cauce's notes and problems, kept from earlier work). "
+            "Take it into account here; check a note against the code, and trust the code when they disagree:\n"
+            + "\n".join(lines))
 
 
 def save(defn: Mapping[str, Any], cwd: str | Path | None, scope: str = DEFAULT_SCOPE, *,
@@ -349,6 +432,10 @@ def start(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] | 
     if extra:
         raise WorkflowError(f"{name} takes no input {', '.join(extra)}; it takes {defn['inputs'] or 'none'}")
     key = repo.key(where)
+    unreadable = [f"step {s['id']!r}: {why}" for s in defn["steps"]
+                  for why in memory_problems(store, key, s.get("memory") or [])]
+    if unreadable:
+        raise WorkflowError("its memory cannot be read here: " + "; ".join(unreadable))
     if repo.toplevel(where) is not None:
         # Where the run started: every step's brief can say what the run changed since.
         with contextlib.suppress(isolate.IsolationError):
@@ -401,6 +488,10 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
     if notes:
         body += (f"\n\nThis is step {step['id']!r} of the workflow {defn['name']!r}. What the steps before it "
                  "found and did (their changes are already in this checkout):\n" + "\n".join(notes))
+    if step.get("memory"):
+        attached = memory_text(store, run["repo"], step["memory"])
+        if attached:
+            body += "\n\n" + attached
     base = _base(store, run, defn, step["id"], latest)
     if base and options.get("origin"):
         body += ("\n\nEverything this workflow changed so far is in this checkout: "

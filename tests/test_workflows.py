@@ -286,3 +286,67 @@ def test_the_cli_reads_writes_files_and_says_where_a_stopped_run_waits(git_repo,
     assert f"run #{run_id} chained — waits on you" in out and "(workflow run #" in out
     assert cli.main(["workflow", "retry", str(run_id), "check"]) == 0
     assert cli.main(["workflow", "status", "999"]) == 1
+
+
+def test_a_step_carries_the_memory_attached_to_it(git_repo, store: Store, kicks):
+    from cauce import repo
+
+    key = repo.key(git_repo.resolve())
+    zone = store.add_note(key, "conventions", "Zones", "Zone ids are UTC offsets, never city names.",
+                          author="person", filed_by="person")
+    old = store.add_note(key, "decisions", "Old rule", "Use floats for money.", author="person", filed_by="person")
+    new = store.add_note(key, "decisions", "Money", "Money is integer cents.", author="person", filed_by="person")
+    store.update_note(old, state="replaced", replaced_by=new)
+    store.add_note(key, "zones", "Daylight", "Daylight saving shifts zone offsets twice a year.",
+                   author="person", filed_by="person")
+    elsewhere = store.add_note("other/repo", "zones", "Not ours", "Never shown here.", author="person",
+                               filed_by="person")
+    problem = store.open_problem("Totals off by one cent", repo=key, symptom="the cart total rounds twice")
+    store.add_fix(problem, "round each line", outcome="failed", repo=key, why="the error adds up")
+
+    _save({"name": "zoned", "inputs": ["goal"], "steps": [
+        {"id": "build", "prompt": "Build {goal}", "kind": "implement",
+         "memory": [zone, f"note:{old}", "topic:zones", f"problem:{problem}"]},
+        {"id": "doc", "prompt": "Document {goal}", "kind": "docs"}]}, git_repo)
+    assert workflows.load("zoned", git_repo)["steps"][0]["memory"] == [
+        f"note:{zone}", f"note:{old}", "topic:zones", f"problem:{problem}"]
+    started = workflows.start(store, "zoned", git_repo, {"goal": "the scheduler"})
+    seen: list[dict] = []
+    flow.work(store, runner=_runner([ok(), ok()], seen))
+    build, doc = seen[0]["prompt"], seen[1]["prompt"]
+    assert "Memory this workflow attaches to this step" in build
+    assert "Zone ids are UTC offsets" in build and "Daylight saving shifts" in build
+    assert "Money is integer cents." in build and "Use floats" not in build  # the note that replaced it
+    assert "Totals off by one cent" in build and "failed: round each line — the error adds up" in build
+    assert "Never shown here" not in build and "Memory this workflow" not in doc
+    assert workflows.status(store, started["id"])["state"] == "done"
+
+    # What cannot be read here stops the run before it starts.
+    store.update_note(zone, state="dropped")
+    with pytest.raises(workflows.WorkflowError) as err:
+        workflows.start(store, "zoned", git_repo, {"goal": "x"})
+    assert f"note #{zone} was dropped" in str(err.value)
+    workflows.edit("zoned", git_repo, lambda d: workflows.set_step(d, "build", {"memory": [
+        f"note:{elsewhere}", "topic:nothing", "problem:999"]}))
+    with pytest.raises(workflows.WorkflowError) as err:
+        workflows.start(store, "zoned", git_repo, {"goal": "x"})
+    for part in (f"no note #{elsewhere} in this project", "topic 'nothing' holds no live note", "no problem #999"):
+        assert part in str(err.value)
+    with pytest.raises(workflows.WorkflowError, match="memory is a list"):
+        workflows.normalize({"name": "x", "steps": [{"id": "a", "prompt": "do", "memory": ["zone:1"]}]})
+
+
+def test_the_cli_attaches_and_clears_memory(git_repo, store: Store, kicks, capsys, monkeypatch):
+    from cauce import repo
+
+    monkeypatch.chdir(git_repo)
+    note = store.add_note(repo.key(git_repo.resolve()), "zones", "Zones", "UTC offsets.", author="person",
+                          filed_by="person")
+    assert cli.main(["workflow", "new", "z"]) == 0
+    assert cli.main(["workflow", "step", "set", "z", "do", "--memory", f"{note},topic:zones"]) == 0
+    capsys.readouterr()
+    assert cli.main(["workflow", "show", "z"]) == 0
+    assert f"+ memory: note:{note}, topic:zones" in capsys.readouterr().out
+    assert cli.main(["workflow", "step", "set", "z", "do", "--memory", "zone:3"]) == 1
+    assert cli.main(["workflow", "step", "set", "z", "do", "--clear", "memory"]) == 0
+    assert "memory" not in workflows.load("z", git_repo)["steps"][0]

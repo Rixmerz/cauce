@@ -28,6 +28,11 @@
   template copies it to the user scope first. A definition holds no
   permission rule, approval or capability: those are flags of `cauce workflow
   run`.
+- **Memory per step.** A step can carry cauce memory into its brief: `note:<id>`
+  (a replaced note is read as the one that replaced it), `topic:<name>` (every
+  live note in it) and `problem:<id>` (with every fix tried on it). Notes are
+  read only from the run's own project. A run whose memory cannot be read
+  there does not start. Set it with `cauce workflow step add|set --memory`.
 - **Watching:** `cauce workflow status [<run>]` shows each step's state, task
   and cell, what runs now, what waits on the person and the branch so far.
   `cauce overview` lists the runs and names each step's run. `cauce workflow

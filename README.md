@@ -400,8 +400,26 @@ Definitions are JSON files:
 - `bundled`: the templates `feature`, `bugfix` and `review-fix`.
 
 A definition holds steps (`id`, `prompt` with `{input}` names, `needs`,
-`kind`, `verify`, `start`, `budget_usd`, `max_turns`) and never a permission
-rule, an approval or a capability. Those are the person's flags on `run`.
+`kind`, `verify`, `start`, `budget_usd`, `max_turns`, `memory`) and never a
+permission rule, an approval or a capability. Those are the person's flags on
+`run`.
+
+A step can carry memory into its brief, on top of what its task asks:
+
+- `note:12` (or `12`): one note of the project. A replaced note is read as the
+  note that replaced it.
+- `topic:zones`: every live note in a topic.
+- `problem:7`: a problem with every fix tried on it.
+
+Use it for the considerations that step must keep in mind:
+
+```bash
+cauce workflow step set feature build --memory note:12,topic:zones,problem:7
+```
+
+A note is read only from the project the run is in. A run whose memory cannot
+be read there (a note of another project, a dropped note, an empty topic, a
+missing problem) does not start.
 
 ### Watching several sessions
 

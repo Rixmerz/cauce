@@ -34,6 +34,8 @@ def _step_fields(args: argparse.Namespace) -> dict[str, Any]:
             out[name] = sys.stdin.read() if value == "-" else value
     if getattr(args, "needs", None) is not None:
         out["needs"] = [n for n in args.needs.split(",") if n.strip()]
+    if getattr(args, "memory", None) is not None:
+        out["memory"] = [m.strip() for m in args.memory.split(",") if m.strip()] or None
     return out
 
 
@@ -53,6 +55,8 @@ def _print_definition(defn: dict[str, Any]) -> None:
         print(f"\n  {step['id']} — {step['title']}{after}" + (f" [{extra}]" if extra else ""))
         for line in step["prompt"].splitlines():
             print(f"      {line}")
+        if step.get("memory"):
+            print(f"      + memory: {', '.join(step['memory'])}")
 
 
 def _print_run(run: dict[str, Any]) -> None:
@@ -316,10 +320,12 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
                            help="the task text; {input} names are replaced at run time; - reads stdin"
                            if flag == "prompt" else None)
         p.add_argument("--needs", help="comma-separated step ids it waits on ('' for none)")
+        p.add_argument("--memory", help="memory its brief carries, comma-separated: note:<id> (or <id>), "
+                       "topic:<name>, problem:<id>")
         if verb == "add":
             p.add_argument("--after", metavar="STEP", help="insert it after this step")
         else:
-            p.add_argument("--clear", action="append", choices=[f for f, _ in STEP_FLAGS if f != "prompt"])
+            p.add_argument("--clear", action="append", choices=[*(f for f, _ in STEP_FLAGS if f != "prompt"), "memory"])
 
     p = wsub.add_parser("run", help="start a run here: its first steps are queued and the rest follow by themselves")
     p.add_argument("name")
