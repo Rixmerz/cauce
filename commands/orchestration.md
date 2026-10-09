@@ -57,8 +57,17 @@ Request: $ARGUMENTS
    Write the task in full: the worker sees nothing of this conversation. Add
    `--verify` whenever the repository has a command that proves the work — a
    worker's own claim of success is not evidence, and cauce runs the check
-   itself, so it needs no permission. `--budget` (default $5) bounds the task;
-   `--kind` skips classification when you already know it.
+   itself, so it needs no permission. `--budget` (default $5) bounds the task.
+   Leave `--kind` out: cauce classifies the task. Pass it only with one of
+   `explore`, `review-routine`, `review-critical`, `plan`, `docs`, `test`,
+   `ui`, `refactor`, `implement`, `feature`, `debug-repro`, `debug-unclear`
+   (`cauce run --help` lists them). A task that must change nothing says
+   "read-only" in its text: that is enough, whatever kind it gets.
+
+   Never pipe a run through `tail`, `head` or `grep`: the pipe hides its exit
+   code and holds back the lines that say it started. After launching one in
+   the background, read its output for `task #N started` before telling the
+   person it is running; a usage error there means nothing ran.
 
    Workers run in Claude Code's auto mode (Haiku workers bypass permissions):
    a classifier lets safe commands through, so most work needs no rules. What
