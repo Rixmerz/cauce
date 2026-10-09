@@ -128,7 +128,8 @@ def test_install_run_demote_and_uninstall(store: Store, tmp_path):
     (repo_dir / ".claude").mkdir(parents=True)
     (repo_dir / ".claude" / "settings.local.json").write_text(json.dumps({"permissions": {"allow": ["x"]}}))
     cand = habits.Candidate(("edit:.py", "bash:ruff-format"), 3, 3, 1.0, 1, 9.0)
-    hid = habits.install(store, cand, command="exit 1", repo_dir=repo_dir)
+    hid, new = habits.install(store, cand, command="echo the type check failed; exit 1", repo_dir=repo_dir)
+    assert new
     settings = json.loads((repo_dir / ".claude" / "settings.local.json").read_text())
     assert settings["permissions"] == {"allow": ["x"]}  # what was there stays
     command = settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
@@ -137,14 +138,18 @@ def test_install_run_demote_and_uninstall(store: Store, tmp_path):
     event = {"tool_input": {"file_path": "/r/a.py"}, "cwd": str(tmp_path)}
     habits.run_habit(store, hid, {"tool_input": {"file_path": "/r/a.md"}})  # not its file type: no run
     assert store.habit(hid)["runs"] == 0
-    for _ in range(3):
-        habits.run_habit(store, hid, event)
+    said = [habits.run_habit(store, hid, event) for _ in range(3)]
+    # the session hears why, so it need not run the check again itself
+    assert "the type check failed" in said[0] and "is off now" not in said[0]
+    assert "is off now" in said[2]
     assert store.habit(hid)["disabled_at"] and store.habit(hid)["failures"] == 3
     habits.run_habit(store, hid, event)  # off: does nothing
     assert store.habit(hid)["runs"] == 3
 
-    ok = habits.install(store, cand, command="true", repo_dir=repo_dir)
-    habits.run_habit(store, ok, event)
+    ok, _ = habits.install(store, cand, command="true", repo_dir=repo_dir)
+    # the same command on the same file type here is the habit already there
+    assert habits.install(store, cand, command="true", repo_dir=repo_dir) == (ok, False)
+    assert habits.run_habit(store, ok, event) is None
     assert store.habit(ok)["runs"] == 1 and store.habit(ok)["failures"] == 0
     assert habits.uninstall(store, hid) and not habits.uninstall(store, 999)
     left = json.loads((repo_dir / ".claude" / "settings.local.json").read_text())["hooks"]["PostToolUse"]

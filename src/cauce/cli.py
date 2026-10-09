@@ -1071,11 +1071,15 @@ def cmd_habits(args: argparse.Namespace) -> int:
                 print(f"no candidate {args.candidate} passes the gates now; see `cauce habits`", file=sys.stderr)
                 return 1
             try:
-                habit_id = habits.install(store, found[args.candidate], command=args.command,
-                                          repo_dir=Path(args.repo or os.getcwd()).resolve())
+                habit_id, new = habits.install(store, found[args.candidate], command=args.command,
+                                               repo_dir=Path(args.repo or os.getcwd()).resolve())
             except habits.HabitError as exc:
                 print(str(exc), file=sys.stderr)
                 return 1
+            if not new:
+                print(f"already installed here as habit #{habit_id}: "
+                      f"`{args.command}` after {found[args.candidate].steps[0]}")
+                return 0
             print(f"installed habit #{habit_id}: after {found[args.candidate].steps[0]}, run `{args.command}`. "
                   f"`cauce habits uninstall {habit_id}` removes it.")
             return 0
@@ -1086,12 +1090,21 @@ def cmd_habits(args: argparse.Namespace) -> int:
             print(f"removed habit #{args.habit_id}")
             return 0
         if args.habits_command == "status":
-            for h in store.habits():
+            installed = [{**h, "steps": json.loads(h["steps"]),
+                          "repo": str(Path(h["settings_path"]).parent.parent)} for h in store.habits()]
+            if args.json:
+                print(json.dumps(installed, ensure_ascii=False))
+                return 0
+            for h in installed:
                 state = f"off since {h['disabled_at']} after {h['failures']} failures" if h["disabled_at"] else "on"
-                print(f"#{h['id']} {' → '.join(json.loads(h['steps']))}: `{h['command']}` "
-                      f"({h['runs']} runs) {state}")
+                print(f"#{h['id']} {' → '.join(h['steps'])}: `{h['command']}` ({h['runs']} runs) {state}"
+                      f"  in {h['repo']}")
             return 0
         found = _candidates(store, args.days)
+        if args.json:
+            print(json.dumps([{"id": c.id, "steps": list(c.steps), "occurrences": c.occurrences,
+                               "sessions": c.sessions, "success": c.success} for c in found[: args.limit]]))
+            return 0
         if not found:
             print("no repeated sequence passes the gates yet")
         for c in found[: args.limit]:
@@ -1102,18 +1115,24 @@ def cmd_habits(args: argparse.Namespace) -> int:
 
 
 def cmd_habit_run(args: argparse.Namespace) -> int:
-    """The body of an installed habit's hook. Fails open, prints nothing."""
+    """The body of an installed habit's hook. Fails open; a check that failed is
+    said to the session (exit 2, the output's end on stderr), a pass says nothing."""
     try:
         event = json.loads(sys.stdin.read() or "{}")
         store = Store.open()
         try:
-            habits.run_habit(store, args.habit_id, event)
+            said = habits.run_habit(store, args.habit_id, event)
         finally:
             store.close()
     except Exception:  # a hook never takes the session down, and says when it failed
         from cauce import signature
 
         signature.note_error(os.environ)
+        return 0
+    if said:
+        # PostToolUse exit 2: the edit stands, and the session reads why the check failed.
+        print(said, file=sys.stderr)
+        return 2
     return 0
 
 
@@ -1510,11 +1529,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_neighbours)
 
     hb = sub.add_parser("habits", help="repeated tool sequences, and the hooks a person installs from them")
-    hb.set_defaults(func=cmd_habits, habits_command="list", days=30, limit=20)
+    hb.set_defaults(func=cmd_habits, habits_command="list", days=30, limit=20, json=False)
     hsub = hb.add_subparsers(dest="habits_command")
     p = hsub.add_parser("list", help="sequences that pass the gates, best first")
     p.add_argument("--days", type=int, default=30)
     p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_habits)
     p = hsub.add_parser("install", help="run a command after the edit that starts a habit (you approve it here)")
     p.add_argument("candidate")
@@ -1525,7 +1545,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = hsub.add_parser("uninstall", help="the kill switch")
     p.add_argument("habit_id", type=int)
     p.set_defaults(func=cmd_habits)
-    hsub.add_parser("status", help="installed habits, runs and failures").set_defaults(func=cmd_habits)
+    p = hsub.add_parser("status", help="installed habits, runs and failures, and where")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_habits)
 
     p = sub.add_parser("habit-run", help=argparse.SUPPRESS)
     p.add_argument("habit_id", type=int)
