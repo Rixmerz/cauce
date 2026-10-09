@@ -31,6 +31,30 @@ def _cell(value: str) -> str:
     return value
 
 
+#: Words a caller reaches for that are not cauce's kinds, read as the kind they mean.
+KIND_ALIASES = {
+    "research": "explore", "investigate": "explore", "investigation": "explore", "search": "explore",
+    "audit": "review-critical", "review": "review-routine", "security": "review-critical",
+    "fix": "debug-repro", "bug": "debug-repro", "bugfix": "debug-repro", "debug": "debug-unclear",
+    "tests": "test", "testing": "test", "e2e": "test", "validate": "test", "validation": "test",
+    "doc": "docs", "documentation": "docs", "frontend": "ui", "design": "ui",
+    "impl": "implement", "code": "implement", "build": "implement", "planning": "plan", "question": "chat",
+}
+
+
+def _kind(value: str) -> str:
+    """A `--kind`: one of cauce's, or a word that means one. Anything else is a
+    usage error that names the kinds, before any task is recorded."""
+    key = value.strip().lower()
+    if key in KINDS:
+        return key
+    if key in KIND_ALIASES:
+        print(f"cauce: --kind {value!r} read as {KIND_ALIASES[key]!r}", file=sys.stderr)
+        return KIND_ALIASES[key]
+    raise argparse.ArgumentTypeError(f"{value!r} is not a kind; use one of: {', '.join(KINDS)} "
+                                     "(or leave --kind out and cauce classifies the task)")
+
+
 def _text(value: str) -> str:
     return sys.stdin.read() if value == "-" else value
 
@@ -1138,7 +1162,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="turns per attempt (default: 30; a feature, 60); raised once, then again while "
                             "the work moves")
         p.add_argument("--verify", help="command whose exit code decides a claimed pass")
-        p.add_argument("--kind", choices=KINDS, help="skip classification")
+        p.add_argument("--kind", type=_kind, metavar="KIND",
+                       help=f"skip classification: {', '.join(KINDS)}")
         p.add_argument("--start", help="pin the first cell, e.g. sonnet/high", type=_cell)
         p.add_argument("--allow-approval", action="store_true", help="allow cells that need approval (Fable)")
         p.add_argument("--allow", action="append", metavar="RULE", help=ALLOW_HELP)
@@ -1201,7 +1226,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo")
     p.add_argument("--budget", type=float)
     p.add_argument("--verify")
-    p.add_argument("--kind", choices=KINDS)
+    p.add_argument("--kind", type=_kind, metavar="KIND")
     p.add_argument("--start", type=_cell)
     p.add_argument("--allow", action="append", metavar="RULE", help=ALLOW_HELP)
     p.add_argument("--json", action="store_true", help="print the queued task as JSON")

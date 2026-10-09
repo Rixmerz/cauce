@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.6.11] - 2026-10-09
+
+### Fixed
+
+- `--kind research` (and `audit`, `fix`, `validation`…) is read as the kind it
+  means, said on stderr; a word that means none is a usage error that lists
+  the kinds and says cauce classifies when `--kind` is left out. A session
+  guessed a kind, the run never started, and the background pipe hid it.
+- The orchestration guide names the kinds, says to leave `--kind` out, never
+  to pipe a run through `tail`, and to read `task #N started` before telling
+  the person a run is going.
+
 ## [0.6.10] - 2026-10-08
 
 ### Fixed

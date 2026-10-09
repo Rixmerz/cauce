@@ -713,3 +713,22 @@ def test_a_start_cell_with_no_such_dial_is_a_usage_error(capsys):
         cli.main(["run", "--start", "haiku/low", "x"])
     assert exit_.value.code == 2
     assert "haiku has no effort dial" in capsys.readouterr().err
+
+
+def test_a_kind_alias_is_read_as_the_kind_it_means(capsys):
+    from cauce import cli
+
+    assert cli._kind("research") == "explore"
+    assert "read as 'explore'" in capsys.readouterr().err
+    assert cli._kind("Explore") == "explore"
+
+
+def test_an_unknown_kind_names_the_kinds():
+    import argparse
+
+    import pytest
+
+    from cauce import cli
+
+    with pytest.raises(argparse.ArgumentTypeError, match="leave --kind out"):
+        cli._kind("whatever")
