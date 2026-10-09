@@ -73,6 +73,7 @@ def test_candidates_pass_every_gate_or_none(store: Store):
     _events(store, 1, ["edit:.go", "bash:go-test"])  # one session: below the gate
     _events(store, 3, ["edit:.ts", "bash:rm"])  # destructive: never a candidate
     _events(store, 3, ["bash:make", "bash:make"])  # a loop is not a habit
+    _events(store, 3, ["write:.ts", "bash:python3"])  # a script the model ran: no check a hook could name
     found = habits.candidates(store.tool_events())
     assert [c.steps for c in found] == [("edit:.py", "bash:ruff-format", "bash:pytest")]
     best = found[0]
@@ -182,3 +183,44 @@ def test_the_fast_path_logs_in_its_own_process(tmp_path):
     off = subprocess.run([str(ROOT / "bin" / "cauce"), "hook", "PostToolUse"], input=delegation, text=True,
                          capture_output=True, env={**env, "CAUCE_HOOKS_OFF": "1"}, check=False)
     assert off.returncode == 0
+
+
+def test_habits_are_mined_per_repository_and_offered_across_them(store: Store, tmp_path):
+    """A Python repository was shown twenty TypeScript habits and none of its own:
+    every repository's events were mined together. Each one's habits come from its
+    own events now; a habit of several others is offered apart."""
+    from cauce.ui import api
+
+    def work(repo: str, sessions: int, seq: list[str]) -> None:
+        for n in range(sessions):
+            sid = f"{repo}-{n}"
+            store.touch_session(sid, f"/{repo}", repo)
+            for sig in seq:
+                store.add_tool_event(session_id=sid, tool="x", sig=sig, arg_hash="h", ok=1)
+
+    work("py", 3, ["edit:.py", "bash:ruff-check"])
+    work("web", 3, ["edit:.ts", "bash:npm-run"])
+    work("api", 2, ["edit:.ts", "bash:npm-run"])
+    worker = store.create_task("x", status="done", source="cauce", repo="api")
+    store.add_tool_event(session_id="worker", task_id=worker["id"], attempt=1, tool="x", sig="edit:.ts",
+                         arg_hash="h", ok=1)  # a worker's event belongs to its task's repository
+    assert {e["repo"] for e in store.tool_events(repo="api")} == {"api"}
+    assert len(store.tool_events(repo="api")) == 5
+
+    here, elsewhere = habits.for_repo(store.tool_events(), "py")
+    assert [c.steps for c in here] == [("edit:.py", "bash:ruff-check")]
+    assert [(c.steps, c.repos) for c in elsewhere] == [(("edit:.ts", "bash:npm-run"), 2)]
+    here, elsewhere = habits.for_repo(store.tool_events(), "web")
+    assert [c.steps for c in here] == [("edit:.ts", "bash:npm-run")]
+    assert elsewhere == []  # what it has is not offered again
+    here_new, offered = habits.for_repo(store.tool_events(), "new")  # a repository with no history yet
+    assert here_new == []
+    assert [c.steps for c in offered] == [("edit:.ts", "bash:npm-run")]
+
+    (tmp_path / "py" / ".claude").mkdir(parents=True)
+    habits.install(store, here[0], command="npm run lint", repo_dir=tmp_path / "web-checkout")
+    view = api.habit_view(store, "py")
+    assert [c["steps"] for c in view["candidates"]] == [["edit:.py", "bash:ruff-check"]]
+    assert view["elsewhere"][0]["repos"] == 2
+    assert view["installed"] == []  # installed in another repository
+    assert len(api.habit_view(store)["installed"]) == 1

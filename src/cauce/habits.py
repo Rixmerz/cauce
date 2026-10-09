@@ -102,14 +102,21 @@ class Candidate:
     success: float
     distinct_args: int
     score: float
+    #: The repositories it was seen in.
+    repos: int = 1
 
     @property
     def id(self) -> str:
         return hashlib.sha256(" > ".join(self.steps).encode()).hexdigest()[:8]
 
     def line(self) -> str:
-        return (f"{self.id}  {' → '.join(self.steps)}  ×{self.occurrences} in {self.sessions} sessions, "
+        where = f", {self.repos} repositories" if self.repos > 1 else ""
+        return (f"{self.id}  {' → '.join(self.steps)}  ×{self.occurrences} in {self.sessions} sessions{where}, "
                 f"{self.success:.0%} ok")
+
+    def data(self) -> dict[str, Any]:
+        return {"id": self.id, "steps": list(self.steps), "occurrences": self.occurrences,
+                "sessions": self.sessions, "repos": self.repos, "success": self.success, "score": self.score}
 
 
 def _runs(events: Sequence[Mapping[str, Any]]) -> dict[str, list[Mapping[str, Any]]]:
@@ -121,7 +128,7 @@ def _runs(events: Sequence[Mapping[str, Any]]) -> dict[str, list[Mapping[str, An
 
 def candidates(events: Sequence[Mapping[str, Any]]) -> list[Candidate]:
     """Sequences of 2–4 consecutive signatures that pass every gate, best first."""
-    occurrences: dict[tuple[str, ...], list[tuple[str, bool, str]]] = defaultdict(list)
+    occurrences: dict[tuple[str, ...], list[tuple[str, bool, str, Any]]] = defaultdict(list)
     for run_key, run in _runs(events).items():
         session = run_key.split(":", 1)[0]
         sigs = [e["sig"] for e in run]
@@ -131,21 +138,22 @@ def candidates(events: Sequence[Mapping[str, Any]]) -> list[Candidate]:
                 if len(set(steps)) == 1:
                     continue  # the same call repeated is a loop, not a habit
                 window = run[i:i + length]
-                occurrences[steps].append(
-                    (session, all(e["ok"] for e in window), "".join(e["arg_hash"] for e in window)))
+                occurrences[steps].append((session, all(e["ok"] for e in window),
+                                           "".join(e["arg_hash"] for e in window), window[0].get("repo")))
     found = []
     for steps, seen in occurrences.items():
         if not automatable(steps):
             continue
         n = len(seen)
-        sessions = len({s for s, _, _ in seen})
-        success = sum(ok for _, ok, _ in seen) / n
+        sessions = len({s for s, _, _, _ in seen})
+        success = sum(ok for _, ok, _, _ in seen) / n
         gates = (n >= MIN_OCCURRENCES and sessions >= MIN_SESSIONS and success >= MIN_SUCCESS
                  and not any(_DESTRUCTIVE.match(step) for step in steps))
         if not gates:
             continue
-        distinct = len({h for _, _, h in seen})
-        found.append(Candidate(steps, n, sessions, success, distinct, score=n * sessions * success))
+        distinct = len({h for _, _, h, _ in seen})
+        repos = len({r for _, _, _, r in seen if r}) or 1
+        found.append(Candidate(steps, n, sessions, success, distinct, score=n * sessions * success, repos=repos))
     # A longer sequence that repeats as often as its prefix is the same habit, better described.
     found.sort(key=lambda c: (-c.score, -len(c.steps)))
     kept: list[Candidate] = []
@@ -156,6 +164,29 @@ def candidates(events: Sequence[Mapping[str, Any]]) -> list[Candidate]:
     return kept
 
 
+#: An interpreter named alone ran a script or a `-c` one-off: `python -m pytest`
+#: is recorded as `bash:pytest`, so a bare `bash:python3` is never a check a hook
+#: could name. After a `.ts` write it was the model's own scratch work, 12 times.
+_SCRIPTS = frozenset({"python", "python3", "node", "bash", "sh", "zsh", "ruby", "perl", "osascript"})
+
+#: A habit seen in this many repositories is offered to one that has no history
+#: of it yet: a team's way of working, not one checkout's.
+MIN_REPOS_ELSEWHERE = 2
+
+
+def for_repo(events: Sequence[Mapping[str, Any]], repo: str) -> tuple[list[Candidate], list[Candidate]]:
+    """A repository's habits, mined from its own events and gated on them alone,
+    and those other repositories share that it does not have yet. A habit is per
+    project: its command is this project's tooling, and a count summed over
+    unrelated projects says nothing about this one."""
+    here = candidates([e for e in events if e.get("repo") == repo])
+    mine = [c.steps for c in here]
+    elsewhere = [c for c in candidates(events)
+                 if c.repos >= MIN_REPOS_ELSEWHERE
+                 and not any(c.steps == m or _contains(m, c.steps) or _contains(c.steps, m) for m in mine)]
+    return here, elsewhere
+
+
 def automatable(steps: Sequence[str]) -> bool:
     """Whether a hook could take a sequence over: it starts with an edit or a write
     (what a hook is triggered by) and ends in a command that does something — a
@@ -164,7 +195,8 @@ def automatable(steps: Sequence[str]) -> bool:
     if len(steps) < 2 or _EDIT_TRIGGER.match(steps[0]) is None:
         return False
     last = steps[-1]
-    return last.startswith("bash:") and last.removeprefix("bash:") not in _LOOKING
+    program = last.removeprefix("bash:")
+    return last.startswith("bash:") and program not in _LOOKING and program not in _SCRIPTS
 
 
 def _contains(longer: tuple[str, ...], shorter: tuple[str, ...]) -> bool:

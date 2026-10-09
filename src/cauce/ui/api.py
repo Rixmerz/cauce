@@ -477,14 +477,20 @@ def session_detail(store: Store, session_id: str, turns: int = 60) -> dict[str, 
     }
 
 
-def habit_view(store: Store, days: int = 30) -> dict[str, Any]:
+def habit_view(store: Store, repo_key: str | None = None, days: int = 30) -> dict[str, Any]:
+    """One project's habits: mined from its own events, the ones other projects
+    share that it has not, and the ones installed in it. Without a project,
+    every repository's events mined together."""
+    from cauce import repo as repo_mod
+
     habits.load_events(store)
-    found = habits.candidates(store.tool_events(days=days))
-    return {
-        "candidates": [{"id": c.id, "steps": list(c.steps), "occurrences": c.occurrences, "sessions": c.sessions,
-                        "success": c.success, "score": c.score} for c in found[:40]],
-        "installed": [{**h, "steps": json.loads(h["steps"])} for h in store.habits()],
-    }
+    events = store.tool_events(days=days)
+    here, elsewhere = habits.for_repo(events, repo_key) if repo_key else (habits.candidates(events), [])
+    installed = [{**h, "steps": json.loads(h["steps"])} for h in store.habits()]
+    if repo_key:
+        installed = [h for h in installed if repo_mod.key(Path(h["settings_path"]).parent.parent) == repo_key]
+    return {"repo": repo_key, "candidates": [c.data() for c in here[:40]],
+            "elsewhere": [c.data() for c in elsewhere[:20]], "installed": installed}
 
 
 def _hours_ago_iso(hours: float) -> str:

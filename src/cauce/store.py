@@ -713,9 +713,18 @@ class Store:
         self._conn.execute(f"INSERT INTO tool_events ({cols}) VALUES ({', '.join('?' for _ in record)})",  # noqa: S608
                            list(record.values()))
 
-    def tool_events(self, *, days: int = 30, limit: int = 50_000) -> list[dict]:
+    def tool_events(self, *, days: int = 30, repo: str | None = None, limit: int = 50_000) -> list[dict]:
+        """Tool events, each with the repository it happened in: its task's, else its
+        session's. Read from what cauce already knows of both; the fast path that
+        records an event never writes a path. With `repo`, that repository's only."""
+        where, params = "e.ts >= ?", [_days_ago(days)]
+        if repo is not None:
+            where += " AND COALESCE(t.repo, s.repo) = ?"
+            params.append(repo)
         rows = self._conn.execute(
-            "SELECT * FROM tool_events WHERE ts >= ? ORDER BY id LIMIT ?", (_days_ago(days), limit)).fetchall()
+            "SELECT e.*, COALESCE(t.repo, s.repo) AS repo FROM tool_events e "  # noqa: S608
+            "LEFT JOIN tasks t ON t.id = e.task_id LEFT JOIN sessions s ON s.id = e.session_id "
+            f"WHERE {where} ORDER BY e.id LIMIT ?", [*params, limit]).fetchall()
         return [dict(r) for r in rows]
 
     def passed_attempt_events(self, kind: str, *, repo: str | None = None, limit: int = 20_000) -> list[dict]:
