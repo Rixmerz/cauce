@@ -334,12 +334,15 @@ def cmd_events(args: argparse.Namespace) -> int:
     after = store.last_event_id() if args.new else args.after
     try:
         while True:
-            for e in store.events(after=after, task_id=args.task):
+            batch = store.events(after=after, task_id=args.task)
+            for e in batch:
                 after = e["id"]
                 if args.kind and e["kind"] not in args.kind:
                     continue
                 print(json.dumps(e, ensure_ascii=False) if args.json else
                       f"{e['ts']} #{e['task_id']} {e['kind']} {json.dumps(e['data'], ensure_ascii=False)}")
+            if batch:
+                continue  # a page at a time, to the last event
             if not args.follow:
                 return 0
             sys.stdout.flush()

@@ -203,6 +203,14 @@ def test_cancel_signals_the_run_and_events_print(capsys, monkeypatch):
     assert {json.loads(x)["kind"] for x in capsys.readouterr().out.splitlines()} == {"cancel_requested"}
     assert cli.main(["events", "--new"]) == 0
     assert capsys.readouterr().out == ""
+    # past the first page: every event, not the first 200
+    store = Store.open()
+    for i in range(250):
+        store.add_event(again["id"], "noise", i=i)
+    store.add_event(again["id"], "branch_pruned", branch="cauce/task-1")
+    store.close()
+    assert cli.main(["events", "--kind", "branch_pruned"]) == 0
+    assert "cauce/task-1" in capsys.readouterr().out
 
 
 def test_sigterm_becomes_a_cancel():
