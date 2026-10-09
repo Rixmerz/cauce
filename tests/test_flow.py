@@ -190,3 +190,57 @@ def test_pinned_runs_never_teach_the_router(git_repo, store: Store):
             adapters=[])
     assert store.landings("implement") == []
     assert store.list_tasks()[0]["pinned"] == 1
+
+
+def test_prune_deletes_only_the_branches_whose_work_landed(store, git_repo, monkeypatch, capsys):
+    """Merged, squash-merged and artifact-only branches go, each kept on its task's
+    events with its tip; work not landed, a task that may resume, and a branch
+    checked out in a worktree stay."""
+    from cauce import cli, flow, isolate
+
+    from .conftest import git
+
+    def branch(task_id, files, status="done"):
+        task = store.create_task(f"task {task_id}", status="running", source="cauce", cwd=str(git_repo))
+        store.update_task(task["id"], status=status)
+        name = isolate.branch_for(task["id"])
+        git(git_repo, "checkout", "-qb", name)
+        for path, text in files.items():
+            (git_repo / path).parent.mkdir(parents=True, exist_ok=True)
+            (git_repo / path).write_text(text)
+        git(git_repo, "add", "-A")
+        git(git_repo, "commit", "-qm", name)
+        git(git_repo, "checkout", "-q", "main")
+        return task["id"], name
+
+    merged = branch(1, {"a.txt": "a"})
+    git(git_repo, "merge", "-q", "--no-ff", "-m", "merge", merged[1])
+    squashed = branch(2, {"b.txt": "b"})
+    (git_repo / "b.txt").write_text("b")
+    git(git_repo, "add", "-A")
+    git(git_repo, "commit", "-qm", "squash")
+    artifacts = branch(3, {".playwright-mcp/console.log": "x"})
+    pending = branch(4, {"c.txt": "c"})
+    blocked = branch(5, {"e.txt": "e"}, status="blocked")
+    git(git_repo, "merge", "-q", "--no-ff", "-m", "merge", blocked[1])
+    checked_out = branch(6, {"d.txt": "d"})
+    git(git_repo, "merge", "-q", "--no-ff", "-m", "merge", checked_out[1])
+    git(git_repo, "worktree", "add", "-q", str(git_repo.parent / "wt"), checked_out[1])
+
+    assert {x["task"] for x in flow.prune(store, dry_run=True)} == {merged[0], squashed[0], artifacts[0]}
+    assert len(isolate.kept_branches(git_repo)) == 6  # a dry run deletes nothing
+
+    monkeypatch.setenv("CAUCE_PRUNE", "off")
+    assert flow.prune(store) == []
+    assert cli.main(["prune"]) == 0
+    assert "pruning is off" in capsys.readouterr().out
+
+    monkeypatch.setenv("CAUCE_PRUNE", "on")
+    gone = {x["task"]: x["why"] for x in flow.prune(store, [git_repo])}
+    assert gone == {merged[0]: "merged", squashed[0]: "squash-merged", artifacts[0]: "artifacts only"}
+    assert set(isolate.kept_branches(git_repo)) == {pending[0], blocked[0], checked_out[0]}
+    event = store.last_event(merged[0], "branch_pruned")["data"]
+    assert event["branch"] == merged[1]
+    assert git(git_repo, "cat-file", "-t", event["tip"]) == "commit"  # still there to bring back
+    assert cli.main(["prune", "--repo", str(git_repo)]) == 0
+    assert "no branch cauce kept has landed" in capsys.readouterr().out

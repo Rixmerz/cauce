@@ -84,6 +84,43 @@ def sweep(store: Store, *, now: datetime | None = None, is_alive: Callable[[int 
     return swept
 
 
+#: Statuses whose branch waits on nothing: no resume continues from it.
+PRUNE_STATUSES = frozenset({"done", "dismissed"})
+
+
+def prune(store: Store, dirs: list[Path] | None = None, *, dry_run: bool = False) -> list[dict]:
+    """Delete the branches cauce kept whose work landed, in each checkout its
+    tasks ran in (or in `dirs`): merged, squash-merged, or tool artifacts only;
+    see `isolate.prunable`. Each is recorded on its task with its tip, so
+    `git branch <name> <tip>` brings it back. Off with `cauce config prune off`."""
+    from cauce import config, isolate, repo
+
+    if not dry_run and not config.enabled("prune", os.environ):
+        return []
+    if dirs is None:
+        seen: dict[str, Path] = {}
+        for task in store.list_tasks(status=sorted(PRUNE_STATUSES), source=("cauce", "queue"), limit=2000):
+            where = Path(task["cwd"]) if task.get("cwd") else None
+            top = repo.toplevel(where) if where is not None and where.is_dir() else None
+            if top is not None:
+                seen.setdefault(str(top), top)
+        dirs = list(seen.values())
+    pruned = []
+    for top in dirs:
+        for task_id, tip in isolate.kept_branches(top).items():
+            task = store.get_task(task_id)
+            if task is None or task["status"] not in PRUNE_STATUSES:
+                continue
+            branch = isolate.branch_for(task_id)
+            why = isolate.prunable(top, branch)
+            if why is None or (not dry_run and not isolate.delete_branch(top, branch)):
+                continue
+            if not dry_run:
+                store.add_event(task_id, "branch_pruned", branch=branch, tip=tip, why=why, repo=str(top))
+            pruned.append({"task": task_id, "branch": branch, "tip": tip, "why": why, "repo": str(top)})
+    return pruned
+
+
 @dataclass(frozen=True)
 class Ran:
     task_id: int

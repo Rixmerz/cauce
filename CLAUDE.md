@@ -16,7 +16,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/launch.py` | one attempt as `claude -p`: argv, the result contract, parsing, git-read changes |
 | `src/cauce/capabilities.py` | which MCP servers a worker gets, from the user-level registry |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, all on/off), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `prune`, all on/off), copied from plugin options by SessionStart |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
 | `src/cauce/habits.py` | mining sequences, recipes for the brief, and approval-gated habit hooks |
@@ -153,6 +153,11 @@ yields the default kind, not a guess.
   nothing (words about the task, never about what it builds) is read as
   reading while it changes nothing, and holds no checkout; a `feature`,
   `implement`, `refactor` or `docs` task never is.
+- A kept branch is deleted only when nothing is lost (`isolate.prunable`):
+  its commits are on another branch, HEAD holds every file it changed, or it
+  holds only artifacts; never one checked out, never one of a task that may
+  resume. Its tip is kept on a `branch_pruned` event. It runs in hooks and the
+  server thread, never in a GET.
 - Files a worker's tools write for themselves (`isolate.ARTIFACT_DIRS`) are
   never a changed file and never committed, and a branch holding only them is
   never a review.

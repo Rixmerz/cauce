@@ -495,6 +495,28 @@ def _overview_task(t: dict) -> str:
     return f"{head} {t['title']} — {t.get('cell') or '-'}, ${t['cost_usd']:.2f}, {t['updated_at']}"
 
 
+def cmd_prune(args: argparse.Namespace) -> int:
+    from cauce import config
+
+    dry = args.dry_run or not config.enabled("prune", os.environ)
+    if dry and not args.dry_run:
+        print("pruning is off (`cauce config prune on`); this is what it would delete:")
+    dirs = None
+    if args.repo:
+        dirs = [top for top in (repo.toplevel(Path(d).resolve()) for d in args.repo) if top is not None]
+    store = Store.open()
+    try:
+        gone = flow.prune(store, dirs, dry_run=dry)
+    finally:
+        store.close()
+    for x in gone:
+        print(f"{'would delete' if dry else 'deleted'} {x['branch']} ({x['why']}) in {x['repo']}; "
+              f"back with: git branch {x['branch']} {x['tip']}")
+    if not gone:
+        print("no branch cauce kept has landed")
+    return 0
+
+
 def cmd_overview(args: argparse.Namespace) -> int:
     """Every session seen lately, and its work: what waits, runs, is queued, ended.
     A read for a watcher; it claims no ending, so each session still hears its own."""
@@ -1528,6 +1550,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--full", action="store_true", help="the whole board as JSON")
     p.add_argument("--repo", action="append", help="only this repository (repeatable)")
     p.set_defaults(func=cmd_board)
+
+    p = sub.add_parser("prune", help="delete the branches cauce kept whose work landed: merged, squash-merged, "
+                       "or tool artifacts only (sessions and the UI do it on their own)")
+    p.add_argument("--repo", action="append", help="only this checkout (repeatable); every one cauce used by default")
+    p.add_argument("--dry-run", action="store_true", help="say what would go, delete nothing")
+    p.set_defaults(func=cmd_prune)
 
     p = sub.add_parser("overview", help="every session seen lately and how its work stands: for watching "
                        "sessions in several projects at once")
