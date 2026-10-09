@@ -615,3 +615,18 @@ def test_resume_args_follow_the_stop(cause, extra, keep, expected):
     args = stops.resume_args(3, shown, keep=keep)
     assert args == (None if expected is None else ["resume", "3", "--detach", *expected])
     assert stops.resume_args(3, {**shown, "next": None}) is None
+
+
+def test_a_branch_of_tool_artifacts_only_waits_on_nobody(store: Store):
+    """Validations committed before artifacts were left out kept branches of a
+    browser's logs: nine "review branch" cards with nothing to merge."""
+    def done(changed):
+        t = store.create_task("validate", status="running", source="cauce", repo="r")
+        store.add_event(t["id"], "finished", status="done", branch=f"cauce/task-{t['id']}", changed=changed)
+        store.update_task(t["id"], status="done")
+        return t["id"]
+
+    done([".playwright-mcp/console.log", "e2e/__pycache__/x.pyc"])
+    work = done([".playwright-mcp/console.log", "src/app.ts"])
+    unknown = done([])
+    assert {c["id"] for c in api.board(store, {"r"})["needs_you"]} == {work, unknown}

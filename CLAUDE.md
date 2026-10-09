@@ -149,9 +149,12 @@ yields the default kind, not a guess.
 - A reading task's answer is its deliverable: findings, broken code included,
   are a pass, and two cells reporting the same findings stop it as
   `converged` instead of climbing. A task whose own text says it changes
-  nothing is read as reading while it changes nothing, and holds no checkout.
+  nothing (words about the task, never about what it builds) is read as
+  reading while it changes nothing, and holds no checkout; a `feature`,
+  `implement`, `refactor` or `docs` task never is.
 - Files a worker's tools write for themselves (`isolate.ARTIFACT_DIRS`) are
-  never a changed file and never committed.
+  never a changed file and never committed, and a branch holding only them is
+  never a review.
 - A worker that stopped before its own check (refused, out of turns or
   money) is checked with `--verify` by cauce when the task changed something;
   a red check is evidence for the next brief, never a pass.
