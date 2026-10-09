@@ -1,5 +1,4 @@
-// The values the cauce mod keeps for a session ($.state): what its band, its
-// status entry and its pane draw from. Read from `cauce board --full`, never
+// What the cauce mod reads from `cauce board --full` for its status entry. Read from `cauce board --full`, never
 // written by the model.
 
 export type CauceStop = {

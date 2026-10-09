@@ -1,3 +1,4 @@
+import { toast } from "./main.js";
 import { get, post } from "./net.js";
 import { stopSection } from "./stop.js";
 import { h, repoName, usd, when } from "./util.js";
@@ -96,6 +97,27 @@ export async function openTask(id, quiet = false) {
       openTask(id);
     } }, "Dismiss");
     actions.push(dismiss);
+  }
+  const stop = d.stop;
+  if (stop && stop.next && t.status !== "cancelled") {
+    // What a press resumes with (rules, an approval, a budget) is read from
+    // cauce's account on the server, never sent from here.
+    const label = { permission: "Allow & resume", approval: "Approve & resume" }[stop.cause] || "Resume";
+    const press = (keep) => async () => {
+      try {
+        await post(`/api/tasks/${id}/resume`, { keep });
+        toast(keep ? `Kept for this repository; resuming #${id}` : `Resuming #${id}`);
+      } catch (err) {
+        toast(String(err.message || err));
+      }
+      openTask(id);
+    };
+    if (stop.cause !== "permission" || (stop.allow && stop.allow.length)) {
+      actions.unshift(h("button", { class: "primary", onclick: press(false) }, label));
+    }
+    if (stop.cause === "permission" && stop.allow && stop.allow.length) {
+      actions.splice(1, 0, h("button", { onclick: press(true) }, "Always allow here"));
+    }
   }
   if (d.branch) {
     const cmd = `git -C ${t.cwd} diff HEAD...${d.branch}`;

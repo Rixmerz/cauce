@@ -357,7 +357,7 @@ test('the status entry counts the board and clears when it is empty', async ($, 
   let board = JSON.stringify(BOARD)
   const { seen, clock } = await started($, on, { board: () => ({ exitCode: 0, stdout: board }) })
   await clock.advance(15_000)
-  expect(seen.status.at(-1)).toBe('cauce ⚠3 ▶1 ⏸1')
+  expect(seen.status.at(-1)).toBe('cauce · 3 waits on you · 1 running · 1 queued')
   board = EMPTY_BOARD
   await clock.advance(15_000)
   expect(seen.status.at(-1)).toBe(undefined)
@@ -366,154 +366,13 @@ test('the status entry counts the board and clears when it is empty', async ($, 
   expect(seen.status.at(-1)).toBe(undefined)
 })
 
-// --- the band above the prompt and the pane ----------------------------------------------
+// --- /cauce -------------------------------------------------------------------------------
 
-const BAND = { component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100,
-  scroll: { bodyRows: 9, offset: 0 }, view: {} } } as const
-
-function engineBand(on: On) {
-  // What the engine draws when the mod has nothing to say.
-  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
-    const { Text } = $.ui.resolve(e)
-    return <Text key="engine">engine band</Text>
-  })
-}
-
-async function withBoard($: any, on: On, board: object, answers: Record<string, Answer> = {}) {
-  engineBand(on)
-  const r = await started($, on, { board: { exitCode: 0, stdout: JSON.stringify(board) }, ...answers })
-  await r.clock.advance(15_000)
-  return r
-}
-
-test('nothing waits: the band is the engine\'s own', async ($, on) => {
-  await withBoard($, on, JSON.parse(EMPTY_BOARD))
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ plugin: 'cauce', surface, ...BAND } as never)
-    expect(await ui.find({ text: 'engine band' })).toBeDefined()
-    await ui.unmount()
-  }
-})
-
-test('a refusal offers Allow & resume, and the press runs exactly the suggested rules', async ($, on) => {
-  const { seen } = await withBoard($, on, BOARD, { resume: { exitCode: 0, stdout: 'resuming #12 in the background' } })
-  const ui = await $.ui.mount({ plugin: 'cauce', surface: 'terminal', ...BAND } as never)
-  expect((await ui.find({ key: 'resume-12' }))?.props.label).toBe('Allow & resume')
-  expect(await ui.find({ key: 'resume-13' })).toBeUndefined() // a task found wrong is rewritten, not resumed
-  expect(await ui.find({ key: 'card-9' })).toBeUndefined() // a branch to review is no stop
-  await ui.press({ key: 'resume-12' })
-  expect(seen.argv.find(a => a[0] === 'resume')).toEqual(['resume', '12', '--detach', '--allow', 'Bash(npm test:*)'])
-  expect(seen.toasts).toContain('cauce: resuming #12')
-})
-
-test('Always allow here keeps the same rules for the repository and resumes; only a refusal offers it', async ($, on) => {
-  const stopped = (id: number, cause: string, allow: string[]) => ({ id, title: `t${id}`, status: 'blocked',
-    stop: { cause, who: 'x', reason: `r${id}`, todo: 'do', next: `cauce resume ${id}`, allow } })
-  const board = { ...BOARD, needs_you: [BOARD.needs_you[0], stopped(2, 'permission', []), stopped(3, 'approval', ['Bash(x)'])] }
-  const { seen } = await withBoard($, on, board, { resume: { exitCode: 0, stdout: 'resuming' } })
-  const ui = await $.ui.mount({ plugin: 'cauce', surface: 'terminal', ...BAND } as never)
-  expect((await ui.find({ key: 'keep-12' }))?.props.label).toBe('Always allow here')
-  // no rule to keep, or a stop that is no refusal: nothing to keep, no button
-  expect(await ui.find({ key: 'keep-2' })).toBeUndefined()
-  expect(await ui.find({ key: 'keep-3' })).toBeUndefined()
-  await ui.press({ key: 'keep-12' })
-  expect(seen.argv.find(a => a[0] === 'resume')).toEqual(['resume', '12', '--detach', '--allow', 'Bash(npm test:*)', '--keep'])
-  expect(seen.toasts).toContain('cauce: kept for this repository; resuming #12')
-  // the model's resume never keeps anything, whatever it asks for
-  await call($, 'resume', { id: 12, keep: true, allow: ['Bash(npm test:*)'] })
-  expect(seen.argv.filter(a => a[0] === 'resume').at(-1)).toEqual(['resume', '12', '--unattended', '--detach'])
-})
-
-test('the pane offers the same keep press', async ($, on) => {
-  const { seen } = await withBoard($, on, BOARD, { resume: { exitCode: 0, stdout: 'resuming' } })
-  const ui = await $.ui.mount({ plugin: 'cauce', surface: 'desktop', component: 'Pane', requestId: 'cauce',
-    props: { title: 'cauce', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { bodyRows: 30, offset: 0 } } } as never)
-  expect(await ui.find({ key: 'keep-13' })).toBeUndefined()
-  await ui.press({ key: 'keep-12' })
-  expect(seen.argv.find(a => a[0] === 'resume')).toEqual(['resume', '12', '--detach', '--allow', 'Bash(npm test:*)', '--keep'])
-})
-
-test('a refusal with no rule to offer has no button; other stops resume as cauce says', async ($, on) => {
-  const stopped = (id: number, cause: string, extra: object = {}) => ({ id, title: `t${id}`, status: 'blocked',
-    stop: { cause, who: 'x', reason: `r${id}`, todo: 'do', next: `cauce resume ${id}`, allow: [], ...extra } })
-  const board = { ...BOARD, needs_you: [stopped(1, 'permission'), stopped(2, 'environment'),
-    stopped(3, 'approval'), stopped(4, 'budget', { budget_usd: 2.5 })] }
-  const { seen } = await withBoard($, on, board)
-  const ui = await $.ui.mount({ plugin: 'cauce', surface: 'terminal', ...BAND } as never)
-  expect(await ui.find({ key: 'resume-1' })).toBeUndefined()
-  expect((await ui.find({ key: 'resume-2' }))?.props.label).toBe('Resume')
-  expect((await ui.find({ key: 'resume-3' }))?.props.label).toBe('Approve & resume')
-  expect(await ui.find({ text: /and 1 more/ })).toBeDefined()
-  await ui.press({ key: 'resume-3' })
-  expect(seen.argv.find(a => a[0] === 'resume')).toEqual(['resume', '3', '--detach', '--allow-approval'])
-})
-
-test('a failed resume press says why', async ($, on) => {
-  const { seen } = await withBoard($, on, BOARD, { resume: { exitCode: 1, stdout: '', stderr: 'task #12 is running' } })
-  const ui = await $.ui.mount({ plugin: 'cauce', surface: 'terminal', ...BAND } as never)
-  await ui.press({ key: 'resume-12' })
-  expect(seen.toasts).toContain('cauce: task #12 is running')
-})
-
-test('a survey keeps the band; Hide puts each card away until its own status changes', async ($, on) => {
-  let board = BOARD
-  engineBand(on)
-  const { clock } = await started($, on, { board: () => ({ exitCode: 0, stdout: JSON.stringify(board) }) })
-  await clock.advance(15_000)
-  const survey = await $.ui.mount({ plugin: 'cauce', surface: 'terminal', ...BAND,
-    props: { ...BAND.props, hasSurvey: true } } as never)
-  expect(await survey.find({ text: 'engine band' })).toBeDefined()
-  await survey.unmount()
-  const ui = await $.ui.mount({ plugin: 'cauce', surface: 'terminal', ...BAND } as never)
-  await ui.press({ key: 'hide' })
-  expect(await ui.find({ text: 'engine band' })).toBeDefined()
-  board = { ...BOARD, needs_you: [...BOARD.needs_you, { id: 30, title: 'new', status: 'blocked',
-    stop: { cause: 'environment', who: 'the environment', reason: 'docker is down', todo: 'fix it', next: 'cauce resume 30', allow: [] } }] } as never
-  await clock.advance(15_000)
-  expect(await ui.find({ key: 'card-30' })).toBeDefined()
-  // a new card shows alone: the ones put away stay away
-  expect(await ui.find({ key: 'card-12' })).toBeUndefined()
-  // one that left the list and another whose status changed: only the changed one is back
-  board = { ...BOARD, needs_you: BOARD.needs_you.filter(c => c.id !== 13).map(c => c.id === 12 ? { ...c, status: 'failed' } : c) } as never
-  await clock.advance(15_000)
-  expect(await ui.find({ key: 'card-12' })).toBeDefined()
-  expect(await ui.find({ key: 'card-30' })).toBeUndefined()
-})
-
-test('Dismiss takes a waiting card off the board, from the band and the pane', async ($, on) => {
-  const { seen } = await withBoard($, on, BOARD, { dismiss: { exitCode: 0, stdout: 'dismissed task #12' } })
-  const band = await $.ui.mount({ plugin: 'cauce', surface: 'terminal', ...BAND } as never)
-  await band.press({ key: 'dismiss-12' })
-  expect(seen.argv).toContainEqual(['dismiss', '12', '--via', 'mod'])
-  expect(seen.toasts).toContain('cauce: #12 dismissed')
-  await band.unmount()
-  const pane = await $.ui.mount({ plugin: 'cauce', surface: 'desktop', component: 'Pane', requestId: 'cauce',
-    props: { title: 'cauce', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { bodyRows: 30, offset: 0 } } } as never)
-  await pane.press({ key: 'dismiss-13' })
-  expect(seen.argv).toContainEqual(['dismiss', '13', '--via', 'mod'])
-  expect(await pane.find({ key: 'dismiss-9' })).toBeUndefined() // a branch to review is no stop
-})
-
-test('/cauce opens the board; its buttons cancel and confirm notes, with the project named', async ($, on) => {
-  const review = [{ id: 5, topic: 'code', title: 'cents', text: 'x', state: 'review', state_reason: 'cart.py changed' }]
-  const { seen } = await withBoard($, on, BOARD, { 'notes --repo /work/shop list --review': { exitCode: 0, stdout: JSON.stringify(review) } })
+test('/cauce starts the web board detached and says where it is; no pane, no band', async ($, on) => {
+  const { seen } = await started($, on, { board: { exitCode: 0, stdout: JSON.stringify(BOARD) } })
   const ran = await $.command.run({ command: 'cauce', args: '' } as never)
-  expect(ran.text).toBe('cauce board opened.')
-  expect(seen.panes).toEqual(['cauce'])
-  const ui = await $.ui.mount({ plugin: 'cauce', surface: 'desktop', component: 'Pane', requestId: 'cauce',
-    props: { title: 'cauce', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { bodyRows: 30, offset: 0 } } } as never)
-  expect(await ui.find({ text: /Waits on you \(3\)/ })).toBeDefined()
-  expect(await ui.find({ text: /Notes to review \(1\)/ })).toBeDefined()
-  await ui.press({ key: 'cancel-14' })
-  await ui.press({ key: 'ok-5' })
-  expect(seen.argv).toContainEqual(['cancel', '14'])
-  expect(seen.argv).toContainEqual(['notes', '--repo', '/work/shop', 'ok', '5'])
-})
-
-test('the pane says so when there is no board', async ($, on) => {
-  engineBand(on)
-  await started($, on, { board: { exitCode: 1, stdout: '' } })
-  const ui = await $.ui.mount({ plugin: 'cauce', surface: 'terminal', component: 'Pane', requestId: 'cauce',
-    props: { title: 'cauce', isFocused: false, bodyColumns: 80, placement: 'inline', scroll: { bodyRows: 30, offset: 0 } } } as never)
-  expect(await ui.find({ text: /no board for this directory/ })).toBeDefined()
+  expect(ran.text).toBe('cauce board: http://127.0.0.1:8790/')
+  expect(seen.panes).toHaveLength(0)
+  const spawned = seen.argv.find(args => args[0] === '-c')
+  expect(spawned?.[1]).toContain('ui --open')
 })

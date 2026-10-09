@@ -32,6 +32,8 @@ import os
 import re
 import secrets
 import signal
+import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -59,6 +61,7 @@ _STATIC_NAME = re.compile(r"^[a-z0-9_-]+\.(js|css|html|svg)$")
 _TASK_ROUTE = re.compile(r"^/api/tasks/(\d+)$")
 _CANCEL_ROUTE = re.compile(r"^/api/tasks/(\d+)/cancel$")
 _DISMISS_ROUTE = re.compile(r"^/api/tasks/(\d+)/dismiss$")
+_RESUME_ROUTE = re.compile(r"^/api/tasks/(\d+)/resume$")
 _FORGET_ROUTE = re.compile(r"^/api/problems/(\d+)/forget$")
 _SESSION_ROUTE = re.compile(r"^/api/sessions/([A-Za-z0-9_-]{1,128})$")
 _NOTE_ROUTE = re.compile(r"^/api/notes/(\d+)/(ok|drop)$")
@@ -352,7 +355,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(HTTPStatus.NOT_FOUND, "no such task")
             if stops.dismiss(store, task, via="ui") is None:
                 return self._error(HTTPStatus.CONFLICT, f"task #{task['id']} is {task['status']}: it waits on no one")
+            dispatch.reopened(task, os.environ)
             return self._json(HTTPStatus.OK, {"id": task["id"], "dismissed": True})
+        if match := _RESUME_ROUTE.match(path):
+            task = store.get_task(int(match.group(1)))
+            if task is None:
+                return self._error(HTTPStatus.NOT_FOUND, "no such task")
+            # The rules come from cauce's account of the stop, never from the request.
+            args = stops.resume_args(task["id"], stops.view(store, task), keep=bool(data.get("keep")))
+            if args is None:
+                return self._error(HTTPStatus.CONFLICT, f"task #{task['id']} has no resume to press")
+            ran = resume(args, task["cwd"])
+            if ran.returncode != 0:
+                return self._error(HTTPStatus.CONFLICT, (ran.stderr or ran.stdout or "resume failed").strip()[-400:])
+            return self._json(HTTPStatus.ACCEPTED, {"id": task["id"], "resumed": True})
         if match := _FORGET_ROUTE.match(path):
             problem = store.forget_problem(int(match.group(1)))
             if problem is None:
@@ -391,6 +407,15 @@ class Handler(BaseHTTPRequestHandler):
         if where is None or not where.is_dir():
             return False
         return dispatch.start(where, self.server.root, repo_key or "*")
+
+
+def resume(args: list[str], cwd: str | None) -> subprocess.CompletedProcess:
+    """Run `cauce resume … --detach`: it returns once the run is started on its own."""
+    try:
+        return subprocess.run([sys.executable, "-m", "cauce", *args], cwd=cwd or None, env=dispatch.child_env(),
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as err:
+        return subprocess.CompletedProcess(args, 1, "", str(err))
 
 
 def _int(query: dict[str, list[str]], key: str, default: int, low: int, high: int) -> int:

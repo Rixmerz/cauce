@@ -259,3 +259,32 @@ def test_a_dismissed_replan_offers_no_resume_unless_it_only_outgrew_its_turns(st
         stops.dismiss(store, store.get_task(task["id"]), via="cli")
         nxt = stops.view(store, store.get_task(task["id"]))["next"]
         assert (nxt or "").startswith(offered) if offered else nxt is None
+
+
+def test_dismissing_the_task_a_lane_paused_on_opens_the_lane(store):
+    """A queued task waited 16 hours behind a lane paused on a task the person had
+    already dismissed."""
+    stopped = store.create_task("wrong task", status="replan", source="cauce", repo="r", cwd="/x")
+    other = store.create_task("other", status="blocked", source="cauce", repo="r", cwd="/x")
+    store.create_task("next", status="queued", source="cauce", repo="r", cwd="/x")
+    store.pause_lane("r", f"task #{stopped['id']} ended replan: spec_bug")
+    assert store.lane_paused_on("r", stopped["id"]) == 1
+    assert store.lane_paused_on("r", other["id"]) == 0
+    stops.dismiss(store, store.get_task(other["id"]), via="cli")
+    assert store.lanes()[0]["paused"] == 1  # a pause on another task stays
+    stops.dismiss(store, store.get_task(stopped["id"]), via="cli")
+    assert store.lanes()[0]["paused"] == 0
+    assert store.lane_paused_on("r", stopped["id"]) == 0
+
+
+def test_an_ending_that_paused_its_lane_says_what_waits(store):
+    from cauce import hooks
+
+    task = store.create_task("wrong task", status="replan", source="cauce", repo="r", cwd="/x", session_id="s")
+    store.add_event(task["id"], "finished", status="replan",
+                    stop=stops.Stop("spec", "the task is wrong", by="worker").data())
+    store.create_task("next", status="queued", source="cauce", repo="r", cwd="/x")
+    store.pause_lane("r", f"task #{task['id']} ended replan: wrong")
+    text, _ = hooks.endings(store, "s")
+    assert "its lane is paused on it: 1 queued task(s) wait" in text
+    assert "cauce lanes --unpause r" in text

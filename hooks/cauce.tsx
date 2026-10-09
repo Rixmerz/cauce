@@ -7,29 +7,26 @@
 //   parameters", which tells the model nothing.
 // - Work a session queued that ends while it is idle wakes it: a turn starts
 //   with the notice, and the session tells the person and goes on.
-// - A status entry, a band above the prompt for what waits on the person, and
-//   a `/cauce` pane with the board and the notes to review.
+// - A status entry that counts what waits on the person, runs and is queued,
+//   and `/cauce`, which opens the web board: the one place to look and press
+//   (resume, allow, dismiss, unpause). A terminal copy of it was a poorer one.
 //
 // The classic hooks keep working without the mod: endings still reach the
 // session at the end of a turn or with the next prompt, and the model can
 // still run `cauce` through Bash. Nothing here grants a permission on the
 // model's behalf: a refused command is allowed by the person's own press.
-import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { CauceBoard, CauceCard, CauceNote } from '../types'
+import type { CauceBoard } from '../types'
 import type { Ran } from './cauce-cli'
-import { DEFAULT_TOPICS, json, keepArgs, resumeArgs, resumeLabel } from './cauce-cli'
+import { DEFAULT_TOPICS, json, statusLine } from './cauce-cli'
 
-const PANE = 'cauce'
+const BOARD_URL = 'http://127.0.0.1:8790/'
 const POLL_MS = 15_000
 const KINDS = ['chat', 'explore', 'docs', 'test', 'refactor', 'implement', 'ui', 'feature', 'debug-repro',
   'debug-unclear', 'review-routine', 'review-critical', 'plan']
 const LINKS = ['depends_on', 'explains', 'replaces', 'contradicts', 'example_of']
 
-const boardState = atom({ plugin: 'cauce', key: 'board' } as const, null)
-const reviewState = atom({ plugin: 'cauce', key: 'review' } as const, [])
-const hiddenState = atom({ plugin: 'cauce', key: 'hidden' } as const, '')
 
 const RECALL = 'mcp__cauce__recall'
 const NOTE = 'mcp__cauce__note'
@@ -56,27 +53,6 @@ function whole(value: unknown): number | null {
     : typeof value === 'string' && /^#?\d+$/.test(value.trim()) ? Number(value.trim().replace('#', ''))
     : NaN
   return Number.isSafeInteger(n) && n > 0 ? n : null
-}
-
-/** What waits on the person, by a key that changes when the list does. */
-function waiting(cards: readonly CauceCard[]): CauceCard[] {
-  return cards.filter(card => card.stop)
-}
-
-function signature(cards: readonly CauceCard[]): string {
-  return cards.map(card => `${card.id}:${card.status}`).join(',')
-}
-
-/** The cards Hide put away, one by one: a card comes back only when its own
- * status changes, never because another card came or went. */
-function unhidden(cards: readonly CauceCard[], hidden: string): CauceCard[] {
-  const away = new Set(hidden.split(',').filter(Boolean))
-  return cards.filter(card => !away.has(`${card.id}:${card.status}`))
-}
-
-/** Takes a card that waits on the person off the board; a resume brings it back. */
-function dismissArgs(card: { id: number }): string[] {
-  return ['dismiss', String(card.id), '--via', 'mod']
 }
 
 // How the mod reaches cauce: the plugin's own launcher, run by argv. The core
@@ -108,10 +84,6 @@ async function board($: EngineInterface, cwd: string): Promise<CauceBoard | null
   return full && full.counts ? full : null
 }
 
-async function toReview($: EngineInterface, cwd: string): Promise<CauceNote[]> {
-  return json<CauceNote[]>(await cauce($, ['notes', '--repo', cwd, 'list', '--review', '--json'])) ?? []
-}
-
 async function topics($: EngineInterface, cwd: string): Promise<string[]> {
   const found = json<{ name: string }[]>(await cauce($, ['notes', '--repo', cwd, 'topics', '--json']))
   const names = (found ?? []).map(t => t.name).filter(n => typeof n === 'string' && n.length > 0)
@@ -125,13 +97,7 @@ let polling = false
 async function refresh($: EngineInterface): Promise<void> {
   const cwd = await $.session.cwd()
   const found = await board($, cwd)
-  await update($, boardState, () => found)
-  const review = await toReview($, cwd)
-  await update($, reviewState, () => review)
-  const c = found?.counts
-  $.ui.status(c && (c.needs_you || c.running || c.queued)
-    ? `cauce ⚠${c.needs_you} ▶${c.running} ⏸${c.queued}`
-    : undefined)
+  $.ui.status(statusLine(found?.counts))
 }
 
 /** Hand the session what ended while it was idle: claimed once, so the Stop
@@ -156,12 +122,6 @@ async function poll($: EngineInterface, wakes: boolean): Promise<void> {
   } finally {
     polling = false
   }
-}
-
-async function press($: EngineInterface, args: string[], done: string): Promise<void> {
-  const ran = await cauce($, args)
-  $.ui.toast(ran.ok ? done : `cauce: ${ran.err || 'it did not run'}`)
-  await refresh($)
 }
 
 /** Work started and not awaited (a refresh after a call) never fails the hook that started it. */
@@ -385,122 +345,16 @@ export const register: Register = (on, options) => {
     })
   }
 
+  // The board is the web UI: one place to see and press, not a second, poorer
+  // copy in the terminal. `cauce ui` serves until stopped, so it is started
+  // detached; when one already serves, it says where and exits.
   on('command.run', { command: 'cauce' }, async $ => {
-    await refresh($)
-    await $.ui.open({ id: PANE, title: 'cauce' })
-    return { text: 'cauce board opened.' }
-  })
-
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) return next(e)
-    const found = await read($, boardState)
-    const all = waiting(found?.needs_you ?? [])
-    const cards = unhidden(all, (await read($, hiddenState)) ?? '')
-    if (!cards.length) return next(e)
-    const { Box, Button, Text } = $.ui.resolve(e)
-    const shown = cards.slice(0, 3)
-    return (
-      <Box flexDirection="column">
-        {shown.map(card => {
-          const args = resumeArgs(card)
-          const keep = keepArgs(card)
-          const stop = card.stop
-          return (
-            <Box key={`card-${card.id}`} flexDirection="row" gap={1}>
-              <Text wrap="truncate-end">
-                cauce #{card.id} {card.status}: {stop ? stop.reason : card.title}
-              </Text>
-              {args && stop && (
-                <Button
-                  key={`resume-${card.id}`}
-                  label={resumeLabel(stop.cause)}
-                  onPress={() => press($, args, `cauce: resuming #${card.id}`)}
-                />
-              )}
-              {keep && (
-                <Button
-                  key={`keep-${card.id}`}
-                  label="Always allow here"
-                  onPress={() => press($, keep, `cauce: kept for this repository; resuming #${card.id}`)}
-                />
-              )}
-              <Button
-                key={`dismiss-${card.id}`}
-                label="Dismiss"
-                onPress={() => press($, dismissArgs(card), `cauce: #${card.id} dismissed`)}
-              />
-            </Box>
-          )
-        })}
-        <Box flexDirection="row" gap={1}>
-          {cards.length > shown.length && <Text dimColor>and {cards.length - shown.length} more</Text>}
-          <Text dimColor>/cauce for the board</Text>
-          <Button key="hide" label="Hide" onPress={() => update($, hiddenState, () => signature(all))} />
-        </Box>
-      </Box>
-    )
-  })
-
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Button, Text } = $.ui.resolve(e)
-    const found = await read($, boardState)
-    const review = await read($, reviewState)
-    if (!found) return <Text dimColor>cauce has nothing here: no board for this directory.</Text>
-    return (
-      <Box flexDirection="column" gap={1}>
-        <Text bold>Waits on you ({found.needs_you.length})</Text>
-        {found.needs_you.length === 0 && <Text dimColor>nothing</Text>}
-        {found.needs_you.map(card => {
-          const args = resumeArgs(card)
-          const keep = keepArgs(card)
-          return (
-            <Box key={`need-${card.id}`} flexDirection="column">
-              <Text>#{card.id} [{card.status}] {card.title}</Text>
-              <Text dimColor>{card.stop ? `${card.stop.who}: ${card.stop.reason}` : card.asks ?? ''}</Text>
-              {card.stop && <Text dimColor>{card.stop.todo}</Text>}
-              {args && card.stop && (
-                <Button key={`resume-${card.id}`} label={resumeLabel(card.stop.cause)}
-                  onPress={() => press($, args, `cauce: resuming #${card.id}`)} />
-              )}
-              {keep && (
-                <Button key={`keep-${card.id}`} label="Always allow here"
-                  onPress={() => press($, keep, `cauce: kept for this repository; resuming #${card.id}`)} />
-              )}
-              {card.stop && (
-                <Button key={`dismiss-${card.id}`} label="Dismiss"
-                  onPress={() => press($, dismissArgs(card), `cauce: #${card.id} dismissed`)} />
-              )}
-            </Box>
-          )
-        })}
-        <Text bold>Running ({found.running.length})</Text>
-        {found.running.map(card => (
-          <Box key={`run-${card.id}`} flexDirection="row" gap={1}>
-            <Text>#{card.id} {card.title}</Text>
-            <Button key={`cancel-${card.id}`} label="Cancel"
-              onPress={() => press($, ['cancel', String(card.id)], `cauce: cancelling #${card.id}`)} />
-          </Box>
-        ))}
-        <Text bold>Queued ({found.counts.queued})</Text>
-        {found.queued.flatMap(lane => lane.tasks).map(card => (
-          <Text key={`queued-${card.id}`}>#{card.id} {card.title}</Text>
-        ))}
-        <Text bold>Notes to review ({review.length})</Text>
-        {review.map(note => (
-          <Box key={`note-${note.id}`} flexDirection="column">
-            <Text>#{note.id} [{note.topic}] {note.title}</Text>
-            <Text dimColor>{note.state_reason ?? ''}</Text>
-            <Box flexDirection="row" gap={1}>
-              <Button key={`ok-${note.id}`} label="Still true"
-                onPress={async () => press($, ['notes', '--repo', await $.session.cwd(), 'ok', String(note.id)],
-                  `cauce: #${note.id} confirmed`)} />
-              <Button key={`drop-${note.id}`} label="Drop"
-                onPress={async () => press($, ['notes', '--repo', await $.session.cwd(), 'drop', String(note.id)],
-                  `cauce: #${note.id} dropped`)} />
-            </Box>
-          </Box>
-        ))}
-      </Box>
-    )
+    const bin = `${$.plugin.root}/bin/cauce`
+    try {
+      await $.process.run(['/bin/sh', '-c', 'nohup "$0" ui --open >/dev/null 2>&1 &', bin], { timeoutMs: 10_000 })
+    } catch (error) {
+      return { text: `cauce: the board did not start (${String(error)}); run \`cauce ui --open\`` }
+    }
+    return { text: `cauce board: ${BOARD_URL}` }
   })
 }

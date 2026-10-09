@@ -559,6 +559,23 @@ class Store:
             "ON CONFLICT(repo) DO UPDATE SET paused = 0, reason = NULL, updated_at = excluded.updated_at",
             (repo or "", now()))
 
+    def release_lane(self, repo: str | None, task_id: int) -> bool:
+        """Unpause a lane paused on this task: what it stopped on no longer waits
+        on anyone (dismissed, superseded, resumed). A pause on another task stays."""
+        cur = self._conn.execute(
+            "UPDATE lanes SET paused = 0, reason = NULL, updated_at = ? WHERE repo IS ? AND paused = 1 "
+            "AND reason LIKE ?", (now(), repo, f"task #{task_id} %"))
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def lane_paused_on(self, repo: str | None, task_id: int) -> int:
+        """How many tasks wait behind a lane paused on this task; 0 when it is not."""
+        row = self._conn.execute(
+            "SELECT (SELECT count(*) FROM tasks q WHERE q.repo IS l.repo AND q.status = 'queued') AS queued "
+            "FROM lanes l WHERE l.repo IS ? AND l.paused = 1 AND l.reason LIKE ?",
+            (repo, f"task #{task_id} %")).fetchone()
+        return int(row["queued"]) if row else 0
+
     def lanes(self) -> list[dict]:
         """Every repository with queued work or a lane record, and its state."""
         rows = self._conn.execute(

@@ -243,6 +243,7 @@ def dismiss(store: Any, task: dict[str, Any], *, via: str) -> Stop | None:
     record(store, task["id"], stop, result=False)
     # The person did it: no session is told of it as an ending.
     store.add_event(task["id"], "reported", via="dismiss")
+    store.release_lane(task.get("repo"), task["id"])
     return stop
 
 
@@ -263,6 +264,7 @@ def supersede(store: Any, task: dict[str, Any]) -> list[int]:
                                                **({"had_cause": before.cause} if before else {})}), result=False)
         # The pass's own report names it; no session is told of it twice.
         store.add_event(other["id"], "reported", via="superseded")
+        store.release_lane(other.get("repo"), other["id"])
         gone.append(other["id"])
     return gone
 
@@ -304,3 +306,29 @@ def view(store: Any, task: dict[str, Any]) -> dict[str, Any] | None:
     return {**stop.data(), "allow": rules, "keep": keep, "status": stop.status, "who": WHO.get(stop.who, stop.who),
             "todo": todo,
             "next": next_step(task["id"], stop, resumable=resumable)}
+
+
+def resume_args(task_id: int, shown: dict[str, Any] | None, *, keep: bool = False) -> list[str] | None:
+    """The `cauce resume` a person's press runs for a stopped task, from cauce's
+    own account, never from what a page or a model sends: the rules a refusal
+    suggests, an approval, a doubled budget. None when no press continues it."""
+    if not shown or not shown.get("next"):
+        return None
+    base = ["resume", str(task_id), "--detach"]
+    cause = shown.get("cause")
+    if cause == "permission":
+        rules = list(shown.get("allow") or [])
+        if not rules:
+            return None
+        return [*base, *(a for rule in rules for a in ("--allow", rule)), *(["--keep"] if keep else [])]
+    if keep:
+        return None
+    if cause == "approval":
+        return [*base, "--allow-approval"]
+    if cause == "budget" and shown.get("budget_usd"):
+        return [*base, "--budget", str(float(shown["budget_usd"]) * 2)]
+    return base
+
+
+def resume_label(cause: str | None) -> str:
+    return {"permission": "Allow & resume", "approval": "Approve & resume"}.get(str(cause), "Resume")

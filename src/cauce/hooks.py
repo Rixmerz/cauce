@@ -395,6 +395,11 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
             lines.append(f"  changed so far: {shown}")
         if stop:
             lines.append(f"  next: {stop['todo']}" + (f": {stop['next']}" if stop["next"] else ""))
+        waiting = store.lane_paused_on(t.get("repo"), t["id"])
+        if waiting:
+            lines.append(f"  its lane is paused on it: {waiting} queued task(s) wait. Dismissing or resuming it "
+                         "opens the lane; when the queued work does not depend on it, tell the person and "
+                         f"run `cauce lanes --unpause {t.get('repo')}` to let them start now")
     return "\n".join(lines), [t["id"] for t in ended]
 
 
