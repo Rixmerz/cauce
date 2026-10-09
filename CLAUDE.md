@@ -19,7 +19,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `prune`, all on/off), copied from plugin options by SessionStart |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
-| `src/cauce/habits.py` | mining sequences, recipes for the brief, and approval-gated habit hooks |
+| `src/cauce/habits.py` | mining sequences per repository (and the ones several repositories share), recipes for the brief, and approval-gated habit hooks |
 | `src/cauce/usage.py` | tokens per model from session transcripts, and spend by model and cell |
 | `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, the stale sweep |
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
@@ -203,6 +203,10 @@ yields the default kind, not a guess.
 - A compaction digest is read from the transcript and git, never written by
   a model: it may leave things out to fit, never paraphrase. A person's
   words are kept as typed; harness text (commands, reminders) is not theirs.
+- Habits are per project: mined from one repository's events and gated on
+  them alone; a habit of other repositories is offered apart, never counted as
+  this one's. An event's repository is read from its task or session, never
+  written by the PostToolUse fast path.
 - Nothing in cauce writes to a settings file except `cauce habits install`,
   run by a person.
 - Problems and fixes are global; notes belong to one project and are never

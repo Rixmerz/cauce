@@ -16,13 +16,16 @@ When `cauce` alone is not found (exit 127), it is
 ## 1. Read what there is
 
 ```bash
-cauce habits list --json      # candidates that passed the gates, best first
+cauce habits list --json      # this repository's candidates, and those other repositories share
 cauce habits status --json    # installed habits: where, runs, failures, on or off
 ```
 
-The candidates come from every repository's sessions; `status` says where each
-installed one lives (`repo`). The repository here is the top of the checkout
-of the current directory (`git rev-parse --show-toplevel`).
+Run them in the repository: habits are per project. `list` mines this
+repository's own sessions and workers (`here`), gated on them alone, and lists
+apart the habits two or more other repositories share that this one has not
+shown yet (`elsewhere`, with how many `repos`). `status` lists every installed
+habit with its `repo`; only the ones in this checkout's top
+(`git rev-parse --show-toplevel`) are yours to review here.
 
 ## 2. Decide, for this repository
 
@@ -48,6 +51,11 @@ A candidate is worth installing here only when all of these hold:
 - **It passes now.** Run the command once. A check that fails before any edit
   would fail after each one and turn itself off after three: tell the person
   what failed instead of offering it.
+
+Prefer `here`: it is what this repository's sessions do. Offer one from
+`elsewhere` only when this repository has the very tool it names (its
+`tsconfig.json` for a type check, a `lint` script, the formatter in its dev
+dependencies), and say it comes from other projects.
 
 A candidate whose last step is the model running a script (`bash:python3`,
 `bash:node` on a one-off file) or a tool you cannot place is no habit to

@@ -1062,11 +1062,20 @@ def _candidates(store: Store, days: int) -> list[habits.Candidate]:
     return habits.candidates(store.tool_events(days=days))
 
 
+def _habit_repo(directory: str | None) -> str | None:
+    return repo.key(Path(directory or os.getcwd()).resolve())
+
+
 def cmd_habits(args: argparse.Namespace) -> int:
     store = Store.open()
     try:
         if args.habits_command == "install":
+            # What `list` showed here, or a habit of several repositories offered to this one.
             found = {c.id: c for c in _candidates(store, args.days)}
+            key = _habit_repo(args.repo)
+            if key:
+                here, _ = habits.for_repo(store.tool_events(days=args.days), key)
+                found.update({c.id: c for c in here})
             if args.candidate not in found:
                 print(f"no candidate {args.candidate} passes the gates now; see `cauce habits`", file=sys.stderr)
                 return 1
@@ -1100,15 +1109,29 @@ def cmd_habits(args: argparse.Namespace) -> int:
                 print(f"#{h['id']} {' → '.join(h['steps'])}: `{h['command']}` ({h['runs']} runs) {state}"
                       f"  in {h['repo']}")
             return 0
-        found = _candidates(store, args.days)
+        key = None if args.all else _habit_repo(args.repo)
+        if key is None:
+            here, elsewhere = _candidates(store, args.days), []
+        else:
+            habits.load_events(store)
+            here, elsewhere = habits.for_repo(store.tool_events(days=args.days), key)
         if args.json:
-            print(json.dumps([{"id": c.id, "steps": list(c.steps), "occurrences": c.occurrences,
-                               "sessions": c.sessions, "success": c.success} for c in found[: args.limit]]))
+            print(json.dumps({"repo": key, "here": [c.data() for c in here[: args.limit]],
+                              "elsewhere": [c.data() for c in elsewhere[: args.limit]]}))
             return 0
-        if not found:
-            print("no repeated sequence passes the gates yet")
-        for c in found[: args.limit]:
-            print(c.line())
+        if key is None:
+            print("every repository:")
+        else:
+            print(f"in {key}:")
+        if not here:
+            print("  no repeated sequence passes the gates here yet")
+        for c in here[: args.limit]:
+            print(f"  {c.line()}")
+        if elsewhere:
+            print(f"in {habits.MIN_REPOS_ELSEWHERE} or more other repositories, not here yet "
+                  "(install one only when this repository has its tool):")
+            for c in elsewhere[: args.limit]:
+                print(f"  {c.line()}")
         return 0
     finally:
         store.close()
@@ -1529,11 +1552,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_neighbours)
 
     hb = sub.add_parser("habits", help="repeated tool sequences, and the hooks a person installs from them")
-    hb.set_defaults(func=cmd_habits, habits_command="list", days=30, limit=20, json=False)
+    hb.set_defaults(func=cmd_habits, habits_command="list", days=30, limit=20, json=False, repo=None, all=False)
     hsub = hb.add_subparsers(dest="habits_command")
-    p = hsub.add_parser("list", help="sequences that pass the gates, best first")
+    p = hsub.add_parser("list", help="this repository's sequences that pass the gates, best first, and those "
+                                     "other repositories share")
     p.add_argument("--days", type=int, default=30)
     p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--repo", help="the repository (default: the current directory)")
+    p.add_argument("--all", action="store_true", help="every repository's events mined together")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_habits)
     p = hsub.add_parser("install", help="run a command after the edit that starts a habit (you approve it here)")

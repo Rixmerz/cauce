@@ -294,7 +294,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/memory":
             return self._json(HTTPStatus.OK, api.memory(store, (query.get("q") or [""])[0]))
         if path == "/api/habits":
-            return self._json(HTTPStatus.OK, api.habit_view(store))
+            return self._json(HTTPStatus.OK, api.habit_view(store, (query.get("repo") or [""])[0] or None))
         if path == "/api/events":
             return self._json(HTTPStatus.OK, store.events(after=_int(query, "after", 0, 0, 10**12), limit=500))
         if path == "/api/stream":

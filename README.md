@@ -189,8 +189,12 @@ way of every call.
   sessions, nearly always succeeding, nothing destructive); the score only
   ranks what passed. The model looking around (`find → ls`, `cat → cd`)
   repeats in every session too, but no hook could take it over or save a turn,
-  so it is never listed. Mining reads every session and repository; installing
-  writes to one repository.
+  so it is never listed. Habits are **per project**: `cauce habits` mines the
+  current repository's own sessions and workers, gated on them alone, and lists
+  apart the habits two or more other repositories share that this one has not
+  shown yet (`--all` mines everything together). Installing writes to one
+  repository. An event is placed by its task's repository, else its session's;
+  the hook that records it never writes a path.
 - Per kind of task, the steps that came before passing worker attempts go into
   the next worker's brief, so it does not spend turns finding them again.
 - `cauce habits install <id> --command "ruff format"` turns a habit that starts

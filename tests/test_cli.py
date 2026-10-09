@@ -288,9 +288,10 @@ def test_habits_commands(capsys, tmp_path, monkeypatch):
         for sig in ("edit:.py", "bash:ruff-format"):
             store.add_tool_event(session_id=f"s{s}", tool="x", sig=sig, arg_hash="h", ok=1)
     store.close()
-    assert cli.main(["habits"]) == 0
-    line = capsys.readouterr().out.strip()
-    cid = line.split()[0]
+    assert cli.main(["habits", "list", "--all"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("every repository:")
+    cid = out.splitlines()[1].split()[0]
     repo_dir = tmp_path / "r"
     repo_dir.mkdir()
     assert cli.main(["habits", "install", cid, "--command", "true", "--repo", str(repo_dir)]) == 0
@@ -302,8 +303,8 @@ def test_habits_commands(capsys, tmp_path, monkeypatch):
     assert "edit:.py → bash:ruff-format" in capsys.readouterr().out
     assert cli.main(["habits", "status", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)[0]["repo"] == str(repo_dir)
-    assert cli.main(["habits", "list", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)[0]["steps"] == ["edit:.py", "bash:ruff-format"]
+    assert cli.main(["habits", "list", "--all", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["here"][0]["steps"] == ["edit:.py", "bash:ruff-format"]
     monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps({"tool_input": {"file_path": "a.py"}})))
     assert cli.main(["habit-run", "1"]) == 0
     monkeypatch.setattr("sys.stdin", __import__("io").StringIO("garbage"))

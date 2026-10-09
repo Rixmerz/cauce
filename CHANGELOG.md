@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.6.20] - 2026-10-09
+
+### Changed
+
+- **Habits are per project.** Every repository's tool events were mined
+  together, so a Python repository was offered twenty TypeScript habits and
+  none of its own, and a count summed over unrelated projects passed the gates
+  for each of them. `cauce habits` (and the UI's habits screen, and
+  `/cauce:habits`) now mine the current repository's own sessions and workers,
+  gated on them alone, and list apart the habits two or more other
+  repositories share that this one has not shown yet. `--all` mines
+  everything together, as before. An event's repository comes from its task,
+  else its session (99% of a real store's events have one); the PostToolUse
+  fast path still writes no path.
+- A bare interpreter run (`bash:python3`, `bash:node`: a script or a `-c`
+  one-off) is no habit: `python -m pytest` is already `bash:pytest`. After a
+  `.ts` write it was the model's scratch work, and the top candidate.
+
 ## [0.6.19] - 2026-10-09
 
 ### Added
