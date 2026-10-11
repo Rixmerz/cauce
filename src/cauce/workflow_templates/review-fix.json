@@ -1,0 +1,11 @@
+{
+  "name": "review-fix",
+  "description": "Review a part of the code, then fix what the review found",
+  "inputs": ["target"],
+  "steps": [
+    {"id": "review", "title": "Review it", "kind": "review-routine",
+     "prompt": "Review, without changing any file: {target}\n\nList each real problem with its file and line: bugs, missing tests, risky code. Say plainly when there is none."},
+    {"id": "fix", "title": "Fix what it found", "kind": "implement",
+     "prompt": "Fix every problem the review below found in: {target}\n\nIf it found none, stop. Run the tests before you stop."}
+  ]
+}

@@ -72,9 +72,13 @@ def kept(repo_dir: Path, task_id: int) -> bool:
     return bool(_git(repo_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_for(task_id)}", check=False))
 
 
-def prepare(repo_dir: Path, task_id: int, root: Path) -> Workspace:
+def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None) -> Workspace:
+    """The task's worktree, on its own branch: from HEAD, or from `base` (a
+    commit a workflow step builds on) when it names one that exists."""
     top = Path(_git(repo_dir, "rev-parse", "--show-toplevel"))
     head = _git(top, "rev-parse", "HEAD")
+    if base:
+        head = _git(top, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}", check=False) or head
     branch = branch_for(task_id)
     path = root / "worktrees" / f"task-{task_id}"
     path.parent.mkdir(parents=True, exist_ok=True)

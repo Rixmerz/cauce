@@ -527,7 +527,8 @@ def cmd_projects(args: argparse.Namespace) -> int:
 
 
 def _overview_task(t: dict) -> str:
-    head = f"#{t['id']} [{t['status']}]"
+    head = f"#{t['id']} [{t['status']}]" + (f" (workflow run #{t['workflow_run']}, step {t['workflow_step']})"
+                                            if t.get("workflow_run") else "")
     if t["state"] == "needs_you":
         why = f" ({t['cause']})" if t.get("cause") else ""
         then = f" — {t['next']}" if t.get("next") else ""
@@ -588,6 +589,11 @@ def cmd_overview(args: argparse.Namespace) -> int:
             print(f"  last prompt: {x['last_prompt']}")
         for t in sorted(x["tasks"], key=lambda t: (order[t["state"]], -t["id"])):
             print(f"  {_overview_task(t)}")
+    if seen.get("workflows"):
+        print("\nWorkflow runs (each goes on by itself; `cauce workflow status <run>` for one):")
+        for w in seen["workflows"]:
+            steps = " → ".join(f"{s['id']}:{s['state']}" for s in w["steps"])
+            print(f"  run #{w['id']} {w['name']} — {w['state']} · {w['cwd']}\n      {steps}")
     if seen["other"]:
         print("\nWork no listed session sent (the queue, a terminal, an older session):")
         for t in sorted(seen["other"], key=lambda t: (order[t["state"]], -t["id"])):
@@ -1414,6 +1420,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = qsub.add_parser("rm", help="take a task off the queue")
     p.add_argument("id", type=int)
     p.set_defaults(func=cmd_queue)
+
+    from cauce import workflow_cli
+
+    workflow_cli.add_parser(sub)
 
     p = sub.add_parser("lanes", help="one serial lane per repository; a failed task pauses it")
     p.add_argument("--unpause", metavar="REPO", help="a repository path or key")

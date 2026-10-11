@@ -151,6 +151,8 @@ def queued_options(task: dict, defaults: Options) -> Options:
         use_model_classifier=defaults.use_model_classifier,
         allow_tools=tuple(raw.get("allow_tools") or defaults.allow_tools),
         isolate=defaults.isolate and not raw.get("no_isolate"),
+        max_turns=int(raw["max_turns"]) if raw.get("max_turns") else defaults.max_turns,
+        base=raw.get("base") or defaults.base,
     )
 
 

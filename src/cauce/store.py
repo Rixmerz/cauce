@@ -102,6 +102,12 @@ CREATE TABLE IF NOT EXISTS habits (
   runs INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0, disabled_at TEXT,
   removed INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS workflow_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, scope TEXT NOT NULL, source TEXT NOT NULL,
+  definition TEXT NOT NULL, inputs TEXT NOT NULL DEFAULT '{}', options TEXT NOT NULL DEFAULT '{}',
+  repo TEXT, cwd TEXT, session_id TEXT, status TEXT NOT NULL DEFAULT 'active', reason TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS lanes (
   repo TEXT PRIMARY KEY, paused INTEGER NOT NULL DEFAULT 0, reason TEXT, updated_at TEXT NOT NULL
 );
@@ -164,6 +170,10 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         # repository (1) or waits its turn (0), and why. NULL: not decided yet.
         "parallel": "INTEGER",
         "parallel_reason": "TEXT",
+        # The workflow run a task is a step of, and which step: the engine, not
+        # a session, starts the next step when this one passes.
+        "workflow_run": "INTEGER",
+        "workflow_step": "TEXT",
     },
     "attempts": {
         # The model the CLI says served the attempt, not the alias it was asked for.
@@ -524,6 +534,43 @@ class Store:
         return self.create_task(body, status="queued", source="queue", repo=repo, cwd=cwd, author=author,
                                 session_id=session_id, options=json.dumps(options or {}))
 
+    # --- workflow runs -------------------------------------------------------------
+
+    def create_run(self, **fields: Any) -> dict:
+        stamp = now()
+        row = {"created_at": stamp, "updated_at": stamp, **fields}
+        cur = self._conn.execute(f"INSERT INTO workflow_runs ({', '.join(row)}) "  # noqa: S608
+                                 f"VALUES ({', '.join('?' for _ in row)})", list(row.values()))
+        return self.get_run(int(cur.lastrowid))
+
+    def get_run(self, run_id: int) -> dict | None:
+        row = self._conn.execute("SELECT * FROM workflow_runs WHERE id = ?", (run_id,)).fetchone()
+        return dict(row) if row else None
+
+    def update_run(self, run_id: int, **fields: Any) -> None:
+        fields["updated_at"] = now()
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        self._conn.execute(f"UPDATE workflow_runs SET {sets} WHERE id = ?", [*fields.values(), run_id])  # noqa: S608
+
+    def list_runs(self, *, repos: set[str] | None = None, limit: int = 50) -> list[dict]:
+        where, params = _in("repo", repos)
+        if where is None:
+            return []
+        rows = self._conn.execute(f"SELECT * FROM workflow_runs {where} ORDER BY id DESC LIMIT ?",  # noqa: S608
+                                  [*params, limit]).fetchall()
+        return [dict(r) for r in rows]
+
+    def runs_from(self, source: str) -> list[dict]:
+        """The runs still active that were started from this definition file."""
+        rows = self._conn.execute("SELECT * FROM workflow_runs WHERE source = ? AND status = 'active' ORDER BY id",
+                                  (source,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def run_tasks(self, run_id: int) -> list[dict]:
+        """A run's step tasks, oldest first: a step retried has more than one, the newest counts."""
+        rows = self._conn.execute("SELECT * FROM tasks WHERE workflow_run = ? ORDER BY id", (run_id,)).fetchall()
+        return [dict(r) for r in rows]
+
     def queued_in(self, repo: str | None) -> list[dict]:
         """A lane's queued tasks, oldest first."""
         rows = self._conn.execute(
@@ -811,6 +858,17 @@ class Store:
             self._conn.execute("ROLLBACK")
             raise
         return ended
+
+    @contextlib.contextmanager
+    def immediate(self) -> Iterator[None]:
+        """One write transaction: what is read in it is still true when it writes."""
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+            self._conn.execute("COMMIT")
+        except BaseException:
+            self._conn.execute("ROLLBACK")
+            raise
 
     def mark_reported(self, task_ids: Iterable[int], *, via: str) -> None:
         for task_id in task_ids:

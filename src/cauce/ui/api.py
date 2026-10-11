@@ -32,7 +32,7 @@ BODY_CHARS = 800
 def _brief(task: dict[str, Any]) -> dict[str, Any]:
     keys = ("id", "title", "status", "kind", "repo", "cwd", "start_cell", "final_cell", "current_cell",
             "cost_usd", "source", "created_at", "updated_at", "result", "pinned", "session_id",
-            "parallel", "parallel_reason")
+            "parallel", "parallel_reason", "workflow_run", "workflow_step")
     body = task.get("body") or ""
     return {**{k: task.get(k) for k in keys},
             "body": body if len(body) <= BODY_CHARS else body[:BODY_CHARS - 1] + "…"}
@@ -182,6 +182,7 @@ def overview(store: Store, hours: float = 24, limit: int = 20, repos: set[str] |
 
     def line(t: dict[str, Any]) -> dict[str, Any]:
         return {"id": t["id"], "title": t["title"], "status": t["status"], "repo": t["repo"],
+                "workflow_run": t.get("workflow_run"), "workflow_step": t.get("workflow_step"),
                 "cell": t.get("final_cell") or t.get("current_cell"), "cost_usd": round(t.get("cost_usd") or 0, 2),
                 "updated_at": t["updated_at"], **open_cards.get(t["id"], {"state": "ended"})}
 
@@ -205,7 +206,13 @@ def overview(store: Store, hours: float = 24, limit: int = 20, repos: set[str] |
             break
     # Work no listed session sent: the queue's, a terminal's, a session not enrolled.
     rest = [t for tasks in by_session.values() for t in tasks]
-    return {"since": since, "sessions": out, "other": sorted(rest, key=lambda t: t["id"], reverse=True)}
+    # Workflow runs still going, or that ended in the window: where each is, step by step.
+    from cauce import workflows
+
+    flows = [w for w in workflows.runs(store, repos=repos, limit=limit)
+             if w["state"] in ("running", "waits on you", "stalled") or (w["updated_at"] or "") >= since]
+    return {"since": since, "sessions": out, "other": sorted(rest, key=lambda t: t["id"], reverse=True),
+            "workflows": flows}
 
 
 def _holds_work(finished: dict | None) -> bool:

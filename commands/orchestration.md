@@ -35,6 +35,29 @@ Request: $ARGUMENTS
    a tool refuses because only the person can clear what stopped a task, tell
    the person in those words.
 
+   **A sequence of phases is a workflow, not a chain you relay.** When the
+   request is several steps where each builds on the one before (plan, build,
+   review, fix; reproduce, fix, check), run `cauce workflow list` and pick the
+   one that fits. The person may also have named a workflow. Then:
+
+   ```bash
+   cauce workflow run <name> "<the goal, written so a stranger could do it>"
+   ```
+
+   Its steps are ordinary cauce tasks that the engine chains by itself. Each
+   one starts from the commit the step before kept, and is told what the
+   earlier steps found. Do not wait on a step to start the next one, and do
+   not pass results along yourself: that is what the run does without you.
+   You hear of the run once, when it ends or when a step waits on the person.
+   `cauce workflow status <run>` shows where it is. A step that stopped is
+   continued with `cauce resume <task>` or `cauce workflow retry <run> <step>`,
+   and the run goes on from there.
+
+   When no saved workflow fits and the same shape will come back, make one
+   instead of chaining by hand: `cauce workflow new <name> --from <closest>`,
+   then `cauce workflow step add|set|rm`. Tell the person what you saved, and
+   where. A one-off sequence of two steps is just two `cauce run`s.
+
 3. **Dispatch** with Bash, from the repository the work is in:
 
    ```bash

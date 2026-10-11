@@ -368,6 +368,71 @@ everything above works without it.
   *Approve & resume*, *Resume*, *Always allow here*). The press is yours; the
   model has no such button.
 
+### Workflows
+
+Some work is a sequence of phases, each building on the one before: plan,
+build, review, fix. A **workflow** is that sequence, saved once and run as
+often as it comes back. Each step is an ordinary cauce task with its own cell,
+check, escalation and stops. The engine chains the steps, not a session. When
+a step passes, cauce queues the steps that waited on it. A writing step starts
+its worktree from the commit the step before it kept, and every step's brief
+says what the earlier steps found. The session that started a run hears of it
+once, at its end or when a step waits on the person. A watcher sees where the
+run is, step by step.
+
+```bash
+cauce workflow list                                   # project, user and bundled scopes; nearest wins
+cauce workflow run feature "add CSV export to the orders page"
+cauce workflow status 3                               # each step: state, task, cell; the branch so far
+cauce workflow new release-notes --from review-fix    # start from an existing one
+cauce workflow step add release-notes publish --prompt "..." --kind docs --after fix
+cauce workflow step set release-notes fix --verify "npm test"
+cauce workflow retry 3 build                          # a stopped step again; the run goes on
+cauce workflow cancel 3
+```
+
+`/cauce:workflow` walks a session through the same commands.
+
+Definitions are JSON files:
+
+- `project`: `.cauce/workflows/<name>.json`, shared through the repository.
+- `user`: in the cauce home.
+- `bundled`: the templates `feature`, `bugfix` and `review-fix`.
+
+A definition holds steps (`id`, `prompt` with `{input}` names, `needs`,
+`kind`, `verify`, `start`, `budget_usd`, `max_turns`, `memory`) and never a
+permission rule, an approval or a capability. Those are the person's flags on
+`run`.
+
+A workflow in the user scope is global: one definition that several projects
+reuse, each run's state kept with its own project. A run never changes under
+its definition, because it runs the copy (and version) it started with. While
+any active run, in any project, uses the definition, it is also **held**:
+
+- A change to it is kept as a pending revision. Later changes build on that
+  revision, and it applies by itself when the last run using the workflow
+  ends or is cancelled.
+- `cauce workflow pending` lists the waiting changes. `--apply` or `--drop`
+  settles one, and `--now` on any change writes it at once.
+- Removing a held workflow needs `--force`.
+
+A step can carry memory into its brief, on top of what its task asks:
+
+- `note:12` (or `12`): one note of the project. A replaced note is read as the
+  note that replaced it.
+- `topic:zones`: every live note in a topic.
+- `problem:7`: a problem with every fix tried on it.
+
+Use it for the considerations that step must keep in mind:
+
+```bash
+cauce workflow step set feature build --memory note:12,topic:zones,problem:7
+```
+
+A note is read only from the project the run is in. A run whose memory cannot
+be read there (a note of another project, a dropped note, an empty topic, a
+missing problem) does not start.
+
 ### Watching several sessions
 
 One session per project, and one more that watches them all: run
