@@ -480,6 +480,23 @@ repository's cards at once.
 - **Routing** — per kind, where tasks started and passed, and how each ladder
   was really climbed: every move with the failure behind it and how often the
   next attempt passed. The evidence for tuning a ladder.
+- **Workflows** — each run of the project as a graph of its steps, left to
+  right as they depend on each other. Every step shows its state (passed,
+  running, waiting on you, not started), cell and tries, and opens its task.
+  Each run shows its progress and the branch holding the work so far, and says
+  how to go on when a step waits. Below are the workflows the project can run:
+  scope, version, steps, the memory each step carries, the runs holding a
+  workflow and a change waiting for them. Runs are started, retried and
+  cancelled from a session.
+- **Map** — the project from what cauce keeps, no model. **Mind map**: topics,
+  each live note, the code it is about, and the problems worked on here with
+  every fix tried. Links between notes (*depends on*, *explains*,
+  *contradicts*…) are dashed lines across the tree. A topic or problem folds,
+  a filter prunes the tree, and a note picked shows its text and links with a
+  button that attaches it to a workflow step's memory; a workflow in use gets
+  that change as a pending revision. **Milestones**: newest first, the
+  workflow runs that finished, the decisions the notes keep, and the features,
+  refactors and plans that passed.
 - **Spend**, **Memory**, **Habits** — the same numbers as the CLI.
 
 Work is never typed into the page: it is asked for in a session, where it has

@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-11
+
+### Added
+
+- **Workflows screen.** `cauce ui` draws each workflow run of the project as a
+  graph of its steps:
+  - columns by what each step waits on;
+  - every step with its state, cell and tries, opening its task;
+  - the run's progress and the branch holding its work so far, and what to do
+    when a step waits.
+
+  Below are the workflows the project can run, each with its version, steps,
+  step memory, the runs holding it and any change waiting for them.
+- **Map screen.** A mind map of the project, built from what cauce keeps
+  without a model: topics → live notes → the code each is about, and problems
+  → every fix tried. The typed links between notes are dashed cross-edges. A
+  topic or problem folds, a filter prunes the tree, and a picked note shows
+  its text and links. **Milestones** lists, newest first, the workflow runs
+  that finished, the decisions the notes keep, and the features, refactors and
+  plans that passed.
+- **Attach a note to a step from the map.** A person's press carries a note
+  into a workflow step's memory (`POST /api/workflows/attach`, token
+  required). A workflow in use gets the change as a pending revision.
+- `GET /api/workflows`, `/api/map` and `/api/milestones` read one project.
+  SVG is drawn node by node with `createElementNS` and `textContent`, never
+  markup, and the map keeps its folds and filter when live events arrive.
+
 ## [0.7.0] - 2026-10-09
 
 ### Added

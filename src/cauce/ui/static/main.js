@@ -6,13 +6,17 @@ import { renderRouting } from "./routing.js";
 import { renderMemory } from "./memory.js";
 import { renderNotes } from "./notes.js";
 import { renderHabits } from "./habits.js";
+import { renderWorkflows } from "./workflows.js";
+import { renderMap } from "./map.js";
 import { openTask } from "./task.js";
 import { h, repoName } from "./util.js";
 
 const views = { board: renderBoard, sessions: renderSessions, spend: renderSpend, routing: renderRouting,
-                notes: renderNotes, memory: renderMemory, habits: renderHabits };
-// The board, the sessions and the notes are always one project's: never every card at once.
-const scoped = new Set(["board", "sessions", "notes"]);
+                notes: renderNotes, memory: renderMemory, habits: renderHabits, workflows: renderWorkflows,
+                map: renderMap };
+// The board, the sessions, the notes, the workflows and the map are always one project's:
+// never every card at once.
+const scoped = new Set(["board", "sessions", "notes", "workflows", "map"]);
 const main = document.getElementById("view");
 const picker = document.getElementById("project");
 let current = "board";
@@ -79,7 +83,8 @@ for (const tab of document.querySelectorAll(".tabs button")) {
 // An event re-renders the scoped view (coalesced), and the open task if it is the one.
 const live = follow(
   (event) => {
-    if (scoped.has(current)) {
+    // The map keeps what a person folded and filtered: nothing a run does changes it.
+    if (scoped.has(current) && current !== "map") {
       clearTimeout(pending);
       pending = setTimeout(() => show(current), 300);
     }

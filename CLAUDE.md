@@ -32,7 +32,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/stops.py` | why a task stopped, who made the call, and the command that continues it; one account on its `finished` event; light, the hooks and the UI read it |
 | `src/cauce/project.py` | a project's `.cauce/` folder: enrollment (only enrolled projects show in the UI) and `sessions.json`, the session names; stdlib, no git call |
 | `src/cauce/naming.py` | Haiku names a session, started detached by the Stop hook; a name a person wrote is never replaced |
-| `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step |
+| `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step; `svg.js` draws the workflow graphs and the project map node by node |
 | `src/cauce/compact.py` | the facts of a session (requests verbatim, failed calls, changed files), written before a compaction and put back after it; no model call |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
 | `src/cauce/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; `workflow_cli.py` is `cauce workflow …` |
@@ -191,8 +191,9 @@ yields the default kind, not a guess.
   person cancelled; it opens again by itself when that task leaves the board
   (dismissed, superseded, or resumed to a pass), and the queue starts again; a person's own `cauce run` never blocks the queue. A GET in the UI never starts work or
   sweeps — housekeeping runs in hooks, the dispatcher and the server thread.
-- The UI builds every node with `textContent` (`h()` in `static/util.js`),
-  never `innerHTML`: task text and worker summaries are untrusted. The token
+- The UI builds every node with `textContent` (`h()` in `static/util.js`,
+  `s()` in `static/svg.js` for SVG), never `innerHTML`, and sets no inline
+  style attribute (the page's policy refuses it; use the CSSOM): task text and worker summaries are untrusted. The token
   never goes in a URL, and every mutation needs it in a header.
 - `plan()` never waits on a neighbour's index: a refresh starts in the
   background and the task uses the index as it is. A run says its task number
