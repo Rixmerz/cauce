@@ -40,7 +40,7 @@ Change it one step at a time. Each change is checked before it is written:
 
 ```bash
 cauce workflow step add <name> <step> --prompt "..." [--after <step>] [--needs a,b] \
-    [--kind <kind>] [--verify "<check>"] [--start <model/effort>] [--budget-usd N] [--max-turns N] \
+    [--kind <kind>] [--role <role>] [--verify "<check>"] [--start <model/effort>] [--budget-usd N] [--max-turns N] \
     [--memory note:12,topic:zones,problem:7]
 cauce workflow step set <name> <step> --prompt "..." [--clear verify]
 cauce workflow step rm <name> <step>
@@ -63,6 +63,10 @@ How to write the steps:
   `explore`) changes nothing. It reads the work of the steps before it.
 - **Writing steps:** each one starts from the commit the nearest writing step
   before it kept.
+- **Roles:** `--role <name>` runs a step as one role of the project's team
+  (`cauce team show`), say `security-auditor` for an audit step. A role the
+  project's team does not have is not used: the team picks, and the plan says
+  so.
 - **Checks:** give a writing step a `verify` command when the repository has
   one. cauce runs it itself.
 - **Memory:** a step can carry cauce memory into its brief, for considerations

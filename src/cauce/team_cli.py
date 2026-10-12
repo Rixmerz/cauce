@@ -82,6 +82,18 @@ def _roles_copy(args: argparse.Namespace) -> int:
     return 0
 
 
+def _roles_new(args: argparse.Namespace) -> int:
+    import sys as _sys
+
+    prompt = _sys.stdin.read() if args.prompt == "-" else (args.prompt or "")
+    path = roles.new(args.name, extends=args.extends, description=args.description, kinds=args.kind or (),
+                     skills=args.skill or (), on_demand=args.on_demand or (), capabilities=args.capability or (),
+                     disallowed_tools=args.disallow or (), match=args.match or (), prompt=prompt)
+    print(f"wrote {path}: it builds on {args.extends}; put it in a team with `cauce team change <team> --add "
+          f"{args.name}`")
+    return 0
+
+
 def _roles_rm(args: argparse.Namespace) -> int:
     path = roles.remove(args.name)
     print(f"removed {path}")
@@ -111,8 +123,8 @@ def _skills(args: argparse.Namespace) -> int:
     return 0
 
 
-_ROLES = {"list": _roles_list, "show": _roles_show, "copy": _roles_copy, "rm": _roles_rm, "check": _roles_check,
-          "skills": _skills}
+_ROLES = {"list": _roles_list, "show": _roles_show, "copy": _roles_copy, "new": _roles_new, "rm": _roles_rm,
+          "check": _roles_check, "skills": _skills}
 
 
 # --- teams -----------------------------------------------------------------------------
@@ -191,8 +203,21 @@ def _team_use(args: argparse.Namespace) -> int:
     return 0
 
 
+def _team_insights(args: argparse.Namespace) -> int:
+    from cauce import insights
+    from cauce.store import Store
+
+    store = Store.open()
+    try:
+        found = insights.gather(store, limit=args.limit)
+    finally:
+        store.close()
+    print(insights.as_json(found) if args.json else insights.text(found))
+    return 0
+
+
 _TEAM = {"list": _team_list, "show": _team_show, "create": _team_create, "change": _team_change,
-         "delete": _team_delete, "use": _team_use}
+         "delete": _team_delete, "use": _team_use, "insights": _team_insights}
 
 
 def add_parser(sub: argparse._SubParsersAction) -> None:
@@ -211,6 +236,18 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("name", help="the new role's name; the same name shadows the bundled one")
     p.add_argument("--kind", action="append", help="the kinds it takes (default: the source's)")
     p.add_argument("--description")
+    p = rsub.add_parser("new", help="a role of yours built on another: cauce roles new implementer-go "
+                                    "--extends implementer --match go.mod --skill go-rules")
+    p.add_argument("name")
+    p.add_argument("--extends", required=True, help="the role it builds on; its instructions come first")
+    p.add_argument("--description")
+    p.add_argument("--kind", action="append", help="the kinds it takes (default: its parent's)")
+    p.add_argument("--skill", action="append", help="a skill whose text it carries, beside its parent's")
+    p.add_argument("--on-demand", action="append", help="a skill it reads when it applies")
+    p.add_argument("--capability", action="append", help="a capability of yours it names")
+    p.add_argument("--disallow", action="append", help="a built-in tool it takes away")
+    p.add_argument("--match", action="append", help="a path or glob that makes it the one picked in a project")
+    p.add_argument("--prompt", help="its own instructions, after its parent's; - reads them from stdin")
     p = rsub.add_parser("rm", help="remove a role of yours (never a bundled one)")
     p.add_argument("name")
     rsub.add_parser("check", help="every role and team, and what is wrong with them")
@@ -244,3 +281,7 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("name", nargs="?")
     p.add_argument("--none", action="store_true")
     p.add_argument("--repo")
+    p = tsub.add_parser("insights", help="what your projects' work says about the teams you need: kinds, how "
+                                         "each went, languages, checks, the team each uses")
+    p.add_argument("--limit", type=int, default=20, help="projects, most recent first")
+    p.add_argument("--json", action="store_true")

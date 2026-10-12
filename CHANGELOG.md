@@ -2,6 +2,73 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-12
+
+### Added
+
+- **`/cauce:personal-team`**, the plugin's first skill. It reads how the person
+  works and proposes one team per purpose: several sessions on several
+  projects usually need several teams. Once the person agrees, it builds the
+  roles on cauce's own, creates the teams and gives each project its team.
+- **`cauce team insights`** (`--json`): every project cauce worked in, with:
+  - the kinds asked for and how each went (pass rate, where it passed, how it
+    stopped, what it cost);
+  - the failures of attempts that did not pass;
+  - its languages by share of files, its manifests, whether it has a UI;
+  - the checks its sessions repeat after an edit, and the team it uses;
+  - suggestions (a language specialization, a kind that passes badly, kinds
+    never asked for).
+
+  Beside it: the person's roles, teams and Claude Code subagents, by name and
+  description. Read from what cauce kept and from the checkouts, never by a
+  model.
+- **`cauce roles new <name> --extends <role>`**: a role built on another, with
+  `--match`, `--skill`, `--on-demand`, `--capability`, `--disallow`, `--kind`
+  and `--prompt` (`-` reads stdin). It keeps the parent's instructions and
+  follows them; its lists are the parent's plus the ones given.
+
+- **A workflow step names its role** (`"role": "security-auditor"`,
+  `cauce workflow step add … --role`). It is used only when the project's
+  team has it: a definition a repository commits never chooses beyond the
+  person's team.
+- **rastro behind a guard.** `cauce.mcp_guard` sits between a worker and
+  rastro and refuses, before they reach it, a browser profile, a saved routine
+  or the profile list, and writes or uploads to any host but localhost; every
+  call runs in rastro's session `cauce-worker`. The hint asked for this; the
+  guard enforces it.
+- **`plugins` on the plugin's settings screen**, beside the other settings;
+  a test holds every setting to an option there.
+- **Roles that add to their parent's lists.** `add_skills`, `add_on_demand`,
+  `add_capabilities`, `add_disallowed_tools` and `add_match` extend the
+  parent's list instead of replacing it, so a derived role follows its parent
+  as it changes. `cauce roles new` writes them, and a role it makes no longer
+  freezes its parent's kinds.
+
+### Fixed
+
+- A skill a role carries whole is no longer also offered by path.
+
+## [0.10.0] - 2026-10-12
+
+### Added
+
+- **Installed neighbours as capabilities.** layout-inspector and rastro,
+  installed as Claude Code plugins (or on PATH), reach workers without a
+  `capabilities.json` entry:
+  - layout-inspector for `ui` work, and after a failed `implement` or
+    `feature`;
+  - rastro for `test` work, and after a failed `ui`, run with its saved
+    routines off.
+
+  The server entry is read from the newest installed version, from the
+  manifest, the file it names or `.mcp.json`, with `${CLAUDE_PLUGIN_ROOT}`
+  filled in. Each comes with its plugin's skill to read first and a read rule
+  for its folder. A registry entry of the same name wins; `cauce config
+  plugins off` leaves them out. `cauce capabilities` and `cauce neighbours`
+  say where each comes from.
+- The `frontend` role names rastro beside layout-inspector, and `tester`
+  names rastro.
+
 ## [0.9.0] - 2026-10-12
 
 ### Added

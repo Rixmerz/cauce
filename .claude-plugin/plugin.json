@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.9.0",
+  "version": "0.11.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -55,6 +55,12 @@
       "type": "boolean",
       "title": "Delete merged branches",
       "description": "A branch cauce kept for a task (cauce/task-N) is deleted once its work landed: merged into another branch, squash-merged (HEAD holds every file it changed), or holding only tool artifacts. Never one checked out or one a stopped task may resume from; its tip stays on the task's events. Off: branches stay until you delete them.",
+      "default": true
+    },
+    "plugins": {
+      "type": "boolean",
+      "title": "Hand workers the neighbours you installed",
+      "description": "Workers get the MCP servers of layout-inspector and rastro when you have them installed as Claude Code plugins (or on PATH), each with its own skill: layout-inspector for UI work, rastro for tests, run behind a guard that keeps writes on localhost and refuses browser profiles and saved routines. Off: only your capabilities.json reaches workers.",
       "default": true
     }
   },

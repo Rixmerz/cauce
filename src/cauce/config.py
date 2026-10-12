@@ -35,6 +35,9 @@ DEFAULTS: dict[str, Any] = {
     # A branch cauce kept is deleted once its work landed: merged, squash-merged,
     # or holding only tool artifacts. Its tip stays on the task's events.
     "prune": True,
+    # Workers get the MCP servers of the neighbours the person installed as Claude
+    # Code plugins (layout-inspector, rastro): see `cauce.plugins`.
+    "plugins": True,
 }
 
 _TRUE = {"1", "true", "on", "yes"}

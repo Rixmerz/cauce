@@ -21,7 +21,7 @@ from cauce.store import Store
 
 NOW_HELP = ("write the change at once even while runs use the workflow (they go on with the copy they started "
             "with); without it the change waits for them")
-STEP_FLAGS = (("title", str), ("prompt", str), ("kind", str), ("verify", str), ("start", str),
+STEP_FLAGS = (("title", str), ("prompt", str), ("kind", str), ("role", str), ("verify", str), ("start", str),
               ("budget_usd", float), ("max_turns", int))
 
 

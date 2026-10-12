@@ -67,9 +67,13 @@ SKILL_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}(?::[a-z0-9][a-z0-9_.-]{0,63
 TOOL = re.compile(r"^[A-Z][A-Za-z]{1,40}$")
 #: The kinds a role may serve: every routed kind but the classifier's own.
 ROLE_KINDS = tuple(k for k in KINDS if k != "classify")
+#: Lists a role may add to its parent's (`add_skills: [...]`) instead of replacing
+#: them: the parent's list changes, and the role keeps following it.
+ADDABLE = ("skills", "on_demand", "capabilities", "disallowed_tools", "match")
 KEYS = frozenset({"name", "description", "kinds", "extends", "skills", "on_demand", "capabilities",
-                  "disallowed_tools", "match", "replace_prompt", "derived_from"})
-LIST_KEYS = frozenset({"kinds", "skills", "on_demand", "capabilities", "disallowed_tools", "match"})
+                  "disallowed_tools", "match", "replace_prompt", "derived_from", *(f"add_{k}" for k in ADDABLE)})
+_ADDS = tuple(f"add_{k}" for k in ADDABLE)
+LIST_KEYS = frozenset({"kinds", *ADDABLE, *_ADDS})
 MAX_EXTENDS = 5
 #: A skill's text is put in front of every attempt of its role: past this it is
 #: offered by path instead, so one large skill cannot crowd out the task.
@@ -221,16 +225,17 @@ def parse(text: str, *, scope: str, path: str = "", expected: str | None = None)
     for kind in meta.get("kinds", []):
         if kind not in ROLE_KINDS:
             raise RoleError(f"no kind {kind!r}; one of {', '.join(ROLE_KINDS)}")
-    for skill in (*meta.get("skills", []), *meta.get("on_demand", [])):
+    for skill in (*meta.get("skills", []), *meta.get("on_demand", []), *meta.get("add_skills", []),
+                  *meta.get("add_on_demand", [])):
         if not SKILL_NAME.match(skill):
             raise RoleError(f"{skill!r} is no skill name")
-    for tool in meta.get("disallowed_tools", []):
+    for tool in (*meta.get("disallowed_tools", []), *meta.get("add_disallowed_tools", [])):
         if not TOOL.match(tool):
             raise RoleError(f"{tool!r} is no built-in tool: a role takes tools away, and only built-in ones")
-    for cap in meta.get("capabilities", []):
+    for cap in (*meta.get("capabilities", []), *meta.get("add_capabilities", [])):
         if not NAME.match(cap):
             raise RoleError(f"{cap!r} is no capability name")
-    for glob in meta.get("match", []):
+    for glob in (*meta.get("match", []), *meta.get("add_match", [])):
         if glob.startswith("/") or ".." in Path(glob).parts:
             raise RoleError(f"`match` {glob!r} must stay inside the project")
     if "replace_prompt" in meta and not isinstance(meta["replace_prompt"], bool):
@@ -294,8 +299,11 @@ def _resolve(name: str, raw: Mapping[str, dict[str, Any]], *, bundled: set[str])
     prompt = ""
     for fields in reversed(chain):
         for key, value in fields.items():
-            if key not in ("prompt", "replace_prompt", "name", "scope", "path", "shadows"):
+            if key not in ("prompt", "replace_prompt", "name", "scope", "path", "shadows", *_ADDS):
                 merged[key] = value
+        for key in ADDABLE:
+            if fields.get(f"add_{key}"):
+                merged[key] = list(dict.fromkeys([*merged.get(key, []), *fields[f"add_{key}"]]))
         body = fields.get("prompt", "")
         prompt = body if fields.get("replace_prompt") or not prompt else (prompt + "\n\n" + body if body else prompt)
     top = chain[0]
@@ -468,6 +476,8 @@ def brief(role: Role, env: Mapping[str, str] | None = None) -> Briefing:
         where = f" Its other files are in {skill.folder}: {', '.join(others)}." if others else ""
         parts.append(f"## Skill `{name}`\n{where.strip()}\n\n{skill.body}".replace("\n\n\n", "\n\n"))
     for name in role.on_demand:
+        if name in role.skills:
+            continue  # carried whole already
         skill = find_skill(name, env)
         if skill is None:
             missing.append(name)
@@ -517,6 +527,40 @@ def copy(source: str, new: str, *, catalog: Catalog | None = None, kinds: Sequen
                    description=description or role.description)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(render(role, derived_from=source), encoding="utf-8")
+    return target
+
+
+def new(name: str, *, extends: str, description: str | None = None, kinds: Sequence[str] = (),
+        skills: Sequence[str] = (), on_demand: Sequence[str] = (), capabilities: Sequence[str] = (),
+        disallowed_tools: Sequence[str] = (), match: Sequence[str] = (), prompt: str = "",
+        catalog: Catalog | None = None) -> Path:
+    """A role of the person's built on another: it keeps its parent's
+    instructions and lists, follows them as they change, and adds what is given
+    here (`add_skills` and the like)."""
+    catalog = catalog or load()
+    parent = catalog.get(extends)
+    if not NAME.match(name):
+        raise RoleError(f"{name!r} is no role name: lowercase letters, digits, - and _")
+    target = dirs()["user"] / f"{name}.md"
+    if target.exists() or name in catalog.roles:
+        raise RoleError(f"there is already a role {name!r}")
+    lines = ["---", f"name: {name}",
+             f"description: {description or parent.description + (' (' + ', '.join(match) + ')' if match else '')}",
+             f"extends: {extends}"]
+    if kinds:
+        lines.append(f"kinds: [{', '.join(kinds)}]")
+    for key, values in (("skills", skills), ("on_demand", on_demand), ("capabilities", capabilities),
+                        ("disallowed_tools", disallowed_tools), ("match", match)):
+        if values:
+            lines.append(f"add_{key}: [{', '.join(dict.fromkeys(values))}]")
+    text = "\n".join([*lines, "---", "", prompt.strip(), ""])
+    parse(text, scope="user", expected=name)  # the same bar as every role, before anything is written
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    if name in load().refused:
+        why = load().refused[name]
+        target.unlink()
+        raise RoleError(why)
     return target
 
 

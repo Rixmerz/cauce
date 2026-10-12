@@ -557,6 +557,30 @@ repository, because a server entry is a command that runs on this machine:
 `always` is transversal, a list of kinds is per task, `after_failure` is
 reactive: it joins the next attempt once one of those kinds failed.
 
+**Installed neighbours need no entry.** Two of livespec's neighbours are found
+where Claude Code keeps plugins (or on PATH) and handed to workers like a
+registry entry, each with its own skill to read first:
+
+| Plugin | When | What the worker does with it |
+|---|---|---|
+| [layout-inspector](https://github.com/Rixmerz/layout-inspector-mcp) | `ui`; after a failed `implement` or `feature` | measures the rendered page instead of judging it by eye, and measures again after the fix |
+| [rastro](https://github.com/Rixmerz/rastro) | `test`; after a failed `ui` | browses the running app with a minimal view and a trace of every effect |
+
+```bash
+claude plugin marketplace add Rixmerz/claude-plugins
+claude plugin install layout-inspector@rixmerz
+claude plugin install rastro@rixmerz && npm i -g @rixmerz/rastro
+cauce neighbours            # what cauce found and how it runs each
+cauce config plugins off    # leave them out
+```
+
+rastro runs for workers behind a guard (`cauce.mcp_guard`) that enforces what
+a worker nobody watches must not do, whatever its prompt says: no browser
+profile (your logins), no saved routine (`--routines=off` too), writes and
+uploads only to the app on this machine (localhost), and every call in a
+session of its own. A `capabilities.json` entry of the same name wins over an
+installed plugin.
+
 ### Roles and teams
 
 Every worker runs as a **role**: a name, what it is for, the kinds of task it
@@ -628,6 +652,16 @@ cauce team use web          # in a project: its workers come from the web team
 cauce team                  # this project's team, every member in full
 cauce team use --none       # back to the bundled team
 ```
+
+**A team built from how you work.** In a session, `/cauce:personal-team` reads
+what cauce kept of your projects (`cauce team insights`: the kinds you ask
+for, how each went, where it passed, the languages and checks of each
+project, the team it uses) and proposes one team per purpose. Once you agree,
+it builds the roles on cauce's own (`cauce roles new implementer-go --extends
+implementer --match go.mod --skill go-rules`), creates the teams and gives
+each project its own. A role built with `extends` keeps cauce's instructions
+and follows them as cauce improves; one project's facts go to that project's
+notes, not into a role every project of the team shares.
 
 Which team a project uses is kept in your cauce home, never in the
 repository. The **Teams** screen of `cauce ui` lists every team, the roles in

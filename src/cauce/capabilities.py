@@ -37,6 +37,9 @@ class Capability:
     when: str | tuple[str, ...] = "always"
     after_failure: tuple[str, ...] = ()
     hint: str = ""
+    #: A folder the worker reads from when it has this capability: the skill of
+    #: the plugin that ships it.
+    read_dir: str = ""
 
     def applies(self, kind: str, *, failed_before: bool) -> bool:
         if self.when == "always":
@@ -51,6 +54,7 @@ class Selection:
     servers: Mapping[str, Any] = field(default_factory=dict)
     hints: tuple[str, ...] = ()
     names: tuple[str, ...] = ()
+    read_dirs: tuple[str, ...] = ()
 
     def system_prompt(self) -> str:
         if not self.hints:
@@ -93,6 +97,19 @@ def load(path: Path) -> dict[str, Capability]:
     return registry
 
 
+def load_all(path: Path, env: Mapping[str, str] | None = None) -> dict[str, Capability]:
+    """The registry at `path` over the neighbours the person installed as Claude
+    Code plugins (`cauce.plugins`): a registry entry of the same name wins, and
+    the `plugins` setting off leaves the installed ones out."""
+    import os
+
+    from cauce import config, plugins
+
+    env = os.environ if env is None else env
+    found = plugins.capabilities(env) if config.enabled("plugins", env) else {}
+    return {**found, **load(path)}
+
+
 def select(
     registry: Mapping[str, Capability],
     kind: str,
@@ -107,7 +124,7 @@ def select(
     values = {"workdir": str(workdir) if workdir else ""}
     servers = {c.name: _fill(c.server, values) for c in chosen}
     hints = tuple(f"{c.name}: {_fill(c.hint, values)}" for c in chosen if c.hint)
-    return Selection(servers, hints, tuple(c.name for c in chosen))
+    return Selection(servers, hints, tuple(c.name for c in chosen), tuple(c.read_dir for c in chosen if c.read_dir))
 
 
 def _fill(value: Any, values: Mapping[str, str]) -> Any:

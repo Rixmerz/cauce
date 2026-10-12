@@ -75,7 +75,7 @@ export async function renderTeams(ctx) {
     h("p", { class: "empty" },
       "A project's workers run only as the roles of its team, and a task is classified only into the kinds that team "
       + "covers. Make a team with cauce team create, give it to a project with cauce team use there, and copy a role "
-      + "to tune it with cauce roles copy."),
+      + "to tune it with cauce roles copy. In a session, /cauce:personal-team builds teams from how you work."),
     overview(ordered, d.here),
     ordered.map((t, i) => teamSection(t, d.roles, d.here, t.name === d.here || (!d.here && i === 0))),
     loose.length ? h("h2", { class: "section" }, "Roles in no team") : null,
