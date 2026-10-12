@@ -153,6 +153,7 @@ def queued_options(task: dict, defaults: Options) -> Options:
         isolate=defaults.isolate and not raw.get("no_isolate"),
         max_turns=int(raw["max_turns"]) if raw.get("max_turns") else defaults.max_turns,
         base=raw.get("base") or defaults.base,
+        role=raw.get("role") or defaults.role,
     )
 
 

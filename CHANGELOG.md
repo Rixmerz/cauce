@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-12
+
+### Added
+
+- **Roles.** Every worker runs as a role: a name, what it is for, the kinds it
+  takes, its instructions and the skills it carries, all in the worker's
+  system prompt beside Claude Code's own. cauce still picks the model, effort
+  and tools of every attempt: a role names no model and adds no tool, it may
+  only take tools away, carry skills (`skills`), point at them (`on_demand`)
+  and name the person's capabilities. `extends` builds a role on another;
+  `match` makes it a specialization picked where the project holds its files.
+- **The bundled team**, one role for every kind: `answerer`, `researcher`,
+  `docs-writer`, `tester`, `refactorer`, `implementer`, `frontend`,
+  `feature-builder`, `debugger`, `investigator`, `reviewer`,
+  `security-auditor`, `architect`, `frontier`. Most adapt vise's agent
+  charters; `security-auditor` carries Cloudflare's security-audit skill.
+- **Bundled skills**, credited with their licenses in
+  `src/cauce/skills/README.md`: vise's engineering-baseline, ponytail,
+  security-baseline, architecture, ui-critique, web-ui-rules, design-brief and
+  fourteen language rules (MIT), and Cloudflare's security-audit (MIT).
+- **Teams.** A person keeps several teams and gives each project one (`cauce
+  team create`, `cauce team use`); a project's workers run only as its team's
+  roles, and its tasks are classified only into the kinds that team covers.
+  Teams, roles and which project uses which live in the person's cauce home.
+- **`cauce roles`** (`list`, `show --full`, `copy`, `rm`, `check`, `skills`)
+  and **`cauce team`** (`list`, `show`, `create`, `change`, `delete`, `use`);
+  `cauce run --role <name>` runs a task as one role.
+- **Teams screen** in `cauce ui`: every team, the roles in it with their
+  kinds, skills, capabilities, tools taken away and instructions, and the
+  projects using it (`GET /api/teams`).
+
+### Changed
+
+- A system prompt over 16,000 characters goes to the worker in a file
+  (`--append-system-prompt-file`).
+
 ## [0.8.0] - 2026-10-11
 
 ### Added

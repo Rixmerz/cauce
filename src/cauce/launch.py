@@ -44,6 +44,9 @@ RESULT_FENCE = "cauce-result"
 _FENCE_RE = re.compile(rf"```{RESULT_FENCE}\s*\n(?P<body>.*?)\n?```", re.DOTALL | re.IGNORECASE)
 
 DEFAULT_MAX_TURNS = 30
+#: Past this a system prompt goes in a file: one argument is capped at 128 KiB
+#: on Linux, and a role with its skills comes near.
+INLINE_PROMPT_CHARS = 16000
 DEFAULT_TIMEOUT_S = 1800
 
 #: Tools a reading task never needs. Removing them is what makes "read-only"
@@ -174,7 +177,8 @@ class WorkerResult:
     transient: bool = False
 
 
-def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path: Path | None = None) -> list[str]:
+def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path: Path | None = None,
+               prompt_path: Path | None = None) -> list[str]:
     argv = [
         claude_bin, "-p",
         "--model", spec.model_id or spec.cell.model,
@@ -199,7 +203,9 @@ def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path:
         argv += ["--add-dir", str(extra)]
     if mcp_config_path is not None:
         argv += ["--mcp-config", str(mcp_config_path)]
-    if spec.append_system_prompt:
+    if prompt_path is not None:
+        argv += ["--append-system-prompt-file", str(prompt_path)]
+    elif spec.append_system_prompt:
         argv += ["--append-system-prompt", spec.append_system_prompt]
     if not spec.persist_session:
         argv.append("--no-session-persistence")
@@ -221,7 +227,13 @@ def run(
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump({"mcpServers": dict(spec.mcp_servers)}, fh)
         mcp_path = Path(name)
-    argv = build_argv(spec, claude_bin=claude_bin, mcp_config_path=mcp_path)
+    prompt_path = None
+    if len(spec.append_system_prompt) > INLINE_PROMPT_CHARS:
+        fd, name = tempfile.mkstemp(prefix="cauce-role-", suffix=".md")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(spec.append_system_prompt)
+        prompt_path = Path(name)
+    argv = build_argv(spec, claude_bin=claude_bin, mcp_config_path=mcp_path, prompt_path=prompt_path)
     before = tracked_state(spec.target_dir)
     started = time.monotonic()
     try:
@@ -246,6 +258,8 @@ def run(
     finally:
         if mcp_path is not None:
             mcp_path.unlink(missing_ok=True)
+        if prompt_path is not None:
+            prompt_path.unlink(missing_ok=True)
     if _mode_refused(proc, spec):
         # This CLI does not take the mode (an older one, or auto mode not on for
         # the account): the attempt runs again, as it would have before.

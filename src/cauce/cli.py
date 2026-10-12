@@ -99,6 +99,14 @@ def _warn_behind() -> None:
 
 def cmd_run(args: argparse.Namespace) -> int:
     _warn_behind()
+    if args.role:
+        from cauce import roles
+
+        try:
+            roles.load().get(args.role)
+        except roles.RoleError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     options = orchestrate.Options(
         budget_usd=args.budget,
         max_attempts=args.max_attempts,
@@ -113,6 +121,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         livespec=args.livespec,
         allow_tools=tuple(args.allow or ()),
+        role=args.role,
     )
     store = Store.open()
     previous = _cancel_on_sigterm()
@@ -1345,6 +1354,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--kind", type=_kind, metavar="KIND",
                        help=f"skip classification: {', '.join(KINDS)}")
         p.add_argument("--start", help="pin the first cell, e.g. sonnet/high", type=_cell)
+        p.add_argument("--role", help="run as this role (`cauce roles list`), on the kinds it takes")
         p.add_argument("--allow-approval", action="store_true", help="allow cells that need approval (Fable)")
         p.add_argument("--allow", action="append", metavar="RULE", help=ALLOW_HELP)
         p.add_argument("--no-isolate", action="store_true", help="work in the checkout, not a worktree")
@@ -1421,9 +1431,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", type=int)
     p.set_defaults(func=cmd_queue)
 
-    from cauce import workflow_cli
+    from cauce import team_cli, workflow_cli
 
     workflow_cli.add_parser(sub)
+    team_cli.add_parser(sub)
 
     p = sub.add_parser("lanes", help="one serial lane per repository; a failed task pauses it")
     p.add_argument("--unpause", metavar="REPO", help="a repository path or key")

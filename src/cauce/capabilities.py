@@ -99,8 +99,11 @@ def select(
     *,
     failed_before: bool = False,
     workdir: Path | None = None,
+    every: bool = False,
 ) -> Selection:
-    chosen = [c for c in registry.values() if c.applies(kind, failed_before=failed_before)]
+    """The capabilities a task of `kind` gets; `every` takes all of `registry`,
+    for the ones a worker's role names whatever their `when`."""
+    chosen = [c for c in registry.values() if every or c.applies(kind, failed_before=failed_before)]
     values = {"workdir": str(workdir) if workdir else ""}
     servers = {c.name: _fill(c.server, values) for c in chosen}
     hints = tuple(f"{c.name}: {_fill(c.hint, values)}" for c in chosen if c.hint)

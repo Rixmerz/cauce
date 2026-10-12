@@ -8,12 +8,13 @@ import { renderNotes } from "./notes.js";
 import { renderHabits } from "./habits.js";
 import { renderWorkflows } from "./workflows.js";
 import { renderMap } from "./map.js";
+import { renderTeams } from "./teams.js";
 import { openTask } from "./task.js";
 import { h, repoName } from "./util.js";
 
 const views = { board: renderBoard, sessions: renderSessions, spend: renderSpend, routing: renderRouting,
                 notes: renderNotes, memory: renderMemory, habits: renderHabits, workflows: renderWorkflows,
-                map: renderMap };
+                map: renderMap, teams: renderTeams };
 // The board, the sessions, the notes, the workflows and the map are always one project's:
 // never every card at once.
 const scoped = new Set(["board", "sessions", "notes", "workflows", "map"]);

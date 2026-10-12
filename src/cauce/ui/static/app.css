@@ -278,3 +278,14 @@ code.anchor { font-family: var(--mono); font-size: 12px; margin-right: 6px; over
 .chip.decision { border-color: var(--warn); color: var(--warn); }
 .chip.workflow { border-color: var(--ok); color: var(--ok); }
 button.linkish { border: 0; background: none; padding: 0; font-weight: 600; text-align: left; }
+
+/* Teams: every team and the roles in it, in full. */
+.team { margin: 14px 0 18px; }
+.team > summary { font-size: 15px; color: var(--ink); padding: 6px 0; }
+.team .team-name { font-weight: 600; }
+.team.here .team-name { color: var(--accent); }
+.team .cards, .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+.card.role::before { display: none; }
+.card.role pre { max-height: 320px; overflow: auto; margin-top: 6px; }
+.meta.warn { color: var(--warn); }
+.muted { color: var(--muted); }
