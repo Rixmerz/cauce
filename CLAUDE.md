@@ -15,6 +15,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/escalate.py` | failure kind → move (retry, more effort, next model, more turns, replan) |
 | `src/cauce/launch.py` | one attempt as `claude -p`: argv, the result contract, parsing, git-read changes |
 | `src/cauce/capabilities.py` | which MCP servers a worker gets, from the user-level registry |
+| `src/cauce/mcp_guard.py` | a JSON-RPC guard between a worker and an MCP server: the calls a policy refuses never reach the server; stdlib, imports nothing of cauce |
 | `src/cauce/plugins.py` | neighbours the person installed as Claude Code plugins (layout-inspector, rastro), read from the plugin cache or PATH and handed over as capabilities with their skill |
 | `src/cauce/roles.py` | what a worker is: role files (bundled `roles/`, the person's in their cauce home), `extends` and `match`, skills found by name and put into the worker's system prompt |
 | `src/cauce/teams.py` | the person's teams of roles and which one each project uses (kept in their cauce home); a project's team bounds the kinds it is classified into; `team_cli.py` is `cauce roles …` and `cauce team …` |
@@ -22,7 +23,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `skills/personal-team/` | the plugin's one skill: builds the person's teams from `insights`, with their agreement, through `cauce roles` and `cauce team` only |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `prune`, all on/off), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `prune`, `plugins`, all on/off), copied from plugin options by SessionStart |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
 | `src/cauce/habits.py` | mining sequences per repository (and the ones several repositories share), recipes for the brief, and approval-gated habit hooks |
@@ -275,8 +276,11 @@ yields the default kind, not a guess.
   Installed neighbours (`plugins.KNOWN`) are read from the person's Claude
   Code plugin cache or PATH, never a repository; a registry entry of the same
   name wins, and `cauce config plugins off` leaves them out. Every tool a
-  neighbour's hint names is in its `tools`. rastro runs with `--routines=off`:
-  a saved routine can write with the person's logins.
+  neighbour's hint names is in its `tools`. rastro runs with `--routines=off`
+  and behind `mcp_guard`, which enforces what its hint asks: no browser
+  profile, no saved routine, writes and uploads to loopback hosts only, every
+  call in its own session. A policy that matters is enforced there, never only
+  asked of the worker in its prompt.
 - A role is not a subagent: it adds identity and instructions, never a dial.
   It names no model, no effort and no tool to add; it may take tools away,
   carry or point at skills, and name capabilities, which come only from the

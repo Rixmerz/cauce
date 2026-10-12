@@ -107,7 +107,8 @@ def test_roles_new_builds_on_a_parent_and_adds_to_its_lists():
     role = roles.load().get("implementer-go")
     parent = roles.load().get("implementer")
     assert role.extends == "implementer" and role.kinds == ("implement",) and role.match == ("go.mod",)
-    assert role.skills == (*parent.skills, "go-rules") and "go-rules" not in role.on_demand
+    assert role.skills == (*parent.skills, "go-rules") and role.on_demand == parent.on_demand
+    assert "add_skills: [go-rules]" in path.read_text() and "kinds:" not in path.read_text()
     assert role.prompt == parent.prompt + "\n\nRun go test ./... first."
     assert role.description.endswith("(go.mod)") and role.disallowed_tools == ("WebFetch",)
     assert roles.brief(role).system_prompt.count("go-rules") == 1 + roles.brief(role).system_prompt.count(
@@ -124,6 +125,20 @@ def test_roles_new_builds_on_a_parent_and_adds_to_its_lists():
     with pytest.raises(roles.RoleError, match="no role 'ghost'"):
         roles.new("x", extends="ghost")
     assert not (home() / "roles" / "x.md").exists()
+
+
+def test_a_derived_role_follows_its_parent_s_lists_as_they_change():
+    from .test_roles import write_role
+
+    write_role(home() / "roles", "base", "Base.", description="base", kinds=["implement"], skills=["ponytail"])
+    roles.new("child", extends="base", skills=["go-rules"], match=["go.mod"])
+    assert roles.load().get("child").skills == ("ponytail", "go-rules")
+    write_role(home() / "roles", "base", "Base.", description="base", kinds=["implement", "test"],
+               skills=["ponytail", "engineering-baseline"])
+    child = roles.load().get("child")
+    assert child.skills == ("ponytail", "engineering-baseline", "go-rules") and child.kinds == ("implement", "test")
+    write_role(home() / "roles", "odd", description="d", kinds=["implement"], add_skills=["Bad Name"])
+    assert "no skill name" in roles.load().refused["odd"]
 
 
 def test_a_role_that_fails_once_written_is_not_kept(monkeypatch):

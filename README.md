@@ -574,9 +574,11 @@ cauce neighbours            # what cauce found and how it runs each
 cauce config plugins off    # leave them out
 ```
 
-rastro runs for workers with its saved routines off (`--routines=off`): a
-routine may write to a real site with your logins, and a worker nobody watches
-does not run one. A `capabilities.json` entry of the same name wins over an
+rastro runs for workers behind a guard (`cauce.mcp_guard`) that enforces what
+a worker nobody watches must not do, whatever its prompt says: no browser
+profile (your logins), no saved routine (`--routines=off` too), writes and
+uploads only to the app on this machine (localhost), and every call in a
+session of its own. A `capabilities.json` entry of the same name wins over an
 installed plugin.
 
 ### Roles and teams

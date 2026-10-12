@@ -41,3 +41,12 @@ def test_the_mod_is_declared_beside_the_classic_hooks():
     assert plugin["userConfig"]["wake"]["default"] is True
     # the classic hooks stay: without the mod, endings and notes still reach the session
     assert {"SessionStart", "UserPromptSubmit", "Stop", "PreCompact"} <= set(hooks_json["hooks"])
+
+
+def test_every_setting_is_an_option_on_the_plugin_s_settings_screen():
+    from cauce import config
+
+    plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
+    assert set(config.DEFAULTS) <= set(plugin["userConfig"])
+    for key, default in config.DEFAULTS.items():
+        assert plugin["userConfig"][key]["default"] is default

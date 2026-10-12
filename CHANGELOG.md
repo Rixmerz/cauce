@@ -27,6 +27,23 @@
   and `--prompt` (`-` reads stdin). It keeps the parent's instructions and
   follows them; its lists are the parent's plus the ones given.
 
+- **A workflow step names its role** (`"role": "security-auditor"`,
+  `cauce workflow step add … --role`). It is used only when the project's
+  team has it: a definition a repository commits never chooses beyond the
+  person's team.
+- **rastro behind a guard.** `cauce.mcp_guard` sits between a worker and
+  rastro and refuses, before they reach it, a browser profile, a saved routine
+  or the profile list, and writes or uploads to any host but localhost; every
+  call runs in rastro's session `cauce-worker`. The hint asked for this; the
+  guard enforces it.
+- **`plugins` on the plugin's settings screen**, beside the other settings;
+  a test holds every setting to an option there.
+- **Roles that add to their parent's lists.** `add_skills`, `add_on_demand`,
+  `add_capabilities`, `add_disallowed_tools` and `add_match` extend the
+  parent's list instead of replacing it, so a derived role follows its parent
+  as it changes. `cauce roles new` writes them, and a role it makes no longer
+  freezes its parent's kinds.
+
 ### Fixed
 
 - A skill a role carries whole is no longer also offered by path.

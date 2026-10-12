@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 from cauce import capabilities as caps
@@ -52,14 +53,18 @@ def test_an_installed_plugin_s_server_is_read_newest_first_with_its_root_filled_
 def test_rastro_runs_without_its_saved_routines_from_a_plugin_or_from_path(tmp_path, monkeypatch):
     install("rastro", "0.4.0", files={".mcp.json": {"mcpServers": {"rastro": {"command": "rastro", "args": ["mcp"]}}}})
     found = plugins.installed()["rastro"]
-    assert found.server == {"command": "rastro", "args": ["mcp", "--routines=off"]} and found.skill_dir is None
+    assert found.server["command"] == sys.executable and found.skill_dir is None
+    assert found.server["args"] == ["-m", "cauce.mcp_guard", "rastro", "--", "rastro", "mcp", "--routines=off"]
+    assert found.server["env"]["PYTHONPATH"].startswith(str(Path(plugins.__file__).resolve().parents[1]))
     assert "Before the first call" not in plugins.capabilities()["rastro"].hint
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "rastro").write_text("#!/bin/sh\n")
     (bin_dir / "rastro").chmod(0o755)
     on_path = plugins.find(plugins.KNOWN[1], {"PATH": str(bin_dir), "CLAUDE_CONFIG_DIR": str(tmp_path / "none")})
-    assert on_path.source == "PATH" and on_path.server == {"command": "rastro", "args": ["mcp", "--routines=off"]}
+    assert on_path.source == "PATH" and on_path.server["args"][-3:] == ["rastro", "mcp", "--routines=off"]
+    kept = plugins.guarded({"command": "x", "env": {"PYTHONPATH": "/mine"}}, "rastro")
+    assert kept["env"]["PYTHONPATH"].endswith(os.pathsep + "/mine") and kept["args"][-1] == "x"
     assert plugins.find(plugins.KNOWN[1], {"PATH": "", "CLAUDE_CONFIG_DIR": str(tmp_path / "none")}) is None
 
 

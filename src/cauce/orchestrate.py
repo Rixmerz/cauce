@@ -106,6 +106,9 @@ class Options:
     base: str | None = None
     #: A role a person named for this run: it runs as that role, on the kinds it takes.
     role: str | None = None
+    #: The role a workflow step names: used when it is in the project's team,
+    #: since a definition a repository commits must not choose beyond the person's team.
+    step_role: str | None = None
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -113,7 +116,8 @@ class Options:
         uncommitted work it was continuing."""
         values = {"budget_usd": self.budget_usd, "verify": self.verify, "kind": self.kind,
                   "allow_approval": self.allow_approval, "allow_tools": list(self.allow_tools),
-                  "livespec": self.livespec, "no_isolate": not self.isolate, "role": self.role}
+                  "livespec": self.livespec, "no_isolate": not self.isolate, "role": self.role,
+                  "step_role": self.step_role}
         return {k: v for k, v in values.items() if v not in (None, [], False)}
 
 
@@ -406,6 +410,12 @@ def _team(options: Options, key: str | None, catalog: roles.Catalog) -> tuple[st
     team, why = teams.of(key, catalog)
     members, missing = team.members(catalog)
     lines += [] if team.name == teams.BUNDLED else [why]
+    if options.step_role:
+        named = [r for r in members if r.name == options.step_role]
+        if named:
+            return team.name, named, [*lines, f"the workflow step runs as {options.step_role}, of this team"]
+        lines.append(f"the workflow step names {options.step_role}, which is not in the {team.name} team: "
+                     "the team picks the role")
     if missing:
         lines.append(f"the {team.name} team names role(s) that are not there: {', '.join(missing)}")
     if catalog.refused:

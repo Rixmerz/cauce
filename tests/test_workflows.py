@@ -413,3 +413,42 @@ def test_a_global_workflow_in_use_is_held_and_its_changes_wait(git_repo, tmp_pat
     assert cli.main(["workflow", "rm", "chain", "--scope", "user"]) == 1
     assert cli.main(["workflow", "rm", "chain", "--scope", "user", "--force"]) == 0
     assert workflows.status(store, third["id"])["state"] == "running"  # it goes on with its copy
+
+
+def test_a_step_runs_as_the_role_it_names_only_when_the_project_s_team_has_it(git_repo, store: Store, kicks):
+    from cauce import repo, teams
+
+    with pytest.raises(workflows.WorkflowError, match="role is a role's name"):
+        workflows.normalize({"name": "x", "steps": [{"id": "a", "prompt": "p", "role": "Bad Name"}]})
+    _save({"name": "roled", "steps": [
+        {"id": "audit", "prompt": "Review, without changing any file, the login", "kind": "review-critical",
+         "role": "security-auditor"},
+        {"id": "fix", "prompt": "Fix the login", "kind": "implement", "role": "security-auditor"}]}, git_repo)
+    started = workflows.start(store, "roled", git_repo)
+    first = store.get_task(started["queued"][0])
+    assert json.loads(first["options"])["step_role"] == "security-auditor"
+    roles_seen: list[str] = []
+
+    def runner(text, where, store, options, **kw):
+        report = run(text, where, store, options, registry={}, launcher=lambda spec: ok(), adapters=[],
+                     classifier=kind("review-critical"), **kw)
+        roles_seen.append(report.plan.role.name)
+        return report
+
+    teams.create("narrow", ["reviewer", "implementer"])
+    teams.use(repo.key(git_repo.resolve()), "narrow")
+    flow.work(store, runner=runner)
+    # not in the project's team: the team picks, and the plan says why
+    assert roles_seen[0] == "reviewer"
+    reasons = store.last_event(first["id"], "planned")["data"]["reasons"]
+    assert any("names security-auditor, which is not in the narrow team" in r for r in reasons)
+
+
+def test_a_step_role_in_the_team_is_the_one_it_runs_as(git_repo, store):
+    from cauce.orchestrate import Options
+
+    dry = run("x", git_repo, store, Options(dry_run=True, step_role="security-auditor"), registry={},
+              classifier=kind("review-critical"))
+    assert dry.plan.role.name == "security-auditor"
+    assert any("the workflow step runs as security-auditor" in r for r in dry.plan.reasons)
+    assert Options(step_role="x").stored()["step_role"] == "x"
