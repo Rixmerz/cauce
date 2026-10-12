@@ -35,6 +35,20 @@
 
 ### Changed
 
+- **Color you read without reading.** The web UI gives every piece of state
+  one tone, always beside its word:
+  - a task's state is a badge with an icon (✓ done, ● running, ○ queued,
+    ! blocked, ◆ needs approval, ✕ failed);
+  - the kind of work is a colored dot by family (read, debug, test, docs, ui,
+    build, plan, review): eight hues in a fixed order, checked for colour-blind
+    separation and contrast in both themes;
+  - a cell shows its model as depth (haiku light to fable dark) and its effort
+    as five pips;
+  - board columns, cards that wait on a person or failed, ladders, the routing
+    pass rates and role cards wear the same tones.
+- The mod's status entry and its toast carry the same tones as markers
+  (🟠 waits on you, 🔵 running, ⚪ queued; ✅ passed, ❌ failed), and the toast
+  says how each task ended: `cauce endings --json` gives each one's status.
 - A system prompt over 16,000 characters goes to the worker in a file
   (`--append-system-prompt-file`).
 

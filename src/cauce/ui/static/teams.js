@@ -1,5 +1,5 @@
 import { get } from "./net.js";
-import { h, repoName } from "./util.js";
+import { family, h, kindChip, repoName } from "./util.js";
 
 const chips = (values, cls = "chip") => (values || []).map((v) => h("span", { class: cls }, v));
 
@@ -8,13 +8,16 @@ function field(label, values, extra) {
   return h("div", { class: "meta" }, h("span", { class: "muted" }, `${label} `), chips(values), extra || null);
 }
 
+const kinds = (label, values) => (values && values.length
+  ? h("div", { class: "meta" }, h("span", { class: "muted" }, `${label} `), values.map(kindChip)) : null);
+
 // One role in full: what it is for, what it carries, and what a worker is told.
 function roleCard(role) {
   const origin = role.scope === "user" ? (role.shadows ? "yours, in place of the bundled one" : "yours") : "bundled";
-  return h("div", { class: "card role" },
+  return h("div", { class: `card role k-${family(role.kinds[0])}` },
     h("div", { class: "title" }, role.name, " ", h("span", { class: "chip" }, origin)),
     h("div", {}, role.description),
-    field("kinds", role.kinds),
+    kinds("kinds", role.kinds),
     field("skills", role.carried),
     field("reads when it applies", role.on_demand),
     field("capabilities", role.capabilities),
@@ -37,7 +40,7 @@ function teamSection(team, roles, here, open) {
       " ", h("span", { class: "chip" }, team.scope === "bundled" ? "bundled" : "yours"),
       " ", h("span", { class: "muted" }, `${team.roles.length} roles`)),
     team.description ? h("p", {}, team.description) : null,
-    field("covers", team.kinds),
+    kinds("covers", team.kinds),
     team.projects && team.projects.length
       ? h("div", { class: "meta" }, h("span", { class: "muted" }, "used by "), chips(team.projects.map(repoName)))
       : null,
@@ -54,7 +57,7 @@ function overview(list, here) {
       h("td", {}, h("strong", {}, t.name), t.name === here ? " ★" : "", " ",
         h("span", { class: "chip" }, t.scope === "bundled" ? "bundled" : "yours")),
       h("td", {}, t.roles.map((r) => r.name).join(", ")),
-      h("td", {}, `${t.kinds.length} kinds`),
+      h("td", {}, h("span", { class: "row" }, t.kinds.map(kindChip))),
       h("td", {}, t.scope === "bundled" ? "every project without a team of its own"
         : (t.projects.length ? t.projects.map(repoName).join(", ") : "no project yet")))));
 }

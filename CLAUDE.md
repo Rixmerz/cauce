@@ -194,6 +194,11 @@ yields the default kind, not a guess.
   person cancelled; it opens again by itself when that task leaves the board
   (dismissed, superseded, or resumed to a pass), and the queue starts again; a person's own `cauce run` never blocks the queue. A GET in the UI never starts work or
   sweeps — housekeeping runs in hooks, the dispatcher and the server thread.
+- Color in the UI carries meaning and never alone: a state, a kind's family
+  and a model's depth each have one tone (`util.js`: `statusBadge`,
+  `kindChip`, `cellChip`), always beside their word. The kind hues keep their
+  fixed order; a change to them is checked for colour-blind separation in
+  both themes. The mod's text carries the same tones as emoji markers.
 - The UI builds every node with `textContent` (`h()` in `static/util.js`,
   `s()` in `static/svg.js` for SVG), never `innerHTML`, and sets no inline
   style attribute (the page's policy refuses it; use the CSSOM): task text and worker summaries are untrusted. The token

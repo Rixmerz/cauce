@@ -4,7 +4,13 @@
 :root {
   --bg: #e9ece6; --panel: #f7f8f5; --sunk: #dfe4dd; --ink: #1d2622; --muted: #4f5b55; --line: #d3d9d2;
   --accent: #0f6155; --accent-soft: #d5e6e0; --ok: #25663a; --warn: #875207; --warn-soft: #f1e3c8;
-  --bad: #a3321f; --bad-soft: #f2d8d2;
+  --bad: #a3321f; --bad-soft: #f2d8d2; --queue: #4f6a86; --queue-soft: #dde5ee; --ok-soft: #d6eadb;
+  /* The kind of work, by family (see util.js): fixed order, colour-blind checked. */
+  --k-read: #2a78d6; --k-debug: #eb6834; --k-test: #1baf7a; --k-docs: #eda100; --k-ui: #e87ba4;
+  --k-build: #008300; --k-plan: #6250d6; --k-review: #e34948; --k-other: #7a8580;
+  /* Models as depth: the stronger, the darker. */
+  --m-haiku: #c9d3cd; --m-sonnet: #8fa39a; --m-opus: #3d5048; --m-fable: #1b2420;
+  --m-haiku-ink: #1d2622; --m-sonnet-ink: #10181a; --m-opus-ink: #f7f8f5; --m-fable-ink: #f1d9a4;
   --radius: 14px; --radius-sm: 8px; --gap: 16px;
   --sans: "Avenir Next", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -13,7 +19,12 @@
 @media (prefers-color-scheme: dark) {
   :root { --bg: #121816; --panel: #19211e; --sunk: #0f1412; --ink: #e3eae6; --muted: #8e9c96; --line: #27322e;
           --accent: #5cc3aa; --accent-soft: #173a33; --ok: #6bcb8b; --warn: #e2a847; --warn-soft: #3a2c12;
-          --bad: #ef7a66; --bad-soft: #3d1d18; color-scheme: dark; }
+          --bad: #ef7a66; --bad-soft: #3d1d18; --queue: #93acc8; --queue-soft: #1f2a36; --ok-soft: #173322;
+          --k-read: #3987e5; --k-debug: #d95926; --k-test: #199e70; --k-docs: #c98500; --k-ui: #d55181;
+          --k-build: #008300; --k-plan: #9085e9; --k-review: #e66767; --k-other: #8e9c96;
+          --m-haiku: #33413b; --m-sonnet: #56706a; --m-opus: #9fbdb3; --m-fable: #e3eae6;
+          --m-haiku-ink: #e3eae6; --m-sonnet-ink: #f3f7f5; --m-opus-ink: #0f1412; --m-fable-ink: #3a2c12;
+          color-scheme: dark; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans);
@@ -63,8 +74,6 @@ h2.spaced { margin-top: 32px; }
 .column { background: var(--sunk); border-radius: var(--radius); padding: 14px 12px 6px; }
 /* The one lane that asks something of a person: a faint ochre wash and an ochre count. */
 .column.needs { background: color-mix(in srgb, var(--warn) 7%, var(--sunk)); }
-.column.needs h2::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--warn);
-                           align-self: center; }
 .column.needs .count { color: var(--warn); font-weight: 650; }
 .column h2 { display: flex; align-items: baseline; gap: 8px; padding: 0 4px; }
 .count { color: var(--muted); font-weight: 500; }
@@ -289,3 +298,57 @@ button.linkish { border: 0; background: none; padding: 0; font-weight: 600; text
 .card.role pre { max-height: 320px; overflow: auto; margin-top: 6px; }
 .meta.warn { color: var(--warn); }
 .muted { color: var(--muted); }
+
+/* --- Reading at a glance: kinds, cells and states (util.js) --------------------- */
+.chip.kind { display: inline-flex; align-items: center; gap: 5px; color: var(--ink);
+             background: color-mix(in srgb, var(--k) 14%, var(--panel)); }
+.card .chip.kind { background: color-mix(in srgb, var(--k) 16%, var(--panel)); }
+.chip.kind .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--k); flex: none; }
+.k-read { --k: var(--k-read); } .k-debug { --k: var(--k-debug); } .k-test { --k: var(--k-test); }
+.k-docs { --k: var(--k-docs); } .k-ui { --k: var(--k-ui); } .k-build { --k: var(--k-build); }
+.k-plan { --k: var(--k-plan); } .k-review { --k: var(--k-review); } .k-other { --k: var(--k-other); }
+
+.chip.cell, .card .chip.cell { display: inline-flex; align-items: center; gap: 6px; padding: 1px 7px 1px 0;
+  background: var(--sunk); color: var(--ink); overflow: hidden; }
+.chip.cell b { font-weight: 600; padding: 1px 7px; border-radius: 6px 0 0 6px; background: var(--m); color: var(--m-ink); }
+.m-haiku { --m: var(--m-haiku); --m-ink: var(--m-haiku-ink); } .m-sonnet { --m: var(--m-sonnet); --m-ink: var(--m-sonnet-ink); }
+.m-opus { --m: var(--m-opus); --m-ink: var(--m-opus-ink); } .m-fable { --m: var(--m-fable); --m-ink: var(--m-fable-ink); }
+.pips { display: inline-flex; gap: 2px; } .pips i { width: 5px; height: 5px; border-radius: 50%; background: color-mix(in srgb, var(--muted) 30%, transparent); }
+.pips i.on { background: var(--ink); }
+.chip.cell .effort { color: var(--muted); }
+
+.badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 1px 8px 1px 6px;
+         border-radius: 999px; white-space: nowrap; color: var(--tone); background: var(--tone-soft); }
+.badge .icon { font-size: 11px; line-height: 1; }
+.t-ok { --tone: var(--ok); --tone-soft: var(--ok-soft); } .t-run { --tone: var(--accent); --tone-soft: var(--accent-soft); }
+.t-queue { --tone: var(--queue); --tone-soft: var(--queue-soft); } .t-warn { --tone: var(--warn); --tone-soft: var(--warn-soft); }
+.t-bad { --tone: var(--bad); --tone-soft: var(--bad-soft); } .t-mute { --tone: var(--muted); --tone-soft: var(--sunk); }
+.badge.t-run .icon { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+
+/* Cards wear their state: a wider stripe, and a wash on the ones that ask for a person. */
+.card::before { width: 4px; }
+.card.s-queued::before { background: var(--queue); }
+.card.s-blocked, .card.s-needs_approval, .card.s-replan { background: color-mix(in srgb, var(--warn) 6%, var(--panel)); }
+.card.s-failed, .card.s-interrupted { background: color-mix(in srgb, var(--bad) 6%, var(--panel)); }
+.card.s-cancelled::before, .card.s-dismissed::before { background: var(--muted); }
+.card .top-line { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
+
+/* Each column says what it holds with a colored dot. */
+.column h2::before { content: ""; width: 8px; height: 8px; border-radius: 50%; align-self: center; background: var(--tone, var(--muted)); }
+.column.needs { --tone: var(--warn); } .column.running { --tone: var(--accent); }
+.column.queued { --tone: var(--queue); } .column.done { --tone: var(--ok); }
+.column.running h2::before { animation: pulse 1.6s ease-in-out infinite; }
+.column.running .count { color: var(--accent); font-weight: 650; }
+.column.done { background: color-mix(in srgb, var(--ok) 4%, var(--sunk)); }
+
+/* A role wears the color of the work it takes. */
+.card.role { border-left: 4px solid var(--k, var(--line)); }
+
+/* A rung of a ladder holds its cell; the rung's border says how it went. */
+.rung { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px; border-width: 2px; }
+.rung:not(.rung-pass):not(.rung-fail):not(.rung-start) { opacity: .6; }
+.rung-pass { background: var(--ok-soft); } .rung-fail { background: var(--bad-soft); }
+@media (prefers-reduced-motion: reduce) { .badge.t-run .icon, .column.running h2::before { animation: none; } }
+td.rate-ok { color: var(--ok); font-weight: 600; } td.rate-warn { color: var(--warn); font-weight: 600; }
+td.rate-bad { color: var(--bad); font-weight: 600; }
