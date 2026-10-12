@@ -651,6 +651,16 @@ cauce team                  # this project's team, every member in full
 cauce team use --none       # back to the bundled team
 ```
 
+**A team built from how you work.** In a session, `/cauce:personal-team` reads
+what cauce kept of your projects (`cauce team insights`: the kinds you ask
+for, how each went, where it passed, the languages and checks of each
+project, the team it uses) and proposes one team per purpose. Once you agree,
+it builds the roles on cauce's own (`cauce roles new implementer-go --extends
+implementer --match go.mod --skill go-rules`), creates the teams and gives
+each project its own. A role built with `extends` keeps cauce's instructions
+and follows them as cauce improves; one project's facts go to that project's
+notes, not into a role every project of the team shares.
+
 Which team a project uses is kept in your cauce home, never in the
 repository. The **Teams** screen of `cauce ui` lists every team, the roles in
 each with their skills, capabilities and instructions, and the projects that

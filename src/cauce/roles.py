@@ -468,6 +468,8 @@ def brief(role: Role, env: Mapping[str, str] | None = None) -> Briefing:
         where = f" Its other files are in {skill.folder}: {', '.join(others)}." if others else ""
         parts.append(f"## Skill `{name}`\n{where.strip()}\n\n{skill.body}".replace("\n\n\n", "\n\n"))
     for name in role.on_demand:
+        if name in role.skills:
+            continue  # carried whole already
         skill = find_skill(name, env)
         if skill is None:
             missing.append(name)
@@ -517,6 +519,46 @@ def copy(source: str, new: str, *, catalog: Catalog | None = None, kinds: Sequen
                    description=description or role.description)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(render(role, derived_from=source), encoding="utf-8")
+    return target
+
+
+def new(name: str, *, extends: str, description: str | None = None, kinds: Sequence[str] = (),
+        skills: Sequence[str] = (), on_demand: Sequence[str] = (), capabilities: Sequence[str] = (),
+        disallowed_tools: Sequence[str] = (), match: Sequence[str] = (), prompt: str = "",
+        catalog: Catalog | None = None) -> Path:
+    """A role of the person's built on another: it keeps its parent's
+    instructions (and follows them as they change) and adds what is given here.
+    Lists are the parent's with these added."""
+    catalog = catalog or load()
+    parent = catalog.get(extends)
+    if not NAME.match(name):
+        raise RoleError(f"{name!r} is no role name: lowercase letters, digits, - and _")
+    target = dirs()["user"] / f"{name}.md"
+    if target.exists() or name in catalog.roles:
+        raise RoleError(f"there is already a role {name!r}")
+
+    def more(base: Sequence[str], added: Sequence[str]) -> list[str]:
+        return list(dict.fromkeys([*base, *added]))
+
+    lines = ["---", f"name: {name}",
+             f"description: {description or parent.description + (' (' + ', '.join(match) + ')' if match else '')}",
+             f"kinds: [{', '.join(kinds or parent.kinds)}]", f"extends: {extends}"]
+    carried = more(parent.skills, skills)
+    for key, values in (("skills", carried),
+                        ("on_demand", [s for s in more(parent.on_demand, on_demand) if s not in carried]),
+                        ("capabilities", more(parent.capabilities, capabilities)),
+                        ("disallowed_tools", more(parent.disallowed_tools, disallowed_tools)),
+                        ("match", more(parent.match, match))):
+        if values:
+            lines.append(f"{key}: [{', '.join(values)}]")
+    text = "\n".join([*lines, "---", "", prompt.strip(), ""])
+    parse(text, scope="user", expected=name)  # the same bar as every role, before anything is written
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    if name in load().refused:
+        why = load().refused[name]
+        target.unlink()
+        raise RoleError(why)
     return target
 
 

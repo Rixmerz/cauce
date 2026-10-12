@@ -18,6 +18,8 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/plugins.py` | neighbours the person installed as Claude Code plugins (layout-inspector, rastro), read from the plugin cache or PATH and handed over as capabilities with their skill |
 | `src/cauce/roles.py` | what a worker is: role files (bundled `roles/`, the person's in their cauce home), `extends` and `match`, skills found by name and put into the worker's system prompt |
 | `src/cauce/teams.py` | the person's teams of roles and which one each project uses (kept in their cauce home); a project's team bounds the kinds it is classified into; `team_cli.py` is `cauce roles …` and `cauce team …` |
+| `src/cauce/insights.py` | what the person's projects say about the teams they need (`cauce team insights`): kinds asked and how each went, languages, checks, the team each uses; read only, no model |
+| `skills/personal-team/` | the plugin's one skill: builds the person's teams from `insights`, with their agreement, through `cauce roles` and `cauce team` only |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first |
 | `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `prune`, all on/off), copied from plugin options by SessionStart |
@@ -290,6 +292,10 @@ yields the default kind, not a guess.
   the team covers, the nearest kind of the same nature (reading or writing)
   when it would be another. A tag or `--kind` is narrowed the same way and
   says so. A team left with no role serves as the bundled one, and says so.
+- Insights are read, never written, and never by a model: one project's
+  tasks, habits and files at a time; notes are counted, never quoted. The
+  personal-team skill writes nothing before the person agrees, and only
+  through `cauce roles` and `cauce team`.
 - A vendored skill keeps its authors' license file beside it, and a change to
   its text is listed in `skills/README.md` with the source commit. Never one
   whose license does not allow redistribution.
