@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-12
+
+### Added
+
+- **Installed neighbours as capabilities.** layout-inspector and rastro,
+  installed as Claude Code plugins (or on PATH), reach workers without a
+  `capabilities.json` entry:
+  - layout-inspector for `ui` work, and after a failed `implement` or
+    `feature`;
+  - rastro for `test` work, and after a failed `ui`, run with its saved
+    routines off.
+
+  The server entry is read from the newest installed version, from the
+  manifest, the file it names or `.mcp.json`, with `${CLAUDE_PLUGIN_ROOT}`
+  filled in. Each comes with its plugin's skill to read first and a read rule
+  for its folder. A registry entry of the same name wins; `cauce config
+  plugins off` leaves them out. `cauce capabilities` and `cauce neighbours`
+  say where each comes from.
+- The `frontend` role names rastro beside layout-inspector, and `tester`
+  names rastro.
+
 ## [0.9.0] - 2026-10-12
 
 ### Added

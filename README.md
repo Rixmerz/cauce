@@ -557,6 +557,28 @@ repository, because a server entry is a command that runs on this machine:
 `always` is transversal, a list of kinds is per task, `after_failure` is
 reactive: it joins the next attempt once one of those kinds failed.
 
+**Installed neighbours need no entry.** Two of livespec's neighbours are found
+where Claude Code keeps plugins (or on PATH) and handed to workers like a
+registry entry, each with its own skill to read first:
+
+| Plugin | When | What the worker does with it |
+|---|---|---|
+| [layout-inspector](https://github.com/Rixmerz/layout-inspector-mcp) | `ui`; after a failed `implement` or `feature` | measures the rendered page instead of judging it by eye, and measures again after the fix |
+| [rastro](https://github.com/Rixmerz/rastro) | `test`; after a failed `ui` | browses the running app with a minimal view and a trace of every effect |
+
+```bash
+claude plugin marketplace add Rixmerz/claude-plugins
+claude plugin install layout-inspector@rixmerz
+claude plugin install rastro@rixmerz && npm i -g @rixmerz/rastro
+cauce neighbours            # what cauce found and how it runs each
+cauce config plugins off    # leave them out
+```
+
+rastro runs for workers with its saved routines off (`--routines=off`): a
+routine may write to a real site with your logins, and a worker nobody watches
+does not run one. A `capabilities.json` entry of the same name wins over an
+installed plugin.
+
 ### Roles and teams
 
 Every worker runs as a **role**: a name, what it is for, the kinds of task it

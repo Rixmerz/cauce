@@ -15,6 +15,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/escalate.py` | failure kind → move (retry, more effort, next model, more turns, replan) |
 | `src/cauce/launch.py` | one attempt as `claude -p`: argv, the result contract, parsing, git-read changes |
 | `src/cauce/capabilities.py` | which MCP servers a worker gets, from the user-level registry |
+| `src/cauce/plugins.py` | neighbours the person installed as Claude Code plugins (layout-inspector, rastro), read from the plugin cache or PATH and handed over as capabilities with their skill |
 | `src/cauce/roles.py` | what a worker is: role files (bundled `roles/`, the person's in their cauce home), `extends` and `match`, skills found by name and put into the worker's system prompt |
 | `src/cauce/teams.py` | the person's teams of roles and which one each project uses (kept in their cauce home); a project's team bounds the kinds it is classified into; `team_cli.py` is `cauce roles …` and `cauce team …` |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
@@ -269,6 +270,11 @@ yields the default kind, not a guess.
   there does not start, and a note gone since says so in the brief.
 - The capability registry is read from the user's cauce home only. A
   repository must never be able to add an MCP server by committing a file.
+  Installed neighbours (`plugins.KNOWN`) are read from the person's Claude
+  Code plugin cache or PATH, never a repository; a registry entry of the same
+  name wins, and `cauce config plugins off` leaves them out. Every tool a
+  neighbour's hint names is in its `tools`. rastro runs with `--routines=off`:
+  a saved routine can write with the person's logins.
 - A role is not a subagent: it adds identity and instructions, never a dial.
   It names no model, no effort and no tool to add; it may take tools away,
   carry or point at skills, and name capabilities, which come only from the

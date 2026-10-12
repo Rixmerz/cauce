@@ -430,7 +430,7 @@ def _with_role(selection: caps.Selection, role: roles.Role | None, registry: Map
         return selection
     extra = caps.select(wanted, "", workdir=workdir, every=True)
     return caps.Selection({**selection.servers, **extra.servers}, (*selection.hints, *extra.hints),
-                          (*selection.names, *extra.names))
+                          (*selection.names, *extra.names), (*selection.read_dirs, *extra.read_dirs))
 
 
 def run(
@@ -452,7 +452,7 @@ def run(
     """Run a task. `history` is a resumed task's earlier attempts: shown to its
     workers, never counted by the escalation, which starts over."""
     options = options or Options()
-    registry = registry if registry is not None else caps.load(home() / "capabilities.json")
+    registry = registry if registry is not None else caps.load_all(home() / "capabilities.json")
     launcher = launcher or launch.run
     repo_dir = repo_dir.resolve()
     the_plan = plan(text, repo_dir, store, options, registry, classifier=classifier, adapters=adapters)
@@ -577,7 +577,8 @@ def run(
                 # reading the skill folders of its role.
                 allowed_tools=tuple(dict.fromkeys([*options.allow_tools, *grants.granted(key),
                                                    *(f"mcp__{name}" for name in selection.servers),
-                                                   *(roles.read_rules(briefing) if briefing else ())])),
+                                                   *(roles.read_rules(briefing) if briefing else ()),
+                                                   *(f"Read(/{Path(d).resolve()}/**)" for d in selection.read_dirs)])),
                 extra_dirs=tuple(workspace.repo_dir / rel for rel in workspace.links
                                  if (workspace.repo_dir / rel).is_dir()) if workspace else (),
                 mcp_servers=selection.servers,
@@ -729,7 +730,7 @@ _BROWSER = re.compile(r"\b(browser|navegador|navigate|navega\w*|abr[ie]\w* (?:el
                       r"captura de pantalla|playwright|puppeteer|e2e)\b", re.IGNORECASE)
 _SERVER = re.compile(r"(\bdev servers?\b|\blevanta\w*\b|\bstart (?:both |the )?(?:dev )?servers?\b|"
                      r"\bng serve\b|\bnpm (?:run )?(?:start|dev)\b|localhost:\d+)", re.IGNORECASE)
-_BROWSER_CAPS = ("browser", "playwright", "chrome", "puppeteer")
+_BROWSER_CAPS = ("browser", "playwright", "chrome", "puppeteer", "rastro")
 
 
 #: A task that says in its own words it must change nothing: a validation whose
@@ -900,7 +901,7 @@ def _equip(selection: caps.Selection, the_plan: Plan, repo_dir: Path, workdir: P
         servers[adapter.name] = server
         hints.append(f"{adapter.name}: {adapter.hint(the_plan.kind, repo_dir, workdir)}")
         names.append(adapter.name)
-    return caps.Selection(servers, tuple(hints), tuple(names))
+    return caps.Selection(servers, tuple(hints), tuple(names), selection.read_dirs)
 
 
 def _check(command: str, workdir: Path) -> tuple[int | None, str]:

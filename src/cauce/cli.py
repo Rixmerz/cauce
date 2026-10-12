@@ -692,14 +692,22 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
     if args.example:
         print(json.dumps(capabilities.EXAMPLE, indent=2))
         return 0
+    from cauce import plugins
+
     path = home() / "capabilities.json"
     registry = capabilities.load(path)
-    if not registry:
-        print(f"no capabilities registered in {path} (see `cauce capabilities --example`)")
-    for c in registry.values():
+    found = plugins.installed() if config.enabled("plugins", os.environ) else {}
+    if not registry and not found:
+        print(f"no capabilities registered in {path} (see `cauce capabilities --example`), "
+              "and no neighbour installed as a Claude Code plugin")
+    every = capabilities.load_all(path)
+    for c in every.values():
         when = c.when if c.when == "always" else ", ".join(c.when)
         extra = f"; after a failed {', '.join(c.after_failure)}" if c.after_failure else ""
-        print(f"{c.name:<20} {when}{extra}")
+        source = "your capabilities.json" if c.name in registry else f"installed: {found[c.name].source}"
+        print(f"{c.name:<20} {when}{extra}  ({source})")
+    if not config.enabled("plugins", os.environ):
+        print("installed plugins are left out: `cauce config plugins on` hands them to workers")
     return 0
 
 
@@ -810,6 +818,16 @@ def cmd_neighbours(args: argparse.Namespace) -> int:
         print(status.line())
         server = adapter.server()
         print(f"  runs as: {' '.join([server['command'], *server.get('args', [])]) if server else 'nothing found'}")
+    from cauce import plugins
+
+    for neighbour in plugins.KNOWN:
+        found = plugins.find(neighbour, os.environ)
+        if found is None:
+            print(f"{neighbour.plugin}: not installed (claude plugin install {neighbour.plugin}@rixmerz)")
+            continue
+        runs = " ".join([found.server["command"], *found.server.get("args", [])])
+        skill = f"; skill {found.skill_dir}" if found.skill_dir else ""
+        print(f"{neighbour.plugin}: {found.source}\n  runs as: {runs}{skill}")
     return 0
 
 
