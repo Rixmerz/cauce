@@ -291,6 +291,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(HTTPStatus.OK, api.notes_view(
                 store, repo_key, topic=(query.get("topic") or [""])[0], query=(query.get("q") or [""])[0],
                 state=(query.get("state") or [""])[0]))
+        if path in ("/api/workflows", "/api/map", "/api/milestones"):
+            repo_key = (query.get("repo") or [""])[0]
+            if not repo_key:
+                return self._error(HTTPStatus.BAD_REQUEST, f"pick a project: {path}?repo=<key>")
+            view = {"/api/workflows": api.workflows_view, "/api/map": api.map_view,
+                    "/api/milestones": api.milestones}[path]
+            return self._json(HTTPStatus.OK, view(store, repo_key))
         if path == "/api/memory":
             return self._json(HTTPStatus.OK, api.memory(store, (query.get("q") or [""])[0]))
         if path == "/api/habits":
@@ -393,6 +400,18 @@ class Handler(BaseHTTPRequestHandler):
                               if p["repo"] == note["project"] and p["exists"]), "")
                 notes.confirm(store, note["id"], Path(place) if place else None)
             return self._json(HTTPStatus.OK, {"id": note["id"], "state": store.get_note(note["id"])["state"]})
+        if path == "/api/workflows/attach":
+            # A person's press: one note of this project into a step's brief. A
+            # workflow in use keeps it as a pending revision.
+            from cauce import workflows
+
+            try:
+                saved = api.attach_note(store, str(data.get("repo") or ""), str(data.get("workflow") or ""),
+                                        str(data.get("step") or ""), int(data.get("note") or 0),
+                                        str(data.get("scope") or "") or None)
+            except (workflows.WorkflowError, ValueError, TypeError) as err:
+                return self._error(HTTPStatus.CONFLICT, str(err))
+            return self._json(HTTPStatus.OK, saved)
         if path == "/api/lanes/unpause":
             repo_key = str(data.get("repo") or "")
             store.unpause_lane(repo_key)

@@ -216,3 +216,65 @@ code.anchor { font-family: var(--mono); font-size: 12px; margin-right: 6px; over
          padding: 9px 16px; border-radius: var(--radius-sm); z-index: 4; font-weight: 500; }
 
 @media (prefers-reduced-motion: reduce) { .drawer { animation: none; } .note { transition: none; } }
+
+/* Workflows: a run is a graph of steps, left to right as they depend on each other. */
+.wf-run { margin-bottom: var(--gap); }
+.wf-scroll, .map-scroll { overflow: auto; max-width: 100%; }
+.wf-graph { display: block; margin-top: 8px; }
+.wf-node rect { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+.wf-node.done rect { stroke: var(--ok); fill: color-mix(in srgb, var(--ok) 8%, var(--panel)); }
+.wf-node.now rect { stroke: var(--accent); fill: var(--accent-soft); }
+.wf-node.waits rect { stroke: var(--warn); fill: var(--warn-soft); }
+.wf-node.pending rect { stroke-dasharray: 4 3; }
+.wf-node.link { cursor: pointer; }
+.wf-node.link:hover rect, .wf-node:focus rect { stroke-width: 2.5; }
+.wf-node:focus { outline: none; }
+.wf-title { font: 600 12.5px var(--sans); fill: var(--ink); }
+.wf-sub { font: 11.5px var(--sans); fill: var(--muted); }
+.wf-edge { fill: none; stroke: var(--line); stroke-width: 1.5; }
+.wf-edge.done { stroke: var(--ok); }
+.progress { position: relative; height: 8px; border-radius: 4px; background: var(--sunk); margin: 10px 0 2px; max-width: 420px; }
+.progress span { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: var(--ok); }
+.progress em { position: absolute; left: calc(100% + 8px); top: -5px; font-style: normal; font-size: 12px; color: var(--muted); }
+.tag.done { color: var(--ok); } .tag.now { color: var(--accent); } .tag.waits { color: var(--warn); }
+.tag.pending { color: var(--muted); }
+
+/* The map: a tree that folds, the links between notes dashed across it. */
+.segmented { margin-bottom: var(--gap); gap: 2px; }
+.segmented button[aria-selected="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.map-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--gap); align-items: start; }
+@media (max-width: 900px) { .map-layout { grid-template-columns: 1fr; } }
+.map-scroll { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); max-height: 76vh; }
+.map-side { position: sticky; top: 72px; background: var(--panel); border: 1px solid var(--line);
+            border-radius: var(--radius); padding: 14px; display: grid; gap: 8px; }
+.map { display: block; }
+.map-edge { fill: none; stroke: var(--line); stroke-width: 1.2; }
+.map-link { fill: none; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 5 4; opacity: .7; }
+.map-link.contradicts { stroke: var(--bad); }
+.map-node { cursor: pointer; }
+.map-node rect { fill: var(--panel); stroke: var(--line); }
+.map-node text { font: 12px var(--sans); fill: var(--ink); }
+.map-node.project rect { fill: var(--accent); stroke: var(--accent); }
+.map-node.project text { fill: var(--panel); font-weight: 600; }
+.map-node.topic rect { fill: var(--accent-soft); stroke: var(--accent); }
+.map-node.topic text { font-weight: 600; }
+.map-node.note.review rect { stroke: var(--warn); fill: var(--warn-soft); }
+.map-node.anchor text { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
+.map-node.anchor rect { stroke-dasharray: 3 3; }
+.map-node.problem rect { stroke: var(--warn); }
+.map-node.problem.solved rect { stroke: var(--ok); }
+.map-node.fix.worked rect { stroke: var(--ok); }
+.map-node.fix.failed rect, .map-node.fix.disproved rect { stroke: var(--bad); }
+.map-node.picked rect, .map-node:focus rect { stroke-width: 2.5; stroke: var(--accent); }
+.map-node:focus { outline: none; }
+.attach { display: grid; gap: 6px; border-top: 1px solid var(--line); padding-top: 10px; }
+
+/* Milestones: what already happened, newest first. */
+.timeline { list-style: none; margin: 0; padding: 0 0 0 4px; border-left: 2px solid var(--line); }
+.timeline li { display: grid; grid-template-columns: 140px 1fr; gap: 12px; padding: 8px 0 8px 14px; position: relative; }
+.timeline li::before { content: ""; position: absolute; left: -7px; top: 14px; width: 10px; height: 10px; border-radius: 50%;
+                       background: var(--accent); border: 2px solid var(--bg); }
+.timeline time { color: var(--muted); font-size: 12.5px; }
+.chip.decision { border-color: var(--warn); color: var(--warn); }
+.chip.workflow { border-color: var(--ok); color: var(--ok); }
+button.linkish { border: 0; background: none; padding: 0; font-weight: 600; text-align: left; }

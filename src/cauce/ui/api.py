@@ -513,3 +513,133 @@ def _days_ago_iso(days: int) -> str:
     from datetime import UTC, datetime, timedelta
 
     return (datetime.now(UTC) - timedelta(days=days)).isoformat(timespec="seconds")
+
+
+# --- workflows, the project map and its milestones ---------------------------------------------
+
+
+def _project_dir(store: Store, repo_key: str) -> str | None:
+    """The checkout a project was last used from: where its project-scope workflows live."""
+    return next((p["dir"] for p in projects(store, enrolled_only=False) if p["repo"] == repo_key and p["exists"]),
+                None)
+
+
+def workflows_view(store: Store, repo_key: str, *, limit: int = 30) -> dict[str, Any]:
+    """One project's workflow runs, each a graph of its steps with their state and the
+    progress made, and the definitions it can run: version, the runs holding each and a
+    change waiting for them. Read only."""
+    from cauce import workflows
+
+    runs = []
+    for run in workflows.runs(store, repos={repo_key}, limit=limit):
+        done = sum(1 for s in run["steps"] if s["state"] == "done")
+        runs.append({**run, "progress": {"done": done, "total": len(run["steps"])}})
+    where = _project_dir(store, repo_key)
+    definitions = []
+    for entry in workflows.listing(where):
+        if entry["shadowed"]:
+            continue
+        item = {k: entry.get(k) for k in ("name", "scope", "description", "error")}
+        if not entry.get("error"):
+            defn = workflows.load(entry["name"], where, entry["scope"])
+            item.update(version=defn["version"], inputs=defn["inputs"],
+                        steps=[{k: st.get(k) for k in ("id", "title", "kind", "needs", "memory")}
+                               for st in defn["steps"]])
+            if entry["scope"] != "bundled":
+                item.update(held_by=workflows.in_use(entry["path"], store),
+                            pending=workflows.pending_path(Path(entry["path"])).is_file())
+        definitions.append(item)
+    return {"runs": runs, "definitions": definitions, "dir": where}
+
+
+#: How many notes and problems the map draws before it says how many it left out.
+MAP_NOTES, MAP_PROBLEMS = 150, 40
+
+
+def map_view(store: Store, repo_key: str) -> dict[str, Any]:
+    """One project as a mind map: the project, its topics, each live note, the code each
+    note is about, and the problems worked on here with every fix tried. A tree of `nodes`
+    (each with its `parent`) and the typed links between notes as cross `edges`. Built
+    from what cauce keeps, no model; read only."""
+    from cauce import notes
+
+    nodes: list[dict[str, Any]] = [{"id": "root", "parent": None, "kind": "project", "label": repo_key}]
+    rows = store.notes(repo_key, states=notes.LIVE, limit=MAP_NOTES + 1)
+    found = notes.expand(store, [r["id"] for r in rows[:MAP_NOTES]])
+    topics = sorted({n["topic"] for n in found})
+    for topic in topics:
+        nodes.append({"id": f"topic:{topic}", "parent": "root", "kind": "topic", "label": topic})
+    paths: set[tuple[str, str]] = set()
+    for n in found:
+        nodes.append({"id": f"note:{n['id']}", "parent": f"topic:{n['topic']}", "kind": "note", "ref": n["id"],
+                      "label": n["title"], "state": n["state"], "text": n["text"], "author": n["author"]})
+        for a in n["anchors"]:
+            key = (f"note:{n['id']}", a["path"])
+            if key not in paths:
+                paths.add(key)
+                nodes.append({"id": f"anchor:{n['id']}:{a['path']}", "parent": f"note:{n['id']}", "kind": "anchor",
+                              "label": f"{a['symbol']} ({a['path']})" if a.get("symbol") else a["path"]})
+    shown = {n["id"] for n in found}
+    edges = [{"from": f"note:{x['from_id']}", "to": f"note:{x['to_id']}", "kind": x["kind"]}
+             for x in store.note_links(shown) if x["from_id"] in shown and x["to_id"] in shown]
+    problems = store.recent_problems(repos=[repo_key], limit=MAP_PROBLEMS + 1)
+    if problems:
+        nodes.append({"id": "problems", "parent": "root", "kind": "topic", "label": "problems"})
+    for p in problems[:MAP_PROBLEMS]:
+        nodes.append({"id": f"problem:{p['id']}", "parent": "problems", "kind": "problem", "ref": p["id"],
+                      "label": p["title"], "state": p["state"], "text": p.get("symptom") or ""})
+        for f in p["fixes"]:
+            outcome = "disproved" if f.get("invalidated_on") else f["outcome"]
+            nodes.append({"id": f"fix:{f['id']}", "parent": f"problem:{p['id']}", "kind": "fix", "ref": f["id"],
+                          "label": f["description"], "state": outcome, "text": f.get("why") or "",
+                          "task": f.get("task_id")})
+    return {"nodes": nodes, "edges": edges,
+            "left_out": {"notes": max(0, len(rows) - MAP_NOTES), "problems": max(0, len(problems) - MAP_PROBLEMS)}}
+
+
+#: Task kinds whose pass is a step in where the project stands, not routine work.
+MILESTONE_KINDS = ("feature", "refactor", "plan")
+
+
+def milestones(store: Store, repo_key: str, *, limit: int = 60) -> list[dict[str, Any]]:
+    """Where the project stands, newest first, from what already happened, no model:
+    workflow runs that finished, the decisions its notes keep, and the features and
+    refactors that passed."""
+    from cauce import notes, workflows
+
+    out: list[dict[str, Any]] = []
+    for run in workflows.runs(store, repos={repo_key}, limit=limit):
+        if run["state"] == "done":
+            goal = "; ".join(f"{k}: {v}" for k, v in run["inputs"].items())
+            out.append({"at": run["updated_at"], "kind": "workflow", "title": f"{run['name']} — {goal}" if goal
+                        else run["name"], "ref": run["id"], "detail": f"{len(run['steps'])} steps, "
+                        f"${run['cost_usd']:.2f}" + (f", branch {run['branch']}" if run["branch"] else "")})
+    for n in store.notes(repo_key, topics=["decisions"], states=notes.LIVE, limit=limit):
+        out.append({"at": n["created_at"], "kind": "decision", "title": n["title"], "ref": n["id"],
+                    "detail": n["text"][:300]})
+    for t in store.list_tasks(repo=repo_key, status=["done"], limit=limit * 4, source=TASK_SOURCES):
+        if t["kind"] in MILESTONE_KINDS and not t.get("workflow_run"):
+            out.append({"at": t["updated_at"], "kind": t["kind"], "title": t["title"], "ref": t["id"],
+                        "detail": f"passed at {t['final_cell'] or '-'}, ${t['cost_usd'] or 0:.2f}"})
+    out.sort(key=lambda m: m["at"] or "", reverse=True)
+    return out[:limit]
+
+
+def attach_note(store: Store, repo_key: str, workflow: str, step: str, note_id: int,
+                scope: str | None = None) -> dict[str, Any]:
+    """A person's press: carry a note of this project into a workflow step's brief. Saved
+    like any change, so a workflow in use gets it as a pending revision."""
+    from cauce import workflows
+
+    note = store.get_note(note_id)
+    if note is None or note["project"] != repo_key:
+        raise workflows.WorkflowError(f"no note #{note_id} in this project")
+    ref = f"note:{note_id}"
+
+    def change(defn: dict[str, Any]) -> None:
+        current = defn["steps"][workflows._index(defn, step)].get("memory") or []
+        if ref not in current:
+            workflows.set_step(defn, step, {"memory": [*current, ref]})
+
+    saved = workflows.edit(workflow, _project_dir(store, repo_key), change, scope)
+    return {"scope": saved.scope, "path": str(saved.path), "held_by": saved.held_by}
