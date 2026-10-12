@@ -39,12 +39,14 @@ from cauce import (
     notes,
     project,
     repo,
+    roles,
     runtime,
     stops,
+    teams,
     workflows,
 )
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
-from cauce.classify import Classification, classify
+from cauce.classify import Classification, classify, narrow
 from cauce.escalate import Attempt, Decision, Failure, Move, decide
 from cauce.matrix import DEFAULT_TURNS, READ_ONLY_KINDS, Cell, ladder_for, turns_for
 from cauce.store import Store, home
@@ -102,6 +104,8 @@ class Options:
     #: The commit a new worktree starts from instead of HEAD: a workflow step
     #: builds on the work of the step before it.
     base: str | None = None
+    #: A role a person named for this run: it runs as that role, on the kinds it takes.
+    role: str | None = None
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -109,7 +113,7 @@ class Options:
         uncommitted work it was continuing."""
         values = {"budget_usd": self.budget_usd, "verify": self.verify, "kind": self.kind,
                   "allow_approval": self.allow_approval, "allow_tools": list(self.allow_tools),
-                  "livespec": self.livespec, "no_isolate": not self.isolate}
+                  "livespec": self.livespec, "no_isolate": not self.isolate, "role": self.role}
         return {k: v for k, v in values.items() if v not in (None, [], False)}
 
 
@@ -128,6 +132,10 @@ class Plan:
     active: tuple[tuple[Adapter, Status], ...] = ()
     #: The project's notes the workers are shown.
     notes: tuple[dict, ...] = ()
+    #: The role the workers run as, and the team it came from.
+    role: roles.Role | None = None
+    team: str = ""
+    role_why: str = ""
 
 
 @dataclass
@@ -165,6 +173,9 @@ class Report:
             f"ladder {' → '.join(c.label for c in self.plan.ladder)}",
             f"start {self.plan.start.label}" + "".join(f"\n  · {r}" for r in self.plan.reasons),
         ]
+        if self.plan.role is not None:
+            lines.append(f"role {self.plan.role.name} ({self.plan.role.scope}) of the {self.plan.team} team: "
+                         f"{self.plan.role_why}")
         lines += [status.line() for status in self.plan.neighbours]
         if self.task_id is None:
             # A dry run shows what the first worker would be handed.
@@ -268,12 +279,15 @@ def adopted(options: Options, adapters: Sequence[Adapter] | None) -> list[Adapte
 def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Mapping[str, caps.Capability],
          *, classifier: Callable[[str], Classification] | None = None,
          adapters: Sequence[Adapter] | None = None) -> Plan:
+    catalog = roles.load()
+    team, members, team_notes = _team(options, repo.key(repo_dir), catalog)
+    covered = roles.kinds_of(members)
     if options.kind:
-        classification = Classification(options.kind, "medium", "rule", "chosen by the caller")
+        classification = narrow(Classification(options.kind, "medium", "rule", "chosen by the caller"), covered)
     elif classifier is not None:
-        classification = classifier(text)
+        classification = narrow(classifier(text), covered)
     else:
-        classification = classify(text, use_model=options.use_model_classifier, cwd=home())
+        classification = classify(text, use_model=options.use_model_classifier, cwd=home(), kinds=covered)
     kind = classification.kind
 
     neighbour_notes: list[str] = []
@@ -309,9 +323,20 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
         critical = critical or briefing.critical
         neighbour_notes += briefing.reasons
 
-    if critical and kind == "review-routine":
+    if critical and kind == "review-routine" and (not covered or "review-critical" in covered):
         kind = "review-critical"
         neighbour_notes.append("the code under review implements a critical spec: reviewed as critical")
+    role, why = roles.pick(kind, members, repo_dir)
+    neighbour_notes += team_notes
+    if role is not None:
+        missing = [s for s in (*role.skills, *role.on_demand) if roles.find_skill(s) is None]
+        if missing:
+            neighbour_notes.append(f"role {role.name}: skill(s) {', '.join(missing)} not found; put each in "
+                                   f"{home() / 'skills'}/<name>/SKILL.md or install it for Claude Code")
+        absent = [c for c in role.capabilities if c not in registry and c not in {a.name for a, _ in active}]
+        if absent:
+            neighbour_notes.append(f"role {role.name}: capability {', '.join(absent)} is not in your registry "
+                                   "or an adopted neighbour here; the workers run without it")
     ladder = ladder_for(kind)
     if options.start is not None:
         start, reasons = options.start, ["pinned by the caller"]
@@ -363,10 +388,49 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
             context += notes.brief_lines(known)
             neighbour_notes.append(f"notes: {len(known)} from this project's memory ("
                                    + ", ".join(f"#{n['id']} {n['topic']}" for n in known) + ")")
-    selected = caps.select(registry, kind, workdir=repo_dir)
+    selected = _with_role(caps.select(registry, kind, workdir=repo_dir), role, registry, repo_dir)
     names = tuple(dict.fromkeys([*selected.names, *(a.name for a, _ in active)]))
     return Plan(kind, classification, ladder, start, reasons + neighbour_notes, names,
-                tuple(context), tuple(statuses), tuple(active), tuple(known))
+                tuple(context), tuple(statuses), tuple(active), tuple(known), role, team, why)
+
+
+def _team(options: Options, key: str | None, catalog: roles.Catalog) -> tuple[str, list[roles.Role], list[str]]:
+    """The roles a task here may run as: the one a person named, or the project's team."""
+    lines: list[str] = []
+    if options.role:
+        try:
+            return "named for this run", [catalog.get(options.role)], []
+        except roles.RoleError as exc:
+            # A queued or resumed task whose role is gone since: it runs, as its team.
+            lines.append(f"{exc}: the project's team serves")
+    team, why = teams.of(key, catalog)
+    members, missing = team.members(catalog)
+    lines += [] if team.name == teams.BUNDLED else [why]
+    if missing:
+        lines.append(f"the {team.name} team names role(s) that are not there: {', '.join(missing)}")
+    if catalog.refused:
+        lines.append("roles refused: " + "; ".join(f"{n} ({why})" for n, why in sorted(catalog.refused.items())))
+    if not members:
+        # A team whose roles are all gone limits nothing: the bundled one serves.
+        bundled = teams.bundled(catalog)
+        lines.append(f"the {team.name} team has no role left: the {bundled.name} team serves")
+        return bundled.name, bundled.members(catalog)[0], lines
+    return team.name, members, lines
+
+
+def _with_role(selection: caps.Selection, role: roles.Role | None, registry: Mapping[str, caps.Capability],
+               workdir: Path) -> caps.Selection:
+    """The capabilities the role names, from the person's registry, beside the ones
+    the kind gets. A role names capabilities; it never brings one."""
+    if role is None:
+        return selection
+    wanted = {name: registry[name] for name in role.capabilities if name in registry
+              and name not in selection.servers}
+    if not wanted:
+        return selection
+    extra = caps.select(wanted, "", workdir=workdir, every=True)
+    return caps.Selection({**selection.servers, **extra.servers}, (*selection.hints, *extra.hints),
+                          (*selection.names, *extra.names))
 
 
 def run(
@@ -429,6 +493,7 @@ def run(
         if reason.startswith(("this task needs", "workers here were refused before")):
             say(f"cauce: #{task['id']} warning: {reason}")
     store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label,
+                    role=the_plan.role.name if the_plan.role else None, team=the_plan.team,
                     ladder=[x.label for x in the_plan.ladder], reasons=the_plan.reasons,
                     neighbours=[st.line() for st in the_plan.neighbours])
 
@@ -461,6 +526,7 @@ def run(
     # The runtime the project declares goes first on the worker's PATH, and on its
     # check's: a worker given the wrong Node hunts for another and is refused each one.
     run_env = runtime.env_for(workdir)
+    briefing = roles.brief(the_plan.role) if the_plan.role is not None else None
     cell, turns = the_plan.start, options.max_turns or turns_for(the_plan.kind)
     attempts: list[Attempt] = []
     changed: set[str] = set()
@@ -488,7 +554,8 @@ def run(
                 report.status, report.summary = "failed", report.stop.reason
                 break
             _check_cancel(store, task["id"])
-            selection = _equip(caps.select(registry, the_plan.kind, failed_before=bool(attempts), workdir=workdir),
+            selection = _equip(_with_role(caps.select(registry, the_plan.kind, failed_before=bool(attempts),
+                                                      workdir=workdir), the_plan.role, registry, workdir),
                                the_plan, repo_dir, workdir)
             # Numbered as the store numbers it: a resumed task's attempts go on from its last.
             nth = len(store.attempts(task["id"])) + 1
@@ -502,23 +569,29 @@ def run(
                 workdir=workdir if workdir != launch_dir else None,
                 max_turns=turns,
                 max_budget_usd=round(remaining, 2),
-                disallowed_tools=() if writes else launch.WRITE_TOOLS,
-                # The person's rules, for this run and for this repository, and the
-                # tools of every MCP server cauce itself hands this worker: a
-                # capability it was given and then refused is no capability.
+                disallowed_tools=tuple(dict.fromkeys([*(() if writes else launch.WRITE_TOOLS),
+                                                      *(the_plan.role.disallowed_tools if the_plan.role else ())])),
+                # The person's rules, for this run and for this repository, the
+                # tools of every MCP server cauce itself hands this worker (a
+                # capability it was given and then refused is no capability), and
+                # reading the skill folders of its role.
                 allowed_tools=tuple(dict.fromkeys([*options.allow_tools, *grants.granted(key),
-                                                   *(f"mcp__{name}" for name in selection.servers)])),
+                                                   *(f"mcp__{name}" for name in selection.servers),
+                                                   *(roles.read_rules(briefing) if briefing else ())])),
                 extra_dirs=tuple(workspace.repo_dir / rel for rel in workspace.links
                                  if (workspace.repo_dir / rel).is_dir()) if workspace else (),
                 mcp_servers=selection.servers,
-                append_system_prompt=selection.system_prompt(),
+                append_system_prompt="\n\n".join(p for p in (briefing.system_prompt if briefing else "",
+                                                               selection.system_prompt()) if p),
                 env={**run_env, "CAUCE_WORKER_TASK": str(task["id"]), "CAUCE_WORKER_ATTEMPT": str(nth)},
             )
             store.update_task(task["id"], current_cell=cell.label)
             say(f"cauce: #{task['id']} attempt {nth} at {cell.label}")
             store.add_event(task["id"], "attempt_started", seq=nth, cell=cell.label,
                             model=spec.model_id or cell.model,
-                            max_turns=turns, budget_usd=spec.max_budget_usd, capabilities=list(selection.names))
+                            max_turns=turns, budget_usd=spec.max_budget_usd, capabilities=list(selection.names),
+                            **({"role": the_plan.role.name, "team": the_plan.team,
+                                "skills": list(briefing.skills)} if briefing else {}))
             result = launcher(spec)
             if result.passed and options.verify:
                 result = _verified(result, options.verify, workdir)

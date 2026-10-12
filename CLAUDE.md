@@ -15,6 +15,9 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/escalate.py` | failure kind → move (retry, more effort, next model, more turns, replan) |
 | `src/cauce/launch.py` | one attempt as `claude -p`: argv, the result contract, parsing, git-read changes |
 | `src/cauce/capabilities.py` | which MCP servers a worker gets, from the user-level registry |
+| `src/cauce/roles.py` | what a worker is: role files (bundled `roles/`, the person's in their cauce home), `extends` and `match`, skills found by name and put into the worker's system prompt |
+| `src/cauce/teams.py` | the person's teams of roles and which one each project uses (kept in their cauce home); a project's team bounds the kinds it is classified into; `team_cli.py` is `cauce roles …` and `cauce team …` |
+| `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first |
 | `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `prune`, all on/off), copied from plugin options by SessionStart |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
@@ -142,10 +145,10 @@ yields the default kind, not a guess.
   writes text a person passes with `--allow` or keeps with `cauce allow` or
   `cauce resume --keep` (stored in their cauce home, never in a repository;
   `--keep` is refused with `--unattended`). A rule for an absolute
-  path has two slashes (`Read(//abs)`). Two things are allowed with the
-  worker itself: the tools of the MCP servers cauce hands it, and the
-  permission mode its model runs in (auto; Haiku bypasses), which a person
-  changes with `cauce config mode`.
+  path has two slashes (`Read(//abs)`). Three things are allowed with the
+  worker itself: the tools of the MCP servers cauce hands it, reading the
+  skill folders of its role, and the permission mode its model runs in
+  (auto; Haiku bypasses), which a person changes with `cauce config mode`.
 - A refused attempt blocks; it never climbs, whatever else it ended with,
   unless the worker found the task wrong. A refused write to a file in the
   worker's own directory that git shows changed anyway is no refusal: it
@@ -191,6 +194,11 @@ yields the default kind, not a guess.
   person cancelled; it opens again by itself when that task leaves the board
   (dismissed, superseded, or resumed to a pass), and the queue starts again; a person's own `cauce run` never blocks the queue. A GET in the UI never starts work or
   sweeps — housekeeping runs in hooks, the dispatcher and the server thread.
+- Color in the UI carries meaning and never alone: a state, a kind's family
+  and a model's depth each have one tone (`util.js`: `statusBadge`,
+  `kindChip`, `cellChip`), always beside their word. The kind hues keep their
+  fixed order; a change to them is checked for colour-blind separation in
+  both themes. The mod's text carries the same tones as emoji markers.
 - The UI builds every node with `textContent` (`h()` in `static/util.js`,
   `s()` in `static/svg.js` for SVG), never `innerHTML`, and sets no inline
   style attribute (the page's policy refuses it; use the CSSOM): task text and worker summaries are untrusted. The token
@@ -261,3 +269,21 @@ yields the default kind, not a guess.
   there does not start, and a note gone since says so in the brief.
 - The capability registry is read from the user's cauce home only. A
   repository must never be able to add an MCP server by committing a file.
+- A role is not a subagent: it adds identity and instructions, never a dial.
+  It names no model, no effort and no tool to add; it may take tools away,
+  carry or point at skills, and name capabilities, which come only from the
+  person's registry and adopted neighbours. Its text goes in
+  `--append-system-prompt`, never `--agent`, which would replace Claude
+  Code's system prompt and cauce's tool list.
+- Roles and teams live in the person's cauce home and in cauce itself, never
+  in a repository, and so does which team a project uses: a repository must
+  not choose what its workers are told by committing a file. A role or team
+  that fails its checks is refused with its reason and costs only itself; a
+  role of a bundled name shadows it and says so.
+- A project's team bounds its kinds: a task is classified only into the kinds
+  the team covers, the nearest kind of the same nature (reading or writing)
+  when it would be another. A tag or `--kind` is narrowed the same way and
+  says so. A team left with no role serves as the bundled one, and says so.
+- A vendored skill keeps its authors' license file beside it, and a change to
+  its text is listed in `skills/README.md` with the source commit. Never one
+  whose license does not allow redistribution.

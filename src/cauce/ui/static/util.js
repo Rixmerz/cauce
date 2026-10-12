@@ -27,3 +27,43 @@ export const when = (iso) => {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
 };
 export const repoName = (key) => (key ? String(key).split("/").slice(-2).join("/") : "—");
+
+// Color carries meaning here, never decoration, and never alone: every color
+// below sits beside the word it stands for.
+
+// The kind of work, by family: eight hues in a fixed order, checked for
+// colour-blind separation in both themes. A new kind joins a family.
+const FAMILY = { chat: "read", explore: "read", classify: "read", docs: "docs", test: "test", refactor: "build",
+  implement: "build", feature: "build", ui: "ui", "debug-repro": "debug", "debug-unclear": "debug",
+  "review-routine": "review", "review-critical": "review", plan: "plan", frontier: "plan" };
+export const family = (kind) => FAMILY[kind] || "other";
+export function kindChip(kind) {
+  if (!kind) return null;
+  return h("span", { class: `chip kind k-${family(kind)}` }, h("i", { class: "dot", "aria-hidden": "true" }), kind);
+}
+
+// A cell: the model as depth (the stronger, the darker) and the effort as pips.
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+export function cellChip(cell) {
+  if (!cell) return null;
+  const [model, effort] = String(cell).split("/");
+  const on = EFFORTS.indexOf(effort) + 1;
+  return h("span", { class: `chip cell m-${model}`, title: effort ? `${model} at ${effort} effort` : model },
+    h("b", {}, model),
+    effort ? h("span", { class: "pips", "aria-label": `effort ${effort}` },
+      EFFORTS.map((_, i) => h("i", { class: i < on ? "on" : "" }))) : null,
+    effort ? h("span", { class: "effort" }, effort) : null);
+}
+
+// A task's state: a tone, an icon and its word, so it reads at a glance and
+// without color.
+const STATES = { done: ["ok", "✓", "done"], running: ["run", "●", "running"], queued: ["queue", "○", "queued"],
+  blocked: ["warn", "!", "blocked"], needs_approval: ["warn", "◆", "needs approval"], replan: ["warn", "↻", "replan"],
+  failed: ["bad", "✕", "failed"], interrupted: ["bad", "✕", "interrupted"], cancelled: ["mute", "–", "cancelled"],
+  dismissed: ["mute", "–", "dismissed"] };
+export const tone = (status) => (STATES[status] || ["mute"])[0];
+export function statusBadge(status) {
+  if (!status) return null;
+  const [t, icon, word] = STATES[status] || ["mute", "•", status];
+  return h("span", { class: `badge t-${t}` }, h("span", { class: "icon", "aria-hidden": "true" }, icon), word);
+}

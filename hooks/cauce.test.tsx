@@ -318,8 +318,17 @@ test('what ended while the session was idle starts a turn, once', async ($, on) 
   await clock.advance(15_000)
   await clock.advance(15_000)
   expect(seen.prompts).toEqual([NOTICE])
-  expect(seen.toasts).toEqual(['cauce: #21 ended'])
+  expect(seen.toasts).toEqual(['cauce: #21 ended'])  // an older cauce says no status: the words alone
   expect(seen.argv.filter(a => a[0] === 'endings')[0]).toEqual(['endings', '--session', 'sess-1', '--json'])
+})
+
+test('the toast says how each task ended, in the board\'s colors', async ($, on) => {
+  const { seen, clock } = await started($, on, {
+    endings: { exitCode: 0, stdout: JSON.stringify({ notice: NOTICE, ids: [21, 22, 23],
+      statuses: { 21: 'done', 22: 'blocked', 23: 'mystery' } }) },
+  })
+  await clock.advance(15_000)
+  expect(seen.toasts[0]).toBe('cauce: #21 ✅ passed · #22 🟠 blocked · #23 ended')
 })
 
 test('nothing ended: no turn, no toast', async ($, on) => {
@@ -369,7 +378,7 @@ test('the status entry counts the board and clears when it is empty', async ($, 
   let board = JSON.stringify(BOARD)
   const { seen, clock } = await started($, on, { board: () => ({ exitCode: 0, stdout: board }) })
   await clock.advance(15_000)
-  expect(seen.status.at(-1)).toBe('cauce · 3 waits on you · 1 running · 1 queued')
+  expect(seen.status.at(-1)).toBe('cauce · 🟠 3 waits on you · 🔵 1 running · ⚪ 1 queued')
   board = EMPTY_BOARD
   await clock.advance(15_000)
   expect(seen.status.at(-1)).toBe(undefined)

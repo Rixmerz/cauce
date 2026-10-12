@@ -1,6 +1,6 @@
 import { get, post } from "./net.js";
 import { stopCard } from "./stop.js";
-import { h, short, usd, when } from "./util.js";
+import { cellChip, h, kindChip, short, statusBadge, usd, when } from "./util.js";
 
 // Where a queued task stands with the dispatcher: Haiku's call on whether it may
 // start beside the running work, with its reason.
@@ -15,9 +15,8 @@ function card(task, openTask, extra = []) {
                     onkeydown: (e) => { if (e.key === "Enter") openTask(task.id); } },
     h("div", { class: "title" }, short(task.title, 120)),
     h("div", { class: "meta" },
-      task.kind ? h("span", { class: "chip" }, task.kind) : null,
-      task.current_cell || task.final_cell || task.start_cell
-        ? h("span", { class: "chip" }, task.current_cell || task.final_cell || task.start_cell) : null,
+      kindChip(task.kind),
+      cellChip(task.current_cell || task.final_cell || task.start_cell),
       task.cost_usd ? h("span", {}, usd(task.cost_usd)) : null,
       ...extra),
     task.stop ? stopCard(task.stop) : task.asks ? h("div", { class: "asks" }, task.asks) : null,
@@ -68,11 +67,13 @@ export async function renderBoard(ctx) {
   return h("div", {},
     h("div", { class: "toolbar" }, picker),
     h("div", { class: "columns" },
-      column("Needs you", needs.length, needs.map((t) => card(t, ctx.openTask, [h("span", { class: `status-${t.status}` }, t.status)])),
+      column("Needs you", needs.length, needs.map((t) => card(t, ctx.openTask, [statusBadge(t.status)])),
         needs.length ? "needs" : ""),
       column("Running", running.length, [
-        ...running.map((t) => card(t, ctx.openTask, [h("span", {}, `attempt ${t.attempt ?? 1}`), h("span", {}, when(t.updated_at))])),
-        ...(answering ? [h("div", { class: "empty" }, `${answering} session${answering === 1 ? "" : "s"} answering a prompt now`)] : [])]),
-      column("Queued", b.queued.reduce((n, lane) => n + lane.tasks.filter(keep).length, 0), lanes.length ? lanes : []),
-      column("Done", b.done.filter(keep).length, diary)));
+        ...running.map((t) => card(t, ctx.openTask, [statusBadge("running"), h("span", {}, `attempt ${t.attempt ?? 1}`),
+          h("span", {}, when(t.updated_at))])),
+        ...(answering ? [h("div", { class: "empty" }, `${answering} session${answering === 1 ? "" : "s"} answering a prompt now`)] : [])],
+        "running"),
+      column("Queued", b.queued.reduce((n, lane) => n + lane.tasks.filter(keep).length, 0), lanes.length ? lanes : [], "queued"),
+      column("Done", b.done.filter(keep).length, diary, "done")));
 }

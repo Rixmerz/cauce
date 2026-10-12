@@ -1,5 +1,5 @@
 import { get } from "./net.js";
-import { h, usd } from "./util.js";
+import { cellChip, h, usd } from "./util.js";
 
 const SERIES = ["opus", "sonnet", "haiku", "fable", "other", "workers"];
 
@@ -35,6 +35,6 @@ export async function renderSpend() {
     h("h2", { class: "section" }, "Workers by cell"),
     h("table", {}, h("tr", {}, h("th", {}, "cell"), h("th", { class: "num" }, "attempts"), h("th", { class: "num" }, "passed"),
         h("th", { class: "num" }, "cost")),
-      s.workers.map((w) => h("tr", {}, h("td", {}, w.cell), h("td", { class: "num" }, w.attempts),
+      s.workers.map((w) => h("tr", {}, h("td", {}, cellChip(w.cell)), h("td", { class: "num" }, w.attempts),
         h("td", { class: "num" }, w.passed || 0), h("td", { class: "num" }, usd(w.usd))))));
 }

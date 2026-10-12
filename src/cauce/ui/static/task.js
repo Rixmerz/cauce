@@ -1,7 +1,7 @@
 import { toast } from "./main.js";
 import { get, post } from "./net.js";
 import { stopSection } from "./stop.js";
-import { h, repoName, usd, when } from "./util.js";
+import { cellChip, h, kindChip, repoName, statusBadge, usd, when } from "./util.js";
 
 const drawer = () => document.getElementById("drawer");
 
@@ -18,7 +18,7 @@ const DIAL = { effort: "more effort, same model", model: "a different model", tu
 function climb(c, move) {
   if (!c) return null;
   const head = c.to
-    ? [h("b", {}, `${DIAL[c.axis] || c.axis}: `), h("span", { class: "chip" }, c.from), " → ", h("span", { class: "chip" }, c.to)]
+    ? [h("b", {}, `${DIAL[c.axis] || c.axis}: `), cellChip(c.from), " → ", cellChip(c.to)]
     : [h("b", {}, `${move}: `), "no further attempt"];
   return h("div", { class: `climb climb-${c.axis}` },
     h("div", { class: "row" }, ...head,
@@ -42,15 +42,16 @@ function ladderPath(plan, attempts) {
     i ? h("span", { class: "rung-gap" }, "→") : null,
     h("span", { class: ["rung", ran.has(cell) ? (ran.get(cell).some((a) => a.passed) ? "rung-pass" : "rung-fail") : "",
       cell === plan.start ? "rung-start" : ""].join(" "), title: cell === plan.start ? "where it started" : "" },
-      cell, ...(ran.get(cell) || []).map((a) => h("sup", {}, ` #${a.seq}`)))]));
+      cellChip(cell), ...(ran.get(cell) || []).map((a) => h("sup", {}, ` #${a.seq}`)))]));
 }
 
 function attempt(a) {
   return h("li", { class: a.passed ? "pass" : "fail" },
     h("div", { class: "row" },
-      h("b", {}, `#${a.seq} ${a.cell}`),
+      h("b", {}, `#${a.seq}`), cellChip(a.cell),
       a.served_model ? h("span", { class: "chip", title: "the model that served it, as the CLI reported" }, a.served_model) : null,
-      h("span", {}, a.passed ? "pass" : (a.failure || "fail")),
+      h("span", { class: `badge ${a.passed ? "t-ok" : "t-bad"}` }, h("span", { class: "icon", "aria-hidden": "true" },
+        a.passed ? "✓" : "✕"), a.passed ? "pass" : (a.failure || "fail")),
       h("span", {}, `${a.turns} turns`), h("span", {}, usd(a.cost_usd))),
     a.summary ? h("div", {}, a.summary) : null,
     a.denied.length ? h("div", { class: "refused" }, `refused: ${a.denied.join(", ")}`) : null,
@@ -128,8 +129,8 @@ export async function openTask(id, quiet = false) {
       h("div", {},
         h("h1", {}, `#${t.id} ${t.title}`),
         h("div", { class: "meta row" },
-          h("span", { class: `status-${t.status}` }, t.status), h("span", {}, repoName(t.repo)),
-          t.kind ? h("span", { class: "chip" }, t.kind) : null, h("span", {}, usd(t.cost_usd)),
+          statusBadge(t.status), h("span", {}, repoName(t.repo)),
+          kindChip(t.kind), h("span", {}, usd(t.cost_usd)),
           t.pinned ? h("span", { class: "chip" }, "pinned") : null, h("span", {}, when(t.created_at)))),
       h("div", { class: "row" }, ...actions, h("button", { onclick: close, "aria-label": "close" }, "✕"))),
     stopSection(d.stop),
@@ -151,7 +152,7 @@ export async function openTask(id, quiet = false) {
         h("span", { class: `tag ${x.disproved_on ? "disproved" : "failed"}` }, x.disproved_on ? "disproved" : "failed"),
         `${x.problem}: ${x.tried}`, x.worked_instead ? ` — worked instead: ${x.worked_instead}` : ""))) : null,
     d.children.length ? h("div", { class: "section" }, h("h2", {}, "Delegations"),
-      d.children.map((c) => h("div", { class: "fix" }, h("span", { class: `tag status-${c.status}` }, c.status), c.title))) : null,
+      d.children.map((c) => h("div", { class: "fix" }, statusBadge(c.status), " ", c.title))) : null,
     h("div", { class: "section" }, h("h2", {}, "Messages"),
       d.messages.map((m) => h("div", {}, h("div", { class: "meta" }, h("span", {}, m.author || m.role), h("span", {}, when(m.ts))), h("div", { class: "text" }, m.text)))),
   ].filter(Boolean));

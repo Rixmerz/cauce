@@ -19,7 +19,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { CauceBoard } from '../types'
 import type { Ran } from './cauce-cli'
-import { DEFAULT_TOPICS, json, statusLine } from './cauce-cli'
+import { DEFAULT_TOPICS, endedToast, json, statusLine } from './cauce-cli'
 
 const BOARD_URL = 'http://127.0.0.1:8790/'
 const POLL_MS = 15_000
@@ -107,10 +107,10 @@ async function refresh($: EngineInterface): Promise<void> {
 async function wake($: EngineInterface, enabled: boolean): Promise<boolean> {
   if (!enabled || busy) return false
   const session = await $.session.id()
-  const found = json<{ notice: string | null; ids: number[] }>(
+  const found = json<{ notice: string | null; ids: number[]; statuses?: Record<string, string | null> }>(
     await cauce($, ['endings', '--session', session, '--json']))
   if (!found?.notice) return false
-  $.ui.toast(`cauce: ${found.ids.map(id => `#${id}`).join(', ')} ended`)
+  $.ui.toast(endedToast(found.ids, found.statuses))
   await $.prompt.submit({ text: found.notice })
   return true
 }

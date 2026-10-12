@@ -1,5 +1,5 @@
 import { get } from "./net.js";
-import { h, short, usd, when } from "./util.js";
+import { h, kindChip, short, statusBadge, usd, when } from "./util.js";
 
 const drawer = () => document.getElementById("drawer");
 const MARK = { completed: "☑", in_progress: "◐", pending: "☐" };
@@ -67,12 +67,12 @@ export async function openSession(id, ctx) {
     h("div", { class: "section" }, h("h2", {}, "Work it gave cauce"),
       d.tasks.length ? d.tasks.map((t) => h("div", { class: "card", onclick: () => ctx.openTask(t.id) },
         h("div", { class: "title" }, short(t.title, 120)),
-        h("div", { class: "meta" }, h("span", { class: `status-${t.status}` }, t.status),
-          t.kind ? h("span", { class: "chip" }, t.kind) : null, t.cost_usd ? h("span", {}, usd(t.cost_usd)) : null)))
+        h("div", { class: "meta" }, statusBadge(t.status),
+          kindChip(t.kind), t.cost_usd ? h("span", {}, usd(t.cost_usd)) : null)))
         : h("div", { class: "empty" }, "Nothing queued or run through cauce from this session.")),
     h("div", { class: "section" }, h("h2", {}, "Recent turns"),
       d.turns.map((t) => h("div", { class: "turn" },
-        h("div", { class: "meta" }, h("span", { class: `status-${t.status}` }, t.status), h("span", {}, when(t.created_at))),
+        h("div", { class: "meta" }, statusBadge(t.status), h("span", {}, when(t.created_at))),
         h("div", { class: "subject" }, short(t.title, 200)),
         t.result ? h("div", { class: "text" }, short(t.result, 400)) : null))));
   el.scrollTop = 0;

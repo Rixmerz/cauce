@@ -557,6 +557,95 @@ repository, because a server entry is a command that runs on this machine:
 `always` is transversal, a list of kinds is per task, `after_failure` is
 reactive: it joins the next attempt once one of those kinds failed.
 
+### Roles and teams
+
+Every worker runs as a **role**: a name, what it is for, the kinds of task it
+takes, its instructions, and the skills it carries. cauce ships one role for
+every kind of work, and the role's instructions and skills go into the
+worker's system prompt (`--append-system-prompt`), beside Claude Code's own.
+
+| Role | Kind | Carries |
+|---|---|---|
+| `answerer` | chat | — |
+| `researcher` | explore | engineering-baseline |
+| `docs-writer` | docs | engineering-baseline, ponytail |
+| `tester` | test | engineering-baseline, ponytail; the browser capability |
+| `refactorer` | refactor | engineering-baseline, ponytail, architecture |
+| `implementer` | implement | engineering-baseline, ponytail |
+| `frontend` | ui | engineering-baseline, web-ui-rules, ui-critique, ponytail; layout-inspector, browser |
+| `feature-builder` | feature | engineering-baseline, ponytail, architecture |
+| `debugger` | debug-repro | engineering-baseline, ponytail |
+| `investigator` | debug-unclear | engineering-baseline, ponytail |
+| `reviewer` | review-routine | engineering-baseline, security-baseline, ponytail |
+| `security-auditor` | review-critical | **Cloudflare's security-audit**, security-baseline, engineering-baseline |
+| `architect` | plan | architecture, engineering-baseline |
+| `frontier` | frontier | engineering-baseline, architecture, security-baseline |
+
+The roles that write code are also told where each language's rules are
+(`python-rules`, `typescript-rules` and twelve more) and read the one for the
+file they are about to edit.
+
+**A role is not a subagent.** It adds identity and instructions, never a dial:
+cauce still picks the model, the effort and the tools of every attempt, and
+escalates on evidence. So a role names no model and no tool to add. It may
+take tools away (`disallowed_tools`), carry skills (`skills`) or point at them
+(`on_demand`), and name capabilities, which come only from your
+`capabilities.json` or an adopted neighbour. Claude Code's own `--agent` was
+tried and left out: it replaces Claude Code's system prompt, its tool list
+overrides cauce's, and it does not preload skills on the main thread.
+
+**Your own roles.** Copy one and edit it; the copy lives in your cauce home
+(`roles/<name>.md`), never in a repository:
+
+```bash
+cauce roles list                         # every role, yours first
+cauce roles show security-auditor --full # exactly what a worker is told
+cauce roles copy reviewer strict-reviewer --description "Reviews like it ships tonight"
+cauce roles copy tester tester           # the same name: yours replaces the bundled one everywhere
+cauce roles check                        # what is wrong with any role or team
+```
+
+A role file is Markdown with frontmatter: `name`, `description`, `kinds`,
+`skills`, `on_demand`, `capabilities`, `disallowed_tools`, `match`,
+`extends`. `extends` builds on another role (its body follows the parent's
+unless `replace_prompt: true`), and `match` makes a role a specialization:
+`match: [pyproject.toml]` makes `backend-python` the one picked over the
+general implementer in a Python project. A skill is found by name in your
+`<cauce home>/skills/`, then cauce's, then Claude Code's (`~/.claude/skills/`,
+and `plugin:skill` for an installed plugin's).
+
+**Teams.** One machine runs sessions on several projects with different
+purposes, so you keep several teams and give each project one. A project's
+workers run only as the roles of its team, and a task there is classified only
+into the kinds that team covers: a team of a frontend role and a strict
+reviewer never runs a task as the bundled implementer.
+
+```bash
+cauce team create web --role frontend --role strict-reviewer --role implementer \
+  --description "the shop's web app"
+cauce team create backend --from cauce --role backend-python   # the bundled team plus a role of yours
+cauce team use web          # in a project: its workers come from the web team
+cauce team                  # this project's team, every member in full
+cauce team use --none       # back to the bundled team
+```
+
+Which team a project uses is kept in your cauce home, never in the
+repository. The **Teams** screen of `cauce ui` lists every team, the roles in
+each with their skills, capabilities and instructions, and the projects that
+use it.
+
+**Credits.** The skills are not cauce's. They come, with their licenses and
+the list of what cauce changed, from
+[vise](https://github.com/Rixmerz/vise) (MIT: the baseline, ponytail,
+security, architecture, UI and fourteen language skills) and from
+[Cloudflare's security-audit skill](https://github.com/cloudflare/security-audit-skill)
+(MIT). Most roles adapt vise's agent charters; `investigator` also takes
+obra/[superpowers](https://github.com/obra/superpowers)' root-cause-first
+rule, and vise's `ponytail` is its own text of
+[DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail)'s idea.
+See [`src/cauce/skills/README.md`](src/cauce/skills/README.md) and
+[`src/cauce/roles/CREDITS.txt`](src/cauce/roles/CREDITS.txt).
+
 ## Measured so far
 
 On a real `claude` (2.1.289), a Haiku classification costs about $0.009; a

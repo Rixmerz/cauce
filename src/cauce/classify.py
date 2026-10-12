@@ -26,7 +26,7 @@ import json
 import os
 import re
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -185,6 +185,39 @@ SCHEMA = {
     "additionalProperties": False,
 }
 
+#: Where a kind a team does not cover goes: the nearest kind of the same nature
+#: (one that writes, or one that reads), then the nearest of the other.
+_WRITE_ORDER = ("implement", "feature", "refactor", "debug-repro", "debug-unclear", "test", "ui", "docs",
+                "frontier")
+_READ_ORDER = ("explore", "chat", "review-routine", "review-critical", "plan")
+
+
+def _prompt_for(kinds: Sequence[str] | None) -> tuple[str, Mapping[str, object]]:
+    """The system prompt and schema, offering only `kinds` when a team limits them."""
+    if not kinds:
+        return SYSTEM_PROMPT, SCHEMA
+    offered = [k for k in _KIND_HELP if k in kinds]
+    if not offered:
+        return SYSTEM_PROMPT, SCHEMA
+    prompt = SYSTEM_PROMPT.replace(
+        "\n".join(f"- {k}: {v}" for k, v in _KIND_HELP.items()),
+        "\n".join(f"- {k}: {_KIND_HELP[k]}" for k in offered))
+    schema = json.loads(json.dumps(SCHEMA))
+    schema["properties"]["kind"]["enum"] = offered
+    return prompt, schema
+
+
+def narrow(found: Classification, kinds: Sequence[str] | None) -> Classification:
+    """A kind the project's team does not cover, read as the nearest one it does."""
+    if not kinds or found.kind in kinds:
+        return found
+    reading = found.kind in _READ_ORDER
+    order = (*_READ_ORDER, *_WRITE_ORDER) if reading else (*_WRITE_ORDER, *_READ_ORDER)
+    kind = next((k for k in order if k in kinds), kinds[0])
+    return Classification(kind, found.complexity, found.source,
+                          f"read as {found.kind}, which this project's team has no role for: {kind}"
+                          + (f" ({found.reason})" if found.reason else ""), found.cost_usd)
+
 
 def ask_haiku(
     system_prompt: str,
@@ -248,9 +281,10 @@ def question(text: str) -> str:
     return f"Classify this request. Do not carry it out.\n\n<request>\n{text}\n</request>"
 
 
-def by_model(text: str, **haiku_kwargs) -> Classification:
+def by_model(text: str, *, kinds: Sequence[str] | None = None, **haiku_kwargs) -> Classification:
     """Haiku's reading of the request. Never raises: a failure is the default kind."""
-    out, cost, failure = ask_haiku(SYSTEM_PROMPT, SCHEMA, question(text), **haiku_kwargs)
+    prompt, schema = _prompt_for(kinds)
+    out, cost, failure = ask_haiku(prompt, schema, question(text), **haiku_kwargs)
     if out is None:
         return Classification(DEFAULT_KIND, reason=failure.replace("the model", "the classifier"), cost_usd=cost)
     kind, complexity = out.get("kind"), out.get("complexity")
@@ -269,13 +303,16 @@ def by_model(text: str, **haiku_kwargs) -> Classification:
     )
 
 
-def classify(text: str, *, use_model: bool = True, **model_kwargs) -> Classification:
+def classify(text: str, *, use_model: bool = True, kinds: Sequence[str] | None = None,
+             **model_kwargs) -> Classification:
+    """The kind of work a request is. With `kinds` (the ones a project's team
+    covers), only one of those."""
     ruled = by_rules(text)
     if ruled is not None:
-        return asks_for_change(text, ruled)
+        return narrow(asks_for_change(text, ruled), kinds)
     if not use_model:
-        return Classification(DEFAULT_KIND, reason="no rule matched and the model was not asked")
-    return asks_for_change(text, by_model(text, **model_kwargs))
+        return narrow(Classification(DEFAULT_KIND, reason="no rule matched and the model was not asked"), kinds)
+    return narrow(asks_for_change(text, by_model(text, kinds=kinds, **model_kwargs)), kinds)
 
 
 def asks_for_change(text: str, found: Classification) -> Classification:

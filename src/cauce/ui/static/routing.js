@@ -1,8 +1,15 @@
 import { get } from "./net.js";
-import { h, usd } from "./util.js";
+import { cellChip, h, kindChip, usd } from "./util.js";
 
 const pct = (a, b) => (b ? `${Math.round((100 * a) / b)}%` : "—");
-const cells = (counts) => Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} ×${n}`).join(", ") || "—";
+// How often a kind passed, toned by how well: the eye finds the weak ladders first.
+const passRate = (a, b) => h("td", { class: `num ${!b ? "" : a / b >= 0.8 ? "rate-ok" : a / b < 0.5 ? "rate-bad" : "rate-warn"}` },
+  pct(a, b));
+const cells = (counts) => {
+  const found = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  return found.length ? h("span", { class: "row" }, found.map(([c, n]) => [cellChip(c), ` ×${n}`])) : "—";
+};
+const ladder = (labels) => h("span", { class: "row" }, labels.map((c, i) => [i ? "→" : null, cellChip(c)]));
 
 // The period, kept per viewer: rules change, and last week's failures of a rule
 // fixed since are not evidence about it any more.
@@ -29,8 +36,8 @@ export async function renderRouting(ctx) {
       h("tr", {}, h("th", {}, "kind"), h("th", {}, "ladder"), h("th", { class: "num" }, "tasks"), h("th", { class: "num" }, "passed"),
         h("th", { class: "num" }, "climbed"), h("th", {}, "passed at"), h("th", { class: "num" }, "avg cost")),
       rows.map((r) => h("tr", {},
-        h("td", {}, h("span", { class: "chip" }, r.kind)), h("td", {}, r.ladder.join(" → ")),
-        h("td", { class: "num" }, r.tasks), h("td", { class: "num" }, pct(r.passed, r.tasks)),
+        h("td", {}, kindChip(r.kind)), h("td", {}, ladder(r.ladder)),
+        h("td", { class: "num" }, r.tasks), passRate(r.passed, r.tasks),
         h("td", { class: "num" }, pct(r.climbed, r.tasks)), h("td", {}, cells(r.passes)),
         h("td", { class: "num" }, r.tasks ? usd(r.cost_usd / r.tasks) : "—")))),
     h("h2", { class: "spaced" }, "How each ladder was climbed"),
@@ -41,8 +48,8 @@ export async function renderRouting(ctx) {
       h("tr", {}, h("th", {}, "kind"), h("th", {}, "from"), h("th", {}, "after"), h("th", {}, "move"), h("th", {}, "to"),
         h("th", { class: "num" }, "times"), h("th", { class: "num" }, "next passed")),
       climbs.map(({ kind, c }) => h("tr", {},
-        h("td", {}, h("span", { class: "chip" }, kind)), h("td", {}, c.from), h("td", {}, c.after), h("td", {}, c.move),
-        h("td", {}, c.to || "— stopped"), h("td", { class: "num" }, c.times),
+        h("td", {}, kindChip(kind)), h("td", {}, cellChip(c.from)), h("td", {}, c.after), h("td", {}, c.move),
+        h("td", {}, c.to ? cellChip(c.to) : "— stopped"), h("td", { class: "num" }, c.times),
         h("td", { class: "num" }, c.then_passed === null ? "—" : pct(c.then_passed, c.times)))))
       : h("div", { class: "empty" }, "No task has climbed yet."));
 }

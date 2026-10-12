@@ -6,3 +6,19 @@ This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 cauce runs livespec (https://github.com/Rixmerz/livespec) as a separate
 program and reads its index; it does not include livespec's code, which is
 licensed under the GNU Affero General Public License v3.0.
+
+cauce includes skills written by others, each under its own license, kept in
+src/cauce/skills/ with its license file and the list of what cauce changed
+(src/cauce/skills/README.md):
+
+- from vise (https://github.com/Rixmerz/vise), MIT License, Copyright (c) 2026
+  Rixmerz: engineering-baseline, ponytail, security-baseline, architecture,
+  ui-critique, web-ui-rules, design-brief and fourteen *-rules skills
+  (src/cauce/skills/LICENSE-vise);
+- from Cloudflare's security-audit skill
+  (https://github.com/cloudflare/security-audit-skill), MIT License,
+  Copyright (c) 2025-2026 Cloudflare, Inc.: security-audit
+  (src/cauce/skills/security-audit/LICENSE).
+
+The roles in src/cauce/roles/ adapt vise's agent charters (MIT, as above);
+src/cauce/roles/CREDITS.txt lists each one's sources.

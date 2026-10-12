@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from cauce import capabilities as caps
-from cauce import orchestrate
+from cauce import orchestrate, roles
 from cauce.classify import Classification
 from cauce.escalate import Failure
 from cauce.launch import WRITE_TOOLS, WorkerResult
@@ -478,7 +478,8 @@ def test_work_a_refusal_stopped_is_kept_unverified_and_the_report_says_what_git_
     assert report.status == "blocked" and report.cells == ["sonnet/medium"]  # no retry into the same refusal
     assert "Bash(node server.js)" in report.summary and "--allow" in report.summary
     assert "The last worker's own account: created the routes" in report.summary
-    assert script.specs[0].allowed_tools == ("Bash(npm run build)",)
+    # Beside the person's rule, only reading the skill folders of the worker's role.
+    assert script.specs[0].allowed_tools == ("Bash(npm run build)", f"Read(/{roles.bundled_skills_dir()}/**)")
     assert report.branch == f"cauce/task-{report.task_id}" and report.changed == ["routes.js"]
     assert "routes.js" in git(git_repo, "show", "--name-only", report.branch)
     assert "(unverified, blocked)" in git(git_repo, "log", "-1", "--format=%s", report.branch)
@@ -676,7 +677,7 @@ def test_a_worker_gets_its_mode_the_repository_s_rules_and_the_tools_it_was_hand
         launcher=script, classifier=kind("test"))
     spec = script.specs[0]
     assert spec.permission_mode == "auto"
-    assert spec.allowed_tools == ("Bash(make:*)", "Bash(npm:*)", "mcp__browser")
+    assert spec.allowed_tools[:3] == ("Bash(make:*)", "Bash(npm:*)", "mcp__browser")
     script = Script(ok())
     run("where is it", git_repo, store, registry={}, launcher=script, classifier=kind("explore"))
     assert script.specs[0].permission_mode == "bypassPermissions"  # a haiku cell

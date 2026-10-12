@@ -1,0 +1,27 @@
+The roles in this folder are cauce's own text, written for its one-shot
+workers and its result contract. Most of them adapt the agent charters of
+vise (https://github.com/Rixmerz/vise, MIT, Copyright (c) 2026 Rixmerz):
+
+  answerer          new
+  researcher        vise's researcher
+  docs-writer       vise's docs-writer
+  tester            vise's tester
+  refactorer        new, from vise's codelayer skill ("when not to decouple")
+  implementer       vise's backend-* charters, made one
+  frontend          vise's frontend
+  feature-builder   new, with vise's db-migrator on migrations
+  debugger          vise's debugger
+  investigator      vise's debugger and researcher, and the root-cause-first
+                    rule and "three fixes failed: question the architecture"
+                    of obra/superpowers' systematic-debugging skill
+                    (https://github.com/obra/superpowers, MIT)
+  reviewer          vise's reviewer
+  security-auditor  vise's security-auditor, carrying Cloudflare's
+                    security-audit skill (see ../skills/README.md); "try to
+                    disprove each candidate" is that skill's method
+  architect         new, from vise's architecture skill; "pick one approach
+                    and commit" follows the code-architect agent of
+                    anthropics/claude-plugins-official (Apache-2.0)
+  frontier          new
+
+The full MIT text of vise is in ../skills/LICENSE-vise.

@@ -696,11 +696,12 @@ def test_endings_are_peeked_or_delivered_once_and_only_to_their_session(capsys):
     assert cli.main(["endings", "--session", "s1", "--peek", "--json"]) == 0
     peeked = json.loads(capsys.readouterr().out)
     assert peeked["ids"] == [mine["id"]] and "#1 [done] write docs" in peeked["notice"]
+    assert peeked["statuses"] == {str(mine["id"]): "done"}  # the mod's toast says how each ended
     assert "still running" not in peeked["notice"] and "other session" not in peeked["notice"]
     assert cli.main(["endings", "--session", "s1", "--json"]) == 0  # a peek took nothing
     assert json.loads(capsys.readouterr().out)["ids"] == [mine["id"]]
     assert cli.main(["endings", "--session", "s1", "--json"]) == 0  # delivered once
-    assert json.loads(capsys.readouterr().out) == {"notice": None, "ids": []}
+    assert json.loads(capsys.readouterr().out) == {"notice": None, "ids": [], "statuses": {}}
     assert cli.main(["endings", "--session", "nobody"]) == 0 and capsys.readouterr().out == ""
     store = Store.open()
     assert store.last_event(mine["id"], "reported")["data"]["via"] == "mod"

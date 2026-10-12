@@ -300,6 +300,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(HTTPStatus.OK, view(store, repo_key))
         if path == "/api/memory":
             return self._json(HTTPStatus.OK, api.memory(store, (query.get("q") or [""])[0]))
+        if path == "/api/teams":
+            return self._json(HTTPStatus.OK, api.teams_view((query.get("repo") or [""])[0] or None))
         if path == "/api/habits":
             return self._json(HTTPStatus.OK, api.habit_view(store, (query.get("repo") or [""])[0] or None))
         if path == "/api/events":

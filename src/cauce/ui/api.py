@@ -503,6 +503,27 @@ def habit_view(store: Store, repo_key: str | None = None, days: int = 30) -> dic
             "elsewhere": [c.data() for c in elsewhere[:20]], "installed": installed}
 
 
+def teams_view(repo_key: str | None = None) -> dict[str, Any]:
+    """Every team and every role, in full: who makes up each team, what each role
+    is told and carries, which projects use which team, and which one this
+    project uses. Read from the person's cauce home and cauce's own files only."""
+    from cauce import roles, teams
+
+    catalog = roles.load()
+    found, refused = teams.listing(catalog)
+    here = teams.of(repo_key, catalog)[0].name if repo_key else None
+    every = []
+    for role in catalog.roles.values():
+        briefing = roles.brief(role)
+        every.append({**role.summary(), "prompt": role.prompt, "carried": list(briefing.skills),
+                      "missing": list(briefing.missing),
+                      "teams": [t.name for t in found if role.name in t.role_names]})
+    skills = {s.name: s.description for s in roles.bundled_skills()}
+    return {"here": here, "teams": [teams.describe(t, catalog) for t in found], "roles": every,
+            "refused": {**catalog.refused, **{f"team {k}": v for k, v in refused.items()}},
+            "skills": skills, "assignments": teams.assignments()}
+
+
 def _hours_ago_iso(hours: float) -> str:
     from datetime import UTC, datetime, timedelta
 
