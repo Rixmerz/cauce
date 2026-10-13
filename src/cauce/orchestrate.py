@@ -767,7 +767,8 @@ def run(
                   notes_ask)
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
-                        changed=report.changed[:50], stop=report.stop.data() if report.stop else None)
+                        changed=report.changed[:50], stop=report.stop.data() if report.stop else None,
+                        risk=the_plan.risk.data())
         store.add_message(task["id"], "worker", report.text())
         if task.get("workflow_run"):
             # The next step starts here, from the engine: no session relays it.

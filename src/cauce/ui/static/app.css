@@ -352,3 +352,17 @@ button.linkish { border: 0; background: none; padding: 0; font-weight: 600; text
 @media (prefers-reduced-motion: reduce) { .badge.t-run .icon, .column.running h2::before { animation: none; } }
 td.rate-ok { color: var(--ok); font-weight: 600; } td.rate-warn { color: var(--warn); font-weight: 600; }
 td.rate-bad { color: var(--bad); font-weight: 600; }
+
+/* What a running attempt is doing, how risky a change is, how a finding came about. */
+.chip.phase { color: var(--ink); } .p-exploring { background: var(--queue-soft); }
+.p-implementing { background: var(--accent-soft); } .p-checking { background: var(--ok-soft); }
+.badge.risk.r-high { --tone: var(--bad); --tone-soft: var(--bad-soft); }
+.badge.risk.r-medium { --tone: var(--warn); --tone-soft: var(--warn-soft); }
+.badge.risk.r-passive { --tone: var(--ok); --tone-soft: var(--ok-soft); }
+.badge.risk { margin-right: 6px; }
+.chip.cause.c-introduced, .chip.cause.c-worsened { color: var(--bad); }
+.chip.cause.c-pre-existing { color: var(--muted); } .chip.cause.c-unknown { color: var(--warn); }
+pre.diff { max-height: 480px; overflow: auto; font-size: 11.5px; }
+pre.diff span { display: block; } pre.diff .add { color: var(--ok); background: var(--ok-soft); }
+pre.diff .del { color: var(--bad); background: var(--bad-soft); } pre.diff .hunk { color: var(--accent); }
+pre.diff .file { font-weight: 600; }

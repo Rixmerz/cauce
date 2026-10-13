@@ -22,7 +22,7 @@ There are three scopes, and the nearest one wins:
 
 - `project`: `.cauce/workflows/` in this checkout, shared through the repository.
 - `user`: the person's cauce home.
-- `bundled`: the templates `feature`, `bugfix` and `review-fix`.
+- `bundled`: the templates `feature`, `bugfix`, `review-fix` and `dual-review`.
 
 A workflow in a nearer scope hides one of the same name further away.
 
@@ -40,7 +40,7 @@ Change it one step at a time. Each change is checked before it is written:
 
 ```bash
 cauce workflow step add <name> <step> --prompt "..." [--after <step>] [--needs a,b] \
-    [--kind <kind>] [--role <role>] [--verify "<check>"] [--start <model/effort>] [--budget-usd N] [--max-turns N] \
+    [--kind <kind>] [--role <role>] [--surfaces 'src/api/**,docs/**'] [--verify "<check>"] [--start <model/effort>] [--budget-usd N] [--max-turns N] \
     [--memory note:12,topic:zones,problem:7]
 cauce workflow step set <name> <step> --prompt "..." [--clear verify]
 cauce workflow step rm <name> <step>
@@ -67,6 +67,9 @@ How to write the steps:
   (`cauce team show`), say `security-auditor` for an audit step. A role the
   project's team does not have is not used: the team picks, and the plan says
   so.
+- **Surfaces:** `--surfaces` bounds where a writing step may change files. A
+  change outside them fails the attempt and is undone. Steps with disjoint
+  surfaces run side by side.
 - **Checks:** give a writing step a `verify` command when the repository has
   one. cauce runs it itself.
 - **Memory:** a step can carry cauce memory into its brief, for considerations

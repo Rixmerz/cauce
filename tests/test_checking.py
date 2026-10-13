@@ -14,6 +14,7 @@ from cauce.orchestrate import Options, run, verifier_brief, verify_cell
 from cauce.store import home
 
 from .test_orchestrate import Script, kind
+from .test_ui import ui  # noqa: F401  (the fixture)
 
 # --- criteria -------------------------------------------------------------------------
 
@@ -329,3 +330,65 @@ def test_the_dual_review_starts_two_blind_reviews_on_different_models(git_repo, 
     assert len(first) == 2 and all("one of two reviewers working apart" in t["body"] for t in first)
     # neither review is shown the other's: they start together, before anything is found
     assert all("What the steps before it found" not in t["body"] for t in first)
+
+
+# --- what a running attempt is doing, and the change it kept -----------------------------
+
+
+def log(entries):
+    import os
+    from datetime import UTC, datetime
+
+    from cauce import signature
+
+    folder = signature.log_dir(dict(os.environ))
+    folder.mkdir(parents=True, exist_ok=True)
+    with (folder / f"{datetime.now(UTC):%Y-%m-%d}.ndjson").open("a") as fh:
+        for task_id, attempt, sig in entries:
+            fh.write(json.dumps({"task_id": task_id, "attempt": attempt, "sig": sig}) + "\n")
+        fh.write("not json\n")
+
+
+def test_a_running_attempt_s_phase_is_read_from_its_last_calls():
+    from cauce import phase
+
+    assert phase.of(1, 1) is None
+    log([(1, 1, "read:py"), (1, 1, "grep")])
+    assert phase.of(1, 1) == "exploring"
+    log([(1, 1, "edit:py"), (2, 1, "bash:pytest")])
+    assert phase.of(1, 1) == "implementing" and phase.of(2, 1) == "checking"
+    log([(1, 1, "bash:npm:test")])
+    assert phase.of(1, 1) == "checking" and phase.of(1, None) == "checking" and phase.of(1, 2) is None
+    assert phase.kind_of("write:ts") == "implementing" and phase.kind_of("bash:ls") == "exploring"
+
+
+def test_the_board_and_the_drawer_show_the_phase_the_risk_and_the_checks(git_repo, store, verifier_on):
+    from cauce.ui import api
+
+    script = Script(passing(), check("fail", [BUG]), passing("fixed"), check("pass"), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    detail = api.task_detail(store, report.task_id)
+    assert detail["risk"]["tier"] == "high" and len(detail["checks"]) == 2
+    assert detail["checks"][0]["findings"][0]["where"] == "app.py:3" and detail["phase"] is None
+    running = store.create_task("busy", status="running", source="cauce", repo="k", cwd=str(git_repo))
+    store.add_event(running["id"], "attempt_started", seq=1, cell="sonnet/medium")
+    log([(running["id"], 1, "edit:py")])
+    board = api.board(store)
+    assert next(t for t in board["running"] if t["id"] == running["id"])["phase"] == "implementing"
+    assert api.task_detail(store, running["id"])["phase"] == "implementing"
+    diff = api.task_diff(store, report.task_id)
+    assert diff["branch"] == report.branch and "app.py" in diff["diff"] and not diff["cut"]
+    assert api.task_diff(store, 999) is None
+    assert "no kept branch" in api.task_diff(store, running["id"])["why"]
+    gone = store.create_task("x", status="done", source="cauce", cwd="/nowhere")
+    assert "not here" in api.task_diff(store, gone["id"])["why"]
+
+
+def test_the_diff_route_answers(ui, store, git_repo):  # noqa: F811
+    from .test_ui import call
+
+    task = store.create_task("x", status="done", source="cauce", cwd=str(git_repo))
+    res, data = call(ui, "GET", f"/api/tasks/{task['id']}/diff")
+    assert res.status == 200 and "branch" in json.loads(data)
+    res, _ = call(ui, "GET", "/api/tasks/99999/diff")
+    assert res.status == 404

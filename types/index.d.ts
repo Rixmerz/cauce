@@ -20,6 +20,7 @@ export type CauceCard = {
   stop?: CauceStop | null
   current_cell?: string | null
   branch?: string | null
+  phase?: string | null
 }
 
 export type CauceBoard = {

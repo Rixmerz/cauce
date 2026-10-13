@@ -379,6 +379,9 @@ test('the status entry counts the board and clears when it is empty', async ($, 
   const { seen, clock } = await started($, on, { board: () => ({ exitCode: 0, stdout: board }) })
   await clock.advance(15_000)
   expect(seen.status.at(-1)).toBe('cauce · 🟠 3 waits on you · 🔵 1 running · ⚪ 1 queued')
+  board = JSON.stringify({ ...BOARD, running: [{ ...BOARD.running[0], phase: 'checking' }] })
+  await clock.advance(15_000)
+  expect(seen.status.at(-1)).toBe('cauce · 🟠 3 waits on you · 🔵 1 running (checking) · ⚪ 1 queued')
   board = EMPTY_BOARD
   await clock.advance(15_000)
   expect(seen.status.at(-1)).toBe(undefined)

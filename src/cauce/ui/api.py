@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from cauce import flow, habits, project, stops, usage
+from cauce import flow, habits, phase, project, stops, usage
 from cauce.matrix import LADDERS
 from cauce.store import Store
 
@@ -110,6 +110,7 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
         elif t["status"] == "running":
             started = store.last_event(t["id"], "attempt_started")
             item["attempt"] = started["data"].get("seq") if started else None
+            item["phase"] = phase.of(t["id"], item["attempt"])
             steps = len((item.get("flow") or {}).get("steps", []))
             item["worker"] = worker_of(store, t, steps) if item.get("flow") else None
             running.append(item)
@@ -265,7 +266,42 @@ def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:
         # What it was shown when it ran; the memory as it is now would include later ones.
         "dead_ends": ((store.last_event(task_id, "dead_ends") or {}).get("data") or {}).get("shown") or [],
         "events": store.events(task_id=task_id, limit=500),
+        "checks": [e["data"] for e in store.events_of(task_id, "verified")],
+        # Where the risk ended: attempts only ever raise it from the plan's.
+        "risk": (finished["data"].get("risk") if finished else None)
+        or ((store.last_event(task_id, "planned") or {}).get("data") or {}).get("risk"),
+        "phase": phase.of(task_id, attempts[-1]["seq"] + 1 if attempts else 1) if task["status"] == "running"
+        else None,
     }
+
+
+#: The most of a diff the UI is sent.
+DIFF_BYTES = 200_000
+
+
+def task_diff(store: Store, task_id: int) -> dict[str, Any] | None:
+    """What a task's kept branch changed against where it left the checkout, read
+    from git. Only read: no checkout, no fetch, nothing written."""
+    import subprocess
+
+    task = store.get_task(task_id)
+    if task is None:
+        return None
+    finished = store.last_event(task_id, "finished")
+    branch = (finished["data"].get("branch") if finished else None) or f"cauce/task-{task_id}"
+    where = task.get("cwd")
+    if not where or not Path(where).is_dir():
+        return {"branch": branch, "diff": "", "why": "the task's checkout is not here"}
+    try:
+        proc = subprocess.run(["git", "diff", "--stat", "--patch", "--no-color", f"HEAD...{branch}"], cwd=where,
+                              capture_output=True, timeout=20, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"branch": branch, "diff": "", "why": f"git did not answer: {exc}"}
+    if proc.returncode != 0:
+        return {"branch": branch, "diff": "", "why": "no kept branch to show: " + proc.stderr.decode(
+            "utf-8", "replace").strip()[:200]}
+    raw = proc.stdout[:DIFF_BYTES].decode("utf-8", "replace")
+    return {"branch": branch, "diff": raw, "cut": len(proc.stdout) > DIFF_BYTES, "why": "" if raw else "no change"}
 
 
 #: Who wrote a message, in words.

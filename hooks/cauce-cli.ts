@@ -21,11 +21,17 @@ const MARK = { needs: '🟠', running: '🔵', queued: '⚪', done: '✅', faile
 
 /** The status entry: what waits on the person first, in words; nothing when
  * the board is empty. */
-export function statusLine(c: { needs_you: number; running: number; queued: number } | undefined): string | undefined {
+export function statusLine(
+  c: { needs_you: number; running: number; queued: number } | undefined,
+  running: { phase?: string | null }[] = [],
+): string | undefined {
   if (!c || !(c.needs_you || c.running || c.queued)) return undefined
+  // What the running work is doing now: exploring, implementing, checking.
+  const phases = [...new Set(running.map(r => r.phase).filter((p): p is string => !!p))]
+  const doing = phases.length ? ` (${phases.join(', ')})` : ''
   const parts = [
     c.needs_you ? `${MARK.needs} ${c.needs_you} waits on you` : '',
-    c.running ? `${MARK.running} ${c.running} running` : '',
+    c.running ? `${MARK.running} ${c.running} running${doing}` : '',
     c.queued ? `${MARK.queued} ${c.queued} queued` : '',
   ].filter(Boolean)
   return `cauce · ${parts.join(' · ')}`

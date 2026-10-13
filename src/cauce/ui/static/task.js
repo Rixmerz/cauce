@@ -45,6 +45,14 @@ function ladderPath(plan, attempts) {
       cellChip(cell), ...(ran.get(cell) || []).map((a) => h("sup", {}, ` #${a.seq}`)))]));
 }
 
+// A diff, line by line: what was added, what was removed, where each hunk starts.
+function diffView(text, cut) {
+  const tone = (line) => (line.startsWith("+++") || line.startsWith("---") ? "file"
+    : line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : line.startsWith("@@") ? "hunk" : "");
+  return h("pre", { class: "diff" }, text.split("\n").map((line) => h("span", { class: tone(line) }, `${line}\n`)),
+    cut ? h("span", { class: "hunk" }, "… cut") : null);
+}
+
 function attempt(a) {
   return h("li", { class: a.passed ? "pass" : "fail" },
     h("div", { class: "row" },
@@ -139,13 +147,29 @@ export async function openTask(id, quiet = false) {
       h("div", {}, t.parallel ? "May run beside the work going in this repository: " : "Waits for the work ahead of it: ",
         t.parallel_reason)) : null,
     d.plan ? h("div", { class: "section" }, h("h2", {}, "Plan"),
+      d.risk ? h("div", { class: "meta" }, h("span", { class: `badge risk r-${d.risk.tier}` },
+        `risk ${d.risk.tier}`), (d.risk.reasons || []).join("; ")) : null,
       ladderPath(d.plan, d.attempts),
       h("div", { class: "meta" }, `started at ${d.plan.start}, because:`),
       h("ul", {}, (d.plan.reasons || []).map((r) => h("li", {}, r))),
       (d.plan.neighbours || []).map((n) => h("div", { class: "meta" }, n))) : null,
     d.attempts.length ? h("div", { class: "section" }, h("h2", {}, "Attempts"), h("ul", { class: "timeline" }, d.attempts.map(attempt))) : null,
+    (d.checks || []).length ? h("div", { class: "section" }, h("h2", {}, "Independent checks"),
+      d.checks.map((c) => h("div", { class: "fix" },
+        h("span", { class: `badge ${c.blocking ? "t-bad" : c.passed ? "t-ok" : "t-mute"}` },
+          c.blocking ? `✕ ${c.blocking} problem(s)` : c.passed ? "✓ clean" : "– undecided"),
+        ` attempt ${c.seq} at `, h("span", { class: "chip" }, c.cell), ` · ${c.summary || ""}`,
+        (c.findings || []).length ? h("ul", {}, c.findings.map((f) => h("li", {},
+          h("span", { class: `chip cause c-${f.cause}` }, f.cause), " ", h("code", {}, f.where || "unplaced"),
+          ` ${f.what}`))) : null))) : null,
     d.branch || d.impact.length ? h("div", { class: "section" }, h("h2", {}, "Result"),
-      d.branch ? h("div", {}, "branch ", h("span", { class: "chip" }, d.branch)) : null,
+      d.branch ? h("div", {}, "branch ", h("span", { class: "chip" }, d.branch), " ",
+        h("button", { onclick: async (e) => {
+          const box = e.target.parentElement.nextElementSibling;
+          const found = await get(`/api/tasks/${t.id}/diff`);
+          box.replaceChildren(found.diff ? diffView(found.diff, found.cut) : h("div", { class: "empty" }, found.why));
+        } }, "Show the change")) : null,
+      d.branch ? h("div", { class: "diff-box" }) : null,
       d.impact.map((line) => h("div", { class: "meta" }, line))) : null,
     d.dead_ends.length ? h("div", { class: "section" }, h("h2", {}, "Dead ends it was shown"),
       d.dead_ends.map((x) => h("div", { class: "fix" },

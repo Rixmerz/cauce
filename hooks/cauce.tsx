@@ -99,7 +99,7 @@ let polling = false
 async function refresh($: EngineInterface): Promise<void> {
   const cwd = await $.session.cwd()
   const found = await board($, cwd)
-  $.ui.status(statusLine(found?.counts))
+  $.ui.status(statusLine(found?.counts, found?.running ?? []))
 }
 
 /** Hand the session what ended while it was idle: claimed once, so the Stop
