@@ -20,10 +20,16 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/roles.py` | what a worker is: role files (bundled `roles/`, the person's in their cauce home), `extends` and `match`, skills found by name and put into the worker's system prompt |
 | `src/cauce/teams.py` | the person's teams of roles and which one each project uses (kept in their cauce home); a project's team bounds the kinds it is classified into; `team_cli.py` is `cauce roles …` and `cauce team …` |
 | `src/cauce/insights.py` | what the person's projects say about the teams they need (`cauce team insights`): kinds asked and how each went, languages, checks, the team each uses; read only, no model |
+| `src/cauce/criteria.py` | a request's listed items as criteria `S1..Sn`, verbatim; a pass answers each |
+| `src/cauce/findings.py` | findings as records: where, what, `evidence_class`, `cause`; which block a change |
+| `src/cauce/risk.py` | a change's tier (passive, medium, high) from its request, kind and files; only raised; no model |
+| `src/cauce/surfaces.py` | where a task may write (`--surface`, a step's `surfaces`): checked after each attempt, and whether two tasks can never touch the same file |
+| `src/cauce/phase.py` | what a running worker is doing (exploring, implementing, checking), read from the tail of the tool-call log |
+| `src/cauce/roles_internal/` | roles cauce runs itself and no team holds: the independent `verifier` |
 | `skills/personal-team/` | the plugin's one skill: builds the person's teams from `insights`, with their agreement, through `cauce roles` and `cauce team` only |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `prune`, `plugins`, all on/off), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `prune`, `plugins`, `verifier`, all on/off), copied from plugin options by SessionStart |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
 | `src/cauce/habits.py` | mining sequences per repository (and the ones several repositories share), recipes for the brief, and approval-gated habit hooks |
@@ -137,6 +143,22 @@ yields the default kind, not a guess.
   without one is read back and marked `recovered`, never presented as recorded.
   A cancel says where it came from; "a person did it" is never a guess.
 - The model's stated confidence about its own work is not an input.
+- A request's criteria are its own words: a pass answers every `S#`, one left
+  out is `inconclusive` and one not met is a `code_bug`. Prose has no criteria.
+- A finding blocks only when the change caused or worsened it (or it cannot be
+  told) and it is shown, not suspected; a pre-existing one is reported, never
+  a blocker.
+- A risk tier is only raised, never lowered; a change that cannot be read is
+  high. A high change, or a medium one a cheap cell made, is checked by the
+  independent verifier before it passes: another cell, read-only, given the
+  request verbatim and the diff, never the worker's summary. A correction
+  round is earned only by a blocker that persists, at most `MAX_CORRECTIONS`;
+  new findings alone stop the task as `review`. A verifier that cannot decide
+  keeps the pass and says so. Tests run with `CAUCE_VERIFIER=off`.
+- Surfaces narrow and grant nothing: a change outside them fails the attempt
+  and is undone in its worktree, never in a person's checkout. Two tasks whose
+  surfaces are provably disjoint run side by side without Haiku; in doubt,
+  the dispatcher decides as before.
 - A move explains itself: `Decision.because` is the evidence chain (what the
   attempt ended with, the rule, where it goes) and `skipped` the rungs passed
   over. A new branch in `decide` gives both; the `moved` event keeps them.

@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -61,6 +61,12 @@
       "type": "boolean",
       "title": "Hand workers the neighbours you installed",
       "description": "Workers get the MCP servers of layout-inspector and rastro when you have them installed as Claude Code plugins (or on PATH), each with its own skill: layout-inspector for UI work, rastro for tests, run behind a guard that keeps writes on localhost and refuses browser profiles and saved routines. Off: only your capabilities.json reaches workers.",
+      "default": true
+    },
+    "verifier": {
+      "type": "boolean",
+      "title": "Independent verifier",
+      "description": "A change that passes is checked again, before it counts, by a separate read-only worker that verifies the request, not the work, when its risk is high (data, security, money, a consumed contract, concurrency, delivery, or code changed with no test beside it) or medium and made by a cheap cell. Its findings go to the next attempt, two corrections at most. Off: a pass stands on its own check.",
       "default": true
     }
   },

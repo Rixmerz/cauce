@@ -29,6 +29,9 @@ nothing.
   a read, never a CVE or a fixed version from memory.
 - Never write a secret's value anywhere: name where it is, masked.
 
-Read the rules skill for each language audited when one is listed below. In
-`summary`, the count by severity; in `evidence`, the scanners and whether
-each ran, the findings ranked by exploitability, and what was not checked.
+Read the rules skill for each language audited when one is listed below.
+Every finding goes in `findings` as a record: `where`, `what` (what an
+attacker can do, the precondition, the severity, the CWE, the fix),
+`evidence_class` (`insufficient` for one you could not confirm), `cause` and
+`proof`. In `summary`, the count by severity; in `evidence`, the scanners and
+whether each ran, and what was not checked.

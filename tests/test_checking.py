@@ -1,0 +1,394 @@
+"""What was asked, findings as records, risk, and the independent check."""
+from __future__ import annotations
+
+import json
+import subprocess
+
+import pytest
+
+from cauce import criteria, findings, launch, risk
+from cauce.escalate import Attempt, Failure, Move, decide
+from cauce.launch import LaunchSpec, WorkerResult
+from cauce.matrix import LADDERS, Cell
+from cauce.orchestrate import Options, run, verifier_brief, verify_cell
+from cauce.store import home
+
+from .test_orchestrate import Script, kind
+from .test_ui import ui  # noqa: F401  (the fixture)
+
+# --- criteria -------------------------------------------------------------------------
+
+
+def test_listed_items_become_criteria_in_the_person_s_words():
+    text = "Fix the cart:\n- totals round once\n* coupons expire at midnight UTC\n2) keep the API as it is\n"
+    assert criteria.items(text) == ["totals round once", "coupons expire at midnight UTC", "keep the API as it is"]
+    assert criteria.ids(text) == ("S1", "S2", "S3")
+    assert "S2: coupons expire at midnight UTC" in criteria.brief(text)
+    assert criteria.items("one sentence. Another sentence.") == [] and criteria.brief("- only one") == ""
+    assert criteria.read({"criteria": [{"id": "s1", "met": True}, {"id": "S2"}, "x"]}) == (
+        {"id": "S1", "met": True, "evidence": ""},)
+    assert criteria.read({"criteria": "no"}) == ()
+    assert criteria.unmet(("S1", "S2", "S3"), [{"id": "S1", "met": True}, {"id": "S2", "met": False}]) == (
+        ["S3"], ["S2"])
+
+
+def proc(block: dict) -> subprocess.CompletedProcess:
+    text = "done\n```cauce-result\n" + json.dumps(block) + "\n```"
+    return subprocess.CompletedProcess([], 0, json.dumps({"result": text, "total_cost_usd": 0.1}), "")
+
+
+def test_a_pass_must_say_each_criterion_is_met(tmp_path):
+    spec = LaunchSpec("p", Cell("sonnet", "medium"), tmp_path, criteria=("S1", "S2"))
+    ok = {"verdict": "pass", "summary": "s", "evidence": "1 passed"}
+    both = launch.parse(proc({**ok, "criteria": [{"id": "S1", "met": True}, {"id": "S2", "met": True}]}), spec)
+    assert both.passed and len(both.criteria) == 2
+    left_out = launch.parse(proc({**ok, "criteria": [{"id": "S1", "met": True}]}), spec)
+    assert not left_out.passed and left_out.failure is Failure.INCONCLUSIVE and "S2" in left_out.summary
+    not_met = launch.parse(proc({**ok, "criteria": [{"id": "S1", "met": True}, {"id": "S2", "met": False}]}), spec)
+    assert not not_met.passed and not_met.failure is Failure.CODE_BUG and "S2 is not met" in not_met.summary
+    plain = launch.parse(proc(ok), LaunchSpec("p", Cell("sonnet", "medium"), tmp_path))
+    assert plain.passed
+
+
+def test_the_brief_carries_the_criteria(git_repo, store):
+    script = Script(WorkerResult(True, None, "ok", "1 passed", criteria=({"id": "S1", "met": True},
+                                                                          {"id": "S2", "met": True})))
+    run("Do it:\n- one\n- two", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert "S1: one" in script.specs[0].prompt and script.specs[0].criteria == ("S1", "S2")
+
+
+# --- findings -------------------------------------------------------------------------
+
+
+def test_findings_are_records_and_only_the_change_s_own_shown_ones_block():
+    read = findings.read({"findings": [
+        {"where": "src/a.py:12", "what": "Off by one in the loop", "evidence_class": "deterministic",
+         "cause": "introduced", "proof": "pytest -k loop"},
+        {"where": "src/b.py", "what": "old bug", "evidence_class": "inferential", "cause": "pre-existing"},
+        {"where": "src/c.py", "what": "maybe slow", "evidence_class": "insufficient", "cause": "introduced"},
+        {"what": "no place, odd values", "evidence_class": "weird", "cause": "??"},
+        {"where": "x"}, "junk"]})
+    assert len(read) == 4 and read[3]["evidence_class"] == "inferential" and read[3]["cause"] == "unknown"
+    assert [f["where"] for f in findings.blocking(read)] == ["src/a.py:12", ""]
+    moved = {"where": "src/a.py:40", "what": "reworded entirely", "evidence_class": "deterministic",
+             "cause": "introduced"}
+    assert findings.same(read[0], moved) and not findings.same(read[1], moved)
+    assert findings.places(read) == {"src/a.py", "src/b.py", "src/c.py"}
+    assert "- [introduced, deterministic] src/a.py:12: Off by one in the loop — pytest -k loop" in findings.text(read)
+    assert findings.read({"findings": "no"}) == ()
+
+
+def test_two_reviews_that_place_the_same_findings_converge():
+    a = Attempt(Cell("sonnet", "medium"), 30, False, Failure.CODE_BUG, "words one",
+                findings=({"where": "a.py:1", "what": "x"},))
+    b = Attempt(Cell("sonnet", "high"), 30, False, Failure.CODE_BUG, "entirely other words",
+                findings=({"where": "a.py:9", "what": "y"},))
+    assert decide(LADDERS["review-routine"], [a, b], reading=True).move is Move.CONVERGED
+    c = Attempt(Cell("sonnet", "high"), 30, False, Failure.CODE_BUG, "words one",
+                findings=({"where": "b.py", "what": "y"},))
+    assert decide(LADDERS["review-routine"], [a, c], reading=True).move is not Move.CONVERGED
+
+
+# --- risk -----------------------------------------------------------------------------
+
+
+def test_risk_starts_from_the_request_and_only_rises_with_the_change():
+    assert risk.of_request("explain the parser", "explore").tier == "passive"
+    assert risk.of_request("rename a helper", "refactor").tier == "medium"
+    r = risk.of_request("fix the login token refresh", "implement")
+    assert r.tier == "high" and "security" in r.reasons[0]
+    assert risk.of_request("audit it", "review-critical").tier == "high"
+    r = risk.of_change(risk.of_request("rename", "refactor"), ["src/a.py", "tests/test_a.py"])
+    assert r.tier == "medium"
+    r = risk.of_change(risk.of_request("rename", "refactor"), ["src/a.py"])
+    assert r.tier == "high" and "no test beside it" in r.reasons[-1]
+    assert risk.of_change(risk.Risk("medium"), ["db/migrations/0002.sql"]).tier == "high"
+    assert risk.of_change(risk.Risk("medium"), None).tier == "high"
+    docs = risk.of_change(risk.Risk("medium"), ["README.md"])
+    assert docs.tier == "medium" and "documentation only" in docs.reasons[-1]
+    high = risk.Risk("high")
+    high.raise_to("passive", "x")
+    assert high.tier == "high"
+    assert risk.needs_verifier(risk.Risk("high"), cheap=False)
+    assert risk.needs_verifier(risk.Risk("medium"), cheap=True) and not risk.needs_verifier(risk.Risk("medium"),
+                                                                                             cheap=False)
+
+
+# --- the independent check --------------------------------------------------------------
+
+
+def passing(summary="done"):
+    return WorkerResult(True, None, summary, "1 passed", cost_usd=0.1)
+
+
+def check(verdict="pass", found=(), summary="checked"):
+    return WorkerResult(verdict == "pass", None if verdict == "pass" else Failure.CODE_BUG, summary, "probe: ok",
+                        cost_usd=0.05, verdict=verdict, findings=tuple(found))
+
+
+BUG = {"where": "app.py:3", "what": "drops the last item", "evidence_class": "deterministic", "cause": "introduced",
+       "proof": "python probe.py"}
+OTHER = {"where": "lib.py:9", "what": "a new crash", "evidence_class": "deterministic", "cause": "introduced",
+         "proof": ""}
+OLD = {"where": "old.py", "what": "was always so", "evidence_class": "deterministic", "cause": "pre-existing",
+       "proof": ""}
+
+
+@pytest.fixture
+def verifier_on(monkeypatch):
+    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+
+
+def test_a_risky_pass_is_checked_and_its_findings_earn_one_correction(git_repo, store, verifier_on):
+    script = Script(passing(), check("fail", [BUG, OLD]), passing("fixed"), check("pass", [OLD]), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert report.status == "done" and report.cells == ["sonnet/medium", "sonnet/high"]
+    _, verifier, again, recheck = script.specs
+    assert verifier.cell == Cell("sonnet", "high") and set(launch.WRITE_TOOLS) <= set(verifier.disallowed_tools)
+    assert "fix the cart total" in verifier.prompt and "done" not in verifier.prompt.split("verbatim:")[1][:40]
+    assert verifier.append_system_prompt.startswith("You work as the `verifier` role")
+    assert "drops the last item" in again.prompt  # the findings are the next attempt's evidence
+    assert "drops the last item" in recheck.prompt and "whether it is fixed" in recheck.prompt
+    events = store.events_of(report.task_id, "verified")
+    assert [e["data"]["blocking"] for e in events] == [1, 0] and events[0]["data"]["risk"]["tier"] == "high"
+    attempts = store.attempts(report.task_id)
+    assert attempts[0]["cost_usd"] == pytest.approx(0.15)
+    assert "risk high" in report.text()
+
+
+def test_a_new_finding_after_a_correction_stops_for_a_person(git_repo, store, verifier_on):
+    script = Script(passing(), check("fail", [BUG]), passing("fixed"), check("fail", [OTHER]), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert report.status == "blocked" and report.stop.cause == "review" and "new finding" in report.stop.reason
+    assert report.branch and "a new crash" in report.stop.account
+
+
+def test_the_same_problem_twice_earns_a_second_correction_then_a_person(git_repo, store, verifier_on):
+    script = Script(passing(), check("fail", [BUG]), passing(), check("fail", [BUG]), passing(),
+                    check("fail", [{**BUG, "where": "app.py:7"}]), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert report.status == "blocked" and "survived 2 corrections" in report.stop.reason
+    assert len(report.cells) == 3
+
+
+def test_an_undecided_check_or_a_fail_without_findings(git_repo, store, verifier_on):
+    script = Script(passing(), check("inconclusive", summary="no browser"), write="app.py")
+    report = run("fix it", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert report.status == "done"
+    assert "independent check inconclusive: no browser" in store.attempts(report.task_id)[0]["evidence"]
+    script = Script(passing(), check("fail", summary="the totals are wrong"), passing(), check("pass"),
+                    write="app.py")
+    report = run("fix it", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert report.status == "done" and "the totals are wrong" in script.specs[2].prompt
+
+
+def test_no_check_for_a_change_without_risk_or_a_reading_task(git_repo, store, verifier_on):
+    script = Script(passing(), write="notes.md")
+    run("rename the docs heading", git_repo, store, registry={}, launcher=script, classifier=kind("refactor"))
+    assert len(script.specs) == 1  # documentation only: medium, from a strong cell
+    script = Script(passing())
+    run("review the cart", git_repo, store, registry={}, launcher=script, classifier=kind("review-routine"))
+    assert len(script.specs) == 1
+    script = Script(passing(), check("pass"), write="notes.md")
+    run("rename the docs heading", git_repo, store, Options(start=Cell("haiku", "medium")), registry={},
+        launcher=script, classifier=kind("refactor"))
+    assert len(script.specs) == 2 and script.specs[1].cell == Cell("sonnet", "high")  # a cheap cell's pass
+
+
+def test_the_verifier_cell_and_brief():
+    assert verify_cell(Cell("haiku", "low")) == Cell("sonnet", "high")
+    assert verify_cell(Cell("opus", "medium")) == Cell("opus", "high")
+    assert verify_cell(Cell("opus", "max")) == Cell("opus", "max")
+    text = verifier_brief("Do:\n- a\n- b", "implement", home(), None, [f"f{i}" for i in range(25)])
+    assert "S2: b" in text and "uncommitted" in text and "and 5 more" in text
+
+
+def test_a_person_s_verifier_role_takes_the_bundled_one_s_place():
+    from cauce import roles
+
+    from .test_roles import write_role
+
+    assert roles.internal("verifier").scope == "bundled"
+    assert "verifier" not in roles.load().roles  # in no team
+    write_role(home() / "roles", "verifier", "Mine.", description="mine", kinds=["review-routine"])
+    assert roles.internal("verifier").prompt == "Mine."
+
+
+# --- surfaces -------------------------------------------------------------------------
+
+
+def test_surfaces_hold_what_they_name_and_nothing_else():
+    from cauce import surfaces
+
+    s = surfaces.check(["src/api/", "docs/*.md", "tests/**", "lib", "*.cfg", "./", " "])
+    assert s == ("src/api/**", "docs/*.md", "tests/**", "lib", "*.cfg", "**")
+    assert surfaces.allows(("src/api/**",), "src/api/x/y.py") and not surfaces.allows(("src/api/**",), "src/apix.py")
+    assert surfaces.allows(("docs/*.md",), "docs/a.md") and not surfaces.allows(("docs/*.md",), "docs/x/a.md")
+    assert surfaces.allows(("lib",), "lib/a/b.c") and not surfaces.allows(("lib",), "libx")
+    assert surfaces.allows(("a[bc].py",), "ab.py") and surfaces.allows(("a[b",), "a[b")
+    assert surfaces.allows(("src/?.py",), "src/a.py") and not surfaces.allows(("src/?.py",), "src/ab.py")
+    assert surfaces.outside((), ["anything"]) == [] and surfaces.outside(("src/**",), ["src/a", "b"]) == ["b"]
+    with pytest.raises(surfaces.SurfaceError, match="inside the project"):
+        surfaces.check(["../up"])
+    with pytest.raises(surfaces.SurfaceError, match="at most"):
+        surfaces.check([f"d{i}" for i in range(30)])
+    assert surfaces.disjoint(["src/api/**"], ["src/web/**"]) and surfaces.disjoint(["src/a.py"], ["src/b.py"])
+    assert not surfaces.disjoint(["src/**"], ["src/web/a.ts"]) and not surfaces.disjoint(["*.md"], ["src/x"])
+    assert not surfaces.disjoint([], ["src/x"]) and not surfaces.disjoint(["src/x"], ["src/x"])
+    assert surfaces.brief(()) == "" and "src/api/**" in surfaces.brief(("src/api/**",))
+
+
+def test_a_change_outside_the_surfaces_is_undone_and_fails_the_attempt(git_repo, store):
+    seen = []
+
+    def launcher(spec):
+        seen.append(spec)
+        (spec.target_dir / "app.py").write_text("changed\n")  # tracked at the base: restored
+        if len(seen) == 1:
+            (spec.target_dir / "stray.txt").write_text("x\n")  # new: removed
+            return WorkerResult(True, None, "done", "1 passed", changed_paths=("app.py", "stray.txt"))
+        return WorkerResult(True, None, "done", "1 passed", changed_paths=("src/ok.py",))
+
+    report = run("fix it", git_repo, store, Options(surfaces=("src/**",)), registry={}, launcher=launcher,
+                 classifier=kind("implement"))
+    assert "Change only files inside these surfaces: src/**" in seen[0].prompt
+    first = store.attempts(report.task_id)[0]
+    assert not first["passed"] and first["failure"] == "approach" and "outside its surfaces" in first["summary"]
+    event = store.last_event(report.task_id, "outside_surfaces")["data"]
+    assert event["paths"] == ["app.py", "stray.txt"] and event["undone"]
+    assert Options(surfaces=("a",)).stored()["surfaces"] == ["a"]
+
+
+def test_in_the_checkout_itself_nothing_is_undone(git_repo, store):
+    def launcher(spec):
+        return WorkerResult(True, None, "done", "1 passed", changed_paths=("app.py",))
+
+    report = run("fix it", git_repo, store, Options(surfaces=("src/**",), isolate=False, max_attempts=1),
+                 registry={}, launcher=launcher, classifier=kind("implement"))
+    assert "left in your checkout" in store.attempts(report.task_id)[0]["summary"]
+
+
+def test_tasks_whose_surfaces_cannot_touch_run_side_by_side_without_a_model(store):
+    from cauce import flow
+
+    def queued(text, surf):
+        return store.enqueue(text, repo="k", cwd="/x", options={"surfaces": surf} if surf else {})
+
+    a, b = queued("a", ["src/api/**"]), queued("b", ["src/web/**"])
+    assert flow.by_surfaces(b, [a]).parallel
+    c = queued("c", ["src/**"])
+    decision = flow.by_surfaces(c, [a])
+    assert not decision.parallel and f"#{a['id']}" in decision.reason
+    assert flow.by_surfaces(queued("d", None), [a]) is None and flow.by_surfaces(b, [queued("e", None)]) is None
+    assert flow.by_surfaces(b, []) is None
+    assert flow._surfaces_of({"options": "{"}) == ()
+
+
+def test_a_workflow_step_carries_its_surfaces(git_repo, store, monkeypatch):
+    from cauce import workflows
+
+    monkeypatch.setattr(workflows, "_kick", lambda cwd, key: None)
+    with pytest.raises(workflows.WorkflowError, match="surfaces are a list"):
+        workflows.normalize({"name": "x", "steps": [{"id": "a", "prompt": "p", "surfaces": "src"}]})
+    with pytest.raises(workflows.WorkflowError, match="inside the project"):
+        workflows.normalize({"name": "x", "steps": [{"id": "a", "prompt": "p", "surfaces": ["../x"]}]})
+    assert "surfaces" not in workflows.normalize({"name": "x", "steps": [{"id": "a", "prompt": "p",
+                                                                         "surfaces": []}]})["steps"][0]
+    workflows.save({"name": "bounded", "steps": [{"id": "a", "prompt": "Do it", "surfaces": ["src/"]}]}, git_repo,
+                   "user")
+    started = workflows.start(store, "bounded", git_repo)
+    assert json.loads(store.get_task(started["queued"][0])["options"])["surfaces"] == ["src/**"]
+
+
+def test_the_cli_takes_surfaces(capsys, git_repo):
+    from cauce import cli
+
+    assert cli.main(["queue", "add", "x", "--repo", str(git_repo), "--surface", "src/", "--json"]) == 0
+    from cauce.store import Store
+
+    queued = json.loads(capsys.readouterr().out)["id"]
+    store = Store.open()
+    assert json.loads(store.get_task(queued)["options"])["surfaces"] == ["src/**"]
+    store.close()
+    with pytest.raises(SystemExit, match="inside the project"):
+        cli.main(["run", "x", "--surface", "/abs", "--repo", str(git_repo), "--dry-run"])
+
+
+# --- the blind dual review --------------------------------------------------------------
+
+
+def test_the_dual_review_starts_two_blind_reviews_on_different_models(git_repo, store, monkeypatch):
+    from cauce import workflows
+
+    monkeypatch.setattr(workflows, "_kick", lambda cwd, key: None)
+    defn = workflows.load("dual-review", git_repo)
+    steps = {s["id"]: s for s in defn["steps"]}
+    assert steps["review-a"]["start"] != steps["review-b"]["start"]
+    assert steps["fix"]["needs"] == ["review-a", "review-b"] and steps["recheck"]["needs"] == ["fix"]
+    started = workflows.start(store, "dual-review", git_repo, {"target": "the cart module"})
+    first = [store.get_task(i) for i in started["queued"]]
+    assert len(first) == 2 and all("one of two reviewers working apart" in t["body"] for t in first)
+    # neither review is shown the other's: they start together, before anything is found
+    assert all("What the steps before it found" not in t["body"] for t in first)
+
+
+# --- what a running attempt is doing, and the change it kept -----------------------------
+
+
+def log(entries):
+    import os
+    from datetime import UTC, datetime
+
+    from cauce import signature
+
+    folder = signature.log_dir(dict(os.environ))
+    folder.mkdir(parents=True, exist_ok=True)
+    with (folder / f"{datetime.now(UTC):%Y-%m-%d}.ndjson").open("a") as fh:
+        for task_id, attempt, sig in entries:
+            fh.write(json.dumps({"task_id": task_id, "attempt": attempt, "sig": sig}) + "\n")
+        fh.write("not json\n")
+
+
+def test_a_running_attempt_s_phase_is_read_from_its_last_calls():
+    from cauce import phase
+
+    assert phase.of(1, 1) is None
+    log([(1, 1, "read:py"), (1, 1, "grep")])
+    assert phase.of(1, 1) == "exploring"
+    log([(1, 1, "edit:py"), (2, 1, "bash:pytest")])
+    assert phase.of(1, 1) == "implementing" and phase.of(2, 1) == "checking"
+    log([(1, 1, "bash:npm:test")])
+    assert phase.of(1, 1) == "checking" and phase.of(1, None) == "checking" and phase.of(1, 2) is None
+    assert phase.kind_of("write:ts") == "implementing" and phase.kind_of("bash:ls") == "exploring"
+
+
+def test_the_board_and_the_drawer_show_the_phase_the_risk_and_the_checks(git_repo, store, verifier_on):
+    from cauce.ui import api
+
+    script = Script(passing(), check("fail", [BUG]), passing("fixed"), check("pass"), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    detail = api.task_detail(store, report.task_id)
+    assert detail["risk"]["tier"] == "high" and len(detail["checks"]) == 2
+    assert detail["checks"][0]["findings"][0]["where"] == "app.py:3" and detail["phase"] is None
+    running = store.create_task("busy", status="running", source="cauce", repo="k", cwd=str(git_repo))
+    store.add_event(running["id"], "attempt_started", seq=1, cell="sonnet/medium")
+    log([(running["id"], 1, "edit:py")])
+    board = api.board(store)
+    assert next(t for t in board["running"] if t["id"] == running["id"])["phase"] == "implementing"
+    assert api.task_detail(store, running["id"])["phase"] == "implementing"
+    diff = api.task_diff(store, report.task_id)
+    assert diff["branch"] == report.branch and "app.py" in diff["diff"] and not diff["cut"]
+    assert api.task_diff(store, 999) is None
+    assert "no kept branch" in api.task_diff(store, running["id"])["why"]
+    gone = store.create_task("x", status="done", source="cauce", cwd="/nowhere")
+    assert "not here" in api.task_diff(store, gone["id"])["why"]
+
+
+def test_the_diff_route_answers(ui, store, git_repo):  # noqa: F811
+    from .test_ui import call
+
+    task = store.create_task("x", status="done", source="cauce", cwd=str(git_repo))
+    res, data = call(ui, "GET", f"/api/tasks/{task['id']}/diff")
+    assert res.status == 200 and "branch" in json.loads(data)
+    res, _ = call(ui, "GET", "/api/tasks/99999/diff")
+    assert res.status == 404

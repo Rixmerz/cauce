@@ -321,6 +321,17 @@ def _resolve(name: str, raw: Mapping[str, dict[str, Any]], *, bundled: set[str])
     )
 
 
+def internal(name: str, catalog: Catalog | None = None) -> Role:
+    """A role cauce itself runs as, outside every team (the independent verifier).
+    A role of the person's of the same name takes its place."""
+    catalog = catalog or load()
+    if name in catalog.roles and catalog.roles[name].scope == "user":
+        return catalog.roles[name]
+    path = Path(__file__).resolve().parent / "roles_internal" / f"{name}.md"
+    fields = parse(path.read_text(encoding="utf-8"), scope="bundled", path=str(path), expected=name)
+    return _resolve(name, {name: fields}, bundled={name})
+
+
 # --- picking -----------------------------------------------------------------------
 
 

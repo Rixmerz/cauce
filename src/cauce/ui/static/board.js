@@ -70,7 +70,8 @@ export async function renderBoard(ctx) {
       column("Needs you", needs.length, needs.map((t) => card(t, ctx.openTask, [statusBadge(t.status)])),
         needs.length ? "needs" : ""),
       column("Running", running.length, [
-        ...running.map((t) => card(t, ctx.openTask, [statusBadge("running"), h("span", {}, `attempt ${t.attempt ?? 1}`),
+        ...running.map((t) => card(t, ctx.openTask, [statusBadge("running"),
+          t.phase ? h("span", { class: `chip phase p-${t.phase}` }, t.phase) : null, h("span", {}, `attempt ${t.attempt ?? 1}`),
           h("span", {}, when(t.updated_at))])),
         ...(answering ? [h("div", { class: "empty" }, `${answering} session${answering === 1 ? "" : "s"} answering a prompt now`)] : [])],
         "running"),

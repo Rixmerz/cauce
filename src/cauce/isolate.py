@@ -157,6 +157,20 @@ def changed(ws: Workspace) -> tuple[str, ...]:
     return tuple(sorted(p for p in paths if p and not _linked(ws, p) and not is_artifact(p)))
 
 
+def undo(ws: Workspace, paths: Sequence[str]) -> None:
+    """Put these paths back as they were at the base, in the task's worktree only:
+    a file the base had is restored, one it did not have is removed."""
+    for path in paths:
+        known = subprocess.run(["git", "cat-file", "-e", f"{ws.base}:{path}"], cwd=str(ws.path),
+                               capture_output=True, check=False).returncode == 0
+        if known:
+            _git(ws.path, "checkout", ws.base, "--", path)
+        else:
+            target = ws.path / path
+            if target.is_file() or target.is_symlink():
+                target.unlink()
+
+
 def has_changes(ws: Workspace) -> bool:
     return bool(changed(ws))
 

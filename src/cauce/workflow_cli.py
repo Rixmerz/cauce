@@ -39,6 +39,8 @@ def _step_fields(args: argparse.Namespace) -> dict[str, Any]:
         out["needs"] = [n for n in args.needs.split(",") if n.strip()]
     if getattr(args, "memory", None) is not None:
         out["memory"] = [m.strip() for m in args.memory.split(",") if m.strip()] or None
+    if getattr(args, "surfaces", None) is not None:
+        out["surfaces"] = [m.strip() for m in args.surfaces.split(",") if m.strip()] or None
     return out
 
 
@@ -361,10 +363,12 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         p.add_argument("--needs", help="comma-separated step ids it waits on ('' for none)")
         p.add_argument("--memory", help="memory its brief carries, comma-separated: note:<id> (or <id>), "
                        "topic:<name>, problem:<id>")
+        p.add_argument("--surfaces", help="comma-separated paths or globs the step may change")
         if verb == "add":
             p.add_argument("--after", metavar="STEP", help="insert it after this step")
         else:
-            p.add_argument("--clear", action="append", choices=[*(f for f, _ in STEP_FLAGS if f != "prompt"), "memory"])
+            p.add_argument("--clear", action="append",
+                           choices=[*(f for f, _ in STEP_FLAGS if f != "prompt"), "memory", "surfaces"])
 
     p = wsub.add_parser("pending", help="changes waiting for the runs that use their workflow to end")
     p.add_argument("name", nargs="?")

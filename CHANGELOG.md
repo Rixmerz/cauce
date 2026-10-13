@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-13
+
+### Added
+
+- **Criteria.** A request that lists what it wants (bullets, numbered lines)
+  becomes criteria `S1..Sn`, kept verbatim in every brief. A pass answers each
+  one with its evidence; one left out is `inconclusive`, one not met a
+  `code_bug`.
+- **Findings as records.** Reviewers, auditors and the verifier report
+  `where`, `what`, `evidence_class` (deterministic, inferential, insufficient)
+  and `cause` (introduced, worsened, pre-existing, unknown). Only the change's
+  own, shown findings block; two attempts naming the same places converge.
+- **Risk tiers.** Each task has a tier (passive, medium, high) read from its
+  request, kind and changed files, with its reasons, only ever raised; shown in
+  the report and the UI.
+- **An independent verifier.** A high-risk pass, or a medium one from a cheap
+  cell, is checked by another cell, read-only, given the request and the diff
+  but never the worker's summary. A blocker that persists earns at most two
+  correction rounds; new findings alone stop the task as `review` for a
+  person. `cauce config verifier off` turns it off.
+- **Edit surfaces.** `--surface <glob>` (run, route, queue add) and a workflow
+  step's `surfaces` bound where a task writes. A change outside them fails the
+  attempt and is undone in its worktree. Tasks with disjoint surfaces run side
+  by side without asking Haiku.
+- **`dual-review` workflow template**: two blind reviews on different models,
+  a fix of only the findings the change caused, and a re-check.
+- **Phase.** A running task shows whether it is exploring, implementing or
+  checking, on the board and in the mod's status line.
+- **The change in the drawer.** A task's drawer shows its risk, its
+  independent checks and, on demand, its diff (`GET /api/tasks/<id>/diff`).
+
+Ideas adapted from gentle-shell (MIT).
+
 ## [0.11.0] - 2026-10-12
 
 ### Added

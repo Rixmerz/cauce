@@ -61,6 +61,7 @@ CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' 
        "font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 _STATIC_NAME = re.compile(r"^[a-z0-9_-]+\.(js|css|html|svg)$")
 _TASK_ROUTE = re.compile(r"^/api/tasks/(\d+)$")
+_DIFF_ROUTE = re.compile(r"^/api/tasks/(\d+)/diff$")
 _CANCEL_ROUTE = re.compile(r"^/api/tasks/(\d+)/cancel$")
 _DISMISS_ROUTE = re.compile(r"^/api/tasks/(\d+)/dismiss$")
 _RESUME_ROUTE = re.compile(r"^/api/tasks/(\d+)/resume$")
@@ -277,6 +278,9 @@ class Handler(BaseHTTPRequestHandler):
         if match := _SESSION_ROUTE.match(path):
             detail = api.session_detail(store, match.group(1))
             return self._json(HTTPStatus.OK, detail) if detail else self._error(HTTPStatus.NOT_FOUND, "no such session")
+        if match := _DIFF_ROUTE.match(path):
+            found = api.task_diff(store, int(match.group(1)))
+            return self._json(HTTPStatus.OK, found) if found else self._error(HTTPStatus.NOT_FOUND, "no such task")
         if match := _TASK_ROUTE.match(path):
             detail = api.task_detail(store, int(match.group(1)))
             return self._json(HTTPStatus.OK, detail) if detail else self._error(HTTPStatus.NOT_FOUND, "no such task")

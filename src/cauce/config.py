@@ -38,6 +38,9 @@ DEFAULTS: dict[str, Any] = {
     # Workers get the MCP servers of the neighbours the person installed as Claude
     # Code plugins (layout-inspector, rastro): see `cauce.plugins`.
     "plugins": True,
+    # A passing change whose risk is high (or medium, made by a cheap cell) is
+    # checked again by an independent verifier before it counts.
+    "verifier": True,
 }
 
 _TRUE = {"1", "true", "on", "yes"}

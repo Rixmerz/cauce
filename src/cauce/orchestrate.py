@@ -45,10 +45,14 @@ from cauce import (
     teams,
     workflows,
 )
+from cauce import criteria as criteria_mod
+from cauce import findings as findings_mod
+from cauce import risk as risk_mod
+from cauce import surfaces as surfaces_mod
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify, narrow
 from cauce.escalate import Attempt, Decision, Failure, Move, decide
-from cauce.matrix import DEFAULT_TURNS, READ_ONLY_KINDS, Cell, ladder_for, turns_for
+from cauce.matrix import DEFAULT_TURNS, EFFORTS, READ_ONLY_KINDS, Cell, ladder_for, turns_for
 from cauce.store import Store, home
 
 #: Failures that describe something tried against the problem, worth keeping
@@ -106,6 +110,8 @@ class Options:
     base: str | None = None
     #: A role a person named for this run: it runs as that role, on the kinds it takes.
     role: str | None = None
+    #: Where the task may write (`cauce.surfaces`): a change outside is undone and fails the attempt.
+    surfaces: tuple[str, ...] = ()
     #: The role a workflow step names: used when it is in the project's team,
     #: since a definition a repository commits must not choose beyond the person's team.
     step_role: str | None = None
@@ -117,7 +123,7 @@ class Options:
         values = {"budget_usd": self.budget_usd, "verify": self.verify, "kind": self.kind,
                   "allow_approval": self.allow_approval, "allow_tools": list(self.allow_tools),
                   "livespec": self.livespec, "no_isolate": not self.isolate, "role": self.role,
-                  "step_role": self.step_role}
+                  "step_role": self.step_role, "surfaces": list(self.surfaces)}
         return {k: v for k, v in values.items() if v not in (None, [], False)}
 
 
@@ -140,6 +146,8 @@ class Plan:
     role: roles.Role | None = None
     team: str = ""
     role_why: str = ""
+    #: How much the change can hurt, from the request; attempts may raise it.
+    risk: risk_mod.Risk = field(default_factory=risk_mod.Risk)
 
 
 @dataclass
@@ -180,6 +188,8 @@ class Report:
         if self.plan.role is not None:
             lines.append(f"role {self.plan.role.name} ({self.plan.role.scope}) of the {self.plan.team} team: "
                          f"{self.plan.role_why}")
+        lines.append(f"risk {self.plan.risk.tier}" + (f": {'; '.join(self.plan.risk.reasons)}"
+                                                      if self.plan.risk.reasons else ""))
         lines += [status.line() for status in self.plan.neighbours]
         if self.task_id is None:
             # A dry run shows what the first worker would be handed.
@@ -395,7 +405,8 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     selected = _with_role(caps.select(registry, kind, workdir=repo_dir), role, registry, repo_dir)
     names = tuple(dict.fromkeys([*selected.names, *(a.name for a, _ in active)]))
     return Plan(kind, classification, ladder, start, reasons + neighbour_notes, names,
-                tuple(context), tuple(statuses), tuple(active), tuple(known), role, team, why)
+                tuple(context), tuple(statuses), tuple(active), tuple(known), role, team, why,
+                risk_mod.of_request(text, kind))
 
 
 def _team(options: Options, key: str | None, catalog: roles.Catalog) -> tuple[str, list[roles.Role], list[str]]:
@@ -504,6 +515,7 @@ def run(
             say(f"cauce: #{task['id']} warning: {reason}")
     store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label,
                     role=the_plan.role.name if the_plan.role else None, team=the_plan.team,
+                    risk=the_plan.risk.data(),
                     ladder=[x.label for x in the_plan.ladder], reasons=the_plan.reasons,
                     neighbours=[st.line() for st in the_plan.neighbours])
 
@@ -537,6 +549,11 @@ def run(
     # check's: a worker given the wrong Node hunts for another and is refused each one.
     run_env = runtime.env_for(workdir)
     briefing = roles.brief(the_plan.role) if the_plan.role is not None else None
+    # The independent check: what it found first, and how many corrections it has had.
+    verifying = writes and not declared_read_only and config.enabled("verifier", os.environ)
+    ledger: dict[str, Mapping[str, str]] = {}
+    corrections = 0
+    base_commit = workspace.base if workspace else _head(repo_dir)
     cell, turns = the_plan.start, options.max_turns or turns_for(the_plan.kind)
     attempts: list[Attempt] = []
     changed: set[str] = set()
@@ -573,7 +590,7 @@ def run(
                 model_id=models.pinned(cell.model),
                 permission_mode=grants.mode_for(cell.model),
                 prompt=brief(text, the_plan.kind, workdir, [*history, *attempts], dead, options.verify,
-                             writes and not declared_read_only, context),
+                             writes and not declared_read_only, context, options.surfaces),
                 cell=cell,
                 launch_dir=launch_dir,
                 workdir=workdir if workdir != launch_dir else None,
@@ -595,6 +612,7 @@ def run(
                 append_system_prompt="\n\n".join(p for p in (briefing.system_prompt if briefing else "",
                                                                selection.system_prompt()) if p),
                 env={**run_env, "CAUCE_WORKER_TASK": str(task["id"]), "CAUCE_WORKER_ATTEMPT": str(nth)},
+                criteria=criteria_mod.ids(text),
             )
             store.update_task(task["id"], current_cell=cell.label)
             say(f"cauce: #{task['id']} attempt {nth} at {cell.label}")
@@ -609,6 +627,29 @@ def run(
             elif _settles(result, options.verify) and (
                     isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
                 result = _settled(result, options.verify, workdir)
+            strayed = surfaces_mod.outside(options.surfaces, result.changed_paths)
+            if strayed:
+                if workspace is not None:
+                    isolate.undo(workspace, strayed)
+                kept = "undone" if workspace is not None else "left in your checkout, unverified"
+                result = dataclasses.replace(
+                    result, passed=False, failure=Failure.APPROACH,
+                    changed_paths=tuple(p for p in result.changed_paths if p not in strayed)
+                    if workspace is not None else result.changed_paths,
+                    summary=f"changed outside its surfaces ({', '.join(strayed[:5])}), {kept}: {result.summary}",
+                    evidence=f"Surfaces: {', '.join(options.surfaces)}. Changed outside them: {', '.join(strayed)}")
+                store.add_event(task["id"], "outside_surfaces", seq=nth, paths=strayed[:50],
+                                surfaces=list(options.surfaces), undone=workspace is not None)
+            review_stop = None
+            if result.passed and verifying:
+                so_far = list(isolate.changed(workspace)) if workspace else sorted({*changed, *result.changed_paths})
+                risk_mod.of_change(the_plan.risk, so_far if (workspace or base_commit) else None)
+                if so_far and risk_mod.needs_verifier(the_plan.risk, cheap=_cheap(cell)):
+                    result, review_stop, ledger, corrections = _independent_check(
+                        result, text=text, kind=the_plan.kind, cell=cell, spec=spec, workdir=workdir,
+                        base=base_commit, changed=so_far, risk=the_plan.risk, ledger=ledger,
+                        corrections=corrections, launcher=launcher, store=store, task_id=task["id"], nth=nth,
+                        say=say)
             changed.update(result.changed_paths)
             report.cells.append(cell.label)
             report.served.append(result.served_model)
@@ -631,10 +672,14 @@ def run(
                             **({"refused_but_written": list(result.overcome)} if result.overcome else {}))
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
-                              transient=result.transient)
+                              transient=result.transient, findings=result.findings)
             attempts.append(attempt)
             say(f"cauce: #{task['id']} attempt {seq} " + ("passed" if result.passed else
                 f"ended {(result.failure or Failure.INCONCLUSIVE).value}: {result.summary[:160]}"))
+            if review_stop is not None:
+                report.stop = review_stop
+                report.status, report.summary = "blocked", review_stop.reason
+                break
             if result.passed:
                 report.status, report.final_cell, report.summary = "done", cell.label, result.summary
                 report.learned = result.learned
@@ -722,7 +767,8 @@ def run(
                   notes_ask)
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
-                        changed=report.changed[:50], stop=report.stop.data() if report.stop else None)
+                        changed=report.changed[:50], stop=report.stop.data() if report.stop else None,
+                        risk=the_plan.risk.data())
         store.add_message(task["id"], "worker", report.text())
         if task.get("workflow_run"):
             # The next step starts here, from the engine: no session relays it.
@@ -852,6 +898,106 @@ def _cancelled(store: Store, task_id: int, attempt: int | None) -> stops.Stop:
                       "(a closed terminal, or the process was killed)", attempt=attempt)
 
 
+#: Fewer corrections than this a verifier's findings may earn; then a person decides.
+MAX_CORRECTIONS = 2
+
+
+def _head(repo_dir: Path) -> str | None:
+    try:
+        return isolate.head(repo_dir, "HEAD")
+    except isolate.IsolationError:
+        return None
+
+
+def _cheap(cell: Cell) -> bool:
+    """A cell whose pass a medium-risk change does not take on its own word."""
+    return cell.model == "haiku" or cell.effort == "low"
+
+
+def verify_cell(cell: Cell) -> Cell:
+    """The verifier runs at least as strong as the work, and never on Haiku."""
+    if cell.model == "haiku":
+        return Cell("sonnet", "high")
+    if cell.effort is not None and EFFORTS.index(cell.effort) < EFFORTS.index("high"):
+        return Cell(cell.model, "high")
+    return cell
+
+
+def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, changed: Sequence[str],
+                   known: Sequence[Mapping[str, str]] = ()) -> str:
+    """What the verifier is given: the request in its words and the change, never the worker's account."""
+    shown = ", ".join(changed[:20]) + (f" and {len(changed) - 20} more" if len(changed) > 20 else "")
+    parts = [f"Check this change. The request it answers ({kind}), verbatim:\n{text}"]
+    if listed := criteria_mod.brief(text):
+        parts.append(listed)
+    where = (f"The change is in {workdir}: `git diff {base}` shows it against the base commit {base}, the state "
+             "before it." if base else f"The change is in {workdir}, uncommitted: `git diff` shows it.")
+    parts.append(f"{where} Files it changed: {shown}.")
+    if known:
+        parts.append("The previous check found these; say for each whether it is fixed, and report any new "
+                     "problem apart:\n" + findings_mod.text(known))
+    parts.append("This check is read-only: change no file of the project.")
+    return "\n\n".join(parts)
+
+
+def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec,
+                       workdir: Path, base: str | None, changed: Sequence[str], risk: risk_mod.Risk,
+                       ledger: dict[str, Mapping[str, str]], corrections: int, launcher: Launcher, store: Store,
+                       task_id: int, nth: int, say: Callable[[str], None]
+                       ) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int]:
+    """A pass checked again by a worker that verifies the request, not the work.
+
+    The first problems it finds earn one correction; a second only while one of
+    those same problems is still there. Problems that were not there before do
+    not earn a round: the task stops for a person, its work kept. A check that
+    could not decide leaves the pass standing, and says so."""
+    role = roles.internal("verifier")
+    vcell = verify_cell(cell)
+    check = dataclasses.replace(
+        spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values())), cell=vcell,
+        model_id=models.pinned(vcell.model), permission_mode=grants.mode_for(vcell.model),
+        disallowed_tools=tuple(dict.fromkeys([*spec.disallowed_tools, *launch.WRITE_TOOLS])),
+        append_system_prompt=roles.brief(role).system_prompt, mcp_servers={},
+        allowed_tools=tuple(r for r in spec.allowed_tools if not r.startswith("mcp__")))
+    say(f"cauce: #{task_id} attempt {nth} passed; risk {risk.tier}: an independent check at {vcell.label}")
+    verdict = launcher(check)
+    cost = result.cost_usd + verdict.cost_usd
+    shown = findings_mod.read({"findings": list(verdict.findings)})
+    blockers = findings_mod.blocking(shown)
+    if not verdict.passed and not blockers and verdict.verdict == "fail":
+        blockers = [{"where": "", "what": verdict.summary or "the check failed without a finding",
+                     "evidence_class": "inferential", "cause": "unknown", "proof": ""}]
+    decided = verdict.passed or bool(blockers)
+    store.add_event(task_id, "verified", seq=nth, cell=vcell.label, risk=risk.data(), verdict=verdict.verdict,
+                    passed=not blockers and decided, findings=list(shown)[:20], blocking=len(blockers),
+                    cost_usd=verdict.cost_usd, summary=verdict.summary[:500], round=corrections)
+    if not decided:
+        say(f"cauce: #{task_id} the independent check could not decide; the pass stands")
+        return dataclasses.replace(result, cost_usd=cost, evidence=result.evidence + "\n\n[independent check "
+                                   f"inconclusive: {verdict.summary[:300]}]"), None, ledger, corrections
+    if not blockers:
+        return dataclasses.replace(result, cost_usd=cost), None, ledger, corrections
+    found = findings_mod.text(blockers)
+    still = [f for f in blockers if any(findings_mod.same(f, g) for g in ledger.values())]
+    if corrections == 0 or (still and corrections < MAX_CORRECTIONS):
+        if corrections == 0:
+            ledger = {findings_mod.key(f): f for f in blockers}
+        say(f"cauce: #{task_id} the independent check found {len(blockers)} problem(s): a correction")
+        failed = dataclasses.replace(
+            result, passed=False, failure=Failure.CODE_BUG, cost_usd=cost,
+            summary=f"the independent check found {len(blockers)} problem(s) this change caused: {result.summary}",
+            evidence=f"The independent check found:\n{found}\n\nIts probes:\n{verdict.evidence[-1500:]}")
+        return failed, None, ledger, corrections + 1
+    why = ("after the correction it found problems the first check had not: a new finding earns no round"
+           if not still else f"the same problem survived {MAX_CORRECTIONS} corrections")
+    stop = stops.Stop("review", f"the independent check still finds problems; {why}", attempt=nth,
+                      account=found[:2000])
+    failed = dataclasses.replace(result, passed=False, failure=Failure.CODE_BUG, cost_usd=cost,
+                                 summary=f"the independent check still finds problems: {result.summary}",
+                                 evidence=found)
+    return failed, stop, ledger, corrections
+
+
 def brief(
     text: str,
     kind: str,
@@ -861,8 +1007,13 @@ def brief(
     verify: str | None,
     writes: bool,
     context: Sequence[str] = (),
+    surfaces: Sequence[str] = (),
 ) -> str:
     parts = [f"Task ({kind}):\n{text}", f"Work in: {workdir}"]
+    if listed := criteria_mod.brief(text):
+        parts.append(listed)
+    if bounds := surfaces_mod.brief(surfaces):
+        parts.append(bounds)
     if context:
         parts.append("\n".join(context))
     if not writes:

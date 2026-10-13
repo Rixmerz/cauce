@@ -680,6 +680,29 @@ rule, and vise's `ponytail` is its own text of
 See [`src/cauce/skills/README.md`](src/cauce/skills/README.md) and
 [`src/cauce/roles/CREDITS.txt`](src/cauce/roles/CREDITS.txt).
 
+### Checks that do not trust the worker
+
+- **Criteria.** A request that lists items is checked item by item: `S1..Sn`,
+  the person's own words, in every brief. A pass answers each one.
+- **Findings.** Reviews report records: where, what, how it is known
+  (`evidence_class`) and whether the change caused it (`cause`). A
+  pre-existing problem is reported and never blocks.
+- **Risk.** Every task gets a tier (passive, medium, high) from its words, its
+  kind and the files it changed: data, security, money, contracts, delivery,
+  or code changed with no test beside it. Only ever raised.
+- **Independent verifier.** A high-risk pass, or a medium one a cheap cell
+  made, is re-checked by another cell that sees the request and the diff, not
+  the worker's summary. A blocker gets at most two correction rounds; new
+  findings stop the task for you as `review`. `cauce config verifier off`.
+- **Surfaces.** `cauce run --surface 'src/api/**' "…"` bounds where a task
+  writes; a change outside is undone and fails the attempt. Tasks with
+  disjoint surfaces run side by side in one repository.
+- **Dual review.** `cauce workflow run dual-review` runs two blind reviews on
+  different models, fixes only what the change caused, and checks again.
+
+These ideas are adapted from
+[gentle-shell](https://github.com/Gentleman-Programming/gentle-shell) (MIT).
+
 ## Measured so far
 
 On a real `claude` (2.1.289), a Haiku classification costs about $0.009; a
