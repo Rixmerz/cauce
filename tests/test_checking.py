@@ -311,3 +311,21 @@ def test_the_cli_takes_surfaces(capsys, git_repo):
     store.close()
     with pytest.raises(SystemExit, match="inside the project"):
         cli.main(["run", "x", "--surface", "/abs", "--repo", str(git_repo), "--dry-run"])
+
+
+# --- the blind dual review --------------------------------------------------------------
+
+
+def test_the_dual_review_starts_two_blind_reviews_on_different_models(git_repo, store, monkeypatch):
+    from cauce import workflows
+
+    monkeypatch.setattr(workflows, "_kick", lambda cwd, key: None)
+    defn = workflows.load("dual-review", git_repo)
+    steps = {s["id"]: s for s in defn["steps"]}
+    assert steps["review-a"]["start"] != steps["review-b"]["start"]
+    assert steps["fix"]["needs"] == ["review-a", "review-b"] and steps["recheck"]["needs"] == ["fix"]
+    started = workflows.start(store, "dual-review", git_repo, {"target": "the cart module"})
+    first = [store.get_task(i) for i in started["queued"]]
+    assert len(first) == 2 and all("one of two reviewers working apart" in t["body"] for t in first)
+    # neither review is shown the other's: they start together, before anything is found
+    assert all("What the steps before it found" not in t["body"] for t in first)
