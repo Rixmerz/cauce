@@ -469,9 +469,11 @@ def _freshen(cwd: Path, root: Path, env: Mapping[str, str], adapters: list | Non
     from cauce.adapters import ABSENT, default_adapters
 
     if adapters is None:
-        adapters = default_adapters() if config.enabled("livespec", env) else []
+        adapters = default_adapters(env)
     notes = []
     for adapter in adapters:
+        if not getattr(adapter, "indexes", True):
+            continue
         status = adapter.inspect(cwd)
         missing = status.state == ABSENT and adapter.server() is not None
         if (missing or status.stale) and adapter.refresh_in_background(cwd, root / f"{adapter.name}-index.log"):

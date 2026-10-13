@@ -29,8 +29,8 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/roles_internal/` | roles cauce runs itself and no team holds: the independent `verifier` |
 | `skills/personal-team/` | the plugin's one skill: builds the person's teams from `insights`, with their agreement, through `cauce roles` and `cauce team` only |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
-| `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `prune`, `plugins`, `verifier`, all on/off), copied from plugin options by SessionStart |
+| `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `prune`, `plugins`, `verifier`, `engram`, `engram_write`, all on/off), copied from plugin options by SessionStart |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
 | `src/cauce/habits.py` | mining sequences per repository (and the ones several repositories share), recipes for the brief, and approval-gated habit hooks |
@@ -207,7 +207,17 @@ yields the default kind, not a guess.
   a red check is evidence for the next brief, never a pass.
 - An adopted neighbour is read, never written: the livespec index is opened
   `mode=ro`, and the index is built only through livespec's own CLI. Absent
-  and unreadable are different states and neither stops a run.
+  and unreadable are different states and neither stops a run. The one
+  exception is engram, and only with `engram_write`, off by default: what a
+  passing worker learned, filtered as a note is (never a secret, never a
+  failed attempt's, never `<private>` text), saved through engram's own
+  server.
+- engram's store is never opened by cauce: only its server, once `/health`
+  says engram and `/compatibility` says the running store is verified. What it
+  holds goes in a brief as data, never instructions. A worker gets
+  `engram mcp` behind the `engram` guard: reading tools only, held to the
+  project cauce resolved. Tests run with `CAUCE_ENGRAM=off`; a test that wants
+  it passes a fake `http`.
 - Every livespec tool a hint names is in `adapters/livespec.TOOLS`, checked
   against the release in `MINIMUM_VERSION`. Check a name against livespec
   before adding it, and bump `PINNED` only after checking the new release.

@@ -83,7 +83,18 @@ class Adapter(Protocol):
     def hint(self, kind: str, repo_dir: Path, workdir: Path) -> str: ...
 
 
-def default_adapters() -> list[Adapter]:
+def default_adapters(env: Mapping[str, str] | None = None, *, livespec: bool | None = None) -> list[Adapter]:
+    """The neighbours whose settings are on: livespec, then engram."""
+    import os
+
+    from cauce import config
+    from cauce.adapters.engram import Engram
     from cauce.adapters.livespec import Livespec
 
-    return [Livespec()]
+    env = os.environ if env is None else env
+    out: list[Adapter] = []
+    if config.enabled("livespec", env, livespec):
+        out.append(Livespec())
+    if config.enabled("engram", env):
+        out.append(Engram(env))
+    return out

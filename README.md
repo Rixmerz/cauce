@@ -104,6 +104,31 @@ Switch it off from the plugin settings (`livespec`), with `cauce config
 livespec off`, `CAUCE_LIVESPEC=off`, or `--no-livespec` for one task.
 `cauce neighbours` shows what cauce sees.
 
+### engram, for teams that already use it
+
+If your team keeps its agents' memory in
+[engram](https://github.com/Gentleman-Programming/engram), cauce works with it
+as it is. With the `engram` setting on (the default), whenever an engram
+server answers (its Claude Code hook starts one, or `engram serve`):
+
+- **The brief recalls it.** The task's words are searched in the project engram
+  resolves for the checkout, and the hits go in the brief as data to check
+  against the code, never as instructions.
+- **Workers can search it.** They get `engram mcp` behind a guard: `mem_search`,
+  `mem_get_observation`, `mem_timeline` and the other reading tools pass; a
+  save, update or delete never reaches the store, and every call stays in the
+  project.
+- **Your team gets what cauce learned**, with `cauce config engram_write on`.
+  The facts a passing worker learned (the ones cauce keeps in its own notes:
+  never a secret, never from a failed attempt, never text inside
+  `<private>…</private>`) are saved as `learning` observations of the project,
+  one session per task, and engram's sync or cloud takes them to the team.
+
+cauce never opens engram's database: it talks to the server only after
+`/health` and `/compatibility` say it is a verified engram. `ENGRAM_URL`,
+`ENGRAM_PORT`, `ENGRAM_SOCKET` and `ENGRAM_HTTP_TOKEN` are honoured. When engram
+is not there, nothing changes; `cauce neighbours` says what cauce sees.
+
 ### Memory
 
 One SQLite file in `$CAUCE_HOME` (default `~/.local/share/cauce`):

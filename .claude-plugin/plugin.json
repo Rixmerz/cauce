@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -68,6 +68,18 @@
       "title": "Independent verifier",
       "description": "A change that passes is checked again, before it counts, by a separate read-only worker that verifies the request, not the work, when its risk is high (data, security, money, a consumed contract, concurrency, delivery, or code changed with no test beside it) or medium and made by a cheap cell. Its findings go to the next attempt, two corrections at most. Off: a pass stands on its own check.",
       "default": true
+    },
+    "engram": {
+      "type": "boolean",
+      "title": "Read the team's engram memory",
+      "description": "When an engram server runs (its session hook starts one, or `engram serve`), cauce searches the task's words in the project engram resolves for the checkout and puts the hits in the brief, and hands workers engram's MCP server read-only: saves, updates and deletes are refused by a guard, and every call stays in this project. cauce never opens engram's database itself. Off: engram is left alone.",
+      "default": true
+    },
+    "engram_write": {
+      "type": "boolean",
+      "title": "Save what workers learned in engram",
+      "description": "What a passing worker learned (the facts cauce keeps in its own notes: never a secret, never a failed attempt's, never text marked <private>) is also saved in engram as learning observations of the project, one session per task, so your team's agents find it. Off by default: it writes to a store that is not cauce's.",
+      "default": false
     }
   },
   "types": "./types/index.d.ts"

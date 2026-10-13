@@ -27,7 +27,6 @@ from cauce import (
     stops,
     usage,
 )
-from cauce.adapters import default_adapters
 from cauce.classify import classify
 from cauce.escalate import Attempt, Failure
 from cauce.matrix import KINDS, LADDERS, Cell
@@ -821,9 +820,12 @@ def _config_model(args: argparse.Namespace) -> int:
 
 def cmd_neighbours(args: argparse.Namespace) -> int:
     where = Path(args.repo or os.getcwd())
-    on = config.enabled("livespec", os.environ)
-    print(f"livespec setting: {'on' if on else 'off'}")
-    for adapter in default_adapters():
+    for key in ("livespec", "engram", "engram_write"):
+        print(f"{key} setting: {'on' if config.enabled(key, os.environ) else 'off'}")
+    from cauce.adapters.engram import Engram
+    from cauce.adapters.livespec import Livespec
+
+    for adapter in (Livespec(), Engram()):
         status = adapter.inspect(where)
         print(status.line())
         server = adapter.server()

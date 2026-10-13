@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-13
+
+### Added
+
+- **engram, adopted** (`adapters/engram.py`). For teams whose agents already
+  keep their memory in engram:
+  - the brief recalls the project's engram memories as data;
+  - workers get `engram mcp` read-only, behind `mcp_guard`'s new `engram`
+    policy (reading tools only, held to the project);
+  - with `engram_write` on (off by default), what a passing worker learned is
+    saved as engram observations, one session per task, each save with an
+    operation id so a retry never saves twice.
+
+  cauce talks only to engram's server (HTTP or Unix socket, bearer token
+  honoured), after `/health` and `/compatibility` verify it, and never opens
+  its store. New settings: `engram` and `engram_write`.
+- **`<private>…</private>`**: text a person marks private never becomes a
+  note and never reaches engram.
+
 ## [0.13.0] - 2026-10-13
 
 ### Added
