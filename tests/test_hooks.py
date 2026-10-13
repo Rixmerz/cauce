@@ -324,3 +324,40 @@ def test_an_old_ending_is_not_brought_back(store: Store):
     store._conn.execute("INSERT INTO events (task_id, ts, kind, data) VALUES (?, ?, 'finished', '{}')",
                         (t["id"], "2020-01-01T00:00:00+00:00"))
     assert store.unreported("s") == []
+
+
+def handback(store, agent, prompt_id, transcript=None):
+    text = f'<agent-message from="{agent}">\n  [Subagent hand-back] The text below is the final report.\n  Done.'
+    event = {"session_id": "s", "prompt": text, "prompt_id": prompt_id}
+    if transcript:
+        event["transcript_path"] = str(transcript)
+    return hooks.user_prompt_submit(event, store)
+
+
+def test_a_subagent_s_report_joins_the_task_that_delegated_it(store: Store, tmp_path):
+    transcript = tmp_path / "s.jsonl"
+    transcript.write_text("")
+    folder = transcript.with_suffix("") / "subagents"
+    folder.mkdir(parents=True)
+    (folder / "agent-a1.meta.json").write_text(json.dumps({"toolUseId": "tu1"}))
+    prompt(store, "build the server", prompt_id="p1")
+    first = store.last_prompt_task("s")
+    hooks.pre_tool_use({"session_id": "s", "tool_name": "Agent", "tool_use_id": "tu1",
+                        "tool_input": {"prompt": "write it", "run_in_background": True}}, store)
+    hooks.stop({"session_id": "s", "prompt_id": "p1", "last_assistant_message": "started"}, store)
+    prompt(store, "and the docs", prompt_id="p2")
+    hooks.stop({"session_id": "s", "prompt_id": "p2", "last_assistant_message": "docs done"}, store)
+
+    assert handback(store, "a1", "p3", transcript) is None
+    assert sorted(t["id"] for t in store.list_tasks() if t["source"] == "hook") == [first["id"], first["id"] + 2]
+    assert store.messages(first["id"])[-1]["role"] == "subagent"
+    hooks.stop({"session_id": "s", "prompt_id": "p3", "last_assistant_message": "the server is ready"}, store)
+    assert store.get_task(first["id"])["result"] == "the server is ready"
+
+    # No meta to follow: the session's latest prompt takes it.
+    assert handback(store, "zz", "p4") is None
+    assert store.messages(first["id"] + 2)[-1]["role"] == "subagent"
+    assert handback(store, "zz", "p5") is None and len(store.list_tasks()) == 3
+    assert hooks.user_prompt_submit({"session_id": "t", "prompt": '<agent-message from="x"> [Subagent hand-back] x',
+                                     "prompt_id": "q"}, store) is None
+    assert not [t for t in store.list_tasks() if t["session_id"] == "t"]

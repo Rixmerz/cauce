@@ -7,7 +7,7 @@ import threading
 
 import pytest
 
-from cauce import stops
+from cauce import stops, usage
 from cauce.store import Store
 from cauce.ui import api, server
 
@@ -671,3 +671,22 @@ def test_overview_is_every_recent_session_and_how_its_work_stands(store: Store, 
     assert "Work no listed session sent" in out
     assert cli.main(["overview", "--json", "--hours", "1"]) == 0
     assert json.loads(capsys.readouterr().out)["sessions"]
+
+
+def test_a_session_s_own_turns_are_priced_apart_from_its_workers(store: Store, tmp_path):
+    work = tmp_path / "work"
+    (work / ".cauce").mkdir(parents=True)
+    store.touch_session("s1", str(work), "r")
+    asked = store.create_task("build it", status="done", source="hook", session_id="s1", repo="r")
+    child = store.create_task("write the server", status="done", source="delegation", session_id="s1",
+                              parent_id=asked["id"], repo="r")
+    for mid, task, side in (("m1", asked["id"], 0), ("m2", child["id"], 1)):
+        store.add_usage(message_id=mid, session_id="s1", task_id=task, repo="r", model="claude-opus-5-5",
+                        input_tokens=0, output_tokens=40_000, cache_read=0, cache_write=0, sidechain=side,
+                        ts="2099-01-01T00:00:00Z")
+    one = round(usage.dollars("claude-opus-5-5", 0, 40_000), 4)
+    detail = api.task_detail(store, asked["id"])
+    assert detail["task"]["turns_usd"] == 2 * one and detail["task"]["cost_usd"] == 0
+    assert detail["children"][0]["turns_usd"] == one
+    assert api.session_list(store, {"r"})[0]["turns_usd"] == 2 * one
+    assert api.session_detail(store, "s1")["session"]["turns_usd"] == 2 * one

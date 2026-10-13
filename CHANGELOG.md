@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-10-13
+
+### Fixed
+
+- **Subagents' turns are counted.** A subagent writes its own transcript
+  under `<session>/subagents/`, and only the session's file was read: in a
+  real store not one of 13,832 usage records was a subagent's, and a session
+  that delegated its building showed about 60% of what it cost. `Stop` now
+  reads those transcripts too, each counted to the delegation its tool call
+  opened (from the `.meta.json` beside it).
+- **A subagent's report is no task.** Claude Code hands a background
+  subagent's final report back as a turn (`<agent-message …> [Subagent
+  hand-back]`), and each became a task of its own: four of fifteen in one
+  session. It now joins the task that delegated the work, which records the
+  answer the session gives on it.
+
+### Added
+
+- The task and session views price a session's own turns (`turns`, its
+  subagents included) apart from cauce's workers (`workers`). A prompt
+  answered in a session showed $0.00 whatever it cost.
+
 ## [0.14.1] - 2026-10-13
 
 ### Changed

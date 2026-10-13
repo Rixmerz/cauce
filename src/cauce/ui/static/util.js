@@ -16,6 +16,7 @@ export function h(tag, attrs = {}, ...children) {
   return el;
 }
 
+export const TURNS_TITLE = "the session's own turns, its subagents included, at API rates";
 export const usd = (v) => `$${(Number(v) || 0).toFixed(2)}`;
 export const short = (text, n = 140) => {
   const s = String(text ?? "").replace(/\s+/g, " ").trim();

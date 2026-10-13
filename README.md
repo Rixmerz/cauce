@@ -185,8 +185,10 @@ off with the `notes` plugin setting or `cauce config notes off`.
 ### Spend
 
 `cauce spend` shows what work really cost over the last days: a session's own
-turns by the model that served them (read from its transcript at every `Stop`),
-and workers by cell. `cauce route` says what finished tasks of the same kind
+turns by the model that served them (read from its transcript, and its
+subagents' transcripts, at every `Stop`), and workers by cell. The task and
+session views show both apart: `turns` for the session's own, `workers` for
+cauce's. `cauce route` says what finished tasks of the same kind
 cost on average before a run is paid for. Dollars are API rates on the token
 counts; on a subscription they measure how much of the plan work used.
 
