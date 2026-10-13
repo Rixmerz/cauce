@@ -35,7 +35,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from cauce import dispatch, isolate, project, repo
+from cauce import dispatch, isolate, project, repo, surfaces
 from cauce.matrix import KINDS, Cell
 from cauce.store import Store, home
 
@@ -48,7 +48,7 @@ TOP_KEYS = frozenset({"name", "description", "inputs", "steps", "version"})
 #: What a step may say. Nothing here widens what a worker may do: rules,
 #: approvals and capabilities are the person's flags on `run`, never a file's.
 STEP_KEYS = frozenset({"id", "title", "prompt", "kind", "needs", "verify", "start", "budget_usd", "max_turns",
-                       "memory", "role"})
+                       "memory", "role", "surfaces"})
 #: What a step may carry from cauce's memory into its brief: a project note by
 #: id, every live note of a topic, or a problem with every fix tried on it.
 MEMORY_REF = re.compile(r"^(?:(note|problem):)?(\d{1,9})$|^topic:([a-z0-9][a-z0-9_-]{0,39})$")
@@ -211,6 +211,15 @@ def normalize(defn: Mapping[str, Any], name: str | None = None) -> dict[str, Any
         if step.get("role") is not None and (not isinstance(step["role"], str)
                                              or not re.match(r"^[a-z0-9][a-z0-9_-]{0,63}$", step["role"])):
             errors.append(f"{where}: role is a role's name (`cauce roles list`)")
+        if step.get("surfaces") is not None:
+            try:
+                if not isinstance(step["surfaces"], list):
+                    raise surfaces.SurfaceError("a list of paths or globs")
+                step["surfaces"] = list(surfaces.check(step["surfaces"])) or None
+                if step["surfaces"] is None:
+                    step.pop("surfaces")
+            except surfaces.SurfaceError as exc:
+                errors.append(f"{where}: surfaces are {exc}" if "list" in str(exc) else f"{where}: {exc}")
         if step.get("verify") is not None and not isinstance(step["verify"], str):
             errors.append(f"{where}: verify is a command, as text")
         for key, kind in (("budget_usd", (int, float)), ("max_turns", int)):
@@ -614,7 +623,7 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         "kind": step.get("kind"), "verify": step.get("verify"), "start": step.get("start"),
         "budget_usd": step.get("budget_usd") or options.get("budget_usd"), "max_turns": step.get("max_turns"),
         "allow_tools": options.get("allow_tools") or None, "allow_approval": options.get("allow_approval") or None,
-        "base": base, "step_role": step.get("role")}.items() if v is not None}
+        "base": base, "step_role": step.get("role"), "surfaces": step.get("surfaces")}.items() if v is not None}
     return store.create_task(body, status="queued", source="queue", author="workflow", repo=run["repo"],
                              cwd=run["cwd"], session_id=run["session_id"], options=json.dumps(opts),
                              title=f"[{defn['name']}#{run['id']} {step['id']}] {step['title']}"[:200],

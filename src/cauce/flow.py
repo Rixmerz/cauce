@@ -32,7 +32,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
-from cauce import config, dispatch, stops
+from cauce import config, dispatch, stops, surfaces
 from cauce.matrix import Cell
 from cauce.orchestrate import Options, Report
 from cauce.store import Store, home
@@ -155,10 +155,32 @@ def queued_options(task: dict, defaults: Options) -> Options:
         base=raw.get("base") or defaults.base,
         role=raw.get("role") or defaults.role,
         step_role=raw.get("step_role") or defaults.step_role,
+        surfaces=tuple(raw.get("surfaces") or defaults.surfaces),
     )
 
 
 Decide = Callable[[dict, list[dict]], dispatch.Decision]
+
+
+def _surfaces_of(task: dict) -> tuple[str, ...]:
+    try:
+        return tuple(json.loads(task.get("options") or "{}").get("surfaces") or ())
+    except ValueError:
+        return ()
+
+
+def by_surfaces(task: dict, ahead: list[dict]) -> dispatch.Decision | None:
+    """The call surfaces settle without a model: every task involved names its
+    surfaces, and they cannot touch (side by side) or they can (it waits). None
+    when one of them names none: then the dispatcher's judgment decides."""
+    mine = _surfaces_of(task)
+    theirs = [(t, _surfaces_of(t)) for t in ahead]
+    if not mine or not theirs or any(not s for _, s in theirs):
+        return None
+    clash = next((t for t, s in theirs if not surfaces.disjoint(mine, s)), None)
+    if clash is not None:
+        return dispatch.Decision(False, f"its surfaces may touch those of #{clash['id']}")
+    return dispatch.Decision(True, "its surfaces cannot touch those of the work ahead")
 
 
 def runnable(store: Store, repo: str | None, *, parallel: bool, decide: Decide) -> list[dict]:
@@ -178,7 +200,7 @@ def runnable(store: Store, repo: str | None, *, parallel: bool, decide: Decide) 
                 if not parallel:
                     break
                 if task["parallel"] is None:
-                    decision = decide(task, ahead)
+                    decision = by_surfaces(task, ahead) or decide(task, ahead)
                     store.set_parallel(task["id"], decision.parallel, decision.reason)
                     if decision.cost_usd:
                         store.update_task(task["id"], cost_usd=(task["cost_usd"] or 0) + decision.cost_usd)

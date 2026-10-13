@@ -97,6 +97,15 @@ def _warn_behind() -> None:
         _say(warning)
 
 
+def _surfaces(values: list[str] | None) -> tuple[str, ...]:
+    from cauce import surfaces
+
+    try:
+        return surfaces.check(values or ())
+    except surfaces.SurfaceError as exc:
+        raise SystemExit(f"cauce: {exc}") from exc
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     _warn_behind()
     if args.role:
@@ -122,6 +131,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         livespec=args.livespec,
         allow_tools=tuple(args.allow or ()),
         role=args.role,
+        surfaces=_surfaces(args.surface),
     )
     store = Store.open()
     previous = _cancel_on_sigterm()
@@ -837,7 +847,8 @@ def cmd_queue(args: argparse.Namespace) -> int:
         if args.queue_command == "add":
             where = Path(args.repo or os.getcwd()).resolve()
             options = {k: v for k, v in {"budget_usd": args.budget, "verify": args.verify, "kind": args.kind,
-                                         "start": args.start, "allow_tools": args.allow}.items() if v is not None}
+                                         "start": args.start, "allow_tools": args.allow,
+                                         "surfaces": list(_surfaces(args.surface)) or None}.items() if v is not None}
             task = store.enqueue(_text(args.text), repo=repo.key(where), cwd=str(where), options=options,
                                  author="orchestrator" if os.environ.get("CAUCE_SESSION_ID") else "person",
                                  session_id=os.environ.get("CAUCE_SESSION_ID"))
@@ -1374,6 +1385,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help=f"skip classification: {', '.join(KINDS)}")
         p.add_argument("--start", help="pin the first cell, e.g. sonnet/high", type=_cell)
         p.add_argument("--role", help="run as this role (`cauce roles list`), on the kinds it takes")
+        p.add_argument("--surface", action="append", metavar="PATH",
+                       help="a path or glob the task may change (repeatable); a change outside is undone")
         p.add_argument("--allow-approval", action="store_true", help="allow cells that need approval (Fable)")
         p.add_argument("--allow", action="append", metavar="RULE", help=ALLOW_HELP)
         p.add_argument("--no-isolate", action="store_true", help="work in the checkout, not a worktree")
@@ -1440,6 +1453,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--kind", type=_kind, metavar="KIND")
     p.add_argument("--start", type=_cell)
     p.add_argument("--allow", action="append", metavar="RULE", help=ALLOW_HELP)
+    p.add_argument("--surface", action="append", metavar="PATH",
+                   help="a path or glob the task may change (repeatable); tasks with surfaces that cannot touch "
+                        "run side by side")
     p.add_argument("--json", action="store_true", help="print the queued task as JSON")
     p.set_defaults(func=cmd_queue)
     p = qsub.add_parser("list", help="what is waiting (this repository; --all for every one)")

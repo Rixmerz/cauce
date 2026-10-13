@@ -15,7 +15,6 @@ from cauce.store import home
 
 from .test_orchestrate import Script, kind
 
-
 # --- criteria -------------------------------------------------------------------------
 
 
@@ -143,7 +142,7 @@ def test_a_risky_pass_is_checked_and_its_findings_earn_one_correction(git_repo, 
     script = Script(passing(), check("fail", [BUG, OLD]), passing("fixed"), check("pass", [OLD]), write="app.py")
     report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
     assert report.status == "done" and report.cells == ["sonnet/medium", "sonnet/high"]
-    worker, verifier, again, recheck = script.specs
+    _, verifier, again, recheck = script.specs
     assert verifier.cell == Cell("sonnet", "high") and set(launch.WRITE_TOOLS) <= set(verifier.disallowed_tools)
     assert "fix the cart total" in verifier.prompt and "done" not in verifier.prompt.split("verbatim:")[1][:40]
     assert verifier.append_system_prompt.startswith("You work as the `verifier` role")
@@ -212,3 +211,103 @@ def test_a_person_s_verifier_role_takes_the_bundled_one_s_place():
     assert "verifier" not in roles.load().roles  # in no team
     write_role(home() / "roles", "verifier", "Mine.", description="mine", kinds=["review-routine"])
     assert roles.internal("verifier").prompt == "Mine."
+
+
+# --- surfaces -------------------------------------------------------------------------
+
+
+def test_surfaces_hold_what_they_name_and_nothing_else():
+    from cauce import surfaces
+
+    s = surfaces.check(["src/api/", "docs/*.md", "tests/**", "lib", "*.cfg", "./", " "])
+    assert s == ("src/api/**", "docs/*.md", "tests/**", "lib", "*.cfg", "**")
+    assert surfaces.allows(("src/api/**",), "src/api/x/y.py") and not surfaces.allows(("src/api/**",), "src/apix.py")
+    assert surfaces.allows(("docs/*.md",), "docs/a.md") and not surfaces.allows(("docs/*.md",), "docs/x/a.md")
+    assert surfaces.allows(("lib",), "lib/a/b.c") and not surfaces.allows(("lib",), "libx")
+    assert surfaces.allows(("a[bc].py",), "ab.py") and surfaces.allows(("a[b",), "a[b")
+    assert surfaces.allows(("src/?.py",), "src/a.py") and not surfaces.allows(("src/?.py",), "src/ab.py")
+    assert surfaces.outside((), ["anything"]) == [] and surfaces.outside(("src/**",), ["src/a", "b"]) == ["b"]
+    with pytest.raises(surfaces.SurfaceError, match="inside the project"):
+        surfaces.check(["../up"])
+    with pytest.raises(surfaces.SurfaceError, match="at most"):
+        surfaces.check([f"d{i}" for i in range(30)])
+    assert surfaces.disjoint(["src/api/**"], ["src/web/**"]) and surfaces.disjoint(["src/a.py"], ["src/b.py"])
+    assert not surfaces.disjoint(["src/**"], ["src/web/a.ts"]) and not surfaces.disjoint(["*.md"], ["src/x"])
+    assert not surfaces.disjoint([], ["src/x"]) and not surfaces.disjoint(["src/x"], ["src/x"])
+    assert surfaces.brief(()) == "" and "src/api/**" in surfaces.brief(("src/api/**",))
+
+
+def test_a_change_outside_the_surfaces_is_undone_and_fails_the_attempt(git_repo, store):
+    seen = []
+
+    def launcher(spec):
+        seen.append(spec)
+        (spec.target_dir / "app.py").write_text("changed\n")  # tracked at the base: restored
+        if len(seen) == 1:
+            (spec.target_dir / "stray.txt").write_text("x\n")  # new: removed
+            return WorkerResult(True, None, "done", "1 passed", changed_paths=("app.py", "stray.txt"))
+        return WorkerResult(True, None, "done", "1 passed", changed_paths=("src/ok.py",))
+
+    report = run("fix it", git_repo, store, Options(surfaces=("src/**",)), registry={}, launcher=launcher,
+                 classifier=kind("implement"))
+    assert "Change only files inside these surfaces: src/**" in seen[0].prompt
+    first = store.attempts(report.task_id)[0]
+    assert not first["passed"] and first["failure"] == "approach" and "outside its surfaces" in first["summary"]
+    event = store.last_event(report.task_id, "outside_surfaces")["data"]
+    assert event["paths"] == ["app.py", "stray.txt"] and event["undone"]
+    assert Options(surfaces=("a",)).stored()["surfaces"] == ["a"]
+
+
+def test_in_the_checkout_itself_nothing_is_undone(git_repo, store):
+    def launcher(spec):
+        return WorkerResult(True, None, "done", "1 passed", changed_paths=("app.py",))
+
+    report = run("fix it", git_repo, store, Options(surfaces=("src/**",), isolate=False, max_attempts=1),
+                 registry={}, launcher=launcher, classifier=kind("implement"))
+    assert "left in your checkout" in store.attempts(report.task_id)[0]["summary"]
+
+
+def test_tasks_whose_surfaces_cannot_touch_run_side_by_side_without_a_model(store):
+    from cauce import flow
+
+    def queued(text, surf):
+        return store.enqueue(text, repo="k", cwd="/x", options={"surfaces": surf} if surf else {})
+
+    a, b = queued("a", ["src/api/**"]), queued("b", ["src/web/**"])
+    assert flow.by_surfaces(b, [a]).parallel
+    c = queued("c", ["src/**"])
+    decision = flow.by_surfaces(c, [a])
+    assert not decision.parallel and f"#{a['id']}" in decision.reason
+    assert flow.by_surfaces(queued("d", None), [a]) is None and flow.by_surfaces(b, [queued("e", None)]) is None
+    assert flow.by_surfaces(b, []) is None
+    assert flow._surfaces_of({"options": "{"}) == ()
+
+
+def test_a_workflow_step_carries_its_surfaces(git_repo, store, monkeypatch):
+    from cauce import workflows
+
+    monkeypatch.setattr(workflows, "_kick", lambda cwd, key: None)
+    with pytest.raises(workflows.WorkflowError, match="surfaces are a list"):
+        workflows.normalize({"name": "x", "steps": [{"id": "a", "prompt": "p", "surfaces": "src"}]})
+    with pytest.raises(workflows.WorkflowError, match="inside the project"):
+        workflows.normalize({"name": "x", "steps": [{"id": "a", "prompt": "p", "surfaces": ["../x"]}]})
+    assert "surfaces" not in workflows.normalize({"name": "x", "steps": [{"id": "a", "prompt": "p",
+                                                                         "surfaces": []}]})["steps"][0]
+    workflows.save({"name": "bounded", "steps": [{"id": "a", "prompt": "Do it", "surfaces": ["src/"]}]}, git_repo,
+                   "user")
+    started = workflows.start(store, "bounded", git_repo)
+    assert json.loads(store.get_task(started["queued"][0])["options"])["surfaces"] == ["src/**"]
+
+
+def test_the_cli_takes_surfaces(capsys, git_repo):
+    from cauce import cli
+
+    assert cli.main(["queue", "add", "x", "--repo", str(git_repo), "--surface", "src/", "--json"]) == 0
+    from cauce.store import Store
+
+    queued = json.loads(capsys.readouterr().out)["id"]
+    store = Store.open()
+    assert json.loads(store.get_task(queued)["options"])["surfaces"] == ["src/**"]
+    store.close()
+    with pytest.raises(SystemExit, match="inside the project"):
+        cli.main(["run", "x", "--surface", "/abs", "--repo", str(git_repo), "--dry-run"])

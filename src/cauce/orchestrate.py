@@ -48,6 +48,7 @@ from cauce import (
 from cauce import criteria as criteria_mod
 from cauce import findings as findings_mod
 from cauce import risk as risk_mod
+from cauce import surfaces as surfaces_mod
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify, narrow
 from cauce.escalate import Attempt, Decision, Failure, Move, decide
@@ -109,6 +110,8 @@ class Options:
     base: str | None = None
     #: A role a person named for this run: it runs as that role, on the kinds it takes.
     role: str | None = None
+    #: Where the task may write (`cauce.surfaces`): a change outside is undone and fails the attempt.
+    surfaces: tuple[str, ...] = ()
     #: The role a workflow step names: used when it is in the project's team,
     #: since a definition a repository commits must not choose beyond the person's team.
     step_role: str | None = None
@@ -120,7 +123,7 @@ class Options:
         values = {"budget_usd": self.budget_usd, "verify": self.verify, "kind": self.kind,
                   "allow_approval": self.allow_approval, "allow_tools": list(self.allow_tools),
                   "livespec": self.livespec, "no_isolate": not self.isolate, "role": self.role,
-                  "step_role": self.step_role}
+                  "step_role": self.step_role, "surfaces": list(self.surfaces)}
         return {k: v for k, v in values.items() if v not in (None, [], False)}
 
 
@@ -587,7 +590,7 @@ def run(
                 model_id=models.pinned(cell.model),
                 permission_mode=grants.mode_for(cell.model),
                 prompt=brief(text, the_plan.kind, workdir, [*history, *attempts], dead, options.verify,
-                             writes and not declared_read_only, context),
+                             writes and not declared_read_only, context, options.surfaces),
                 cell=cell,
                 launch_dir=launch_dir,
                 workdir=workdir if workdir != launch_dir else None,
@@ -624,6 +627,19 @@ def run(
             elif _settles(result, options.verify) and (
                     isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
                 result = _settled(result, options.verify, workdir)
+            strayed = surfaces_mod.outside(options.surfaces, result.changed_paths)
+            if strayed:
+                if workspace is not None:
+                    isolate.undo(workspace, strayed)
+                kept = "undone" if workspace is not None else "left in your checkout, unverified"
+                result = dataclasses.replace(
+                    result, passed=False, failure=Failure.APPROACH,
+                    changed_paths=tuple(p for p in result.changed_paths if p not in strayed)
+                    if workspace is not None else result.changed_paths,
+                    summary=f"changed outside its surfaces ({', '.join(strayed[:5])}), {kept}: {result.summary}",
+                    evidence=f"Surfaces: {', '.join(options.surfaces)}. Changed outside them: {', '.join(strayed)}")
+                store.add_event(task["id"], "outside_surfaces", seq=nth, paths=strayed[:50],
+                                surfaces=list(options.surfaces), undone=workspace is not None)
             review_stop = None
             if result.passed and verifying:
                 so_far = list(isolate.changed(workspace)) if workspace else sorted({*changed, *result.changed_paths})
@@ -990,10 +1006,13 @@ def brief(
     verify: str | None,
     writes: bool,
     context: Sequence[str] = (),
+    surfaces: Sequence[str] = (),
 ) -> str:
     parts = [f"Task ({kind}):\n{text}", f"Work in: {workdir}"]
     if listed := criteria_mod.brief(text):
         parts.append(listed)
+    if bounds := surfaces_mod.brief(surfaces):
+        parts.append(bounds)
     if context:
         parts.append("\n".join(context))
     if not writes:
