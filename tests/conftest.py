@@ -27,6 +27,8 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("CAUCE_NOTES", "off")
     # An independent verifier is one more worker per pass: a test that wants it turns it on.
     monkeypatch.setenv("CAUCE_VERIFIER", "off")
+    monkeypatch.setenv("CAUCE_ENGRAM", "off")
+    monkeypatch.setenv("CAUCE_ENGRAM_WRITE", "off")
     monkeypatch.delenv("CAUCE_SESSION_ID", raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     for var, value in {

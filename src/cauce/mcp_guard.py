@@ -18,12 +18,22 @@ The `rastro` policy keeps a worker to the app its task runs:
   the person's logins;
 - every call runs in rastro's session `cauce-worker`, so a worker never picks
   up a session of the person's, with what it was bound to.
+
+The `engram` policy keeps a worker to reading its own project's memory:
+
+- only engram's reading tools pass: a save, an update, a delete, a judgment or
+  a session call never reaches the store (what a worker learned reaches engram
+  through cauce, after a pass);
+- every call is held to the project cauce resolved (`ENGRAM_PROJECT`): another
+  project, every project, and personal scope (which reads across projects) are
+  refused.
 """
 from __future__ import annotations
 
 import contextlib
 import ipaddress
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -77,7 +87,27 @@ def rastro(name: str, arguments: Mapping[str, Any]) -> tuple[str | None, dict[st
     return None, args
 
 
-POLICIES: Mapping[str, Callable[[str, Mapping[str, Any]], tuple[str | None, dict[str, Any]]]] = {"rastro": rastro}
+#: engram's tools that only read.
+ENGRAM_READ = frozenset({"mem_search", "mem_context", "mem_timeline", "mem_get_observation", "mem_current_project",
+                         "mem_stats"})
+
+
+def engram(name: str, arguments: Mapping[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    args = dict(arguments)
+    if name not in ENGRAM_READ:
+        return f"{name} changes engram's store; a worker only reads it, and cauce saves what it learned", args
+    project = os.environ.get("ENGRAM_PROJECT", "")
+    if args.get("all_projects") or args.get("scope") == "personal":
+        return f"a worker reads only this project's memory ({project or 'its own'})", args
+    if args.get("project") not in (None, "", project):
+        return f"a worker reads only this project's memory ({project}), not {args['project']}", args
+    if project:
+        args["project"] = project
+    return None, args
+
+
+POLICIES: Mapping[str, Callable[[str, Mapping[str, Any]], tuple[str | None, dict[str, Any]]]] = {
+    "rastro": rastro, "engram": engram}
 
 
 def screen(message: Any, policy: Callable[[str, Mapping[str, Any]], tuple[str | None, dict[str, Any]]]

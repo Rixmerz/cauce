@@ -41,6 +41,12 @@ DEFAULTS: dict[str, Any] = {
     # A passing change whose risk is high (or medium, made by a cheap cell) is
     # checked again by an independent verifier before it counts.
     "verifier": True,
+    # engram (the team's memory, when its server runs): searched into the brief,
+    # and handed to workers read-only. See `cauce.adapters.engram`.
+    "engram": True,
+    # What a passing worker learned is also saved in engram, for the team. Off
+    # unless the person turns it on: it writes to a store that is not cauce's.
+    "engram_write": False,
 }
 
 _TRUE = {"1", "true", "on", "yes"}

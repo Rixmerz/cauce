@@ -93,6 +93,8 @@ _SECRET = re.compile(r"(sk-[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{8,}|github_pat_\w{8,}
                      r"AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY|\b[0-9a-f]{40,}\b|password\s*[:=]\s*\S+)",
                      re.IGNORECASE)
 
+_PRIVATE = re.compile(r"<private>.*?</private>", re.IGNORECASE | re.DOTALL)
+
 Ask = Callable[..., tuple[dict | None, float, str]]
 
 
@@ -136,7 +138,8 @@ def add_topic(store: Store, project: str, name: str, description: str) -> str:
 
 def clean_fact(text: str) -> str | None:
     """A fact as it is kept, or None when it is not worth keeping or must not be."""
-    fact = " ".join(str(text or "").split())
+    # What a person marked private never becomes a note.
+    fact = " ".join(_PRIVATE.sub(" ", str(text or "")).split())
     if len(fact) < MIN_FACT or _SECRET.search(fact):
         return None
     return fact[:MAX_FACT]

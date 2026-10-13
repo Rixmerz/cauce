@@ -289,9 +289,7 @@ def _index_of(ladder: Sequence[Cell], cell: Cell) -> int:
 def adopted(options: Options, adapters: Sequence[Adapter] | None) -> list[Adapter]:
     if adapters is not None:
         return list(adapters)
-    if not config.enabled("livespec", os.environ, options.livespec):
-        return []
-    return default_adapters()
+    return default_adapters(os.environ, livespec=options.livespec)
 
 
 def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Mapping[str, caps.Capability],
@@ -315,7 +313,8 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     raise_rungs, critical = 0, False
     for adapter in adopted(options, adapters):
         status = adapter.inspect(repo_dir)
-        runnable_absent = status.state == ABSENT and adapter.server() is not None
+        runnable_absent = status.state == ABSENT and getattr(adapter, "indexes", True) and \
+            adapter.server() is not None
         if runnable_absent or status.stale:
             # In the background, never before the task: a large repository takes
             # minutes to index, and a run that is silent for minutes, with no task
@@ -779,6 +778,8 @@ def run(
             _note(store, task, key, report, the_plan, workspace.repo_dir if workspace else repo_dir,
                   isolate.head(workspace.repo_dir, report.branch) if workspace and report.branch else None,
                   notes_ask)
+        if status == "done" and report.learned and config.enabled("engram_write", os.environ):
+            _to_engram(store, task, report, the_plan, workspace.repo_dir if workspace else repo_dir)
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
                         changed=report.changed[:50], stop=report.stop.data() if report.stop else None,
@@ -1196,6 +1197,28 @@ def _note(store: Store, task: dict, key: str | None, report: Report, the_plan: P
         return
     if report.noted:
         store.add_event(task["id"], "noted", notes=report.noted)
+
+
+def _to_engram(store: Store, task: dict, report: Report, the_plan: Plan, checkout: Path) -> None:
+    """Give the team's engram what a passing worker learned, when the person turned
+    it on. The facts are the ones notes would keep: never a secret. Never fails
+    the run, and a save that failed is said in the report."""
+    found = next(((a, s) for a, s in the_plan.active if a.name == "engram"), None)
+    if found is None:
+        report.impact.append("engram: what the worker learned was not saved (no verified engram server answered)")
+        return
+    adapter, status = found
+    facts = [f for f in (notes.clean_fact(x) for x in report.learned) if f]
+    try:
+        saved = adapter.remember(facts, project=str(status.data.get("project") or ""), task_id=task["id"],
+                                 title=task["title"], directory=checkout)
+    except Exception as exc:  # a pass is not undone by a neighbour
+        report.impact.append(f"engram: what the worker learned could not be saved ({type(exc).__name__}: {exc})")
+        return
+    if saved:
+        report.impact.append(f"engram: saved {len(saved)} memories to {status.data.get('project')} "
+                             f"(#{', #'.join(map(str, saved))})")
+        store.add_event(task["id"], "engram_saved", project=status.data.get("project"), ids=saved)
 
 
 def _remember(store: Store, task: dict, key: str | None, attempt: Attempt, outcome: str,
