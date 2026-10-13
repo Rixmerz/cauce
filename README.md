@@ -698,7 +698,12 @@ See [`src/cauce/skills/README.md`](src/cauce/skills/README.md) and
   writes; a change outside is undone and fails the attempt. Tasks with
   disjoint surfaces run side by side in one repository.
 - **Dual review.** `cauce workflow run dual-review` runs two blind reviews on
-  different models, fixes only what the change caused, and checks again.
+  different models. They do not vote, so there is no tie: their findings are
+  added together. A finding only one saw and could only read from the code goes
+  to a refuter, which confirms or refutes it with its own proof; what it cannot
+  decide comes to you. The fix gets only the confirmed rows (`F1..Fn`, frozen
+  with a digest), the re-check answers for each row against the fix's diff, and
+  a row still open gets one more round, then comes to you.
 
 These ideas are adapted from
 [gentle-shell](https://github.com/Gentleman-Programming/gentle-shell) (MIT).

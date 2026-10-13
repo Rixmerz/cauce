@@ -35,7 +35,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from cauce import dispatch, isolate, project, repo, surfaces
+from cauce import dispatch, isolate, ledger, project, repo, surfaces
 from cauce.matrix import KINDS, Cell
 from cauce.store import Store, home
 
@@ -48,7 +48,7 @@ TOP_KEYS = frozenset({"name", "description", "inputs", "steps", "version"})
 #: What a step may say. Nothing here widens what a worker may do: rules,
 #: approvals and capabilities are the person's flags on `run`, never a file's.
 STEP_KEYS = frozenset({"id", "title", "prompt", "kind", "needs", "verify", "start", "budget_usd", "max_turns",
-                       "memory", "role", "surfaces"})
+                       "memory", "role", "surfaces", "ledger"})
 #: What a step may carry from cauce's memory into its brief: a project note by
 #: id, every live note of a topic, or a problem with every fix tried on it.
 MEMORY_REF = re.compile(r"^(?:(note|problem):)?(\d{1,9})$|^topic:([a-z0-9][a-z0-9_-]{0,39})$")
@@ -220,6 +220,14 @@ def normalize(defn: Mapping[str, Any], name: str | None = None) -> dict[str, Any
                     step.pop("surfaces")
             except surfaces.SurfaceError as exc:
                 errors.append(f"{where}: surfaces are {exc}" if "list" in str(exc) else f"{where}: {exc}")
+        if step.get("ledger") is not None:
+            role = step["ledger"]
+            if role not in ledger.ROLES:
+                errors.append(f"{where}: ledger is one of {', '.join(ledger.ROLES)}")
+            elif not any(s.get("ledger") is None for s in steps[:n] if isinstance(s, dict)):
+                errors.append(f"{where}: a ledger step comes after the reviews whose findings it takes")
+            elif role == "recheck" and not any(isinstance(s, dict) and s.get("ledger") == "fix" for s in steps[:n]):
+                errors.append(f"{where}: a recheck comes after the fix it checks")
         if step.get("verify") is not None and not isinstance(step["verify"], str):
             errors.append(f"{where}: verify is a command, as text")
         for key, kind in (("budget_usd", (int, float)), ("max_turns", int)):
@@ -590,12 +598,27 @@ def _queue_ready(store: Store, run: Mapping[str, Any]) -> list[int]:
         return []
     defn, latest = _definition(run), _latest(store, run["id"])
     inputs, options = json.loads(run["inputs"]), json.loads(run["options"])
-    queued = []
-    for step in defn["steps"]:
-        if step["id"] in latest or any((latest.get(d) or {}).get("status") != "done" for d in step["needs"]):
-            continue
-        queued.append(_queue_step(store, run, defn, step, inputs, options, latest)["id"])
-    return queued
+    queued: list[int] = []
+    while True:
+        ready = [s for s in defn["steps"] if all((latest.get(d) or {}).get("status") == "done" for d in s["needs"])
+                 and (s["id"] not in latest or _rerun(s, latest))]
+        if not ready:
+            return queued
+        for step in ready:
+            task = _queue_step(store, run, defn, step, inputs, options, latest)
+            latest[step["id"]] = task
+            if task["status"] == "queued":
+                queued.append(task["id"])
+        # A ledger step with nothing to decide passed at once: what waits on it may be ready now.
+        if all(latest[s["id"]]["status"] == "queued" for s in ready):
+            return queued
+
+
+def _rerun(step: Mapping[str, Any], latest: Mapping[str, dict]) -> bool:
+    """A ledger step goes again when a step it needs ran again after it: a recheck after the next fix round."""
+    mine = latest[step["id"]]
+    return bool(step.get("ledger")) and mine["status"] == "done" and any(
+        (latest.get(d) or {}).get("id", 0) > mine["id"] for d in step["needs"])
 
 
 def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Mapping[str, Any],
@@ -603,6 +626,12 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
     body = INPUT.sub(lambda m: inputs.get(m.group(1), m.group(0)), step["prompt"]).strip()
     earlier = _before(defn, step["id"])
     notes = []
+    held: dict[str, Any] | None = None
+    if step.get("ledger"):
+        # A ledger step is scoped: its rows, never what the steps before said of their work.
+        held = _ledger(store, run, defn, step, latest, options)
+        body += "\n\n" + held.pop("brief")
+        earlier = []
     for sid in earlier:
         task = latest.get(sid)
         if task and task.get("result"):
@@ -623,11 +652,86 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         "kind": step.get("kind"), "verify": step.get("verify"), "start": step.get("start"),
         "budget_usd": step.get("budget_usd") or options.get("budget_usd"), "max_turns": step.get("max_turns"),
         "allow_tools": options.get("allow_tools") or None, "allow_approval": options.get("allow_approval") or None,
-        "base": base, "step_role": step.get("role"), "surfaces": step.get("surfaces")}.items() if v is not None}
-    return store.create_task(body, status="queued", source="queue", author="workflow", repo=run["repo"],
-                             cwd=run["cwd"], session_id=run["session_id"], options=json.dumps(opts),
+        "base": base, "step_role": step.get("role"), "surfaces": step.get("surfaces"),
+        "ledger": held}.items() if v is not None}
+    empty = held is not None and not held["ids"]
+    task = store.create_task(body, status="done" if empty else "queued", source="queue", author="workflow",
+                             repo=run["repo"], cwd=run["cwd"], session_id=run["session_id"],
+                             options=json.dumps(opts),
                              title=f"[{defn['name']}#{run['id']} {step['id']}] {step['title']}"[:200],
                              workflow_run=run["id"], workflow_step=step["id"])
+    if empty:
+        # Nothing to decide or fix: the step passes without a worker, and no session is told of it.
+        assert held is not None
+        nothing = {"refute": "no finding needed a refuter", "fix": "no confirmed finding to fix",
+                   "recheck": "no fix to check"}[held["role"]]
+        store.update_task(task["id"], result=nothing)
+        settled = ledger.Outcome(held["role"], held["round"], confirmed=list(held.get("agreed") or ()),
+                                 held=list(held.get("held") or ()))
+        store.add_event(task["id"], "finished", status="done", final_cell=None, cost_usd=0, branch=None,
+                        changed=[], stop=None, findings=[], ledger=settled.data(), skipped=True)
+        store.add_event(task["id"], "reported", via="workflow")
+        task = store.get_task(task["id"])
+    return task
+
+
+def _findings_of(store: Store, task: Mapping[str, Any] | None) -> list[dict]:
+    finished = store.last_event(task["id"], "finished") if task and task.get("status") == "done" else None
+    return list((finished or {}).get("data", {}).get("findings") or [])
+
+
+def _decided(store: Store, task: Mapping[str, Any] | None) -> dict:
+    finished = store.last_event(task["id"], "finished") if task and task.get("status") == "done" else None
+    return dict((finished or {}).get("data", {}).get("ledger") or {})
+
+
+def _ledger(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Mapping[str, Any],
+            latest: Mapping[str, dict], options: Mapping[str, Any]) -> dict[str, Any]:
+    """The rows a ledger step is given, read from the steps before it, never from a worker's words.
+    Every step sees the same rows by the same ids: the ledger is rebuilt the same way each time."""
+    role, earlier = step["ledger"], _before(defn, step["id"])
+    by_id = {s["id"]: s for s in defn["steps"]}
+    rows = ledger.collect([(sid, _findings_of(store, latest.get(sid)))
+                           for sid in earlier if not by_id[sid].get("ledger")])
+    known = {r["id"]: r for r in rows}
+    nearest = {r: next((sid for sid in reversed(earlier) if by_id[sid].get("ledger") == r), None)
+               for r in ledger.ROLES}
+    round_, diff, held = 1, "", []
+    if role == "refute":
+        mine = [r for r in rows if ledger.disputed(r)]
+        agreed = [r["id"] for r in rows if not ledger.disputed(r)]
+    else:
+        refuted = _decided(store, latest.get(nearest["refute"])) if nearest["refute"] else {}
+        confirmed = refuted.get("confirmed", [r["id"] for r in rows]) if refuted else [r["id"] for r in rows]
+        held, agreed = list(refuted.get("held") or ()), []
+        if role == "fix":
+            # A later round fixes what the recheck after this fix left open.
+            after = next((s for s in defn["steps"] if s.get("ledger") == "recheck"
+                          and step["id"] in _before(defn, s["id"])), None)
+            checked = _decided(store, latest.get(after["id"])) if after else {}
+            if checked and checked.get("survivors"):
+                confirmed, round_ = checked["survivors"], int(checked.get("round") or 1) + 1
+            mine = [known[i] for i in confirmed if i in known]
+        else:
+            fix = latest.get(nearest["fix"]) if nearest["fix"] else None
+            spec = json.loads(fix.get("options") or "{}").get("ledger") or {} if fix else {}
+            mine = [known[i] for i in spec.get("ids", []) if i in known] if fix and fix["status"] == "done" else []
+            round_, held = int(spec.get("round") or 1), list(spec.get("held") or held)
+            finished = store.last_event(fix["id"], "finished") if fix else None
+            branch = (finished or {}).get("data", {}).get("branch")
+            start = spec.get("base") or options.get("origin")
+            if branch and start and run["cwd"] and Path(run["cwd"]).is_dir():
+                with contextlib.suppress(isolate.IsolationError):
+                    diff = f"git diff {start[:12]} {isolate.head(Path(run['cwd']), branch)[:12]}"
+    sha = ledger.digest(mine)
+    spec = {"role": role, "round": round_, "ids": [r["id"] for r in mine], "digest": sha, "held": held}
+    if role == "refute":
+        spec["agreed"] = agreed
+    if role == "fix":
+        spec["base"] = _base(store, run, defn, step["id"], latest) or options.get("origin")
+    spec["brief"] = ledger.brief(role, mine, round_=round_, sha=sha, diff=diff) if mine else \
+        f"Ledger ({role}): nothing to do."
+    return spec
 
 
 def _before(defn: Mapping[str, Any], step_id: str) -> list[str]:
@@ -675,6 +779,8 @@ def advance(store: Store, task: Mapping[str, Any] | None, env: Mapping[str, str]
         if queued:
             store.add_event(task["id"], "reported", via="workflow")
             store.add_event(task["id"], "workflow_advanced", run=run["id"], queued=queued)
+    if not queued:
+        queued = _next_round(store, run, task)
     if queued:
         (kick or _kick)(run["cwd"], run["repo"])
         store.update_run(run["id"])
@@ -684,8 +790,29 @@ def advance(store: Store, task: Mapping[str, Any] | None, env: Mapping[str, str]
         store.update_run(run["id"], status="done")
         promote(run["source"], store)
     else:
+        # A step that passed while a sibling still runs: the engine went past it, and the session is not told.
+        store.add_event(task["id"], "reported", via="workflow")
         store.update_run(run["id"])
     return queued
+
+
+def _next_round(store: Store, run: Mapping[str, Any], task: Mapping[str, Any]) -> list[int]:
+    """A recheck that passed with rows still open queues its fix again, for one more round."""
+    spec = json.loads(task.get("options") or "{}").get("ledger") or {}
+    decided = _decided(store, task)
+    if spec.get("role") != "recheck" or not decided.get("survivors") or int(decided.get("round") or 1) >= ledger.ROUNDS:
+        return []
+    defn = _definition(run)
+    with store.immediate():
+        latest = _latest(store, run["id"])
+        fix = next((s for s in reversed(defn["steps"]) if s.get("ledger") == "fix"
+                    and s["id"] in _before(defn, task["workflow_step"])), None)
+        if fix is None or latest[fix["id"]]["id"] > task["id"]:
+            return []
+        queued = _queue_step(store, run, defn, fix, json.loads(run["inputs"]), json.loads(run["options"]), latest)
+        store.add_event(task["id"], "reported", via="workflow")
+        store.add_event(task["id"], "workflow_advanced", run=run["id"], queued=[queued["id"]], round=True)
+    return [queued["id"]] if queued["status"] == "queued" else []
 
 
 def status(store: Store, run_id: int) -> dict[str, Any]:

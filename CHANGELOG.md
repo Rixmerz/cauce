@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-13
+
+### Added
+
+- **A review ledger with a refuter.** Workflow steps take `"ledger"`:
+  `refute`, `fix` or `recheck` (`--ledger` on `cauce workflow step`). The
+  engine builds the ledger `F1..Fn` from the blocking findings of the reviews
+  before, frozen with a sha256. Reviewers do not vote: one is enough to put a
+  finding on it.
+  - A row only one reviewer saw and could only read from the code goes to a
+    refuter. It answers `confirmed`, `refuted` or `unsure` with its own proof;
+    `unsure` comes to the person.
+  - The fix gets only the confirmed rows. The re-check answers `fixed`,
+    `not_fixed` or `regression` for each row against the fix's own diff.
+  - A row still open gets a second round; after two, the run stops as
+    `review`. A ledger step with nothing to decide passes without a worker.
+- **`verdicts`** in the result contract: a pass that leaves a given row
+  without a valid verdict is `inconclusive`.
+
+### Changed
+
+- **`dual-review`** now runs refute → fix → recheck, with up to two rounds.
+- A workflow step that passes while a sibling still runs is no longer handed
+  to the session as an ending.
+
 ## [0.12.0] - 2026-10-13
 
 ### Added

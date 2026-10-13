@@ -47,6 +47,7 @@ from cauce import (
 )
 from cauce import criteria as criteria_mod
 from cauce import findings as findings_mod
+from cauce import ledger as ledger_mod
 from cauce import risk as risk_mod
 from cauce import surfaces as surfaces_mod
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
@@ -115,6 +116,8 @@ class Options:
     #: The role a workflow step names: used when it is in the project's team,
     #: since a definition a repository commits must not choose beyond the person's team.
     step_role: str | None = None
+    #: A workflow step's part in a review ledger (`cauce.ledger`): its role, round and rows.
+    ledger: dict | None = None
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -123,7 +126,8 @@ class Options:
         values = {"budget_usd": self.budget_usd, "verify": self.verify, "kind": self.kind,
                   "allow_approval": self.allow_approval, "allow_tools": list(self.allow_tools),
                   "livespec": self.livespec, "no_isolate": not self.isolate, "role": self.role,
-                  "step_role": self.step_role, "surfaces": list(self.surfaces)}
+                  "step_role": self.step_role, "surfaces": list(self.surfaces),
+                  "ledger": self.ledger}
         return {k: v for k, v in values.items() if v not in (None, [], False)}
 
 
@@ -553,6 +557,9 @@ def run(
     verifying = writes and not declared_read_only and config.enabled("verifier", os.environ)
     ledger: dict[str, Mapping[str, str]] = {}
     corrections = 0
+    # A workflow step that decides ledger rows: a pass answers each, and its answers decide the run.
+    deciding = options.ledger if options.ledger and options.ledger.get("role") in ledger_mod.WORDS else None
+    settled: ledger_mod.Outcome | None = None
     base_commit = workspace.base if workspace else _head(repo_dir)
     cell, turns = the_plan.start, options.max_turns or turns_for(the_plan.kind)
     attempts: list[Attempt] = []
@@ -613,6 +620,8 @@ def run(
                                                                selection.system_prompt()) if p),
                 env={**run_env, "CAUCE_WORKER_TASK": str(task["id"]), "CAUCE_WORKER_ATTEMPT": str(nth)},
                 criteria=criteria_mod.ids(text),
+                verdicts=tuple(deciding.get("ids") or ()) if deciding else (),
+                verdict_words=ledger_mod.WORDS.get(deciding["role"], ()) if deciding else (),
             )
             store.update_task(task["id"], current_cell=cell.label)
             say(f"cauce: #{task['id']} attempt {nth} at {cell.label}")
@@ -650,6 +659,11 @@ def run(
                         base=base_commit, changed=so_far, risk=the_plan.risk, ledger=ledger,
                         corrections=corrections, launcher=launcher, store=store, task_id=task["id"], nth=nth,
                         say=say)
+            if result.passed and deciding:
+                settled = ledger_mod.outcome(deciding, result.verdicts)
+                store.add_event(task["id"], "ledger_decided", seq=nth, **settled.data())
+                if settled.stop:
+                    review_stop = stops.Stop("review", settled.stop, attempt=nth, account=result.summary[:2000])
             changed.update(result.changed_paths)
             report.cells.append(cell.label)
             report.served.append(result.served_model)
@@ -768,7 +782,9 @@ def run(
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
                         changed=report.changed[:50], stop=report.stop.data() if report.stop else None,
-                        risk=the_plan.risk.data())
+                        risk=the_plan.risk.data(),
+                        findings=list(attempts[-1].findings)[:30] if status == "done" and attempts else [],
+                        **({"ledger": settled.data()} if settled else {}))
         store.add_message(task["id"], "worker", report.text())
         if task.get("workflow_run"):
             # The next step starts here, from the engine: no session relays it.

@@ -6,14 +6,14 @@ import subprocess
 
 import pytest
 
-from cauce import criteria, findings, launch, risk
+from cauce import criteria, findings, flow, launch, risk
 from cauce.escalate import Attempt, Failure, Move, decide
 from cauce.launch import LaunchSpec, WorkerResult
 from cauce.matrix import LADDERS, Cell
 from cauce.orchestrate import Options, run, verifier_brief, verify_cell
 from cauce.store import home
 
-from .test_orchestrate import Script, kind
+from .test_orchestrate import Script, kind, ok
 from .test_ui import ui  # noqa: F401  (the fixture)
 
 # --- criteria -------------------------------------------------------------------------
@@ -324,7 +324,7 @@ def test_the_dual_review_starts_two_blind_reviews_on_different_models(git_repo, 
     defn = workflows.load("dual-review", git_repo)
     steps = {s["id"]: s for s in defn["steps"]}
     assert steps["review-a"]["start"] != steps["review-b"]["start"]
-    assert steps["fix"]["needs"] == ["review-a", "review-b"] and steps["recheck"]["needs"] == ["fix"]
+    assert steps["refute"]["needs"] == ["review-a", "review-b"] and steps["recheck"]["needs"] == ["fix"]
     started = workflows.start(store, "dual-review", git_repo, {"target": "the cart module"})
     first = [store.get_task(i) for i in started["queued"]]
     assert len(first) == 2 and all("one of two reviewers working apart" in t["body"] for t in first)
@@ -392,3 +392,184 @@ def test_the_diff_route_answers(ui, store, git_repo):  # noqa: F811
     assert res.status == 200 and "branch" in json.loads(data)
     res, _ = call(ui, "GET", "/api/tasks/99999/diff")
     assert res.status == 404
+
+
+# --- the ledger: a refuter, never a vote --------------------------------------------------
+
+
+def _found(*rows):
+    from cauce import findings
+
+    return findings.read({"findings": [dict(zip(("where", "what", "evidence_class", "cause"), r, strict=True))
+                                       for r in rows]})
+
+
+def _decides(summary, **verdicts):
+    from cauce import ledger
+    from cauce.launch import WorkerResult
+
+    return WorkerResult(True, None, summary, evidence="read it",
+                        verdicts=ledger.read({"verdicts": [{"id": k, "verdict": v} for k, v in verdicts.items()]}))
+
+
+def _reviewed(summary, *rows):
+    from cauce.launch import WorkerResult
+
+    return WorkerResult(True, None, summary, evidence="read it", findings=_found(*rows))
+
+
+def test_the_ledger_adds_reviews_together_and_sends_only_one_sided_readings_to_a_refuter():
+    from cauce import ledger
+
+    rows = ledger.collect([
+        ("review-a", _found(("cart.py:10", "total ignores the discount", "deterministic", "introduced"),
+                            ("cart.py:40", "rounding drops a cent", "inferential", "introduced"),
+                            ("old.py:1", "an old leak", "deterministic", "pre-existing"))),
+        ("review-b", _found(("cart.py:10", "the discount is never applied", "inferential", "introduced"),
+                            ("cart.py:41", "rounding drops a cent", "inferential", "introduced"),
+                            ("tax.py:5", "tax on the gross", "inferential", "worsened"))),
+    ])
+    # one reviewer is enough to put a problem on it; a pre-existing one never is
+    assert [(r["id"], r["where"], r["seen_by"]) for r in rows] == [
+        ("F1", "cart.py:10", ["review-a", "review-b"]), ("F2", "cart.py:40", ["review-a", "review-b"]),
+        ("F3", "tax.py:5", ["review-b"])]
+    assert [r["id"] for r in rows if ledger.disputed(r)] == ["F3"]
+    assert ledger.digest(rows) == ledger.digest(ledger.collect([("review-a", _found(
+        ("cart.py:10", "total ignores the discount", "deterministic", "introduced"),
+        ("cart.py:40", "rounding drops a cent", "inferential", "introduced"))), ("review-b", _found(
+        ("cart.py:10", "the discount is never applied", "inferential", "introduced"),
+        ("cart.py:41", "rounding drops a cent", "inferential", "introduced"),
+        ("tax.py:5", "tax on the gross", "inferential", "worsened")))]))
+    text = ledger.brief("refute", rows[2:], round_=1, sha="abc")
+    assert "never decide a row by who reported it" in text and "F3" in text and "confirmed, refuted, unsure" in text
+
+    refuted = ledger.outcome({"role": "refute", "ids": ["F3"], "agreed": ["F1"]}, [{"id": "F3", "verdict": "x"}])
+    assert refuted.confirmed == ["F1"] and refuted.held == ["F3"] and not refuted.stop
+    alone = ledger.outcome({"role": "refute", "ids": ["F3"], "agreed": []}, [])
+    assert "could not decide F3" in alone.stop
+    checked = ledger.outcome({"role": "recheck", "round": 2, "ids": ["F1", "F2"]},
+                             [{"id": "F1", "verdict": "fixed"}, {"id": "F2", "verdict": "regression"}])
+    assert checked.survivors == ["F2"] and "after 2 fix rounds" in checked.stop
+    clean = ledger.outcome({"role": "recheck", "round": 1, "ids": ["F1"], "held": ["F3"]},
+                           [{"id": "F1", "verdict": "fixed"}])
+    assert not clean.survivors and "could not decide F3" in clean.stop
+    assert ledger.read({"verdicts": [{"id": "f1", "verdict": " Fixed "}, "junk", {"id": 3}]}) == (
+        {"id": "F1", "verdict": "fixed", "proof": ""},)
+    assert ledger.read({}) == ()
+
+
+def test_a_deciding_pass_answers_every_row(tmp_path):
+    from cauce.launch import parse
+
+    spec = LaunchSpec("p", Cell("sonnet", "medium"), tmp_path, verdicts=("F1", "F2"),
+                      verdict_words=("fixed", "not_fixed", "regression"))
+    block = {"verdict": "pass", "summary": "checked", "evidence": "read it",
+             "verdicts": [{"id": "F1", "verdict": "fixed"}, {"id": "F2", "verdict": "maybe"}]}
+    result = parse(proc(block), spec)
+    assert not result.passed and "without a verdict on F2" in result.summary
+    block["verdicts"][1]["verdict"] = "not_fixed"
+    assert parse(proc(block), spec).passed
+
+
+def _ledger_run(git_repo, store, results, monkeypatch):
+    from cauce import workflows
+
+    monkeypatch.setattr(workflows, "_kick", lambda cwd, key: None)
+    started = workflows.start(store, "dual-review", git_repo, {"target": "the cart"}, session_id="s1")
+    seen: list[dict] = []
+    from .test_workflows import _runner
+
+    flow.work(store, parallel=False, runner=_runner(results, seen))
+    return started, seen, {t["workflow_step"]: t for t in store.run_tasks(started["id"])}
+
+
+def test_the_dual_review_fixes_only_what_is_confirmed_and_rechecks_each_row(git_repo, store, monkeypatch):
+    from cauce import workflows
+
+    results = [
+        _reviewed("a", ("cart.py:10", "total ignores the discount", "deterministic", "introduced"),
+                  ("cart.py:40", "rounding drops a cent", "inferential", "introduced")),
+        _reviewed("b", ("cart.py:10", "the discount is never applied", "inferential", "introduced"),
+                  ("tax.py:5", "tax on the gross", "inferential", "worsened")),
+        _decides("decided", F2="confirmed", F3="refuted"),
+        ok("fixed both"),
+        _decides("one left", F1="fixed", F2="not_fixed"),
+        ok("fixed the rounding"),
+        _decides("all fixed", F2="fixed"),
+    ]
+    started, seen, steps = _ledger_run(git_repo, store, results, monkeypatch)
+    _, _, refute, fix1, recheck1, fix2, recheck2 = (s["prompt"] for s in seen)
+    # the refuter is given only what one reviewer saw and could only read, never the reviews' own words
+    assert "F2" in refute and "F3" in refute and "- F1 " not in refute and "What the steps before" not in refute
+    assert "- F1 " in fix1 and "- F2 " in fix1 and "- F3 " not in fix1 and "round 1 of 2" in fix1
+    assert "The fix is `git diff" in recheck1 and "fixed, not_fixed, regression" in recheck1
+    assert "- F2 " in fix2 and "- F1 " not in fix2 and "round 2 of 2" in fix2
+    assert "- F2 " in recheck2 and "- F1 " not in recheck2
+    status = workflows.status(store, started["id"])
+    assert status["state"] == "done" and status["steps"][3]["tries"] == 2
+    decided = store.last_event(steps["refute"]["id"], "finished")["data"]["ledger"]
+    assert decided["confirmed"] == ["F1", "F2"] and decided["refuted"] == ["F3"]
+    # the session hears of the run once, at its end
+    assert [t["workflow_step"] for t in store.unreported("s1")] == ["recheck"]
+
+
+def test_what_the_refuter_cannot_decide_goes_to_the_person(git_repo, store, monkeypatch):
+    from cauce import workflows
+
+    results = [_reviewed("a", ("tax.py:5", "tax on the gross", "inferential", "introduced")), _reviewed("b"),
+               _decides("cannot tell", F1="unsure")]
+    started, seen, steps = _ledger_run(git_repo, store, results, monkeypatch)
+    assert len(seen) == 3 and steps["refute"]["status"] == "blocked"
+    stop = store.last_event(steps["refute"]["id"], "finished")["data"]["stop"]
+    assert stop["cause"] == "review" and "could not decide F1" in stop["reason"]
+    assert workflows.status(store, started["id"])["state"] == "waits on you"
+
+
+def test_rows_still_open_after_two_rounds_go_to_the_person(git_repo, store, monkeypatch):
+    results = [_reviewed("a", ("cart.py:10", "total ignores the discount", "deterministic", "introduced")),
+               _reviewed("b"), ok("fixed"), _decides("no", F1="not_fixed"), ok("again"),
+               _decides("still no", F1="regression")]
+    _, seen, steps = _ledger_run(git_repo, store, results, monkeypatch)
+    assert len(seen) == 6 and steps["recheck"]["status"] == "blocked"
+    assert "F1 still open after 2 fix rounds" in steps["recheck"]["result"]
+
+
+def test_with_no_finding_the_ledger_steps_pass_without_a_worker(git_repo, store, monkeypatch):
+    from cauce import workflows
+
+    results = [_reviewed("a", ("old.py:1", "an old leak", "deterministic", "pre-existing")), _reviewed("b")]
+    started, seen, steps = _ledger_run(git_repo, store, results, monkeypatch)
+    assert len(seen) == 2 and workflows.status(store, started["id"])["state"] == "done"
+    assert steps["fix"]["result"] == "no confirmed finding to fix"
+    assert store.last_event(steps["refute"]["id"], "finished")["data"]["skipped"]
+
+
+def test_a_ledger_step_is_checked_where_it_stands():
+    from cauce import workflows
+
+    def steps(*more):
+        return {"name": "l", "steps": [{"id": "r", "prompt": "Review", "kind": "review-routine"}, *more]}
+
+    with pytest.raises(workflows.WorkflowError, match="ledger is one of"):
+        workflows.normalize(steps({"id": "x", "prompt": "p", "ledger": "vote"}))
+    with pytest.raises(workflows.WorkflowError, match="after the reviews"):
+        workflows.normalize({"name": "l", "steps": [{"id": "x", "prompt": "p", "ledger": "refute"}]})
+    with pytest.raises(workflows.WorkflowError, match="after the fix it checks"):
+        workflows.normalize(steps({"id": "x", "prompt": "p", "ledger": "recheck"}))
+    assert workflows.normalize(steps({"id": "f", "prompt": "p", "ledger": "fix"},
+                                     {"id": "c", "prompt": "p", "ledger": "recheck"}))["steps"][2]["ledger"]
+
+
+def test_the_cli_sets_a_step_s_ledger_part(git_repo, capsys, monkeypatch):
+    from cauce import cli
+
+    monkeypatch.chdir(git_repo)
+    assert cli.main(["workflow", "new", "rv"]) == 0
+    assert cli.main(["workflow", "step", "set", "rv", "do", "--prompt", "Review it", "--kind", "review-routine"]) == 0
+    assert cli.main(["workflow", "step", "add", "rv", "decide", "--prompt", "Decide", "--ledger", "refute"]) == 0
+    assert cli.main(["workflow", "step", "add", "rv", "bad", "--prompt", "x", "--ledger", "vote"]) == 1
+    assert "ledger is one of refute, fix, recheck" in capsys.readouterr().err
+    assert cli.main(["workflow", "step", "set", "rv", "decide", "--clear", "ledger"]) == 0
+    capsys.readouterr()
+    assert cli.main(["workflow", "show", "rv", "--json"]) == 0
+    assert "ledger" not in json.loads(capsys.readouterr().out)["steps"][1]

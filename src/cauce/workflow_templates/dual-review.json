@@ -1,15 +1,18 @@
 {
   "name": "dual-review",
-  "description": "Two blind reviews on different models, a fix of only what they found, and one re-check",
+  "description": "Two blind reviews on different models, a refuter for what only one saw, a fix of only the confirmed findings, and a re-check of each one; two rounds, then the person",
   "inputs": ["target"],
   "steps": [
     {"id": "review-a", "title": "First review", "kind": "review-routine", "start": "sonnet/high", "needs": [],
      "prompt": "Review, without changing any file: {target}\n\nYou are one of two reviewers working apart: find the real problems on your own. Report each one in `findings`, with its place, its evidence and whether the change caused it. Say plainly when there is none."},
     {"id": "review-b", "title": "Second review", "kind": "review-routine", "start": "opus/high", "needs": [],
      "prompt": "Review, without changing any file: {target}\n\nYou are one of two reviewers working apart: find the real problems on your own. Report each one in `findings`, with its place, its evidence and whether the change caused it. Say plainly when there is none."},
-    {"id": "fix", "title": "Fix what they found", "kind": "implement", "needs": ["review-a", "review-b"],
-     "prompt": "Fix, in: {target}, only the problems the two reviews below found that the change caused or worsened (not the pre-existing ones), and nothing else. A problem only one review found is fixed when you can show it; say which you did not fix and why. If neither found one, stop. Run the tests before you stop."},
-    {"id": "recheck", "title": "Check the fix", "kind": "review-routine", "needs": ["fix"],
-     "prompt": "Review, without changing any file, the fix just made in: {target}\n\nFor each problem the reviews before found, say whether it is fixed. Report any new problem the fix introduced in `findings`. This is the last round: what is left goes to the person."}
+    {"id": "refute", "title": "Decide what only one saw", "kind": "review-routine", "start": "opus/xhigh",
+     "ledger": "refute", "needs": ["review-a", "review-b"],
+     "prompt": "Decide, without changing any file, the findings on: {target}"},
+    {"id": "fix", "title": "Fix the confirmed findings", "kind": "implement", "ledger": "fix", "needs": ["refute"],
+     "prompt": "Fix, in: {target}, the confirmed findings below."},
+    {"id": "recheck", "title": "Check each fix", "kind": "review-routine", "ledger": "recheck", "needs": ["fix"],
+     "prompt": "Check, without changing any file, the fix just made in: {target}"}
   ]
 }

@@ -22,6 +22,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/insights.py` | what the person's projects say about the teams they need (`cauce team insights`): kinds asked and how each went, languages, checks, the team each uses; read only, no model |
 | `src/cauce/criteria.py` | a request's listed items as criteria `S1..Sn`, verbatim; a pass answers each |
 | `src/cauce/findings.py` | findings as records: where, what, `evidence_class`, `cause`; which block a change |
+| `src/cauce/ledger.py` | a review's findings as one frozen ledger `F1..Fn`: who decides each row (refuter, fix, re-check), two rounds, then the person |
 | `src/cauce/risk.py` | a change's tier (passive, medium, high) from its request, kind and files; only raised; no model |
 | `src/cauce/surfaces.py` | where a task may write (`--surface`, a step's `surfaces`): checked after each attempt, and whether two tasks can never touch the same file |
 | `src/cauce/phase.py` | what a running worker is doing (exploring, implementing, checking), read from the tail of the tool-call log |
@@ -148,6 +149,14 @@ yields the default kind, not a guess.
 - A finding blocks only when the change caused or worsened it (or it cannot be
   told) and it is shown, not suspected; a pre-existing one is reported, never
   a blocker.
+- Reviewers never vote: their findings are added together, so one is enough
+  and there is no tie. A row only one saw and could only read from the code is
+  decided by a refuter with its own proof, never by a count; a row it cannot
+  decide goes to the person. The engine builds the ledger from the steps'
+  `finished` findings, never from a worker's words: a fix gets only its rows,
+  a re-check answers only for them against the fix's diff, and a pass that
+  leaves a row without a verdict is `inconclusive`. Open rows earn one more
+  round, up to `ledger.ROUNDS`; then the run stops as `review`.
 - A risk tier is only raised, never lowered; a change that cannot be read is
   high. A high change, or a medium one a cheap cell made, is checked by the
   independent verifier before it passes: another cell, read-only, given the
