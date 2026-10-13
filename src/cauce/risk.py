@@ -11,6 +11,12 @@ cannot be read (no checkout) is high: not knowing is not safe.
 
 No model is asked. The tier decides one thing: whether a passing change is
 checked again by an independent verifier before it counts.
+
+The verifier reads one discount, and the tier never shows it: a change that
+touched tests only, on a request whose own words made it high, is weighed as
+medium (checked when a cheap cell made it). The words said what the code is
+about; a change to its tests alone ships none of that code. A high tier a
+kind, a file or an unreadable change set is never discounted.
 """
 from __future__ import annotations
 
@@ -57,8 +63,13 @@ _CODE = frozenset({".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", "
 class Risk:
     tier: str = "passive"
     reasons: list[str] = field(default_factory=list)
+    #: Whether something other than the request's words made it high: its kind,
+    #: a file it changed, a change that could not be read.
+    high_beyond_words: bool = False
 
-    def raise_to(self, tier: str, reason: str) -> None:
+    def raise_to(self, tier: str, reason: str, *, words: bool = False) -> None:
+        if tier == "high" and not words:
+            self.high_beyond_words = True
         if TIERS.index(tier) > TIERS.index(self.tier):
             self.tier = tier
         if reason not in self.reasons:
@@ -76,7 +87,7 @@ def of_request(text: str, kind: str) -> Risk:
     for area, pattern in _TEXT:
         found = pattern.search(text)
         if found and kind not in _PASSIVE_KINDS:
-            risk.raise_to("high", f"the request is about {area} ({found.group(0).strip()!r})")
+            risk.raise_to("high", f"the request is about {area} ({found.group(0).strip()!r})", words=True)
     return risk
 
 
@@ -106,6 +117,19 @@ def of_change(risk: Risk, changed: Sequence[str] | None) -> Risk:
     return risk
 
 
-def needs_verifier(risk: Risk, *, cheap: bool) -> bool:
+def tests_only(changed: Sequence[str] | None) -> bool:
+    return bool(changed) and all(_TEST.search(p) for p in changed or ())
+
+
+def weight(risk: Risk, changed: Sequence[str] | None) -> str:
+    """The tier the verifier reads: the risk's own, but a high one only the
+    request's words set counts as medium when every changed file is a test."""
+    if risk.tier == "high" and not risk.high_beyond_words and tests_only(changed):
+        return "medium"
+    return risk.tier
+
+
+def needs_verifier(risk: Risk, *, cheap: bool, changed: Sequence[str] | None = None) -> bool:
     """A change high in risk is always verified; a medium one when a cheap cell made it."""
-    return risk.tier == "high" or (risk.tier == "medium" and cheap)
+    tier = weight(risk, changed)
+    return tier == "high" or (tier == "medium" and cheap)

@@ -573,3 +573,90 @@ def test_the_cli_sets_a_step_s_ledger_part(git_repo, capsys, monkeypatch):
     capsys.readouterr()
     assert cli.main(["workflow", "show", "rv", "--json"]) == 0
     assert "ledger" not in json.loads(capsys.readouterr().out)["steps"][1]
+
+
+# --- open scope, retries, reports and test-only changes ---------------------------------
+
+
+def test_open_words_are_named_before_the_run_and_held_to_evidence_in_the_brief(git_repo, store):
+    from cauce import scope
+
+    text = "neutraliza al menos ENVIRONMENT; revisa env.js por otras que el CI pueda definir"
+    assert scope.open_phrases(text) == ["al menos", "revisa env.js por otras"]
+    assert scope.open_phrases("check config.js for others, at least FOO, etc.") == [
+        "check config.js for others", "at least", "etc."]
+    assert scope.open_phrases("borra solo ENVIRONMENT") == [] and scope.warning([]) == scope.brief([]) == ""
+    lines: list[str] = []
+    script = Script(passing(), write="app.py")
+    report = run(text, git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+                 progress=lines.append)
+    assert any("scope open («al menos»" in line for line in lines)
+    assert "scope open" in report.text()
+    assert "list it in `summary` as considered and left unchanged" in script.specs[0].prompt
+    script = Script(passing())
+    run("review it, at least the parser", git_repo, store, registry={}, launcher=script,
+        classifier=kind("review-routine"))
+    assert "scope open" not in script.specs[0].prompt
+
+
+def test_a_retry_checks_narrow_first_and_leaves_the_full_run_for_the_end(git_repo, store):
+    script = Script(WorkerResult(False, Failure.CODE_BUG, "2 tests fail", cost_usd=0.1), passing(), write="app.py")
+    run("fix the cart total", git_repo, store, Options(verify="true"), registry={}, launcher=script,
+        classifier=kind("implement"))
+    first, retry = script.specs
+    assert "This is a retry" not in first.prompt
+    assert "This is a retry" in retry.prompt and "Leave the full run to cauce: it runs `true`" in retry.prompt
+    script = Script(WorkerResult(False, Failure.CODE_BUG, "2 tests fail", cost_usd=0.1), passing(), write="app.py")
+    run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert "Run the full suite once, at the end" in script.specs[1].prompt
+
+
+def test_the_verifier_is_told_the_check_already_passed(git_repo, store, verifier_on):
+    assert "do not run it again" in verifier_brief("x", "implement", home(), None, ["a"], verified="npm test")
+    assert "do not run it again" not in verifier_brief("x", "implement", home(), None, ["a"])
+    script = Script(passing(), check("pass"), write="app.py")
+    run("fix the cart total", git_repo, store, Options(verify="true"), registry={}, launcher=script,
+        classifier=kind("implement"))
+    assert "cauce ran `true` on this change and it passed" in script.specs[1].prompt
+
+
+def test_the_problem_the_check_found_leads_the_summary_and_show_prints_it_whole(git_repo, store, verifier_on,
+                                                                                 capsys):
+    from cauce import cli
+
+    long = "removed three variables " + "and explained why at length " * 20
+    script = Script(passing(long), check("fail", [BUG]), passing("fixed"), check("pass"), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    first = store.attempts(report.task_id)[0]["summary"]
+    assert first.startswith("the independent check found 1 problem(s) this change caused: "
+                            "app.py:3: drops the last item. The worker's account: removed three")
+    assert cli.main(["show", str(report.task_id)]) == 0
+    out = capsys.readouterr().out
+    assert long.strip() in out
+    assert "independent check at sonnet/high: fail, 1 blocking" in out
+    assert "[introduced, deterministic] app.py:3: drops the last item — python probe.py" in out
+    script = Script(passing(), check("fail", [BUG]), passing(), check("fail", [OTHER]), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert "still finds problems: lib.py:9: a new crash" in store.attempts(report.task_id)[1]["summary"]
+
+
+def test_a_change_to_tests_only_weighs_less_when_only_the_words_made_it_high(git_repo, store, verifier_on):
+    words = risk.of_request("fix the login token test", "implement")
+    assert words.tier == "high"
+    assert risk.weight(words, ["tests/test_login.py", "test/env.test.js"]) == "medium"
+    assert not risk.needs_verifier(words, cheap=False, changed=["tests/test_login.py"])
+    assert risk.needs_verifier(words, cheap=True, changed=["tests/test_login.py"])
+    assert risk.weight(words, ["src/login.py", "tests/test_login.py"]) == "high"
+    assert risk.weight(words, []) == "high" and risk.weight(words, None) == "high"
+    assert risk.weight(risk.of_request("fix the test", "review-critical"), ["tests/test_a.py"]) == "high"
+    assert risk.weight(risk.of_change(risk.of_request("x", "implement"), ["tests/.env.test"]),
+                       ["tests/.env.test"]) == "high"  # a file made it high, not the words
+    script = Script(passing(), write="test_login.py")
+    report = run("fix the login token test", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"))
+    assert report.status == "done" and len(script.specs) == 1
+    assert report.plan.risk.tier == "high" and "tests only" in report.text()
+    script = Script(passing(), check("pass"), write="test_login.py")
+    run("fix the login token test", git_repo, store, Options(start=Cell("haiku", "medium")), registry={},
+        launcher=script, classifier=kind("implement"))
+    assert len(script.specs) == 2  # a cheap cell's pass is still checked

@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-13
+
+### Added
+
+- **Open scope, named before the run** (`scope.py`). A writing request with
+  words that leave its scope open ("al menos", "revisa … por otras",
+  "at least", "check … for others", "etc.") gets a warning on stderr and in
+  the report, before any attempt: a person can cancel and name each thing to
+  change. The worker is told to change what the request names, and anything
+  more under those words only with evidence that it is required; the rest it
+  lists as considered and left unchanged.
+
+### Changed
+
+- **A retry checks narrow first.** From the second attempt on, the worker is
+  told to check with the narrowest command that covers what failed and what
+  it changes; the full run is paid once, at the end — by cauce when `--verify`
+  is set, else by the worker before it reports.
+- **The independent check does not repeat `--verify`.** When the check passed
+  on the change, the verifier is told so and reads the diff instead of
+  running the suite again.
+- **The problem leads the report.** A pass the independent check turned back
+  now reads `found 1 problem(s) this change caused: <where>: <what>. The
+  worker's account: …`, so the problem is no longer cut off behind the
+  worker's summary. `cauce show` prints each summary whole and, under each
+  attempt, the independent check's verdict and findings; the stderr line is
+  cut at a word, not mid-sentence.
+- **A change to tests only weighs less for the verifier.** When the only thing
+  that made a change high is the request's own words, and every file it
+  changed is a test, the verifier weighs it as medium: it checks it when a
+  cheap cell made it. The tier itself is never lowered, and a high tier set by
+  a kind, a file or an unreadable change is never discounted. The report says
+  when the discount applied.
+
 ## [0.14.1] - 2026-10-13
 
 ### Changed
