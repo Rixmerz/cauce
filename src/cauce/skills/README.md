@@ -28,6 +28,9 @@ license; where cauce changed the text, the change is listed.
     the repository already runs".
   - `design-brief`: the paragraphs on `vise shot` became tool-neutral advice
     to render and look, then measure.
+  - `ponytail`: the visual-design exception gained its prototype case — a
+    request for a prototype is functional work, with neutral styles marked
+    `ponytail: prototype styles` instead of a stop for a missing brief.
 
 vise's `ponytail` is its own shorter text of an idea that
 [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail) (MIT)

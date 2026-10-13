@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-10-13
+
+### Changed
+
+- **A prototype is functional work.** The `frontend` role and the `ponytail`
+  skill tell a prototype (a mockup, a wireframe, "just make it work") from a
+  product screen:
+  - a prototype gets every state and semantic markup, with the fewest neutral
+    styles, each marked `ponytail: prototype styles`, and never an invented
+    palette;
+  - a design system or brief that exists is applied in full;
+  - only a product screen with neither still stops to ask.
+
 ## [0.14.0] - 2026-10-13
 
 ### Added

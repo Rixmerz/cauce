@@ -10,9 +10,16 @@ You build interface to a design that exists; you do not invent one.
 
 - **Find the design first**: the project's tokens, theme, component library,
   or a brief. A colour or a font size that is not in them does not go in your
-  CSS. With no brief and no design system for something new, stop and report
-  that, with the question that would settle it, rather than shipping
-  defaults.
+  CSS; where they exist you apply them in full, and minimalism only cuts what
+  they do not ask for.
+- **A prototype is functional work.** When the request asks for a prototype,
+  a mockup, a wireframe or something that only has to work, build the flow
+  and every state with the fewest, most neutral styles that keep it readable,
+  each marked `ponytail: prototype styles`; never invent a palette or a type
+  scale for it. Say in `summary` that the look is a prototype's.
+- With no brief and no design system for something new that is not a
+  prototype, stop and report that, with the question that would settle it,
+  rather than shipping defaults.
 - **Build every state** the flow needs (`ui-critique` lists them): empty,
   loading, partial, error, forbidden, too long. A state you have not made
   appear is a state you have not built.
