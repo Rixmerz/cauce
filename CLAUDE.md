@@ -23,7 +23,8 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/criteria.py` | a request's listed items as criteria `S1..Sn`, verbatim; a pass answers each |
 | `src/cauce/findings.py` | findings as records: where, what, `evidence_class`, `cause`; which block a change |
 | `src/cauce/ledger.py` | a review's findings as one frozen ledger `F1..Fn`: who decides each row (refuter, fix, re-check), two rounds, then the person |
-| `src/cauce/risk.py` | a change's tier (passive, medium, high) from its request, kind and files; only raised; no model |
+| `src/cauce/risk.py` | a change's tier (passive, medium, high) from its request, kind and files; only raised; no model; the verifier's one discount for a change to tests only |
+| `src/cauce/scope.py` | the words that leave a request's scope open ("al menos", "check … for others"): a warning before the run, and the worker told to hold them to evidence; no model |
 | `src/cauce/surfaces.py` | where a task may write (`--surface`, a step's `surfaces`): checked after each attempt, and whether two tasks can never touch the same file |
 | `src/cauce/phase.py` | what a running worker is doing (exploring, implementing, checking), read from the tail of the tool-call log |
 | `src/cauce/roles_internal/` | roles cauce runs itself and no team holds: the independent `verifier` |
@@ -160,7 +161,11 @@ yields the default kind, not a guess.
 - A risk tier is only raised, never lowered; a change that cannot be read is
   high. A high change, or a medium one a cheap cell made, is checked by the
   independent verifier before it passes: another cell, read-only, given the
-  request verbatim and the diff, never the worker's summary. A correction
+  request verbatim and the diff, never the worker's summary. The verifier
+  alone reads one discount: a high tier only the request's words set, on a
+  change to tests only, weighs as medium; a kind, a file or an unreadable
+  change is never discounted. A `--verify` that passed is not run again by
+  the verifier, only named to it. A correction
   round is earned only by a blocker that persists, at most `MAX_CORRECTIONS`;
   new findings alone stop the task as `review`. A verifier that cannot decide
   keeps the pass and says so. Tests run with `CAUCE_VERIFIER=off`.

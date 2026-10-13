@@ -71,6 +71,11 @@ def places(found: Iterable[Mapping[str, str]]) -> frozenset[str]:
     return frozenset(_place(f["where"]) for f in found if f["where"])
 
 
+def line(found: Iterable[Mapping[str, str]]) -> str:
+    """Findings on one line, place and problem, for a summary a person reads first."""
+    return "; ".join(f"{f['where'] or 'unplaced'}: {f['what']}" for f in found)
+
+
 def text(found: Iterable[Mapping[str, str]]) -> str:
     """Findings for a brief or a report, one per line."""
     return "\n".join(f"- [{f['cause']}, {f['evidence_class']}] {f['where'] or 'unplaced'}: {f['what']}"

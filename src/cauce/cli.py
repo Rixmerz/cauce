@@ -18,6 +18,7 @@ from cauce import (
     capabilities,
     config,
     dispatch,
+    findings,
     flow,
     habits,
     hooks,
@@ -461,13 +462,22 @@ def cmd_show(args: argparse.Namespace) -> int:
         print(f"cost ${task['cost_usd']:.2f}  start {task['start_cell']}  final {task['final_cell']}")
         refused = store.denials(args.id)
         climbed = {e["data"]["seq"]: e["data"] for e in store.events_of(args.id, "moved") if "seq" in e["data"]}
+        checked: dict[int, list[dict]] = {}
+        for e in store.events_of(args.id, "verified"):
+            checked.setdefault(e["data"].get("seq"), []).append(e["data"])
         for a in store.attempts(args.id):
             verdict = "pass" if a["passed"] else (a["failure"] or "fail")
             model = f" [{a['served_model']}]" if a.get("served_model") else ""
             print(f"  attempt {a['seq']} {a['cell']}{model} ({a['turns']} turns, ${a['cost_usd']:.2f}) {verdict}"
                   + (f" → {a['move']}: {a['move_reason']}" if a["move"] else ""))
             if a["summary"]:
-                print(f"    {a['summary'][:300]}")
+                # Whole: what failed is often the last clause, and a cut hides it.
+                print(f"    {a['summary']}")
+            for check in checked.get(a["seq"], ()):
+                print(f"    independent check at {check.get('cell')}: {check.get('verdict') or 'no verdict'}, "
+                      f"{check.get('blocking', 0)} blocking")
+                for line in findings.text(check.get("findings") or ()).splitlines():
+                    print(f"      {line}")
             if refused.get(a["seq"]):
                 print(f"    refused: {', '.join(refused[a['seq']])}")
             move = climbed.get(a["seq"])

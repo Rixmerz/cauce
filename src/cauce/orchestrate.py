@@ -41,6 +41,7 @@ from cauce import (
     repo,
     roles,
     runtime,
+    scope,
     stops,
     teams,
     workflows,
@@ -194,6 +195,8 @@ class Report:
                          f"{self.plan.role_why}")
         lines.append(f"risk {self.plan.risk.tier}" + (f": {'; '.join(self.plan.risk.reasons)}"
                                                       if self.plan.risk.reasons else ""))
+        if self.task_id and risk_mod.weight(self.plan.risk, self.changed) != self.plan.risk.tier:
+            lines.append("  · it changed tests only: the independent check weighs it as medium")
         lines += [status.line() for status in self.plan.neighbours]
         if self.task_id is None:
             # A dry run shows what the first worker would be handed.
@@ -392,6 +395,8 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     if seen:
         neighbour_notes.append("workers here were refused before: " + ", ".join(f"{r} ×{n}" for r, n in seen)
                                + ". Pass the ones this task needs with --allow, or a worker stops on them")
+    if kind not in READ_ONLY_KINDS and (open_scope := scope.warning(scope.open_phrases(text))):
+        neighbour_notes.append(open_scope)
     expected = store.expected_cost(kind, repo=repo.key(repo_dir)) or store.expected_cost(kind)
     if expected:
         neighbour_notes.append(f"finished {kind} tasks cost ${expected[0]:.2f} on average (last {expected[1]})")
@@ -514,7 +519,8 @@ def run(
         the_plan.reasons.append(f"{the_plan.kind} work starts with {turns_for(the_plan.kind)} turns: "
                                 f"at {DEFAULT_TURNS} its attempts ran out")
     for reason in the_plan.reasons:
-        if reason.startswith(("this task needs", "workers here were refused before")):
+        if reason.startswith(("this task needs", "workers here were refused before",
+                              "the request leaves its scope open")):
             say(f"cauce: #{task['id']} warning: {reason}")
     store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label,
                     role=the_plan.role.name if the_plan.role else None, team=the_plan.team,
@@ -652,12 +658,12 @@ def run(
             if result.passed and verifying:
                 so_far = list(isolate.changed(workspace)) if workspace else sorted({*changed, *result.changed_paths})
                 risk_mod.of_change(the_plan.risk, so_far if (workspace or base_commit) else None)
-                if so_far and risk_mod.needs_verifier(the_plan.risk, cheap=_cheap(cell)):
+                if so_far and risk_mod.needs_verifier(the_plan.risk, cheap=_cheap(cell), changed=so_far):
                     result, review_stop, ledger, corrections = _independent_check(
                         result, text=text, kind=the_plan.kind, cell=cell, spec=spec, workdir=workdir,
                         base=base_commit, changed=so_far, risk=the_plan.risk, ledger=ledger,
                         corrections=corrections, launcher=launcher, store=store, task_id=task["id"], nth=nth,
-                        say=say)
+                        say=say, verified=options.verify)
             if result.passed and deciding:
                 settled = ledger_mod.outcome(deciding, result.verdicts)
                 store.add_event(task["id"], "ledger_decided", seq=nth, **settled.data())
@@ -688,7 +694,7 @@ def run(
                               transient=result.transient, findings=result.findings)
             attempts.append(attempt)
             say(f"cauce: #{task['id']} attempt {seq} " + ("passed" if result.passed else
-                f"ended {(result.failure or Failure.INCONCLUSIVE).value}: {result.summary[:160]}"))
+                f"ended {(result.failure or Failure.INCONCLUSIVE).value}: {_cut(result.summary, 400)}"))
             if review_stop is not None:
                 report.stop = review_stop
                 report.status, report.summary = "blocked", review_stop.reason
@@ -919,6 +925,12 @@ def _cancelled(store: Store, task_id: int, attempt: int | None) -> stops.Stop:
 MAX_CORRECTIONS = 2
 
 
+def _cut(text: str, limit: int) -> str:
+    """A line for stderr: whole when it fits, else cut at a word and marked as cut."""
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + " …"
+
+
 def _head(repo_dir: Path) -> str | None:
     try:
         return isolate.head(repo_dir, "HEAD")
@@ -941,7 +953,7 @@ def verify_cell(cell: Cell) -> Cell:
 
 
 def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, changed: Sequence[str],
-                   known: Sequence[Mapping[str, str]] = ()) -> str:
+                   known: Sequence[Mapping[str, str]] = (), verified: str | None = None) -> str:
     """What the verifier is given: the request in its words and the change, never the worker's account."""
     shown = ", ".join(changed[:20]) + (f" and {len(changed) - 20} more" if len(changed) > 20 else "")
     parts = [f"Check this change. The request it answers ({kind}), verbatim:\n{text}"]
@@ -950,6 +962,9 @@ def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, change
     where = (f"The change is in {workdir}: `git diff {base}` shows it against the base commit {base}, the state "
              "before it." if base else f"The change is in {workdir}, uncommitted: `git diff` shows it.")
     parts.append(f"{where} Files it changed: {shown}.")
+    if verified:
+        parts.append(f"cauce ran `{verified}` on this change and it passed: do not run it again. Read the diff; "
+                     "run a narrower command only to show a finding.")
     if known:
         parts.append("The previous check found these; say for each whether it is fixed, and report any new "
                      "problem apart:\n" + findings_mod.text(known))
@@ -960,7 +975,7 @@ def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, change
 def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec,
                        workdir: Path, base: str | None, changed: Sequence[str], risk: risk_mod.Risk,
                        ledger: dict[str, Mapping[str, str]], corrections: int, launcher: Launcher, store: Store,
-                       task_id: int, nth: int, say: Callable[[str], None]
+                       task_id: int, nth: int, say: Callable[[str], None], verified: str | None = None
                        ) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int]:
     """A pass checked again by a worker that verifies the request, not the work.
 
@@ -971,7 +986,8 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     role = roles.internal("verifier")
     vcell = verify_cell(cell)
     check = dataclasses.replace(
-        spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values())), cell=vcell,
+        spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values()), verified),
+        cell=vcell,
         model_id=models.pinned(vcell.model), permission_mode=grants.mode_for(vcell.model),
         disallowed_tools=tuple(dict.fromkeys([*spec.disallowed_tools, *launch.WRITE_TOOLS])),
         append_system_prompt=roles.brief(role).system_prompt, mcp_servers={},
@@ -1002,7 +1018,8 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
         say(f"cauce: #{task_id} the independent check found {len(blockers)} problem(s): a correction")
         failed = dataclasses.replace(
             result, passed=False, failure=Failure.CODE_BUG, cost_usd=cost,
-            summary=f"the independent check found {len(blockers)} problem(s) this change caused: {result.summary}",
+            summary=f"the independent check found {len(blockers)} problem(s) this change caused: "
+                    f"{findings_mod.line(blockers)}. The worker's account: {result.summary}",
             evidence=f"The independent check found:\n{found}\n\nIts probes:\n{verdict.evidence[-1500:]}")
         return failed, None, ledger, corrections + 1
     why = ("after the correction it found problems the first check had not: a new finding earns no round"
@@ -1010,7 +1027,8 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     stop = stops.Stop("review", f"the independent check still finds problems; {why}", attempt=nth,
                       account=found[:2000])
     failed = dataclasses.replace(result, passed=False, failure=Failure.CODE_BUG, cost_usd=cost,
-                                 summary=f"the independent check still finds problems: {result.summary}",
+                                 summary=f"the independent check still finds problems: {findings_mod.line(blockers)}. "
+                                         f"The worker's account: {result.summary}",
                                  evidence=found)
     return failed, stop, ledger, corrections
 
@@ -1031,6 +1049,8 @@ def brief(
         parts.append(listed)
     if bounds := surfaces_mod.brief(surfaces):
         parts.append(bounds)
+    if writes and (held := scope.brief(scope.open_phrases(text))):
+        parts.append(held)
     if context:
         parts.append("\n".join(context))
     if not writes:
@@ -1042,6 +1062,14 @@ def brief(
                      "`spec_bug` when the task asks for a change, which you cannot make here.")
     if verify:
         parts.append(f"When you report a pass, it is checked by running: {verify}")
+    if attempts and writes:
+        # A retry knows what failed: the narrow check answers it in seconds, and
+        # the full run, which cauce or the worker's last step makes anyway, is
+        # paid once instead of at every try.
+        parts.append("This is a retry. Check first with the narrowest command that covers what failed last and "
+                     "what you change (those tests, those files), not the whole suite. "
+                     + (f"Leave the full run to cauce: it runs `{verify}` once you report a pass."
+                        if verify else "Run the full suite once, at the end, before you report a pass."))
     if dead_ends:
         lines = ["Fixes already tried against similar problems, here or in another repository. "
                  "Do not repeat one without saying why it would work this time:"]
