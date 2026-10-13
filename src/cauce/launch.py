@@ -38,6 +38,7 @@ from typing import Any
 from cauce import allow, grants, models
 from cauce import criteria as criteria_mod
 from cauce import findings as findings_mod
+from cauce import ledger as ledger_mod
 from cauce.escalate import REPLAN, Failure
 from cauce.isolate import is_artifact
 from cauce.matrix import Cell
@@ -69,7 +70,8 @@ When you are done, end your reply with exactly one fenced block:
   "findings": [{{"where": "path:line", "what": "the problem",
                 "evidence_class": "deterministic" | "inferential" | "insufficient",
                 "cause": "introduced" | "worsened" | "pre-existing" | "unknown",
-                "proof": "the command or hunk that shows it"}}]
+                "proof": "the command or hunk that shows it"}}],
+  "verdicts": [{{"id": "F1", "verdict": "one of the words the task gives", "proof": "what shows it"}}]
 }}
 ```
 
@@ -118,6 +120,9 @@ When you are done, end your reply with exactly one fenced block:
   change being checked is to blame, `pre-existing` when it was there before
   (check the base commit), `unknown` when you cannot tell. `[]` when there is
   none, or when you were not asked to find problems.
+- `verdicts`: when the task gives you ledger rows `F1..Fn` to decide, one entry
+  for each, with one of the words it names. A pass that leaves one out is not a
+  pass. `[]` otherwise.
 """.strip()
 
 Runner = Callable[..., subprocess.CompletedProcess]
@@ -154,6 +159,9 @@ class LaunchSpec:
     append_system_prompt: str = ""
     #: The criteria `S#` the task lists: a pass must say each one is met.
     criteria: tuple[str, ...] = ()
+    #: The ledger rows the task decides, and the words a verdict may use (`cauce.ledger`).
+    verdicts: tuple[str, ...] = ()
+    verdict_words: tuple[str, ...] = ()
     persist_session: bool = False
     #: Extra environment for the worker: which task and attempt it is, so its
     #: tool calls are recorded against them.
@@ -193,6 +201,8 @@ class WorkerResult:
     criteria: tuple[dict[str, Any], ...] = ()
     #: The problems it reports, as records (`cauce.findings`).
     findings: tuple[dict[str, str], ...] = ()
+    #: Its answer for each ledger row it was given.
+    verdicts: tuple[dict[str, str], ...] = ()
     #: Refused writes to files the attempt changed anyway, per git: no block.
     overcome: tuple[str, ...] = ()
     #: The launch broke (a timeout, no JSON, an errored session), not the work:
@@ -346,6 +356,7 @@ def parse(
     common["learned"] = learned(block)
     common["criteria"] = criteria_mod.read(block)
     common["findings"] = findings_mod.read(block)
+    common["verdicts"] = ledger_mod.read(block)
     if verdict == "pass":
         if not evidence.strip():
             return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
@@ -358,6 +369,11 @@ def parse(
         if left_out:
             return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
                                 f"claimed a pass without saying whether {', '.join(left_out)} is met: " + summary,
+                                evidence, raw=text, verdict=verdict, **common)
+        undecided = ledger_mod.missing(spec.verdicts, spec.verdict_words, common["verdicts"])
+        if undecided:
+            return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
+                                f"claimed a pass without a verdict on {', '.join(undecided)}: " + summary,
                                 evidence, raw=text, verdict=verdict, **common)
         return WorkerResult(True, None, summary, evidence, raw=text, verdict=verdict, **common)
     failure = _refused(_failure(block.get("failure"), verdict), denied)

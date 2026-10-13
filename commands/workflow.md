@@ -70,6 +70,11 @@ How to write the steps:
 - **Surfaces:** `--surfaces` bounds where a writing step may change files. A
   change outside them fails the attempt and is undone. Steps with disjoint
   surfaces run side by side.
+- **Review ledger:** after review steps, `--ledger refute` decides the
+  findings only one review saw, `--ledger fix` fixes only the confirmed ones,
+  and `--ledger recheck` checks each one. Reviews never vote. A row still open
+  gets a second round, then the run waits on the person. `dual-review` is
+  built this way.
 - **Checks:** give a writing step a `verify` command when the repository has
   one. cauce runs it itself.
 - **Memory:** a step can carry cauce memory into its brief, for considerations
