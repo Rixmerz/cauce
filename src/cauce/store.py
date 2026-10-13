@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS usage (
   sidechain INTEGER NOT NULL DEFAULT 0, ts TEXT
 );
 CREATE INDEX IF NOT EXISTS usage_ts ON usage (ts);
+CREATE INDEX IF NOT EXISTS usage_task ON usage (task_id);
+CREATE INDEX IF NOT EXISTS usage_session ON usage (session_id);
 CREATE TABLE IF NOT EXISTS transcript_offsets (path TEXT PRIMARY KEY, offset INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS tool_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, task_id INTEGER, attempt INTEGER, ts TEXT NOT NULL,
@@ -664,6 +666,20 @@ class Store:
             "sum(output_tokens) AS output_tokens, sum(cache_read) AS cache_read, sum(cache_write) AS cache_write "
             f"FROM usage WHERE ts >= datetime('now', ?) {scope} GROUP BY model ORDER BY output_tokens DESC",
             [f"-{int(days)} days", *params]).fetchall()
+        return [dict(r) for r in rows]
+
+    def usage_by(self, column: str, values: Iterable[Any]) -> list[dict]:
+        """Tokens per model for each task id or session id in `values`, as `key`."""
+        if column not in ("task_id", "session_id"):
+            raise ValueError(f"usage is kept by task_id or session_id, not {column}")
+        keys = list(values)
+        if not keys:
+            return []
+        marks = ", ".join("?" for _ in keys)
+        rows = self._conn.execute(
+            f"SELECT {column} AS key, model, sum(input_tokens) AS input_tokens, "  # noqa: S608
+            "sum(output_tokens) AS output_tokens, sum(cache_read) AS cache_read, sum(cache_write) AS cache_write "
+            f"FROM usage WHERE {column} IN ({marks}) GROUP BY {column}, model", keys).fetchall()
         return [dict(r) for r in rows]
 
     def session_models(self, *, days: int = 30) -> list[str]:

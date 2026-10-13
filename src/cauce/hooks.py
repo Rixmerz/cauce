@@ -64,6 +64,10 @@ def _context(event_name: str, text: str) -> dict:
     return {"hookSpecificOutput": {"hookEventName": event_name, "additionalContext": text}}
 
 
+#: How Claude Code hands a background subagent's final report back to the session.
+_HANDBACK = re.compile(r'^<agent-message from="([^"]+)">\s*\[Subagent hand-back\]')
+
+
 def _ignored(text: str) -> bool:
     stripped = text.strip()
     # Harness-generated turns (task notifications, local command output) are not
@@ -88,6 +92,9 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
     text = str(event.get("prompt") or "")
     if session_id and text.lstrip().startswith("<task-notification"):
         _background_child_finished(session_id, text, store)
+        return None
+    if session_id and (handback := _HANDBACK.match(text.lstrip())):
+        _handed_back(store, event, handback.group(1), text)
         return None
     if not session_id or _ignored(text):
         return None
@@ -140,6 +147,23 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
     return _context("UserPromptSubmit", "\n\n".join(blocks)) if blocks else None
 
 
+def _handed_back(store: Store, event: Mapping[str, Any], agent_id: str, text: str) -> None:
+    """A subagent's report is no request: it joins the task that delegated the work,
+    which records the answer the session gives on it."""
+    session_id = str(event["session_id"])
+    tool_use = None
+    if event.get("transcript_path"):
+        from cauce import usage
+
+        tool_use = usage.subagent_tool_use(event["transcript_path"], agent_id)
+    child = store.delegation(session_id, tool_use) if tool_use else None
+    task = store.get_task(child["parent_id"]) if child and child["parent_id"] else store.last_prompt_task(session_id)
+    if task is None:
+        return
+    store.add_message(task["id"], "subagent", text)
+    store.update_task(task["id"], status="running", prompt_id=event.get("prompt_id"))
+
+
 def _kick(cwd: str | None, key: str | None) -> str:
     from cauce import dispatch
 
@@ -165,8 +189,10 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
         from cauce import usage
 
         # What this session's turns cost, by the model that served them.
-        usage.ingest(store, event["transcript_path"], session_id=session_id,
-                     task_id=target["id"] if target else None, repo=target["repo"] if target else None)
+        counted = {"session_id": session_id, "task_id": target["id"] if target else None,
+                   "repo": target["repo"] if target else None}
+        usage.ingest(store, event["transcript_path"], **counted)
+        usage.ingest_subagents(store, event["transcript_path"], **counted)
     from cauce import naming
 
     naming.maybe_start(store, session_id, home(), os.environ)

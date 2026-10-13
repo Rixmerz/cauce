@@ -253,13 +253,17 @@ def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:
         a["denied"] = refused.get(a["seq"], [])
         a["climb"] = climb
     finished = store.last_event(task_id, "finished")
+    children = store.children(task_id)
+    turns = usage.cost_by(store, "task_id", [task_id, *(c["id"] for c in children)])
     return {
         "task": {**_brief(task), "body": task["body"], "options": json.loads(task.get("options") or "{}"),
-                 "class_source": task["class_source"], "class_reason": task["class_reason"]},
+                 "class_source": task["class_source"], "class_reason": task["class_reason"],
+                 # What the session's own turns on it cost, its subagents' included; cost_usd is workers'.
+                 "turns_usd": round(sum(turns.values()), 4)},
         "plan": (store.last_event(task_id, "planned") or {}).get("data"),
         "attempts": attempts,
         "messages": [{**m, "author": author(m["role"], task)} for m in store.messages(task_id)],
-        "children": [_brief(c) for c in store.children(task_id)],
+        "children": [{**_brief(c), "turns_usd": turns.get(c["id"], 0.0)} for c in children],
         "stop": stops.view(store, task),
         "branch": finished["data"].get("branch") if finished else None,
         "impact": finished["data"].get("impact", []) if finished else [],
@@ -306,6 +310,7 @@ def task_diff(store: Store, task_id: int) -> dict[str, Any] | None:
 
 #: Who wrote a message, in words.
 AUTHORS = {"person": "you", "orchestrator": "main session (orchestrator)", "assistant": "main session's answer",
+           "subagent": "subagent's report",
            "worker": "cauce report"}
 
 
@@ -456,7 +461,8 @@ def sessions(store: Store, repos: set[str] | None = None, limit: int = 100) -> l
                     "name": name, "named_by": ("you" if project.person_named(entry) else "haiku") if name else None})
         if len(out) >= limit:
             break
-    return out
+    turns = usage.cost_by(store, "session_id", [s["id"] for s in out])
+    return [{**s, "turns_usd": turns.get(s["id"], 0.0)} for s in out]
 
 
 SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")

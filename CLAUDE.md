@@ -34,7 +34,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
 | `src/cauce/habits.py` | mining sequences per repository (and the ones several repositories share), recipes for the brief, and approval-gated habit hooks |
-| `src/cauce/usage.py` | tokens per model from session transcripts, and spend by model and cell |
+| `src/cauce/usage.py` | tokens per model from session transcripts and their subagents' (counted to the delegation that started each), spend by model and cell, and what a task's or a session's own turns cost |
 | `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, the stale sweep |
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |

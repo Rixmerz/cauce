@@ -1,5 +1,5 @@
 import { get } from "./net.js";
-import { h, kindChip, short, statusBadge, usd, when } from "./util.js";
+import { h, kindChip, short, statusBadge, TURNS_TITLE, usd, when } from "./util.js";
 
 const drawer = () => document.getElementById("drawer");
 const MARK = { completed: "☑", in_progress: "◐", pending: "☐" };
@@ -30,7 +30,8 @@ export async function renderSessions(ctx) {
     s.running ? h("span", { class: "chip ok" }, `${s.running} running`) : null,
     progress(s.plan),
     h("span", {}, `${s.prompts} prompt${s.prompts === 1 ? "" : "s"}`),
-    s.cost_usd ? h("span", {}, usd(s.cost_usd)) : null,
+    s.cost_usd ? h("span", { title: "cauce's workers" }, `workers ${usd(s.cost_usd)}`) : null,
+    s.turns_usd ? h("span", { title: TURNS_TITLE }, `turns ${usd(s.turns_usd)}`) : null,
     h("span", {}, `last seen ${when(s.last_seen_at)}`)),
   h("div", { class: "resume" }, h("code", {}, s.resume), copy(s.resume, ctx)))));
 }
@@ -60,7 +61,8 @@ export async function openSession(id, ctx) {
         h("div", { class: "meta row" },
           s.name ? h("span", { class: "chip", title: "edit it in .cauce/sessions.json; a name you set is kept" },
             s.named_by === "you" ? "named by you" : "named by Haiku") : null,
-          h("span", {}, `${s.prompts} prompt${s.prompts === 1 ? "" : "s"}`), h("span", {}, usd(s.cost_usd)),
+          h("span", {}, `${s.prompts} prompt${s.prompts === 1 ? "" : "s"}`), h("span", { title: "cauce's workers" }, `workers ${usd(s.cost_usd)}`),
+          h("span", { title: TURNS_TITLE }, `turns ${usd(s.turns_usd || 0)}`),
           h("span", {}, `last seen ${when(s.last_seen_at)}`), h("code", {}, s.id))),
       h("div", { class: "row" }, copy(s.resume, ctx), h("button", { onclick: close, "aria-label": "close" }, "✕"))),
     h("div", { class: "section" }, h("h2", {}, "Its task list"), planList(d.plan)),

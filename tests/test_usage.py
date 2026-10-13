@@ -61,3 +61,34 @@ def test_spend_joins_sessions_and_workers(store: Store, tmp_path):
     assert report["sessions"][0]["family"] == "opus" and report["sessions"][0]["usd"] > 20
     assert report["workers"][0]["cell"] == "haiku" and report["workers"][0]["usd"] == 0.25
     assert report["total_usd"] == round(report["sessions"][0]["usd"] + 0.25, 4)
+
+
+def test_subagents_are_counted_to_the_delegation_that_started_them(store: Store, tmp_path):
+    transcript = tmp_path / "s.jsonl"
+    transcript.write_text(line("m1"))
+    folder = usage.subagents_folder(transcript)
+    assert usage.ingest_subagents(store, transcript, session_id="s", task_id=None, repo="r") == 0  # none yet
+    folder.mkdir(parents=True)
+    parent = store.create_task("build it", status="running", source="hook", session_id="s", repo="r")
+    child = store.create_task("write the server", status="running", source="delegation", session_id="s",
+                              parent_id=parent["id"], repo="r", prompt_id="tu1")
+    (folder / "agent-a1.jsonl").write_text(line("m2", sidechain=True, out=3000))
+    (folder / "agent-a1.meta.json").write_text(json.dumps({"toolUseId": "tu1", "agentType": "general-purpose"}))
+    (folder / "agent-a2.jsonl").write_text(line("m3", sidechain=True))  # no meta: the turn's task
+    (folder / "agent-a3.jsonl").write_text(line("m4", sidechain=True))
+    (folder / "agent-a3.meta.json").write_text("not json")
+    assert usage.subagent_tool_use(transcript, "a1") == "tu1" and usage.subagent_tool_use(transcript, "a3") is None
+    assert usage.ingest_subagents(store, transcript, session_id="s", task_id=parent["id"], repo="r") == 3
+    assert usage.ingest_subagents(store, transcript, session_id="s", task_id=parent["id"], repo="r") == 0
+    by_task = usage.cost_by(store, "task_id", [parent["id"], child["id"]])
+    assert set(by_task) == {parent["id"], child["id"]} and by_task[child["id"]] > by_task[parent["id"]]
+    assert usage.cost_by(store, "session_id", ["s"])["s"] == round(sum(by_task.values()), 4)
+    assert usage.cost_by(store, "task_id", []) == {}
+    assert store.usage_by_model(days=100000, repo="r")[0]["messages"] == 3
+
+
+def test_usage_is_kept_by_task_or_session_only(store: Store):
+    import pytest
+
+    with pytest.raises(ValueError, match="task_id or session_id"):
+        store.usage_by("repo", ["r"])
