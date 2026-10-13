@@ -36,6 +36,8 @@ from pathlib import Path
 from typing import Any
 
 from cauce import allow, grants, models
+from cauce import criteria as criteria_mod
+from cauce import findings as findings_mod
 from cauce.escalate import REPLAN, Failure
 from cauce.isolate import is_artifact
 from cauce.matrix import Cell
@@ -62,7 +64,12 @@ When you are done, end your reply with exactly one fenced block:
   "failure": "code_bug" | "test_bug" | "approach" | "spec_bug" | "architecture_bug" | "environment" | null,
   "summary": "one or two sentences: what you did, or what stopped you",
   "evidence": "the command you ran to check it and its real output, verbatim",
-  "learned": ["a durable fact about this project that you confirmed and the next person would want"]
+  "learned": ["a durable fact about this project that you confirmed and the next person would want"],
+  "criteria": [{{"id": "S1", "met": true, "evidence": "what shows it"}}],
+  "findings": [{{"where": "path:line", "what": "the problem",
+                "evidence_class": "deterministic" | "inferential" | "insufficient",
+                "cause": "introduced" | "worsened" | "pre-existing" | "unknown",
+                "proof": "the command or hunk that shows it"}}]
 }}
 ```
 
@@ -101,6 +108,16 @@ When you are done, end your reply with exactly one fenced block:
   business rule, why the code is shaped this way, a convention, how to run or
   test something, a trap. Not what you changed, not guesses, not anything
   plain from reading the code, never a secret. `[]` when there is none.
+- `criteria`: when the task lists criteria `S1..Sn`, one entry for each, met or
+  not, with what shows it. A pass that leaves one out, or says one is not met,
+  is not a pass. `[]` when the task lists none.
+- `findings`: when you review, audit or verify, each problem you found, as a
+  record. `evidence_class` is `deterministic` when a command, a test or the
+  diff shows it, `inferential` when you read it from the code, `insufficient`
+  when you only suspect it. `cause` is `introduced` or `worsened` when the
+  change being checked is to blame, `pre-existing` when it was there before
+  (check the base commit), `unknown` when you cannot tell. `[]` when there is
+  none, or when you were not asked to find problems.
 """.strip()
 
 Runner = Callable[..., subprocess.CompletedProcess]
@@ -135,6 +152,8 @@ class LaunchSpec:
     mcp_servers: Mapping[str, Any] = field(default_factory=dict)
     permission_mode: str = "acceptEdits"
     append_system_prompt: str = ""
+    #: The criteria `S#` the task lists: a pass must say each one is met.
+    criteria: tuple[str, ...] = ()
     persist_session: bool = False
     #: Extra environment for the worker: which task and attempt it is, so its
     #: tool calls are recorded against them.
@@ -170,6 +189,10 @@ class WorkerResult:
     permission_mode: str = ""
     #: Facts about the project the worker says it confirmed: filed in its notes on a pass.
     learned: tuple[str, ...] = ()
+    #: What the worker says of each criterion `S#` of the task: id, met, evidence.
+    criteria: tuple[dict[str, Any], ...] = ()
+    #: The problems it reports, as records (`cauce.findings`).
+    findings: tuple[dict[str, str], ...] = ()
     #: Refused writes to files the attempt changed anyway, per git: no block.
     overcome: tuple[str, ...] = ()
     #: The launch broke (a timeout, no JSON, an errored session), not the work:
@@ -321,10 +344,21 @@ def parse(
     summary = str(block.get("summary") or "")[:1000]
     evidence = str(block.get("evidence") or "")[:4000]
     common["learned"] = learned(block)
+    common["criteria"] = criteria_mod.read(block)
+    common["findings"] = findings_mod.read(block)
     if verdict == "pass":
         if not evidence.strip():
             return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
                                 "claimed a pass with no evidence: " + summary, raw=text, verdict=verdict, **common)
+        left_out, not_met = criteria_mod.unmet(spec.criteria, common["criteria"])
+        if not_met:
+            return WorkerResult(False, _refused(Failure.CODE_BUG, denied),
+                                f"claimed a pass, but says {', '.join(not_met)} is not met: " + summary, evidence,
+                                raw=text, verdict=verdict, **common)
+        if left_out:
+            return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
+                                f"claimed a pass without saying whether {', '.join(left_out)} is met: " + summary,
+                                evidence, raw=text, verdict=verdict, **common)
         return WorkerResult(True, None, summary, evidence, raw=text, verdict=verdict, **common)
     failure = _refused(_failure(block.get("failure"), verdict), denied)
     return WorkerResult(False, failure, summary, evidence, raw=text, verdict=verdict, **common)

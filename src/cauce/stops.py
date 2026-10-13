@@ -51,6 +51,7 @@ CAUSES = {
     "died": ("interrupted", "cauce"),
     "crashed": ("failed", "cauce"),
     "converged": ("failed", "worker"),
+    "review": ("blocked", "cauce"),
     "dismissed": ("dismissed", "you"),
     "superseded": ("dismissed", "cauce"),
 }
@@ -187,6 +188,8 @@ def what_to_do(stop: Stop) -> str:
         "crashed": "cauce itself failed: the reason has the error; resume once it is fixed",
         "converged": "the findings are the answer: read them in the worker's account and act on them; "
                      "resuming would only repeat them",
+        "review": "the independent check kept finding problems: read its findings, then fix what is right by "
+                  "hand or resume for one more round",
         "dismissed": "nothing: you took it off the board; resume it if you want it after all",
         "superseded": "nothing: a later task with the same text passed; resume it if you want it after all",
     }.get(stop.cause, "read the attempts")

@@ -28,6 +28,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+from cauce import findings as findings_mod
 from cauce.matrix import EFFORT_PURPOSE, MODELS, Cell
 from cauce.text import reads_alike
 
@@ -101,6 +102,8 @@ class Attempt:
     evidence: str = ""
     #: The launch broke, not the work (see `WorkerResult.transient`).
     transient: bool = False
+    #: The problems it reported, as records: two cells that place the same ones agree.
+    findings: tuple[dict[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -139,9 +142,13 @@ def _repeated_pair(attempts: Sequence[Attempt]) -> tuple[int, int] | None:
     if len(failed) < 2:
         return None
     (i, a), (j, b) = failed[-2], failed[-1]
-    if a.cell != b.cell and a.failure == b.failure and reads_alike(a.summary, b.summary):
-        return i, j
-    return None
+    if a.cell == b.cell or a.failure != b.failure:
+        return None
+    if a.findings and b.findings:
+        # Findings as records: the same places named is the same answer, whatever the words.
+        same = findings_mod.places(a.findings) == findings_mod.places(b.findings) != frozenset()
+        return (i, j) if same else None
+    return (i, j) if reads_alike(a.summary, b.summary) else None
 
 
 def _position(ladder: Sequence[Cell], cell: Cell) -> int:

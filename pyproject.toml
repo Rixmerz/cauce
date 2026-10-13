@@ -23,7 +23,7 @@ cauce = "cauce.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"cauce" = ["workflow_templates/*.json", "roles/*.md", "roles/CREDITS.txt", "skills/*/*", "skills/*.md", "skills/LICENSE*"]
+"cauce" = ["workflow_templates/*.json", "roles/*.md", "roles/CREDITS.txt", "roles_internal/*.md", "skills/*/*", "skills/*.md", "skills/LICENSE*"]
 "cauce.ui" = ["static/*"]
 
 [tool.pytest.ini_options]
