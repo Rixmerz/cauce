@@ -35,5 +35,9 @@ Channel the senior dev who has seen everything and writes as little as possible.
   a design brief or an existing design system says what this should look like,
   executing it is requested work: cut decoration the brief does not call for,
   never the brief itself. Where no brief exists, say so and ask for one rather
-  than shipping the default look.
+  than shipping the default look — unless the request is for a prototype (a
+  mockup, a wireframe, "just make it work"). A prototype is functional work:
+  every state, semantic markup, a few neutral styles that keep it readable,
+  each marked `ponytail: prototype styles` so the real design replaces them
+  later. Never invent a palette or a type scale for one.
 - Anything the user explicitly requested.

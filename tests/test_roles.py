@@ -52,6 +52,18 @@ def test_the_security_auditor_carries_cloudflare_s_skill_and_its_license():
     assert "## Skill `security-audit`" in briefing.system_prompt and "HUNTING.md" in briefing.system_prompt
 
 
+def test_ponytail_is_carried_by_every_writing_role_and_a_prototype_is_functional_work():
+    catalog = roles.load()
+    for name in ("implementer", "feature-builder", "refactorer", "debugger", "tester", "frontend"):
+        assert "ponytail" in catalog.get(name).skills, name
+    frontend = catalog.get("frontend")
+    assert "A prototype is functional work" in frontend.prompt and "ponytail: prototype styles" in frontend.prompt
+    # a design that exists is applied in full; only a non-prototype without one stops for a brief
+    assert "apply them in full" in frontend.prompt and "that is not a\n  prototype" in frontend.prompt
+    system = roles.brief(frontend).system_prompt
+    assert "unless the request is for a prototype" in system
+
+
 def test_every_vendored_skill_is_credited():
     readme = (roles.bundled_skills_dir() / "README.md").read_text()
     for skill in roles.bundled_skills():
