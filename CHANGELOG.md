@@ -2,6 +2,73 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-14
+
+### Added
+
+- **Preflight: a worker is never launched into an environment that will stop
+  it.** Before the first attempt of a task, and before a resume, cauce checks
+  what it can for free, with no model call (`cauce.preflight`). In a real
+  store, a week of environment stops each spent at least one attempt finding
+  out what these checks say at once:
+  - the `--verify` command's programs on the worker's PATH (the project's Node
+    first), and an npm script or `package.json` it needs;
+  - the API: the host `ANTHROPIC_BASE_URL` or a proxy names, resolved and
+    connected; an unreachable one is waited for with backoff for up to three
+    minutes, then stops the task as `environment` without an attempt. A retry
+    after a broken launch waits the same way instead of spending itself;
+  - the budget: it must pay for one attempt at the starting cell (the cheapest
+    quarter of passing attempts there, or a floor per model in `matrix`), and
+    a warning says when it cannot pay for one climb too, with the amount that
+    would;
+  - the base: a task that names one ("from branch X", "on branch X", "at
+    <sha>") gets a worktree from it, and stops when it does not resolve;
+  - inputs a worktree will not have: paths the task names that git ignores or
+    does not track, with `--no-isolate` named;
+  - requirements: an `environment` stop whose worker named a missing program,
+    Python module or local port is kept as an `environment` note with a probe,
+    only when cauce's own probe confirms it; the next task here that reads
+    like it is checked for it, and a probe that passes clears it;
+  - a browser, running servers, and a login with no test account in the
+    project's notes: warnings, as before.
+
+  A blocker stops the task as `blocked` (cause `preflight`, or `budget` or
+  `environment`) with the command that continues it; warnings print in the
+  run's header. `cauce run --dry-run` prints the findings, and `cauce
+  preflight "<task>" [--verify …]` runs them alone.
+- Workers may always read git: `status`, `log`, `diff`, `show`, `rev-parse`,
+  `branch --list`/`--show-current`, `merge-base`, `ls-files`, `blame`,
+  `describe`. A resumed worker was refused `git status --short`.
+
+### Changed
+
+- **Turns are sized from evidence.** A first attempt starts with what 80% of
+  passing attempts of its kind used (in the repository with enough history,
+  else everywhere), never below the kind's default and never above 120; the
+  plan says where the number came from. 17 attempts in a week hit a fixed cap
+  of 30 or 60 and were run again. Every worker is told its turns and asked to
+  leave its work resumable.
+- **An attempt that ran out of turns is continued, not replaced.** The next
+  attempt resumes the same CLI session (`--resume`) in the same worktree, and
+  so does `cauce resume` of a task that outgrew its turns.
+- **Budget is checked before every attempt.** Below what the next cell needs,
+  the task stops as `budget` before launching, with `cauce resume <id>
+  --budget N` computed for that cell instead of twice the last budget.
+- Workflow steps with no budget get one from their kind's history.
+
+### Fixed
+
+- **A hook's refusal is not a permission refusal.** A PreToolUse hook that
+  refused `git add` was reported as a setting, with `--allow 'Bash(git add:*)'`
+  suggested, which cannot get past a hook. It now stops as `hook`, with the
+  hook's own message, and no rule is suggested.
+- **Shared refs are never rewritten by a worker.** `git reset`, `git branch
+  -f/-D/-M`, `git push --force` and `git update-ref` are denied to every
+  worker, and `git checkout`, `git switch` and `git rebase` to one working in
+  the person's checkout, whatever was allowed. cauce never suggests them, and
+  `cauce allow` and `--keep` refuse to keep them. A worker once moved a branch
+  the person's checkout shared with `git reset`.
+
 ## [0.14.2] - 2026-10-13
 
 ### Fixed

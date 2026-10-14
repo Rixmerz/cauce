@@ -152,6 +152,18 @@ TURNS = {"feature": 60}
 def turns_for(kind: str) -> int:
     return TURNS.get(kind, DEFAULT_TURNS)
 
+
+#: Where history may take a first attempt's turns, and no further: past it a
+#: task is split, not given a bigger worker.
+MAX_START_TURNS = 120
+
+#: The least an attempt on each model costs before it can do more than orient
+#: itself, when history has no number for the kind and cell: an attempt launched
+#: with $0.09 read three files and stopped. Below it, the run stops before
+#: launching instead of paying for an attempt that cannot finish.
+MIN_ATTEMPT_USD = {"haiku": 0.05, "sonnet": 0.25, "opus": 0.5, "fable": 1.0}
+
+
 KINDS: tuple[str, ...] = tuple(LADDERS)
 
 #: Kinds whose work is reading, not writing. Their workers get no edit tools,

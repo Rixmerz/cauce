@@ -8,7 +8,7 @@ import pytest
 
 from cauce import launch
 from cauce.escalate import Failure
-from cauce.launch import LaunchSpec, build_argv, parse, result_block
+from cauce.launch import LaunchSpec, build_argv, parse, result_block, turn_budget
 from cauce.matrix import Cell
 
 from .conftest import git
@@ -53,7 +53,7 @@ def test_argv_carries_every_ceiling_and_restriction(tmp_path):
     assert val("--max-turns") == "12" and val("--max-budget-usd") == "1.50"
     assert val("--tools") == "Read,Bash" and val("--disallowedTools") == "Edit,Write"
     assert val("--add-dir") == str(work) and val("--mcp-config") == str(tmp_path / "m.json")
-    assert val("--append-system-prompt") == "hint"
+    assert val("--append-system-prompt") == "hint\n\n" + turn_budget(12)
     assert "--strict-mcp-config" in argv and "--no-session-persistence" in argv
 
 

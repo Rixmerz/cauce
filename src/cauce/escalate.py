@@ -17,7 +17,8 @@ circles:
   should not exist; the run stops and says so.
 - **Blocked** — a person has to act: the environment failed twice, or the
   worker was refused a command (a refusal is a setting, so retrying it, or
-  sending a stronger model into it, gets the same refusal).
+  sending a stronger model into it, gets the same refusal), or a hook the
+  person installed refused one (no rule gets past a hook).
 
 Deliberately absent from the inputs: the model's stated confidence. A model's
 opinion of its own output is not evidence about the output.
@@ -42,6 +43,7 @@ class Failure(StrEnum):
     ARCHITECTURE_BUG = "architecture_bug"
     ENVIRONMENT = "environment"  # never attempted: timeout, missing tool, transport
     PERMISSION = "permission"  # a tool call the worker needed was refused by the permission settings
+    HOOK = "hook"  # a PreToolUse hook the person installed refused a tool call
     TURNS_EXHAUSTED = "turns_exhausted"
     BUDGET_EXHAUSTED = "budget_exhausted"  # the attempt's own spending cap
 
@@ -56,6 +58,7 @@ MEANING = {
     Failure.ARCHITECTURE_BUG: "the design the task assumes is wrong",
     Failure.ENVIRONMENT: "the work never ran: a timeout, a missing tool, a transport error",
     Failure.PERMISSION: "a tool call the worker needed was refused by the permission settings",
+    Failure.HOOK: "a hook the person installed refused a tool call the worker needed",
     Failure.TURNS_EXHAUSTED: "the worker used all its turns before a verdict",
     Failure.BUDGET_EXHAUSTED: "the attempt reached its own spending cap before a verdict",
 }
@@ -104,6 +107,9 @@ class Attempt:
     transient: bool = False
     #: The problems it reported, as records: two cells that place the same ones agree.
     findings: tuple[dict[str, str], ...] = ()
+    #: Calls a PreToolUse hook refused, and what the hook said.
+    hooked: tuple[str, ...] = ()
+    hook_message: str = ""
 
 
 @dataclass(frozen=True)
@@ -226,6 +232,17 @@ def decide(
                                  "a refusal is a setting: a retry, or a stronger model, gets the same refusal",
                                  *([f"the rules that let it through, one per program: {', '.join(last.allow)}"]
                                    if last.allow else [])))
+
+    if failure is Failure.HOOK or (last.hooked and failure not in REPLAN):
+        # A hook said no: its finding is the person's to resolve, or the hook
+        # theirs to adjust. No rule gets past it, so none is suggested.
+        refused = ", ".join(last.hooked[:3]) or "a tool call"
+        said = f": {last.hook_message}" if last.hook_message else ""
+        return Decision(Move.BLOCKED, reason=f"a hook you installed refused {refused}{said}; resolve what it "
+                                             "reports or adjust the hook, then resume",
+                        because=(seen, f"refused by a PreToolUse hook: {refused}",
+                                 "a hook is the person's own check: no --allow rule gets past it, and a "
+                                 "stronger model meets the same hook"))
 
     if failure is Failure.ENVIRONMENT:
         retries = sum(1 for a in attempts if a.failure is Failure.ENVIRONMENT)

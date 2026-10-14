@@ -758,6 +758,23 @@ class Store:
     def last_event_id(self) -> int:
         return int(self._conn.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()[0])
 
+    def passing_attempts(self, kind: str, *, cell: str | None = None, repo: str | None = None,
+                         limit: int = 50) -> list[dict]:
+        """The latest passing attempts of a kind (at one cell, in one repository):
+        their turns and cost, which is what the next attempt is sized from."""
+        scope, params = "", [kind]
+        if cell is not None:
+            scope += " AND a.cell = ?"
+            params.append(cell)
+        if repo is not None:
+            scope += " AND t.repo = ?"
+            params.append(repo)
+        rows = self._conn.execute(
+            "SELECT a.turns, a.cost_usd, a.cell FROM attempts a JOIN tasks t ON t.id = a.task_id "  # noqa: S608
+            "WHERE t.kind = ? AND t.source = 'cauce' AND a.passed = 1" + scope
+            + " ORDER BY a.id DESC LIMIT ?", [*params, limit]).fetchall()
+        return [dict(r) for r in rows]
+
     def expected_cost(self, kind: str, *, repo: str | None = None, limit: int = 20) -> tuple[float, int] | None:
         """The average cost of the last finished tasks of a kind, and how many."""
         scope, params = ("AND repo = ?", [repo]) if repo is not None else ("", [])

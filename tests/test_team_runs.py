@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from cauce import capabilities as caps
-from cauce import cli, launch, roles, teams
+from cauce import cli, grants, launch, roles, teams
 from cauce.matrix import Cell
 from cauce.orchestrate import Options, run
 from cauce.store import home
@@ -45,7 +45,8 @@ def test_a_project_s_team_limits_the_kinds_and_its_role_takes_tools_away(git_rep
                  classifier=kind("explore"))
     spec = script.specs[0]
     assert report.plan.kind == "implement" and "no role for" in report.plan.classification.reason
-    assert spec.disallowed_tools == ("WebFetch",) and "Go slow." in spec.append_system_prompt
+    assert spec.disallowed_tools[0] == "WebFetch" and "Go slow." in spec.append_system_prompt
+    assert spec.disallowed_tools[1:] == grants.denied(isolated=True)  # narrowed to implement: a worktree
     reasons = " | ".join(report.plan.reasons)
     assert "the team chosen for this project (narrow)" in reasons
     assert "skill(s) ghost not found" in reasons and "capability absent is not in your registry" in reasons
@@ -126,9 +127,10 @@ def test_a_long_system_prompt_goes_in_a_file(tmp_path):
 
     spec = launch.LaunchSpec("p", Cell("sonnet", "medium"), tmp_path, append_system_prompt="x" * 20000)
     launch.run(spec, runner=runner)
-    assert seen["text"] == "x" * 20000 and "--append-system-prompt" not in seen["argv"]
+    assert seen["text"] == launch.system_prompt(spec) and seen["text"].startswith("x" * 20000)
+    assert "--append-system-prompt" not in seen["argv"]
     short = launch.build_argv(launch.LaunchSpec("p", Cell("sonnet", "medium"), tmp_path, append_system_prompt="y"))
-    assert short[short.index("--append-system-prompt") + 1] == "y"
+    assert short[short.index("--append-system-prompt") + 1].startswith("y\n\nYou have 30 turns")
 
 
 # --- the commands -----------------------------------------------------------------------

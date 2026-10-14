@@ -35,8 +35,8 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from cauce import dispatch, isolate, ledger, project, repo, surfaces
-from cauce.matrix import KINDS, Cell
+from cauce import dispatch, isolate, ledger, preflight, project, repo, surfaces
+from cauce.matrix import KINDS, Cell, ladder_for
 from cauce.store import Store, home
 
 SCOPES = ("project", "user", "bundled")
@@ -650,7 +650,8 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
                  f"`git diff {options['origin'][:12]}` shows it.")
     opts = {k: v for k, v in {
         "kind": step.get("kind"), "verify": step.get("verify"), "start": step.get("start"),
-        "budget_usd": step.get("budget_usd") or options.get("budget_usd"), "max_turns": step.get("max_turns"),
+        "budget_usd": step.get("budget_usd") or options.get("budget_usd") or _step_budget(store, step, run["repo"]),
+        "max_turns": step.get("max_turns"),
         "allow_tools": options.get("allow_tools") or None, "allow_approval": options.get("allow_approval") or None,
         "base": base, "step_role": step.get("role"), "surfaces": step.get("surfaces"),
         "ledger": held}.items() if v is not None}
@@ -744,6 +745,14 @@ def _before(defn: Mapping[str, Any], step_id: str) -> list[str]:
             seen.add(sid)
             todo.extend(needs[sid])
     return [s["id"] for s in defn["steps"] if s["id"] in seen]
+
+
+def _step_budget(store: Store, step: Mapping[str, Any], repo: str | None) -> float | None:
+    """A step that names no budget, and a run given none: what its kind has cost
+    here before (`preflight.estimate`), instead of the flat default. None without
+    a kind or its history, and the default holds."""
+    kind = step.get("kind")
+    return preflight.estimate(store, kind, ladder_for(kind), repo) if kind else None
 
 
 def _base(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step_id: str,

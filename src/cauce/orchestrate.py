@@ -16,10 +16,10 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import json
+import math
 import os
 import re
 import shlex
-import socket
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -37,6 +37,7 @@ from cauce import (
     launch,
     models,
     notes,
+    preflight,
     project,
     repo,
     roles,
@@ -53,7 +54,7 @@ from cauce import surfaces as surfaces_mod
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify, narrow
 from cauce.escalate import Attempt, Decision, Failure, Move, decide
-from cauce.matrix import DEFAULT_TURNS, EFFORTS, READ_ONLY_KINDS, Cell, ladder_for, turns_for
+from cauce.matrix import EFFORTS, MAX_START_TURNS, READ_ONLY_KINDS, Cell, ladder_for, turns_for
 from cauce.store import Store, home
 
 #: Failures that describe something tried against the problem, worth keeping
@@ -80,6 +81,10 @@ KEEPS_WORK = frozenset({"done", "blocked", "needs_approval"})
 #: How many finished tasks of a kind it takes before history moves the start.
 MIN_REPO_SAMPLES = 3
 MIN_GLOBAL_SAMPLES = 5
+#: How many passing attempts of a kind size its first attempt's turns, and the
+#: share of them that fit in what it starts with.
+MIN_TURN_SAMPLES = 5
+TURN_PERCENTILE = 0.8
 VERIFY_TIMEOUT_S = 900
 
 Launcher = Callable[[launch.LaunchSpec], launch.WorkerResult]
@@ -118,6 +123,9 @@ class Options:
     step_role: str | None = None
     #: A workflow step's part in a review ledger (`cauce.ledger`): its role, round and rows.
     ledger: dict | None = None
+    #: The CLI session a resumed task's last worker left when it ran out of turns:
+    #: the first attempt continues it. Never stored: it is read from the attempt.
+    resume_session: str | None = None
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -152,6 +160,8 @@ class Plan:
     role_why: str = ""
     #: How much the change can hurt, from the request; attempts may raise it.
     risk: risk_mod.Risk = field(default_factory=risk_mod.Risk)
+    #: The turns a first attempt starts with, from history (`start_turns`).
+    turns: int = 0
 
 
 @dataclass
@@ -181,6 +191,8 @@ class Report:
     #: What the passing worker learned, and where each fact was filed in the notes.
     learned: tuple[str, ...] = ()
     noted: list[dict] = field(default_factory=list)
+    #: What the checks before the first attempt found (`cauce.preflight`).
+    preflight: list[preflight.Finding] = field(default_factory=list)
 
     def text(self) -> str:
         lines = [
@@ -200,6 +212,7 @@ class Report:
             lines += self.plan.context
         if self.plan.capabilities:
             lines.append(f"capabilities {', '.join(self.plan.capabilities)}")
+        lines += [f"preflight {f.kind}: {f.line()}" for f in self.preflight]
         for i, (cell, move) in enumerate(zip(self.cells, [*self.moves, ""], strict=False), 1):
             model = self.served[i - 1] if i <= len(self.served) and self.served[i - 1] else ""
             lines.append(f"attempt {i} {cell}" + (f" [{model}]" if model else "") + (f" → {move}" if move else ""))
@@ -374,7 +387,6 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     if learned:
         context.append("Steps that came before passing attempts on this kind of task here: "
                        + "; ".join(learned) + ". Use them unless the task says otherwise.")
-    neighbour_notes += _unmet(text, registry)
     for lag in models.lagging(store):
         neighbour_notes.append(f"workers last ran {lag['workers']} for `{lag['alias']}` while your sessions use "
                                f"{lag['sessions']}: the installed Claude Code's alias is older. Pin it with "
@@ -407,9 +419,33 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
                                    + ", ".join(f"#{n['id']} {n['topic']}" for n in known) + ")")
     selected = _with_role(caps.select(registry, kind, workdir=repo_dir), role, registry, repo_dir)
     names = tuple(dict.fromkeys([*selected.names, *(a.name for a, _ in active)]))
-    return Plan(kind, classification, ladder, start, reasons + neighbour_notes, names,
+    turns, turns_why = start_turns(store, kind, key)
+    if options.max_turns:
+        turns, turns_why = options.max_turns, f"starts with {options.max_turns} turns: --max-turns"
+    return Plan(kind, classification, ladder, start, [*reasons, turns_why, *neighbour_notes], names,
                 tuple(context), tuple(statuses), tuple(active), tuple(known), role, team, why,
-                risk_mod.of_request(text, kind))
+                risk_mod.of_request(text, kind), turns)
+
+
+def start_turns(store: Store, kind: str, key: str | None) -> tuple[int, str]:
+    """The turns a first attempt of this kind starts with, and where the number
+    came from: what passing attempts of the kind used (`TURN_PERCENTILE` of them
+    fit), in this repository when it has the history, else everywhere. Never
+    below the kind's own default, never above `MAX_START_TURNS`."""
+    floor = turns_for(kind)
+    for where, repo_key in (("this repository", key), ("all repositories", None)):
+        if where == "this repository" and not key:
+            continue
+        used = sorted(r["turns"] for r in store.passing_attempts(kind, repo=repo_key) if r["turns"] > 0)
+        if len(used) < MIN_TURN_SAMPLES:
+            continue
+        high = used[max(math.ceil(TURN_PERCENTILE * len(used)) - 1, 0)]
+        turns = min(max(high, floor), MAX_START_TURNS)
+        return turns, (f"starts with {turns} turns: {round(TURN_PERCENTILE * 100)}% of the last {len(used)} "
+                       f"passing {kind} attempts in {where} used {high} or fewer"
+                       + (f" (the kind's floor is {floor})" if high < floor else "")
+                       + (f" (capped at {MAX_START_TURNS})" if high > MAX_START_TURNS else ""))
+    return floor, f"starts with {floor} turns: the kind's default, with too few passing attempts to size it"
 
 
 def _team(options: Options, key: str | None, catalog: roles.Catalog) -> tuple[str, list[roles.Role], list[str]]:
@@ -480,12 +516,19 @@ def run(
     launcher = launcher or launch.run
     repo_dir = repo_dir.resolve()
     the_plan = plan(text, repo_dir, store, options, registry, classifier=classifier, adapters=adapters)
+    key = repo.key(repo_dir)
+    writes = the_plan.kind not in READ_ONLY_KINDS
+    # A reading step of a workflow reads the work of the steps before it: it gets
+    # their commit too, in a worktree its tools cannot write to.
+    isolating = options.isolate and (writes or bool(options.base)) and repo.toplevel(repo_dir) is not None
+    named_base = None if options.base else preflight.base_of(text, repo_dir)[0]
+    checks = dict(kind=the_plan.kind, ladder=the_plan.ladder, start=the_plan.start, registry=registry, project=key,
+                  options=dataclasses.replace(options, isolate=isolating, base=options.base or named_base))
     if options.dry_run:
-        return Report(None, "dry run", the_plan)
+        return Report(None, "dry run", the_plan, preflight=preflight.check(text, repo_dir, store, api=True, **checks))
     with contextlib.suppress(OSError, project.NotAProject):
         project.enroll(repo_dir)  # work run here: the project is cauce's
 
-    key = repo.key(repo_dir)
     c = the_plan.classification
     fields = dict(
         repo=key, cwd=str(repo_dir), kind=the_plan.kind, complexity=c.complexity, class_source=c.source,
@@ -510,37 +553,29 @@ def run(
     # Said as it happens: a run in a background shell is otherwise silent until
     # its report, and silence reads as a run that never started.
     say(f"cauce: task #{task['id']} started: {the_plan.kind}, at {the_plan.start.label}")
-    if not options.max_turns and turns_for(the_plan.kind) != DEFAULT_TURNS:
-        the_plan.reasons.append(f"{the_plan.kind} work starts with {turns_for(the_plan.kind)} turns: "
-                                f"at {DEFAULT_TURNS} its attempts ran out")
+    # Before any worker: what would stop it, said now and for free (`cauce.preflight`).
+    report.preflight = preflight.check(text, repo_dir, store, **checks)
+    for finding in report.preflight:
+        if not finding.blocks:
+            say(f"cauce: #{task['id']} warning: {finding.line()}")
+    blocker = next((f for f in report.preflight if f.blocks), None)
+    if blocker is not None:
+        report.stop = _preflight_stop(blocker, options)
     for reason in the_plan.reasons:
-        if reason.startswith(("this task needs", "workers here were refused before")):
+        if reason.startswith("workers here were refused before"):
             say(f"cauce: #{task['id']} warning: {reason}")
     store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label,
                     role=the_plan.role.name if the_plan.role else None, team=the_plan.team,
                     risk=the_plan.risk.data(),
                     ladder=[x.label for x in the_plan.ladder], reasons=the_plan.reasons,
                     neighbours=[st.line() for st in the_plan.neighbours])
+    if report.preflight:
+        store.add_event(task["id"], "preflight", findings=[f.as_dict() for f in report.preflight])
 
     workspace = None
-    writes = the_plan.kind not in READ_ONLY_KINDS
     declared_read_only = the_plan.kind not in _BUILDS and bool(
         _READ_ONLY.search(task.get("body") or task.get("title") or ""))
     context = list(the_plan.context)
-    # A reading step of a workflow reads the work of the steps before it: it gets
-    # their commit too, in a worktree its tools cannot write to.
-    if options.isolate and (writes or options.base) and repo.toplevel(repo_dir) is not None:
-        resumed = isolate.kept(repo_dir, task["id"])
-        workspace = isolate.prepare(repo_dir, task["id"], home(), base=options.base)
-        if resumed:
-            context.append("This task was stopped before and is resumed: what its earlier attempts wrote is "
-                           "already here. Check it, and finish it rather than starting over.")
-        if workspace.links:
-            context.append("Linked from the person's checkout and shared with it: "
-                           + ", ".join(workspace.links) + ". Use them; do not delete or reinstall them.")
-    workdir = workspace.path if workspace else repo_dir
-    launch_dir = options.launch_dir.resolve() if options.launch_dir else workdir
-
     # Strict, as the prompt hook: a task's text shares a word or two with
     # nearly every task in its repository, and a loose match puts unrelated
     # failures in front of the worker as if they were this problem's.
@@ -548,9 +583,6 @@ def run(
     if dead:
         # What the workers are shown, kept as shown: the memory grows after the run.
         store.add_event(task["id"], "dead_ends", shown=dead)
-    # The runtime the project declares goes first on the worker's PATH, and on its
-    # check's: a worker given the wrong Node hunts for another and is refused each one.
-    run_env = runtime.env_for(workdir)
     briefing = roles.brief(the_plan.role) if the_plan.role is not None else None
     # The independent check: what it found first, and how many corrections it has had.
     verifying = writes and not declared_read_only and config.enabled("verifier", os.environ)
@@ -559,26 +591,60 @@ def run(
     # A workflow step that decides ledger rows: a pass answers each, and its answers decide the run.
     deciding = options.ledger if options.ledger and options.ledger.get("role") in ledger_mod.WORDS else None
     settled: ledger_mod.Outcome | None = None
-    base_commit = workspace.base if workspace else _head(repo_dir)
-    cell, turns = the_plan.start, options.max_turns or turns_for(the_plan.kind)
+    cell, turns = the_plan.start, options.max_turns or the_plan.turns or turns_for(the_plan.kind)
+    # A worker that ran out of turns is continued, not replaced: its session goes on.
+    session = options.resume_session
     attempts: list[Attempt] = []
     changed: set[str] = set()
     decision: Decision | None = None
-    # In the checkout itself, one run at a time: the work and its check share the
-    # person's files. A run in a worktree has its own.
-    in_place = workspace is None and ((writes and not declared_read_only) or bool(options.verify))
     held = contextlib.ExitStack()
     try:
+        if report.stop is None and (gate := preflight.wait_for_api(
+                say=lambda line: say(f"cauce: #{task['id']} {line}"),
+                cancelled=lambda: _check_cancel(store, task["id"]))) is not None:
+            report.stop = _preflight_stop(gate, options)
+        if report.stop is not None:
+            report.status, report.summary = "blocked", report.stop.reason
+        elif isolating:
+            resumed = isolate.kept(repo_dir, task["id"])
+            workspace = isolate.prepare(repo_dir, task["id"], home(), base=options.base or named_base)
+            if resumed:
+                context.append("This task was stopped before and is resumed: what its earlier attempts wrote is "
+                               "already here. Check it, and finish it rather than starting over.")
+            if workspace.links:
+                context.append("Linked from the person's checkout and shared with it: "
+                               + ", ".join(workspace.links) + ". Use them; do not delete or reinstall them.")
+        workdir = workspace.path if workspace else repo_dir
+        launch_dir = options.launch_dir.resolve() if options.launch_dir else workdir
+        # The runtime the project declares goes first on the worker's PATH, and on its
+        # check's: a worker given the wrong Node hunts for another and is refused each one.
+        run_env = runtime.env_for(workdir)
+        base_commit = workspace.base if workspace else _head(repo_dir)
+        # In the checkout itself, one run at a time: the work and its check share the
+        # person's files. A run in a worktree has its own.
+        in_place = report.stop is None and workspace is None and (
+            (writes and not declared_read_only) or bool(options.verify))
         if in_place:
             for place in isolate.held_by(repo_dir, repo.toplevel(repo_dir)):
                 held.enter_context(isolate.in_place(
                     home(), place, task["id"], waiting=lambda who: _waits(store, task["id"], who, say),
                     check=lambda: _check_cancel(store, task["id"])))
-        while True:
+        while report.stop is None:
             remaining = options.budget_usd - report.cost_usd
-            if remaining < 0.01:
-                report.stop = stops.Stop("budget", f"the ${options.budget_usd:.2f} budget is spent",
-                                         budget_usd=options.budget_usd, attempt=len(attempts) or None)
+            needed, why = preflight.minimum_attempt(store, the_plan.kind, cell)
+            if remaining < needed:
+                # An attempt that cannot pay for itself only orients and stops: the
+                # run stops before it, and says what a resume needs.
+                short = preflight.budget_blocker(options.budget_usd, needed, cell, why, spent=report.cost_usd)
+                report.stop = stops.Stop("budget", short.what, budget_usd=options.budget_usd,
+                                         attempt=len(attempts) or None, extra={"needed_usd": short.data["needed_usd"]})
+                report.status, report.summary = "blocked", report.stop.reason
+                break
+            if attempts and attempts[-1].transient and attempts[-1].failure is Failure.ENVIRONMENT and (
+                    gate := preflight.wait_for_api(say=lambda line: say(f"cauce: #{task['id']} {line}"),
+                                                   cancelled=lambda: _check_cancel(store, task["id"]))) is not None:
+                # The retry would meet the same unreachable API: it is not spent.
+                report.stop = _preflight_stop(gate, options, attempt=len(attempts))
                 report.status, report.summary = "blocked", report.stop.reason
                 break
             if len(attempts) >= options.max_attempts:
@@ -595,20 +661,24 @@ def run(
             spec = launch.LaunchSpec(
                 model_id=models.pinned(cell.model),
                 permission_mode=grants.mode_for(cell.model),
-                prompt=brief(text, the_plan.kind, workdir, [*history, *attempts], dead, options.verify,
-                             writes and not declared_read_only, context, options.surfaces),
+                prompt=continuation(workdir, turns) if session else brief(
+                    text, the_plan.kind, workdir, [*history, *attempts], dead, options.verify,
+                    writes and not declared_read_only, context, options.surfaces),
+                persist_session=True,
+                resume_session=session,
                 cell=cell,
                 launch_dir=launch_dir,
                 workdir=workdir if workdir != launch_dir else None,
                 max_turns=turns,
                 max_budget_usd=round(remaining, 2),
                 disallowed_tools=tuple(dict.fromkeys([*(() if writes else launch.WRITE_TOOLS),
-                                                      *(the_plan.role.disallowed_tools if the_plan.role else ())])),
+                                                      *(the_plan.role.disallowed_tools if the_plan.role else ()),
+                                                      *grants.denied(isolated=workspace is not None)])),
                 # The person's rules, for this run and for this repository, the
                 # tools of every MCP server cauce itself hands this worker (a
                 # capability it was given and then refused is no capability), and
                 # reading the skill folders of its role.
-                allowed_tools=tuple(dict.fromkeys([*options.allow_tools, *grants.granted(key),
+                allowed_tools=tuple(dict.fromkeys([*options.allow_tools, *grants.granted(key), *grants.READ_GIT,
                                                    *(f"mcp__{name}" for name in selection.servers),
                                                    *(roles.read_rules(briefing) if briefing else ()),
                                                    *(f"Read(/{Path(d).resolve()}/**)" for d in selection.read_dirs)])),
@@ -682,10 +752,14 @@ def run(
                             allow=list(result.allow), served_model=result.served_model,
                             permission_mode=result.permission_mode,
                             changed=list(result.changed_paths)[:50],
+                            **({"hooked": list(result.hooked), "hook_message": result.hook_message}
+                               if result.hooked else {}),
+                            **({"session_id": result.session_id} if result.session_id else {}),
                             **({"refused_but_written": list(result.overcome)} if result.overcome else {}))
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
-                              transient=result.transient, findings=result.findings)
+                              transient=result.transient, findings=result.findings, hooked=result.hooked,
+                              hook_message=result.hook_message)
             attempts.append(attempt)
             say(f"cauce: #{task['id']} attempt {seq} " + ("passed" if result.passed else
                 f"ended {(result.failure or Failure.INCONCLUSIVE).value}: {result.summary[:160]}"))
@@ -725,11 +799,14 @@ def run(
                 report.stop = stops.Stop(
                     _cause(decision, attempt), decision.reason, denied=attempt.denied, allow=attempt.allow,
                     attempt=seq,
-                    next_cell=decision.cell.label if decision.cell else None, account=result.summary[:2000])
+                    next_cell=decision.cell.label if decision.cell else None, account=result.summary[:2000],
+                    extra={"hooked": list(attempt.hooked), "hook_message": attempt.hook_message}
+                    if attempt.hooked else {})
                 break
             if decision.move is Move.NEXT_MODEL and workspace is not None:
                 isolate.reset(workspace)
             cell, turns = decision.cell, decision.max_turns
+            session = (result.session_id or None) if decision.move is Move.MORE_TURNS else None
     except Cancelled:
         report.stop = _cancelled(store, task["id"], len(attempts) or None)
         report.status, report.summary = "cancelled", report.stop.reason
@@ -778,6 +855,9 @@ def run(
             _note(store, task, key, report, the_plan, workspace.repo_dir if workspace else repo_dir,
                   isolate.head(workspace.repo_dir, report.branch) if workspace and report.branch else None,
                   notes_ask)
+        if (report.stop is not None and report.stop.cause == "environment" and attempts and key
+                and attempts[-1].failure is Failure.ENVIRONMENT and config.enabled("notes", os.environ, options.notes)):
+            _requirements(store, task, key, attempts[-1], report, repo_dir)
         if status == "done" and report.learned and config.enabled("engram_write", os.environ):
             _to_engram(store, task, report, the_plan, workspace.repo_dir if workspace else repo_dir)
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
@@ -798,14 +878,6 @@ def run(
     return report
 
 
-#: Words that say a task needs a browser, or servers that keep running.
-_BROWSER = re.compile(r"\b(browser|navegador|navigate|navega\w*|abr[ie]\w* (?:el )?navegador|screenshot|"
-                      r"captura de pantalla|playwright|puppeteer|e2e)\b", re.IGNORECASE)
-_SERVER = re.compile(r"(\bdev servers?\b|\blevanta\w*\b|\bstart (?:both |the )?(?:dev )?servers?\b|"
-                     r"\bng serve\b|\bnpm (?:run )?(?:start|dev)\b|localhost:\d+)", re.IGNORECASE)
-_BROWSER_CAPS = ("browser", "playwright", "chrome", "puppeteer", "rastro")
-
-
 #: A task that says in its own words it must change nothing: a validation whose
 #: findings are its answer, whatever kind it was filed under. The words must be
 #: about the task: "a read-only version history" is a thing to build, and "do not
@@ -822,37 +894,6 @@ _READ_ONLY = re.compile(
 #: Kinds whose work is the change itself: whatever their text says is read-only,
 #: they write. Every misreading of a task as read-only was one of these.
 _BUILDS = frozenset({"feature", "implement", "refactor", "docs"})
-_PORT = re.compile(r"(?:localhost|127\.0\.0\.1):(\d{2,5})\b")
-
-
-def _listening(port: int) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.3):
-            return True
-    except OSError:
-        return False
-
-
-def _all_listening(text: str) -> bool:
-    """A task that names its local servers by port, every one of them up: the
-    servers it needs are running, and saying otherwise is noise."""
-    ports = {int(p) for p in _PORT.findall(text) if 0 < int(p) < 65536}
-    return bool(ports) and all(_listening(p) for p in ports)
-
-
-def _unmet(text: str, registry: Mapping[str, caps.Capability]) -> list[str]:
-    """What a task asks for that a one-shot worker does not have, said before any
-    money is spent: a worker has no browser unless a capability gives it one,
-    and a server it starts ends with it."""
-    notes = []
-    if _BROWSER.search(text) and not any(k in name.lower() for name in registry for k in _BROWSER_CAPS):
-        notes.append("this task needs a browser and workers have none: register a browser MCP server in "
-                     "your cauce capabilities.json (`cauce capabilities --example` has one) and allow its tools "
-                     "(--allow 'mcp__browser'), or check the pages yourself")
-    if _SERVER.search(text) and not _all_listening(text):
-        notes.append("this task needs running servers: start them yourself before dispatching, or pass the "
-                     "--allow rules that start them; a server a worker starts stops when it finishes")
-    return notes
 
 
 def _refused_here(store: Store, key: str | None, granted: Sequence[str], mode: str) -> list[tuple[str, int]]:
@@ -874,8 +915,25 @@ def _refused_here(store: Store, key: str | None, granted: Sequence[str], mode: s
     return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:8]
 
 
+def _preflight_stop(finding: preflight.Finding, options: Options, attempt: int | None = None) -> stops.Stop:
+    """The account of a run a preflight blocker stopped before an attempt was spent."""
+    needed = finding.data.get("needed_usd")
+    return stops.Stop(finding.cause, f"before any attempt: {finding.line()}", attempt=attempt,
+                      budget_usd=options.budget_usd if finding.cause == "budget" else None,
+                      extra={"preflight": finding.as_dict(), **({"needed_usd": needed} if needed else {})})
+
+
+def continuation(workdir: Path, turns: int) -> str:
+    """What a worker that ran out of turns is told when its own session goes on."""
+    return (f"You ran out of turns before you finished. Continue the same task from where you stopped, with "
+            f"{turns} turns: what you did is in {workdir} and in this conversation. Do not start over and do not "
+            "redo what is done; finish what is left and check it.")
+
+
 def _cause(decision: Decision, attempt: Attempt) -> str:
     """What ended the run, from the move and the failure that led to it."""
+    if decision.move is Move.BLOCKED and (attempt.failure is Failure.HOOK or (attempt.hooked and not attempt.denied)):
+        return "hook"
     if decision.move is Move.BLOCKED:
         return "permission" if attempt.failure is Failure.PERMISSION or attempt.denied else "environment"
     if decision.move is Move.NEEDS_APPROVAL:
@@ -1197,6 +1255,21 @@ def _note(store: Store, task: dict, key: str | None, report: Report, the_plan: P
         return
     if report.noted:
         store.add_event(task["id"], "noted", notes=report.noted)
+
+
+def _requirements(store: Store, task: dict, key: str, attempt: Attempt, report: Report, repo_dir: Path) -> None:
+    """Keep what the environment lacked, as a requirement the next preflight here
+    probes. Never fails the run: its stop is already decided."""
+    try:
+        kept = preflight.learn(store, key, task, f"{attempt.summary}\n{attempt.evidence}",
+                               {**os.environ, **runtime.env_for(repo_dir)})
+    except Exception as exc:  # a stop is not changed by its notes
+        report.impact.append(f"requirements: what was missing could not be kept ({type(exc).__name__}: {exc})")
+        return
+    if kept:
+        report.impact.append("requirements: kept as note(s) " + ", ".join(f"#{n}" for n in kept)
+                             + "; the next task here like this one is checked for them before it starts")
+        store.add_event(task["id"], "requirements", notes=kept)
 
 
 def _to_engram(store: Store, task: dict, report: Report, the_plan: Plan, checkout: Path) -> None:

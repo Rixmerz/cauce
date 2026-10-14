@@ -73,6 +73,56 @@ PRESETS: dict[str, tuple[str, ...]] = {
 }
 
 
+#: Git that only reads, allowed to every worker: a resumed worker refused
+#: `git status --short` could not see the work it was resuming.
+READ_GIT: tuple[str, ...] = (
+    "Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)", "Bash(git rev-parse:*)",
+    "Bash(git branch --list:*)", "Bash(git branch --show-current)", "Bash(git merge-base:*)",
+    "Bash(git ls-files:*)", "Bash(git blame:*)", "Bash(git describe:*)",
+)
+
+#: Commands that move a ref the person's checkout shares, denied to every worker
+#: whatever a person allowed: a deny rule wins over every allow. A worker once
+#: ran `git reset` on a branch its checkout shared and moved it.
+#: ponytail: prefix rules; `git -C dir reset` is another prefix and gets past them.
+NEVER: dict[str, str] = {
+    "git reset": "it moves the branch it runs on, which may be one the person's checkout shares",
+    "git branch -f": "it moves a branch by force",
+    "git branch --force": "it moves a branch by force",
+    "git branch -D": "it deletes a branch whatever it holds",
+    "git branch -M": "it renames a branch over another",
+    "git push --force": "it rewrites a remote branch",
+    "git push -f": "it rewrites a remote branch",
+    "git push --force-with-lease": "it rewrites a remote branch",
+    "git update-ref": "it moves any ref directly",
+}
+#: Denied too when a worker works in the person's checkout, not a worktree: it
+#: would leave their checkout on another branch, or rewrite the one it is on.
+NEVER_IN_CHECKOUT: dict[str, str] = {
+    "git checkout": "in your checkout it switches the branch you have checked out",
+    "git switch": "in your checkout it switches the branch you have checked out",
+    "git rebase": "in your checkout it rewrites the branch you have checked out",
+}
+
+
+def denied(isolated: bool) -> tuple[str, ...]:
+    """The deny rules a worker runs with."""
+    found = {**NEVER, **({} if isolated else NEVER_IN_CHECKOUT)}
+    return tuple(f"Bash({prefix}:*)" for prefix in found)
+
+
+def never(rule: str) -> str | None:
+    """Why a rule must not be granted, or None: it allows a command that rewrites a
+    shared ref. A broader rule (`Bash(git:*)`) is no such rule: the deny still holds."""
+    if not rule.startswith("Bash(") or not rule.endswith(")"):
+        return None
+    target = " ".join(rule[5:-1].removesuffix(":*").split())
+    for prefix, why in {**NEVER, **NEVER_IN_CHECKOUT}.items():
+        if target == prefix or target.startswith(prefix + " "):
+            return f"{rule} is never granted to a worker: {why}"
+    return None
+
+
 def granted(repo: str | None, env: Mapping[str, str] | None = None) -> tuple[str, ...]:
     """The rules a person granted every worker in `repo`."""
     if not repo:
@@ -92,8 +142,9 @@ def expand(rules: Iterable[str], presets: Iterable[str] = ()) -> tuple[str, ...]
 
 
 def grant(repo: str, rules: Iterable[str], env: Mapping[str, str] | None = None) -> tuple[str, ...]:
-    """Add rules for a repository; returns every rule it now has."""
-    return _save(repo, (*granted(repo, env), *rules), env)
+    """Add rules for a repository; returns every rule it now has. A rule `never`
+    refuses is not kept: the caller says why with `never`."""
+    return _save(repo, (*granted(repo, env), *(r for r in rules if never(r) is None)), env)
 
 
 def revoke(repo: str, rules: Iterable[str], env: Mapping[str, str] | None = None) -> tuple[str, ...]:

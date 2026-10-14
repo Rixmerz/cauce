@@ -14,7 +14,9 @@ program, so each refusal is turned into those:
   relative to the settings file, and the rule would match nothing;
 - a URL becomes its domain.
 
-Commands that change nothing a rule guards (`cd`, `echo`, `true`) are left out.
+Commands that change nothing a rule guards (`cd`, `echo`, `true`) are left out,
+and so are the ones no rule may let through (`grants.never`): a refused
+`git reset` is suggested as nothing, because no rule would get past its deny.
 These are suggestions printed for a person to pass; nothing here grants them.
 """
 from __future__ import annotations
@@ -24,6 +26,8 @@ import shlex
 from collections.abc import Iterable
 from typing import Any
 from urllib.parse import urlparse
+
+from cauce import grants
 
 FILE_TOOLS = frozenset({"Read", "Write", "Edit", "MultiEdit", "NotebookEdit"})
 _SEPARATORS = frozenset({";", "&&", "||", "|", "&", "\n"})
@@ -36,7 +40,12 @@ _RULE = re.compile(r"^(?P<tool>[A-Za-z_][\w-]*)\((?P<target>.*)\)$", re.DOTALL)
 
 
 def rules(tool_name: str, tool_input: dict[str, Any] | None) -> list[str]:
-    """The rules for one refused call, as its tool and input arrived."""
+    """The rules for one refused call, as its tool and input arrived, those no
+    rule may grant left out."""
+    return [rule for rule in _rules(tool_name, tool_input) if grants.never(rule) is None]
+
+
+def _rules(tool_name: str, tool_input: dict[str, Any] | None) -> list[str]:
     given = tool_input if isinstance(tool_input, dict) else {}
     if tool_name == "Bash" and given.get("command"):
         return [f"Bash({prefix}:*)" for prefix in commands(str(given["command"]))] or ["Bash"]
@@ -73,7 +82,7 @@ def from_refusals(refused: Iterable[str]) -> tuple[str, ...]:
             continue
         key = {"Bash": "command", "WebFetch": "url"}.get(tool, "file_path")
         out += rules(tool, {key: target})
-    return tuple(dict.fromkeys(r for r in out if r))
+    return tuple(dict.fromkeys(r for r in out if r and grants.never(r) is None))
 
 
 def commands(command: str) -> list[str]:

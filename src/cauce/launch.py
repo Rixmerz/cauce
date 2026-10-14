@@ -19,7 +19,8 @@ the worker's report — the party being checked does not supply the evidence. A
 missing or ambiguous verdict is *inconclusive*, never a pass. And what the
 permission settings refused comes from the CLI's own `permission_denials`: a
 worker that could not run `npm run build` is blocked on a setting, whatever it
-says about the code.
+says about the code. A refusal a PreToolUse hook made is told apart from those:
+no `--allow` rule gets past a hook, so it is never suggested one.
 """
 from __future__ import annotations
 
@@ -163,6 +164,9 @@ class LaunchSpec:
     verdicts: tuple[str, ...] = ()
     verdict_words: tuple[str, ...] = ()
     persist_session: bool = False
+    #: A session an attempt that ran out of turns left: this one continues it
+    #: (`--resume`) instead of a fresh worker orienting itself again.
+    resume_session: str | None = None
     #: Extra environment for the worker: which task and attempt it is, so its
     #: tool calls are recorded against them.
     env: Mapping[str, str] = field(default_factory=dict)
@@ -208,6 +212,23 @@ class WorkerResult:
     #: The launch broke (a timeout, no JSON, an errored session), not the work:
     #: the one failure a retry can help.
     transient: bool = False
+    #: Calls a PreToolUse hook refused, as `Tool(target)`, and what it said: no
+    #: rule lets them through, so they are neither `denied` nor in `allow`.
+    hooked: tuple[str, ...] = ()
+    hook_message: str = ""
+    #: The CLI's session, which a `more_turns` attempt resumes.
+    session_id: str = ""
+
+
+def turn_budget(max_turns: int) -> str:
+    """What every worker is told of its turns: the work it leaves must be resumable."""
+    return (f"You have {max_turns} turns for this attempt. Before you run out, leave the work so another "
+            "attempt can continue it: commit what works when you are on a cauce/task-* branch, and say in the "
+            "result's `summary` what is done and what is left.")
+
+
+def system_prompt(spec: LaunchSpec) -> str:
+    return "\n\n".join(p for p in (spec.append_system_prompt, turn_budget(spec.max_turns)) if p)
 
 
 def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path: Path | None = None,
@@ -227,7 +248,10 @@ def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path:
     if spec.tools is not None:
         argv += ["--tools", ",".join(spec.tools)]
     if spec.disallowed_tools:
-        argv += ["--disallowedTools", ",".join(spec.disallowed_tools)]
+        # A rule with arguments goes alone: its spaces must not split it.
+        names = [t for t in spec.disallowed_tools if "(" not in t]
+        argv += ["--disallowedTools", *([",".join(names)] if names else []),
+                 *(t for t in spec.disallowed_tools if "(" in t)]
     if spec.allowed_tools:
         argv += ["--allowedTools", *spec.allowed_tools]
     if spec.workdir is not None and spec.workdir != spec.launch_dir:
@@ -238,9 +262,11 @@ def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path:
         argv += ["--mcp-config", str(mcp_config_path)]
     if prompt_path is not None:
         argv += ["--append-system-prompt-file", str(prompt_path)]
-    elif spec.append_system_prompt:
-        argv += ["--append-system-prompt", spec.append_system_prompt]
-    if not spec.persist_session:
+    else:
+        argv += ["--append-system-prompt", system_prompt(spec)]
+    if spec.resume_session:
+        argv += ["--resume", spec.resume_session]
+    elif not spec.persist_session:
         argv.append("--no-session-persistence")
     return argv
 
@@ -261,10 +287,10 @@ def run(
             json.dump({"mcpServers": dict(spec.mcp_servers)}, fh)
         mcp_path = Path(name)
     prompt_path = None
-    if len(spec.append_system_prompt) > INLINE_PROMPT_CHARS:
+    if len(system_prompt(spec)) > INLINE_PROMPT_CHARS:
         fd, name = tempfile.mkstemp(prefix="cauce-role-", suffix=".md")
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(spec.append_system_prompt)
+            fh.write(system_prompt(spec))
         prompt_path = Path(name)
     argv = build_argv(spec, claude_bin=claude_bin, mcp_config_path=mcp_path, prompt_path=prompt_path)
     before = tracked_state(spec.target_dir)
@@ -325,9 +351,11 @@ def parse(
     envelope = _json(proc.stdout)
     usage = _usage(envelope)
     envelope, overcome = _overcome(envelope, changed, spec.target_dir)
+    envelope, hooked, hook_message = _hooked(envelope)
     denied = denials(envelope)
     common = dict(changed_paths=changed, duration_s=duration_s, denied=denied, allow=allow_rules(envelope),
-                  overcome=overcome, **usage)
+                  overcome=overcome, hooked=hooked, hook_message=hook_message,
+                  session_id=str((envelope or {}).get("session_id") or ""), **usage)
     if envelope is None:
         detail = (proc.stderr or "").strip()[:300]
         return WorkerResult(False, Failure.ENVIRONMENT,
@@ -348,7 +376,7 @@ def parse(
                             **common)
     block = result_block(text)
     if block is None:
-        return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
+        return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied, hooked),
                             "the worker did not answer with exactly one result block", raw=text, **common)
     verdict = str(block.get("verdict") or "").lower()
     summary = str(block.get("summary") or "")[:1000]
@@ -359,24 +387,24 @@ def parse(
     common["verdicts"] = ledger_mod.read(block)
     if verdict == "pass":
         if not evidence.strip():
-            return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
+            return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied, hooked),
                                 "claimed a pass with no evidence: " + summary, raw=text, verdict=verdict, **common)
         left_out, not_met = criteria_mod.unmet(spec.criteria, common["criteria"])
         if not_met:
-            return WorkerResult(False, _refused(Failure.CODE_BUG, denied),
+            return WorkerResult(False, _refused(Failure.CODE_BUG, denied, hooked),
                                 f"claimed a pass, but says {', '.join(not_met)} is not met: " + summary, evidence,
                                 raw=text, verdict=verdict, **common)
         if left_out:
-            return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
+            return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied, hooked),
                                 f"claimed a pass without saying whether {', '.join(left_out)} is met: " + summary,
                                 evidence, raw=text, verdict=verdict, **common)
         undecided = ledger_mod.missing(spec.verdicts, spec.verdict_words, common["verdicts"])
         if undecided:
-            return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
+            return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied, hooked),
                                 f"claimed a pass without a verdict on {', '.join(undecided)}: " + summary,
                                 evidence, raw=text, verdict=verdict, **common)
         return WorkerResult(True, None, summary, evidence, raw=text, verdict=verdict, **common)
-    failure = _refused(_failure(block.get("failure"), verdict), denied)
+    failure = _refused(_failure(block.get("failure"), verdict), denied, hooked)
     return WorkerResult(False, failure, summary, evidence, raw=text, verdict=verdict, **common)
 
 
@@ -393,11 +421,51 @@ def learned(block: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(found))[:MAX_LEARNED]
 
 
-def _refused(failure: Failure, denied: Sequence[str]) -> Failure:
+def _refused(failure: Failure, denied: Sequence[str], hooked: Sequence[str] = ()) -> Failure:
     """A refusal decides where an unfinished attempt stands, unless the worker found
     the task itself wrong: no model gets past a setting, and a stronger one sent
-    into the same refusal only costs more."""
-    return Failure.PERMISSION if denied and failure not in REPLAN else failure
+    into the same refusal only costs more. A hook's refusal is the hook's."""
+    if failure in REPLAN:
+        return failure
+    if denied:
+        return Failure.PERMISSION
+    return Failure.HOOK if hooked else failure
+
+
+#: A line where a PreToolUse hook said it refused a call: in the session's result
+#: text, or in a denial's own fields.
+_HOOK_LINE = re.compile(
+    r"[^\n]*\b(?:PreToolUse|pre-tool-use|hooks?)\b[^\n]*\b(?:block|den[iy]|refus|reject|prevent|stopp)\w*[^\n]*"
+    r"|[^\n]*\b(?:block|den[iy]|refus|reject|prevent|stopp)\w*\b[^\n]*\b(?:PreToolUse|pre-tool-use|hooks?)\b[^\n]*",
+    re.IGNORECASE)
+
+
+def _hooked(envelope: dict[str, Any] | None) -> tuple[dict[str, Any] | None, tuple[str, ...], str]:
+    """The envelope without the refusals a PreToolUse hook made, those refusals as
+    `Tool(target)`, and what the hook said. A refusal is a hook's when the denial
+    itself says so, or when the session's text quotes a hook refusing that program."""
+    entries = (envelope or {}).get("permission_denials") or ()
+    if not entries:
+        return envelope, (), ""
+    said = _HOOK_LINE.findall(str((envelope or {}).get("result") or ""))
+    kept, hooked, messages = [], [], []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            kept.append(entry)
+            continue
+        own = " ".join(str(v) for k, v in entry.items() if k not in ("tool_input", "tool_name", "tool_use_id"))
+        given = entry.get("tool_input") if isinstance(entry.get("tool_input"), dict) else {}
+        programs = allow.commands(str(given.get("command") or "")) if entry.get("tool_name") == "Bash" else []
+        quoted = [line.strip() for line in said if any(p in line for p in programs)]
+        if "hook" in own.lower() or quoted:
+            hooked.append(entry)
+            messages += [own.strip()] if "hook" in own.lower() else quoted
+        else:
+            kept.append(entry)
+    if not hooked:
+        return envelope, (), ""
+    message = " ".join(dict.fromkeys(m for m in messages if m))[:500]
+    return {**(envelope or {}), "permission_denials": kept}, denials({"permission_denials": hooked}), message
 
 
 #: The tools that write a file: a refusal of one is overcome when git shows the file written.

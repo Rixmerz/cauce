@@ -26,6 +26,7 @@ from cauce import allow
 WHO = {
     "you": "you",
     "settings": "your permission settings",
+    "hook": "a hook you installed",
     "budget": "the task's budget",
     "environment": "the environment",
     "worker": "the worker's verdict",
@@ -37,6 +38,8 @@ WHO = {
 #: cause → (status it ends in, who made the call).
 CAUSES = {
     "permission": ("blocked", "settings"),
+    "hook": ("blocked", "hook"),
+    "preflight": ("blocked", "cauce"),
     "environment": ("blocked", "environment"),
     "budget": ("blocked", "budget"),
     "missing_dir": ("blocked", "environment"),
@@ -162,9 +165,17 @@ def next_step(task_id: int, stop: Stop, *, resumable: bool = True) -> str | None
         return base + "".join(f" --allow {shlex.quote(rule)}" for rule in rules)
     if stop.cause == "approval":
         return f"{base} --allow-approval"
-    if stop.cause == "budget" and stop.budget_usd:
-        return f"{base} --budget {stop.budget_usd * 2:g}"
+    if stop.cause == "budget" and (needed := budget_needed(stop)):
+        return f"{base} --budget {needed:g}"
     return base
+
+
+def budget_needed(stop: Stop) -> float | None:
+    """The budget a resume needs: what cauce computed the next attempt costs, else
+    twice what the task had."""
+    if stop.extra.get("needed_usd"):
+        return float(stop.extra["needed_usd"])
+    return stop.budget_usd * 2 if stop.budget_usd else None
 
 
 def what_to_do(stop: Stop) -> str:
@@ -173,6 +184,10 @@ def what_to_do(stop: Stop) -> str:
         "permission": "allow what was refused for this run, or add --keep to keep it for every task here, "
                       "then resume",
         "environment": "fix what failed to run, then resume",
+        "hook": "a hook you installed refused a call: resolve what its message reports, or adjust the hook, "
+                "then resume; no --allow rule gets past a hook",
+        "preflight": "cauce found before any attempt that the environment would stop the worker: fix what the "
+                     "reason names, then resume",
         "budget": "resume with a larger budget, or read the attempts first",
         "missing_dir": "the task's directory is gone: restore it, or queue the task again where it now lives",
         "approval": "approve the next cell by resuming with --allow-approval",
@@ -329,8 +344,8 @@ def resume_args(task_id: int, shown: dict[str, Any] | None, *, keep: bool = Fals
         return None
     if cause == "approval":
         return [*base, "--allow-approval"]
-    if cause == "budget" and shown.get("budget_usd"):
-        return [*base, "--budget", str(float(shown["budget_usd"]) * 2)]
+    if cause == "budget" and (needed := budget_needed(read(shown) or Stop("budget", ""))):
+        return [*base, "--budget", str(needed)]
     return base
 
 

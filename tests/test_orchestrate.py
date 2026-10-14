@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from cauce import capabilities as caps
-from cauce import orchestrate, roles
+from cauce import grants, orchestrate, preflight, roles
 from cauce.classify import Classification
 from cauce.escalate import Failure
 from cauce.launch import WRITE_TOOLS, WorkerResult
@@ -89,7 +89,8 @@ def test_a_first_try_pass_leaves_a_branch(git_repo, store):
     assert not (git_repo / "feature.py").exists()
     spec = script.specs[0]
     assert spec.launch_dir != git_repo and spec.workdir is None
-    assert spec.max_budget_usd == 5.0 and spec.disallowed_tools == ()
+    assert spec.max_budget_usd == 5.0
+    assert spec.disallowed_tools == grants.denied(isolated=True)
     task = store.get_task(report.task_id)
     assert task["status"] == "done" and task["final_cell"] == "sonnet/medium"
     assert store.messages(report.task_id)[-1]["role"] == "worker"
@@ -141,7 +142,7 @@ def test_read_only_work_gets_no_edit_tools_and_no_worktree(git_repo, store):
     report = run("where is the router defined", git_repo, store, registry={}, launcher=script,
                  classifier=kind("explore"))
     spec = script.specs[0]
-    assert spec.disallowed_tools == WRITE_TOOLS
+    assert spec.disallowed_tools == (*WRITE_TOOLS, *grants.denied(isolated=False))
     assert spec.launch_dir == git_repo.resolve()
     assert "read-only" in spec.prompt
     assert report.branch is None and report.final_cell == "haiku/medium"
@@ -258,7 +259,8 @@ def test_options_pin_and_launch_dir_and_dry_run(git_repo, store, tmp_path):
     spec = script.specs[0]
     assert spec.cell == Cell("opus", "low") and spec.launch_dir == launch_dir.resolve()
     assert spec.workdir == git_repo.resolve()
-    assert report.plan.reasons == ["pinned by the caller"]
+    assert report.plan.reasons[0] == "pinned by the caller"
+    assert report.plan.reasons[1].startswith("starts with 30 turns: the kind's default")
     dry = run("y", git_repo, store, Options(dry_run=True, kind="docs"), registry={}, launcher=script)
     assert dry.task_id is None and dry.status == "dry run" and dry.plan.start == Cell("haiku")
     assert "plan: dry run" in dry.text()
@@ -479,7 +481,8 @@ def test_work_a_refusal_stopped_is_kept_unverified_and_the_report_says_what_git_
     assert "Bash(node server.js)" in report.summary and "--allow" in report.summary
     assert "The last worker's own account: created the routes" in report.summary
     # Beside the person's rule, only reading the skill folders of the worker's role.
-    assert script.specs[0].allowed_tools == ("Bash(npm run build)", f"Read(/{roles.bundled_skills_dir()}/**)")
+    assert script.specs[0].allowed_tools == ("Bash(npm run build)", *grants.READ_GIT,
+                                             f"Read(/{roles.bundled_skills_dir()}/**)")
     assert report.branch == f"cauce/task-{report.task_id}" and report.changed == ["routes.js"]
     assert "routes.js" in git(git_repo, "show", "--name-only", report.branch)
     assert "(unverified, blocked)" in git(git_repo, "log", "-1", "--format=%s", report.branch)
@@ -645,15 +648,16 @@ def test_the_task_text_says_who_wrote_it(git_repo, store):
 def test_the_plan_says_when_a_task_needs_a_browser_or_running_servers(git_repo, store, tmp_path):
     text = "Start both dev servers (app on 4200) and open the browser at localhost:4200 to check the admin panel"
     dry = run(text, git_repo, store, Options(dry_run=True), registry={}, classifier=kind("test"))
-    notes = [r for r in dry.plan.reasons if r.startswith("this task needs")]
+    notes = [f.line() for f in dry.preflight if f.check in ("browser", "server")]
     assert len(notes) == 2 and "browser MCP server" in notes[0] and "--allow 'mcp__browser'" in notes[0]
     assert "start them yourself" in notes[1]
+    assert "preflight warning: this task needs a browser" in dry.text()
     (tmp_path / "caps.json").write_text(json.dumps({"browser": caps.EXAMPLE["browser"]}))
     registry = caps.load(tmp_path / "caps.json")
     dry = run(text, git_repo, store, Options(dry_run=True), registry=registry, classifier=kind("explore"))
-    assert [r for r in dry.plan.reasons if r.startswith("this task needs")] == [notes[1]]
+    assert [f.line() for f in dry.preflight if f.check in ("browser", "server")] == [notes[1]]
     plain = run("fix the parser", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"))
-    assert not any(r.startswith("this task needs") for r in plain.plan.reasons)
+    assert not [f for f in plain.preflight if f.check in ("browser", "server")]
 
 
 def test_work_that_outgrew_its_turns_is_kept_for_the_resume(git_repo, store):
@@ -677,7 +681,9 @@ def test_a_worker_gets_its_mode_the_repository_s_rules_and_the_tools_it_was_hand
         launcher=script, classifier=kind("test"))
     spec = script.specs[0]
     assert spec.permission_mode == "auto"
-    assert spec.allowed_tools[:3] == ("Bash(make:*)", "Bash(npm:*)", "mcp__browser")
+    assert spec.allowed_tools[:2] == ("Bash(make:*)", "Bash(npm:*)")
+    assert spec.allowed_tools[2:2 + len(grants.READ_GIT)] == grants.READ_GIT
+    assert "mcp__browser" in spec.allowed_tools
     script = Script(ok())
     run("where is it", git_repo, store, registry={}, launcher=script, classifier=kind("explore"))
     assert script.specs[0].permission_mode == "bypassPermissions"  # a haiku cell
@@ -799,7 +805,7 @@ def test_a_dry_run_and_a_run_without_a_listener_say_nothing(git_repo, store, cap
     ("echo 'Node.js version v22.16.0 detected.'; "
      "echo 'The build tool requires a minimum Node.js version of v22.22.3.'; exit 3",
      "requires a minimum Node.js version"),
-    ("no-such-tool-anywhere --run", "exit 127"),
+    ("echo 'zsh: no-such-tool-anywhere: command not found' >&2; exit 127", "exit 127"),
 ])
 def test_a_check_that_cannot_run_is_the_environment_and_stops_the_work_it_let_run(git_repo, store, check, why):
     script = Script(WorkerResult(True, None, "upgraded the lockfile", "0 vulnerabilities", ("package-lock.json",),
@@ -859,7 +865,7 @@ def test_a_feature_starts_with_more_turns_and_a_pin_still_wins(git_repo, store):
     feature = Script(ok())
     report = run("add the export", git_repo, store, registry={}, launcher=feature, classifier=kind("feature"))
     assert feature.specs[0].max_turns == 60
-    assert any("feature work starts with 60 turns" in r for r in report.plan.reasons)
+    assert any(r.startswith("starts with 60 turns: the kind's default") for r in report.plan.reasons)
     implement = Script(ok())
     run("fix the export", git_repo, store, registry={}, launcher=implement, classifier=kind("implement"))
     assert implement.specs[0].max_turns == 30
@@ -985,11 +991,11 @@ def test_servers_named_by_a_port_that_answers_need_no_warning():
         server.bind(("127.0.0.1", 0))
         server.listen()
         port = server.getsockname()[1]
-        assert orchestrate._unmet(f"the dev server is up at localhost:{port}", {}) == []
-    warned = orchestrate._unmet(f"the dev server is up at localhost:{port}", {})
+        assert preflight.unmet(f"the dev server is up at localhost:{port}", {}) == []
+    warned = [f.line() for f in preflight.unmet(f"the dev server is up at localhost:{port}", {})]
     assert len(warned) == 1
     assert "running servers" in warned[0]
-    assert orchestrate._unmet("start the dev server", {})  # no port named: still said
+    assert preflight.unmet("start the dev server", {})  # no port named: still said
 
 
 @pytest.mark.parametrize("text", ["TASK: Final browser validation (READ-ONLY)", "Valida el flujo, solo lectura",

@@ -207,6 +207,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
             from cauce import grants
 
             rules = grants.expand(args.allow or ())
+            for rule in rules:
+                if why := grants.never(rule):
+                    print(f"not kept: {why}", file=sys.stderr)
             if not rules or not task["repo"]:
                 why = "name them with --allow" if not rules else f"task #{args.id} has no repository to key them to"
                 print(f"--keep keeps the --allow rules for the task's repository: {why}", file=sys.stderr)
@@ -228,6 +231,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
         if args.max_turns or outgrew:
             # A task that outgrew its turns is not wrong: it goes on with more.
             options.max_turns = args.max_turns or stops.RESUME_TURNS
+        if outgrew and not args.start and (last := store.last_event(args.id, "attempt_finished")):
+            # The worker that ran out goes on in its own session, not a fresh one.
+            options.resume_session = (last.get("data") or {}).get("session_id")
         attempts = store.attempts(args.id)
         moved = store.last_event(args.id, "moved")
         waiting = moved["data"].get("next_cell") if moved and task["status"] == "needs_approval" else None
@@ -778,6 +784,9 @@ def cmd_allow(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    refused = [why for rule in rules if not args.rm and (why := grants.never(rule))]
+    for why in refused:
+        print(f"not kept: {why}", file=sys.stderr)
     if args.rm:
         kept = grants.revoke(key, rules)
     elif rules:
@@ -785,7 +794,26 @@ def cmd_allow(args: argparse.Namespace) -> int:
     else:
         kept = grants.granted(key)
     print(f"workers in {key} get: " + (", ".join(kept) if kept else "nothing beyond their mode"))
-    return 0
+    return 1 if refused else 0
+
+
+def cmd_preflight(args: argparse.Namespace) -> int:
+    """What would stop a worker on this task, checked now and for free: no model,
+    no attempt (`cauce.preflight`). Exit 1 when something blocks it."""
+    options = orchestrate.Options(budget_usd=args.budget, verify=args.verify, kind=args.kind,
+                                  isolate=not args.no_isolate, use_model_classifier=False, dry_run=True,
+                                  livespec=False, notes=False)
+    store = Store.open()
+    try:
+        report = orchestrate.run(_text(args.text), Path(args.repo or os.getcwd()), store, options)
+    finally:
+        store.close()
+    print(f"kind {report.plan.kind}, start {report.plan.start.label}, budget ${args.budget:.2f}")
+    for finding in report.preflight:
+        print(f"{finding.kind}: {finding.line()}")
+    if not report.preflight:
+        print("nothing found that would stop a worker")
+    return 1 if any(f.blocks for f in report.preflight) else 0
 
 
 def _config_model(args: argparse.Namespace) -> int:
@@ -1380,8 +1408,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--budget", type=float, default=5.0, help="dollars this task may spend (default 5)")
         p.add_argument("--max-attempts", type=int, default=6)
         p.add_argument("--max-turns", type=int,
-                       help="turns per attempt (default: 30; a feature, 60); raised once, then again while "
-                            "the work moves")
+                       help="turns per attempt (default: what passing attempts of the kind used, at least 30; "
+                            "a feature, 60); raised once, then again while the work moves")
         p.add_argument("--verify", help="command whose exit code decides a claimed pass")
         p.add_argument("--kind", type=_kind, metavar="KIND",
                        help=f"skip classification: {', '.join(KINDS)}")
@@ -1425,6 +1453,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="refuse (exit 3) when only a person can clear what stopped it: a refusal, an approval")
     p.add_argument("--no-report", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_resume)
+
+    p = sub.add_parser("preflight", help="what would stop a worker on a task, checked before any attempt "
+                                         "(no model call); exit 1 when something blocks it")
+    p.add_argument("text", help="the task; - reads it from stdin")
+    p.add_argument("--repo", help="the repository the work is in (default: the current directory)")
+    p.add_argument("--verify", help="the command whose exit code would decide a claimed pass")
+    p.add_argument("--budget", type=float, default=5.0, help="dollars the task would have (default 5)")
+    p.add_argument("--kind", type=_kind, metavar="KIND", help="the kind it would run as (default: the rules')")
+    p.add_argument("--no-isolate", action="store_true", help="it would run in the checkout, not a worktree")
+    p.set_defaults(func=cmd_preflight)
 
     p = sub.add_parser("route", help="show where a task would start and how it would climb")
     run_args(p)

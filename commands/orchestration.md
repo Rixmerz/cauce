@@ -73,9 +73,15 @@ Request: $ARGUMENTS
 
    Run it in the background when it may take a while: it prints its task
    number and each attempt on stderr as they happen, and its report when it
-   stops. A `warning:` line (no browser, servers that must be running) means
-   the task as written will not get far: say so to the person before waiting
-   on it.
+   stops. Before the first attempt cauce runs its preflight, with no model
+   call: a `warning:` line (no browser, servers that must be running, a login
+   with no test account, an input a worktree will not have, a budget that may
+   not cover a climb) means the task as written may not get far: say so to the
+   person before waiting on it. What would surely stop a worker (a `--verify`
+   program that is not installed, an API that does not answer, a budget below
+   one attempt, a base branch that does not exist, a requirement an earlier
+   task here stopped on) stops the task before any attempt, as `blocked`.
+   `cauce preflight "<task>" --verify "<cmd>"` runs the same checks alone.
 
    Write the task in full: the worker sees nothing of this conversation. Add
    `--verify` whenever the repository has a command that proves the work — a
@@ -131,9 +137,12 @@ Request: $ARGUMENTS
      `--allow-approval` only on a yes.
    - `replan` — the task as written cannot be done, or does not fit. Rewrite or
      split it from the report's reason, then dispatch again. Do not rerun it as is.
-   - `blocked` — a refused command, the environment or the budget stopped it.
-     The report's `stopped by …` line says which, and the line under it is the
-     command that continues it. Tell the user both, in those words. Its work
+   - `blocked` — a refused command, a hook the person installed, the
+     environment, the budget or the preflight stopped it. The report's
+     `stopped by …` line says which, and the line under it is the
+     command that continues it. A hook's refusal has no `--allow`: tell the
+     person what the hook said; they resolve it or adjust the hook. A preflight
+     stop spent no attempt: fix what it names, then resume. Tell the user both, in those words. Its work
      so far is on its branch, marked unverified. When the user grants what was
      refused, run that command (`cauce resume <id> --allow "<the refused rule>"`).
      It is not a new task, and you never redo it by hand. When the person

@@ -24,6 +24,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/findings.py` | findings as records: where, what, `evidence_class`, `cause`; which block a change |
 | `src/cauce/ledger.py` | a review's findings as one frozen ledger `F1..Fn`: who decides each row (refuter, fix, re-check), two rounds, then the person |
 | `src/cauce/risk.py` | a change's tier (passive, medium, high) from its request, kind and files; only raised; no model |
+| `src/cauce/preflight.py` | before the first attempt and a resume: what would stop a worker (the check's programs, the API, the budget, the base, untracked inputs, kept requirements, browser, servers, login), as blockers and warnings; no model, nothing written to a repository |
 | `src/cauce/surfaces.py` | where a task may write (`--surface`, a step's `surfaces`): checked after each attempt, and whether two tasks can never touch the same file |
 | `src/cauce/phase.py` | what a running worker is doing (exploring, implementing, checking), read from the tail of the tool-call log |
 | `src/cauce/roles_internal/` | roles cauce runs itself and no team holds: the independent `verifier` |
@@ -144,6 +145,21 @@ yields the default kind, not a guess.
   without one is read back and marked `recovered`, never presented as recorded.
   A cancel says where it came from; "a person did it" is never a guess.
 - The model's stated confidence about its own work is not an input.
+- A worker is never launched into a wall the preflight can see: a blocker
+  stops the task as `blocked` before an attempt is spent (cause `preflight`,
+  `budget` or `environment`) with the command that continues it; a warning
+  prints in the header. An unreachable API is waited for, bounded, never an
+  attempt. Before every attempt the budget left must pay for the next cell's
+  minimum, and the resume names that amount. Tests run with
+  `CAUCE_API_CHECK=off`; a test that wants it passes a fake `connect`.
+- A refusal a PreToolUse hook made is the hook's (`hook`), never a
+  permission: its message is reported and no `--allow` rule is suggested.
+- Workers always get read-only git (`grants.READ_GIT`) and never a command
+  that moves a shared ref (`grants.NEVER`, and `NEVER_IN_CHECKOUT` outside a
+  worktree): denied whatever a person allowed, never suggested, never kept.
+- A first attempt's turns come from history (p80 of passing attempts of the
+  kind, between its default and `MAX_START_TURNS`), and a `more_turns` move
+  resumes the worker's own session.
 - A request's criteria are its own words: a pass answers every `S#`, one left
   out is `inconclusive` and one not met is a `code_bug`. Prose has no criteria.
 - A finding blocks only when the change caused or worsened it (or it cannot be
@@ -268,7 +284,9 @@ yields the default kind, not a guess.
 - Problems and fixes are global; notes belong to one project and are never
   read from another. A note is written by a passing worker (`learned`), by
   Haiku before a session compacts or ends, or by a person — never by a failed
-  attempt, whose facts no pass confirmed. Haiku files under topics that
+  attempt, whose facts no pass confirmed. The one exception is a requirement
+  an `environment` stop named, kept only when cauce's own probe confirms it is
+  missing, and cleared when the probe passes. Haiku files under topics that
   exist and never invents a link; without Haiku a fact is kept by its words.
   A fact that looks like a secret is never kept.
 - A note's anchor is reviewed only against this checkout's history: a change

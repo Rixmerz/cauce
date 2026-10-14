@@ -707,6 +707,27 @@ rule, and vise's `ponytail` is its own text of
 See [`src/cauce/skills/README.md`](src/cauce/skills/README.md) and
 [`src/cauce/roles/CREDITS.txt`](src/cauce/roles/CREDITS.txt).
 
+### Preflight: no worker launched into a wall
+
+Before the first attempt, and before a resume, cauce checks what would stop a
+worker, with no model call: the `--verify` command's programs and npm script,
+the API (through `ANTHROPIC_BASE_URL` or a proxy; waited for, then a stop that
+spends no attempt), a budget too small for one attempt at the starting cell, a
+base branch the task names, inputs git does not track, requirements an earlier
+task here stopped on (kept as notes with a probe), a browser, running servers
+and a login. A blocker stops the task as `blocked` with the command that
+continues it; a warning prints in the header. `cauce preflight "<task>"`
+runs it alone, and `cauce run --dry-run` prints it.
+
+Workers may always read git, and never move a ref the person's checkout
+shares: `git reset`, `git branch -f/-D/-M`, `git push --force` and `git
+update-ref` are denied whatever was allowed, and so are `git checkout`, `git
+switch` and `git rebase` in the person's checkout. A refusal a PreToolUse hook
+made stops as `hook`, with the hook's message and no rule suggested.
+
+A first attempt's turns come from what passing attempts of its kind used, and
+one that runs out is continued in its own session, not started again.
+
 ### Checks that do not trust the worker
 
 - **Criteria.** A request that lists items is checked item by item: `S1..Sn`,
