@@ -944,7 +944,8 @@ def cmd_survey(args: argparse.Namespace) -> int:
     only = repo.key(Path(args.repo).resolve()) if args.repo else None
     store = Store.open()
     try:
-        found = survey.gather(store, days=args.days, limit=args.sessions, per_project=args.per_project, only=only)
+        found = survey.gather(store, days=args.days, limit=args.sessions, per_project=args.per_project, only=only,
+                              deep=args.deep)
     finally:
         store.close()
     print(survey.as_json(found) if args.json else survey.text(found))
@@ -1483,10 +1484,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", type=int)
     p.set_defaults(func=cmd_queue)
 
-    from cauce import team_cli, workflow_cli
+    from cauce import investigate, team_cli, workflow_cli
 
     workflow_cli.add_parser(sub)
     team_cli.add_parser(sub)
+    investigate.add_parser(sub)
 
     p = sub.add_parser("lanes", help="one serial lane per repository; a failed task pauses it")
     p.add_argument("--unpause", metavar="REPO", help="a repository path or key")
@@ -1510,6 +1512,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sessions", type=int, default=400, help="the most sessions read, newest first (default 400)")
     p.add_argument("--per-project", type=int, default=60, help="the most sessions read per project (default 60)")
     p.add_argument("--repo", help="only this project")
+    p.add_argument("--deep", action="store_true", help="every error reported and what followed it, every branch, "
+                                                       "the chains of fixes and reverts, cauce's stops")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_survey)
     p = sub.add_parser("index-livespec", help=argparse.SUPPRESS)

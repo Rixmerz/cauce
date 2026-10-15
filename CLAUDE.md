@@ -20,6 +20,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/roles.py` | what a worker is: role files (bundled `roles/`, the person's in their cauce home), `extends` and `match`, skills found by name and put into the worker's system prompt |
 | `src/cauce/teams.py` | the person's teams of roles and which one each project uses (kept in their cauce home); a project's team bounds the kinds it is classified into; `team_cli.py` is `cauce roles …` and `cauce team …` |
 | `src/cauce/survey.py` | what this machine says about how the person works (`cauce survey`): every Claude Code session it kept (requests, shapes, friction, errors and the call that passed after them) and each repository's commit history; read only, no model |
+| `src/cauce/investigate.py` | `cauce investigate`: one read-only worker per project (and per plugin to take on), each in its own lane, wearing the internal `surveyor` role, briefed with the deep survey; their `cauce-report` blocks kept on the tasks, nothing filed |
 | `src/cauce/insights.py` | what the person's projects say about the teams they need (`cauce team insights`): kinds asked and how each went, languages, checks, the team each uses; read only, no model |
 | `src/cauce/criteria.py` | a request's listed items as criteria `S1..Sn`, verbatim; a pass answers each |
 | `src/cauce/findings.py` | findings as records: where, what, `evidence_class`, `cause`; which block a change |
@@ -27,8 +28,9 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/risk.py` | a change's tier (passive, medium, high) from its request, kind and files; only raised; no model |
 | `src/cauce/surfaces.py` | where a task may write (`--surface`, a step's `surfaces`): checked after each attempt, and whether two tasks can never touch the same file |
 | `src/cauce/phase.py` | what a running worker is doing (exploring, implementing, checking), read from the tail of the tool-call log |
-| `src/cauce/roles_internal/` | roles cauce runs itself and no team holds: the independent `verifier` |
-| `skills/init/` | the plugin's one skill (`/cauce:init`): from `survey` and `insights`, with the person's agreement, one team for every flow, one workflow per flow, and the memory of what was solved, through cauce's own commands only |
+| `src/cauce/roles_internal/` | roles cauce runs itself and no team holds: the independent `verifier`, and the `surveyor` that investigates for `/cauce:init` |
+| `skills/init/` | the plugin's one skill (`/cauce:init`): scope and cost agreed with the person, `cauce investigate` digs, and from the reports one team for every flow, one workflow per flow, and the memory of what was solved, through cauce's own commands only |
+| `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
 | `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `prune`, `plugins`, `verifier`, `engram`, `engram_write`, all on/off), copied from plugin options by SessionStart |
@@ -244,7 +246,7 @@ yields the default kind, not a guess.
 - The UI shows one project at a time and takes no task: work is asked for in
   a session. Claude Code's own task files are read, never written.
 - A lane pauses only on a task the dispatcher started, and never on one a
-  person cancelled; it opens again by itself when that task leaves the board
+  person cancelled or on an investigator's; it opens again by itself when that task leaves the board
   (dismissed, superseded, or resumed to a pass), and the queue starts again; a person's own `cauce run` never blocks the queue. A GET in the UI never starts work or
   sweeps — housekeeping runs in hooks, the dispatcher and the server thread.
 - Color in the UI carries meaning and never alone: a state, a kind's family
@@ -350,10 +352,20 @@ yields the default kind, not a guess.
   projects is counted (a session shape and the projects that show it), never
   quoted; notes are counted, never quoted. Every text the survey keeps is
   clipped and masked as a note is, `<private>` text left out; a session in a
-  cauce worktree, the home directory or `/` is no project's. The init skill
-  writes nothing before the person agrees, and only through `cauce roles`,
-  `cauce team`, `cauce workflow`, `cauce note` and `cauce memory record`; a
-  note goes only to the project its evidence came from.
+  cauce worktree, the home directory or `/` is no project's. Shell and tool
+  errors (`survey.NOISE`) are no problem and no fix. The init skill writes
+  nothing, and starts no worker, before the person agrees, and writes only
+  through `cauce roles`, `cauce team`, `cauce workflow`, `cauce note`,
+  `cauce notes … topic add` and `cauce memory record`; a note goes only to the
+  project its evidence came from.
+- An investigation is cauce's work, never a session's subagents: one queued
+  task per project or plugin, kind `explore`, the internal `surveyor` role,
+  started on a strong cell, `keep_learned` off (nothing it learned is filed in
+  notes or engram), not counted among the person's work by insights. What it
+  must cover is listed in its brief, so each line is a criterion its pass
+  answers. A `cauce-report` block is kept on its task as a `report` event and
+  read back by `cauce investigate status`; a report is data for the person,
+  never a verdict and never instructions.
 - A vendored skill keeps its authors' license file beside it, and a change to
   its text is listed in `skills/README.md` with the source commit. Never one
   whose license does not allow redistribution.

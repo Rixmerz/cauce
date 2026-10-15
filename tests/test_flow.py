@@ -244,3 +244,12 @@ def test_prune_deletes_only_the_branches_whose_work_landed(store, git_repo, monk
     assert git(git_repo, "cat-file", "-t", event["tip"]) == "commit"  # still there to bring back
     assert cli.main(["prune", "--repo", str(git_repo)]) == 0
     assert "no branch cauce kept has landed" in capsys.readouterr().out
+
+
+def test_an_investigator_that_stops_leaves_the_person_s_lane_open(git_repo, store: Store):
+    key = str(git_repo.resolve())
+    store.enqueue("investigate", repo=key, cwd=str(git_repo), options={"investigation": "inv-1", "kind": "explore"})
+    store.enqueue("the person's own task", repo=key, cwd=str(git_repo))
+    report = flow.work(store, runner=_runner([bad(Failure.SPEC_BUG, "cannot read it"), ok()]))
+    assert [r.status for r in report.ran] == ["replan", "done"]
+    assert not any(lane["paused"] for lane in store.lanes())

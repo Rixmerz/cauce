@@ -321,6 +321,10 @@ def _resolve(name: str, raw: Mapping[str, dict[str, Any]], *, bundled: set[str])
     )
 
 
+#: The roles cauce runs itself, outside every team: a person names one only to replace it.
+INTERNAL = ("verifier", "surveyor")
+
+
 def internal(name: str, catalog: Catalog | None = None) -> Role:
     """A role cauce itself runs as, outside every team (the independent verifier).
     A role of the person's of the same name takes its place."""

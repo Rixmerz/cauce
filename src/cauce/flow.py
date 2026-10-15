@@ -157,6 +157,7 @@ def queued_options(task: dict, defaults: Options) -> Options:
         step_role=raw.get("step_role") or defaults.step_role,
         surfaces=tuple(raw.get("surfaces") or defaults.surfaces),
         ledger=raw.get("ledger") or defaults.ledger,
+        keep_learned=bool(raw.get("keep_learned", defaults.keep_learned)),
     )
 
 

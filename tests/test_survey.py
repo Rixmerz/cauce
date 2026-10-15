@@ -123,7 +123,7 @@ def test_the_survey_reads_sessions_by_project_with_their_history(git_repo, tmp_p
     assert fix["command"] == "uv run pytest" and fix["tries"] == 2 and fix["changed"] == ["cart.py"]
     assert "AssertionError" in fix["error"] and "cents" in fix["said"]
     assert p["unsolved"] == [{"command": "npm run build", "error": "npm ERR! Missing script: build", "sessions": 1}]
-    assert p["tool_errors"] == {"Bash": 3, "Edit": 1}
+    assert p["tool_errors"] == {"Bash": 3} and p["friction"]["noise"] == 1  # an edit of text not there: noise
     assert {"command": "uv run pytest", "runs": 3, "check": True} in p["commands"]
     assert p["skills"] == {"python-rules": 1} and p["subagents"] == {"Explore": 1, "general-purpose": 1}
     assert p["slash_commands"] == {"cauce:workflow": 1} and p["models"] == {"sonnet": 10}
@@ -239,3 +239,130 @@ def test_odd_transcripts_are_read_as_far_as_they_go(tmp_path, monkeypatch, git_r
 def test_nothing_left_out_says_nothing(store):
     found = survey.gather(store)
     assert "left out" not in survey.text(found)
+
+
+# --- read deep ----------------------------------------------------------------------------
+
+
+def commit(repo, name, text, subject, *, body="", date=None):
+    (repo / name).parent.mkdir(parents=True, exist_ok=True)
+    (repo / name).write_text(text)
+    git(repo, "add", "-A")
+    env = {**os.environ, **({"GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date} if date else {})}
+    import subprocess
+
+    subprocess.run(["git", "commit", "-q", "-m", subject, *(["-m", body] if body else [])], cwd=repo, env=env,
+                   check=True)
+    return git(repo, "rev-parse", "HEAD")
+
+
+def deep_repo(repo: Path) -> None:
+    commit(repo, "cart.py", "v1\n", "feat(cart): totals in cents", date="2026-09-01T10:00:00")
+    commit(repo, "package-lock.json", "{}\n", "chore: lock", date="2026-09-01T11:00:00")
+    commit(repo, "cart.py", "v2\n", "fix(cart): round once", date="2026-09-03T10:00:00")
+    commit(repo, "cart.py", "v3\n", "fix: the rounding again", date="2026-09-04T10:00:00")
+    bad = commit(repo, "cfg.yaml", "x: 1\n", "feat: new config key", date="2026-09-05T10:00:00")
+    git(repo, "revert", "--no-edit", bad)
+    commit(repo, "old.py", "o\n", "feat: something old", date="2026-01-01T10:00:00")
+    commit(repo, "old.py", "o2\n", "fix: far too late to be its fix", date="2026-06-01T10:00:00")
+    git(repo, "checkout", "-q", "-b", "feat/tokens")
+    commit(repo, "auth.py", "safe\n", "fix: sanitize the token before logging")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "checkout", "-q", "-b", "feat/squashed")
+    commit(repo, "s.py", "s\n", "feat: squashed work")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "-q", "--squash", "feat/squashed")
+    git(repo, "commit", "-q", "-m", "feat: squashed work (#2)")
+    git(repo, "branch", "merged-one")
+    for n in (1, 2):
+        git(repo, "branch", f"cauce/task-{n}", "feat/tokens")
+
+
+def test_a_deep_history_reads_every_branch_the_chains_and_the_reverts(git_repo):
+    deep_repo(git_repo)
+    h = survey.deep_history(git_repo)
+    b = h["branches"]
+    assert b["default"] == "main"
+    states = {r["branch"]: r["state"] for r in b["listed"]}
+    assert states == {"feat/tokens": "unmerged", "feat/squashed": "squashed", "merged-one": "merged"}
+    lost = b["unmerged_commits"][0]
+    assert lost["branch"] == "feat/tokens" and lost["security"] and lost["type"] == "fix"
+    assert b["cauce_kept"]["count"] == 2 and b["cauce_kept"]["duplicates"] == [["cauce/task-1", "cauce/task-2"]]
+    chain = h["chains"][0]
+    assert chain["cause"]["subject"] == "feat(cart): totals in cents" and chain["files"] == ["cart.py"]
+    assert [f["subject"] for f in chain["followups"]] == ["fix(cart): round once", "fix: the rounding again"]
+    assert not any(c["cause"]["subject"] == "feat: something old" for c in h["chains"])  # months apart: no chain
+    revert = h["reverts"][0]
+    assert revert["reverted"]["subject"] == "feat: new config key" and isinstance(revert["days"], int)
+    assert {f["subject"] for f in h["fixes"]} >= {"fix: the rounding again", "fix: sanitize the token before logging"}
+    assert survey.deep_history(git_repo.parent / "nowhere") is None
+
+
+def test_a_default_branch_and_a_revert_of_a_commit_not_read():
+    commits = [{"sha": "b", "full": "b" * 40, "date": "2026-01-02", "subject": "Revert \"x\"",
+                "body": "This reverts commit aaaaaaa.", "files": []},
+               {"sha": "c", "full": "c" * 40, "date": "x", "subject": "Revert y", "body": "", "files": []}]
+    out = survey.reverts(commits)
+    assert out[0]["reverted"]["sha"] == "aaaaaaa" and out[0]["days"] is None and out[1]["reverted"]["sha"] == ""
+    assert survey._days("x", "2026-01-01") == 10**6
+
+
+def test_the_default_branch(git_repo, tmp_path):
+    assert survey.default_branch(git_repo) == "main"
+    git(git_repo, "branch", "-m", "trunk")
+    assert survey.default_branch(git_repo) == "HEAD"
+    clone = tmp_path / "clone"
+    git(tmp_path, "clone", "-q", str(git_repo), str(clone))
+    assert survey.default_branch(clone) == "origin/trunk"
+    assert survey._landed(git_repo, "HEAD", "HEAD") is False
+
+
+def test_a_deep_survey_follows_each_reported_error_and_keeps_cauce_s_stops(git_repo, tmp_path, store):
+    deep_repo(git_repo)
+    claude = tmp_path / "claude-config"
+    write(claude, "-repo", "s1", [
+        user("me sale este error: TypeError: total is undefined en el checkout", git_repo),
+        assistant("The total is read before it is set; I'll initialise it."),
+        assistant([tool("w1", "Edit", file_path=f"{git_repo}/cart.py", old_string="a", new_string="b"),
+                   tool("t1", "Bash", command="npm test"), tool("c1", "Bash", command="git commit -m x")]),
+        result("w1", "ok"), result("t1", "ok"),
+        user("x" * 2100, git_repo),
+    ])
+    key = survey.repo.key(git_repo)
+    task = store.create_task("fix the palette", status="blocked", source="cauce", repo=key, kind="ui")
+    store.add_event(task["id"], "finished", status="blocked", stop={"cause": "review", "reason": "new findings"})
+    store.create_task("rename", status="failed", source="cauce", repo=key, kind="refactor", result="it broke")
+    found = survey.gather(store, deep=True)
+    p = found["projects"][0]
+    first = p["deep"]["reported_errors"][0]
+    assert first["error"].startswith("me sale este error: TypeError") and first["changed"] == ["cart.py"]
+    assert first["checked_after"] and first["committed_after"] and "initialise" in first["answer"]
+    assert p["deep"]["reported_errors"][1]["answer"] is None
+    assert p["deep"]["requests"][0].startswith("me sale este error")
+    assert p["deep"]["history"]["branches"]["default"] == "main"
+    stopped = {s["title"]: s for s in p["cauce"]["stopped"]}
+    assert stopped["fix the palette"]["cause"] == "review" and stopped["fix the palette"]["reason"] == "new findings"
+    assert stopped["rename"]["reason"] == "it broke"
+    assert survey.gather(store, only=[key])["projects"][0]["repo"] == key
+
+
+def test_the_installed_plugins_are_listed_with_their_skills(tmp_path):
+    cache = tmp_path / "claude-config" / "plugins" / "cache" / "market"
+    for version in ("1.2.0", "1.10.0"):
+        root = cache / "helper" / version
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "helper", "description": "Dev"}))
+        (root / "skills" / "plan").mkdir(parents=True)
+        (root / "skills" / "plan" / "SKILL.md").write_text("---\nname: plan\ndescription: Plan in phases\n---\nx")
+        (root / "commands").mkdir()
+        (root / "commands" / "ship.md").write_text("no front matter")
+    (cache / "broken" / "0.1").mkdir(parents=True)
+    (cache / "broken" / "0.1" / "agents").mkdir()
+    (cache / "broken" / "0.1" / "agents" / "a.md").write_text("---\nname: unclosed\n")
+    (cache / "empty").mkdir()
+    found = {p["name"]: p for p in survey.plugins()}
+    assert found["helper"]["version"] == "1.10.0" and found["helper"]["marketplace"] == "market"
+    assert found["helper"]["skills"] == [{"name": "plan", "description": "Plan in phases"}]
+    assert found["helper"]["commands"] == [{"name": "ship", "description": ""}]
+    assert found["broken"]["agents"][0]["name"] == "a" and "empty" not in found
+    assert survey.have()["plugins"]

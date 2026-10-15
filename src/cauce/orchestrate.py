@@ -119,6 +119,9 @@ class Options:
     step_role: str | None = None
     #: A workflow step's part in a review ledger (`cauce.ledger`): its role, round and rows.
     ledger: dict | None = None
+    #: What a passing worker learned is filed in the project's notes (and engram, when
+    #: writing there is on). Off for a task whose findings wait on a person's agreement.
+    keep_learned: bool = True
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -129,7 +132,10 @@ class Options:
                   "livespec": self.livespec, "no_isolate": not self.isolate, "role": self.role,
                   "step_role": self.step_role, "surfaces": list(self.surfaces),
                   "ledger": self.ledger}
-        return {k: v for k, v in values.items() if v not in (None, [], False)}
+        kept = {k: v for k, v in values.items() if v not in (None, [], False)}
+        if not self.keep_learned:
+            kept["keep_learned"] = False  # a task whose findings wait on a person's word
+        return kept
 
 
 @dataclass
@@ -418,6 +424,8 @@ def _team(options: Options, key: str | None, catalog: roles.Catalog) -> tuple[st
     lines: list[str] = []
     if options.role:
         try:
+            if options.role in roles.INTERNAL and options.role not in catalog.roles:
+                return "cauce's own", [roles.internal(options.role, catalog)], []
             return "named for this run", [catalog.get(options.role)], []
         except roles.RoleError as exc:
             # A queued or resumed task whose role is gone since: it runs, as its team.
@@ -691,6 +699,8 @@ def run(
                               transient=result.transient, findings=result.findings)
             attempts.append(attempt)
             subject = result.commit or subject
+            if result.report is not None:
+                store.add_event(task["id"], "report", seq=seq, passed=result.passed, report=result.report)
             say(f"cauce: #{task['id']} attempt {seq} " + ("passed" if result.passed else
                 f"ended {(result.failure or Failure.INCONCLUSIVE).value}: {result.summary[:160]}"))
             if review_stop is not None:
@@ -775,15 +785,19 @@ def run(
         # A person's cancel is their call on this task, not a broken state the
         # next one would start on: the queue behind it goes on.
         by_a_person = report.stop is not None and report.stop.cause == "cancelled" and report.stop.who == "you"
-        if status != "done" and store.get_task(task["id"])["dispatched"] and not by_a_person:
+        # An investigator's stop is no broken state of the project: the person's queue goes on.
+        reading_for_init = '"investigation"' in (store.get_task(task["id"]).get("options") or "")
+        if status != "done" and store.get_task(task["id"])["dispatched"] and not by_a_person and not reading_for_init:
             store.pause_lane(key, f"task #{task['id']} ended {status}: {report.summary[:200]}")
         if workspace is None:
             report.changed = sorted(changed)
-        if status == "done" and report.learned and config.enabled("notes", os.environ, options.notes):
+        if status == "done" and report.learned and options.keep_learned and config.enabled(
+                "notes", os.environ, options.notes):
             _note(store, task, key, report, the_plan, workspace.repo_dir if workspace else repo_dir,
                   isolate.head(workspace.repo_dir, report.branch) if workspace and report.branch else None,
                   notes_ask)
-        if status == "done" and report.learned and config.enabled("engram_write", os.environ):
+        if status == "done" and report.learned and options.keep_learned and config.enabled(
+                "engram_write", os.environ):
             _to_engram(store, task, report, the_plan, workspace.repo_dir if workspace else repo_dir)
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,

@@ -70,7 +70,9 @@ def languages(checkout: Path) -> dict[str, Any]:
 
 def work(store: Store, key: str) -> dict[str, Any]:
     """The tasks of one project by kind: how many, how each went, where it passed."""
-    tasks = store.list_tasks(repo=key, source=("cauce", "queue"), limit=2000)
+    # An investigator's reading is cauce's own work about the person's, not theirs.
+    tasks = [t for t in store.list_tasks(repo=key, source=("cauce", "queue"), limit=2000)
+             if '"investigation"' not in (t.get("options") or "")]
     by_kind: dict[str, dict[str, Any]] = {}
     for t in tasks:
         kind = t.get("kind") or "unknown"
