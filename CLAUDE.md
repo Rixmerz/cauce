@@ -54,6 +54,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
 | `src/cauce/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; `workflow_cli.py` is `cauce workflow …` |
 | `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
+| `src/cauce/services.py` | the servers a task needs up (`--service 'cmd@port'`): started in the task's directory, waited for, stopped with their process group when the run ends |
 | `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified |
 | `commands/orchestration.md` | the one entry point a user types |
 | `commands/habits.md` | review the habit candidates for this repository and install the ones the person picks |
@@ -113,12 +114,19 @@ yields the default kind, not a guess.
 - Effort and model are different dials. Shallow work climbs effort; a wrong
   approach or a repeated answer changes model. Do not collapse them into one
   ladder walk.
-- A retry is for a launch that broke (a timeout, no JSON, an errored
-  session); it is never an escalation. An environment the worker named, or
-  a check cauce could not run, blocks at once. A refused
+- A retry is for a launch that broke (a timeout before any change, no JSON,
+  an errored session); it is never an escalation. An environment the worker
+  named, or a check cauce could not run, blocks at once. A refused
   command is neither: it blocks at once, because it is a setting. An
   environment failure on an attempt that changed files is not work that never
-  ran: it blocks at once too, its work kept.
+  ran: it blocks at once too, its work kept. A timeout after the work changed
+  files is out of turns, not the environment: more turns, and an attempt's
+  time grows with its turns (`launch.timeout_for`).
+- Out of turns is room, never a bug: a finding of the independent check in
+  work whose worker ran out of turns before its own check earns the same cell
+  more turns, never more effort or another model, and is no dead end.
+- After the first attempt, none starts with less budget than its model can
+  use (`MIN_ATTEMPT_USD`): the task stops as `budget` with the resume command.
 - A check that could not run at all (exit 127, npm's missing script or
   manifest, a tool's minimum Node) is `environment`, never a `code_bug`: its
   exit says nothing about the work, and it is no dead end. npm's EBADENGINE
@@ -149,6 +157,8 @@ yields the default kind, not a guess.
 - The model's stated confidence about its own work is not an input.
 - A request's criteria are its own words: a pass answers every `S#`, one left
   out is `inconclusive` and one not met is a `code_bug`. Prose has no criteria.
+  Items the request puts out of scope (under a line ending in `:` that says
+  so, or marked so themselves) are no criteria, and the brief names them.
 - A finding blocks only when the change caused or worsened it (or it cannot be
   told) and it is shown, not suspected; a pre-existing one is reported, never
   a blocker.
@@ -202,9 +212,27 @@ yields the default kind, not a guess.
   reading while it changes nothing, and holds no checkout; a `feature`,
   `implement`, `refactor` or `docs` task never is.
 - A kept branch is deleted only when nothing is lost (`isolate.prunable`):
-  its commits are on another branch, HEAD holds every file it changed, or it
-  holds only artifacts; never one checked out, never one of a task that may
-  resume. Its tip is kept on a `branch_pruned` event. It runs in hooks and the
+  its commits are on another branch, HEAD holds every file it changed, it
+  holds only artifacts, or another kept branch holds the same tree; never one
+  checked out, never one of a task that may resume. A task asked again while
+  one with the same text keeps its work points at `cauce resume`.
+- A worktree gets what the task needs from the person's checkout and nothing
+  more: ignored paths the task names are copied (never linked, never
+  committed, up to `isolate.BRING_BYTES`); uncommitted changes come only with
+  `--carry`, and a task that names them without it is warned. A new model
+  starts from the base; what the last one did is kept on
+  `refs/cauce/aside/…`, the brief says so, and the refs go with the branch
+  when the run keeps none. `--add-dir` is the person's, for a sibling
+  repository.
+- A service (`--service 'cmd@port'`) is the person's flag, never a
+  definition's or a model tool's: cauce starts it in the task's directory,
+  waits for its port, and stops its process group when the run ends; a port
+  already up is left alone, and one that never listens blocks the task as
+  `environment` before any attempt.
+- A session's turn is recorded for coupling, never as work: `cauce tasks`
+  and the board leave it out (`--turns` shows it), a turn that ended without
+  its answer is a `turn` stop with nothing to resume, and a notice cauce put
+  in a session (the endings, a plugin's message) is no turn. Its tip is kept on a `branch_pruned` event. It runs in hooks and the
   server thread, never in a GET.
 - A kept commit's subject is the change's: the line the worker proposed
   (`commit`), else the task's title, never a task number; the task and an
@@ -228,6 +256,8 @@ yields the default kind, not a guess.
   `engram mcp` behind the `engram` guard: reading tools only, held to the
   project cauce resolved. Tests run with `CAUCE_ENGRAM=off`; a test that wants
   it passes a fake `http`.
+- An index livespec failed to build is not tried again until the checkout
+  moves (`Livespec.last_failure`); the plan says so once per task.
 - Every livespec tool a hint names is in `adapters/livespec.TOOLS`, checked
   against the release in `MINIMUM_VERSION`. Check a name against livespec
   before adding it, and bump `PINNED` only after checking the new release.

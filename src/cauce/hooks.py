@@ -68,11 +68,20 @@ def _context(event_name: str, text: str) -> dict:
 _HANDBACK = re.compile(r'^<agent-message from="([^"]+)">\s*\[Subagent hand-back\]')
 
 
+#: How the endings notice opens: the mod submits it as a prompt to wake an idle session.
+ENDINGS_HEADER = "cauce: work this session sent has ended since you last heard."
+#: A prompt a plugin submitted in the person's place, as Claude Code words it.
+_PLUGIN_SENT = re.compile(r"^The [\w.:@-]+ plugin sent a message")
+
+
 def _ignored(text: str) -> bool:
     stripped = text.strip()
     # Harness-generated turns (task notifications, local command output) are not
-    # requests anyone made.
-    return not stripped or stripped.startswith(("<task-notification", "<command-", "<local-command", "<system-"))
+    # requests anyone made, and neither is a notice cauce itself put in the
+    # session: none of them is a turn to record as a task.
+    return (not stripped or stripped.startswith(("<task-notification", "<command-", "<local-command", "<system-",
+                                                 ENDINGS_HEADER))
+            or bool(_PLUGIN_SENT.match(stripped)))
 
 
 def _dead_end_text(dead: list[dict], intro: str) -> str:
@@ -398,7 +407,7 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
     ended = store.claim_unreported(session_id, via=claim) if claim else store.unreported(session_id)
     if not ended:
         return None, []
-    lines = ["cauce: work this session sent has ended since you last heard. Act on each now: tell the person "
+    lines = [ENDINGS_HEADER + " Act on each now: tell the person "
              "what happened, then continue as its line says (never redo a worker's task by hand)."]
     for t in ended:
         data = t["finished_data"]

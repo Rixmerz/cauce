@@ -220,6 +220,30 @@ class Livespec:
         digest = hashlib.sha256(str(self.db_path(root)).encode()).hexdigest()[:16]
         return home(self.env) / "work" / f"livespec-index-{digest}.lock"
 
+    def _failure_path(self, repo_dir: Path) -> Path:
+        return self.lock_path(repo_dir).with_name(self.lock_path(repo_dir).stem.replace("index", "failed") + ".json")
+
+    def last_failure(self, repo_dir: Path) -> str | None:
+        """Why the last index run failed, while the checkout is still at the commit it
+        failed at: an index that cannot be built (a workspace moved since, a broken
+        config) is not tried again before every task, only once the checkout moves."""
+        root = (repo.toplevel(repo_dir) or repo_dir).resolve()
+        try:
+            data = json.loads(self._failure_path(repo_dir).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        head = _head(root)
+        return str(data.get("error") or "it failed") if head and data.get("head") == head else None
+
+    def _remember_failure(self, repo_dir: Path, error: str | None) -> None:
+        path = self._failure_path(repo_dir)
+        if error is None:
+            path.unlink(missing_ok=True)
+            return
+        root = (repo.toplevel(repo_dir) or repo_dir).resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"head": _head(root), "error": error[:300]}), encoding="utf-8")
+
     def indexing(self, repo_dir: Path) -> bool:
         """Whether a refresh cauce started holds this index now."""
         with _lock(self.lock_path(repo_dir), wait_s=0) as (got, _):
@@ -250,7 +274,10 @@ class Livespec:
             except (OSError, subprocess.TimeoutExpired) as exc:
                 return f"livespec index did not run: {exc}"
         if proc.returncode != 0:
-            return f"livespec index failed: {(proc.stderr or proc.stdout or '').strip()[:200]}"
+            error = (proc.stderr or proc.stdout or "").strip()[:200]
+            self._remember_failure(repo_dir, error)
+            return f"livespec index failed: {error}"
+        self._remember_failure(repo_dir, None)
         return "livespec index refreshed"
 
     def refresh_in_background(self, repo_dir: Path, log: Path) -> bool:
@@ -405,6 +432,15 @@ def _connect(db: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _head(root: Path) -> str | None:
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root), capture_output=True, text=True,
+                             timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return (out.stdout.strip() or None) if out.returncode == 0 else None
 
 
 def _older_than_head(indexed_at: str | None, root: Path) -> bool:

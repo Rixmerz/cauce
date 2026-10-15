@@ -306,6 +306,28 @@ cauce memory search "redirect query string"                    # dead ends, ever
 cauce memory record --problem "redirect drops query" --fix "use url_for(_external)" --outcome failed --why "..."
 ```
 
+**What the worktree holds.** A worktree is a clean checkout: it has your
+ignored dependency folders (linked) and your local settings, and nothing you
+have not committed. A task that names a file you changed but did not commit
+says so before it starts; `--carry` brings your uncommitted changes into its
+worktree. An ignored path the task names (`scripts/slides/`) is copied in, and
+being ignored is never committed. `--add-dir ../api` lets the workers use a
+sibling repository. When a new model takes over after a wrong approach, it
+starts from the base commit; what the last one wrote is kept on
+`refs/cauce/aside/…` and its brief says how to read it.
+
+```bash
+cauce run "finish the change in checkout.ts" --carry      # your uncommitted work comes along
+cauce run "check the cart page at localhost:4200" --service "npm run dev@4200"
+cauce run "align the client with the API" --add-dir ../api
+```
+
+**Servers the task needs.** A worker's own dev server stops when the worker
+does. `--service 'npm run dev@4200'` (repeatable) has cauce start the command
+in the task's directory, wait until the port listens, run the attempts, and
+stop it after; a port already up is left alone, and a server that never
+listens stops the task before any money is spent.
+
 `cauce run` prints the task number at once, and each attempt as it starts
 and ends, on stderr; the report comes on stdout when the task stops. A
 livespec index that is missing or stale is rebuilt in the background, never

@@ -615,3 +615,21 @@ def test_the_check_keeps_only_the_neighbours_that_measure(git_repo, store, verif
     assert set(verifier.mcp_servers) == {"layout-inspector"}
     assert "mcp__layout-inspector" in verifier.allowed_tools and "mcp__rastro" not in verifier.allowed_tools
     assert "layout-inspector: measure the rendered page" in verifier.append_system_prompt
+
+
+def test_a_problem_in_work_that_ran_out_of_turns_gets_more_turns_not_a_stronger_model(git_repo, store, verifier_on):
+    """The palette task: the worker ran out of turns, its check passed in its place, and the
+    independent check found a problem. It failed for room: same cell, twice the turns."""
+    out_of_turns = WorkerResult(False, Failure.TURNS_EXHAUSTED, "used all 60 turns without a verdict",
+                                cost_usd=0.1)
+    script = Script(out_of_turns, check("fail", [BUG]), passing("fixed"), check("pass"), write="app.py")
+    report = run("fix the cart total", git_repo, store, Options(verify="true"), registry={}, launcher=script,
+                 classifier=kind("implement"))
+    assert report.status == "done"
+    first, _, again, _ = script.specs
+    assert again.cell == first.cell and again.max_turns == first.max_turns * 2
+    assert again.timeout_s == launch.timeout_for(again.max_turns)
+    attempts = store.attempts(report.task_id)
+    assert attempts[0]["failure"] == "turns_exhausted" and "run out of turns" in attempts[0]["summary"]
+    # A turn ceiling is no dead end: only the fix that worked is remembered.
+    assert [f["outcome"] for f in store.recent_problems()[0]["fixes"]] == ["worked"]

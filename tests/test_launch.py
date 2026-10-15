@@ -305,3 +305,14 @@ def test_the_commit_subject_a_worker_proposes_is_one_short_line():
     assert commit_subject({"commit": 3}) == "" and commit_subject({}) == "" and commit_subject({"commit": " "}) == ""
     cut = commit_subject({"commit": "word, " * 30})
     assert len(cut) <= 72 and cut.endswith("…")
+
+
+def test_a_timeout_after_the_work_changed_files_is_out_of_turns_not_the_environment(git_repo):
+    def slow_but_working(argv, **kwargs):
+        (git_repo / "app.py").write_text("changed\n")
+        raise subprocess.TimeoutExpired(argv, 1)
+
+    result = launch.run(spec(git_repo, timeout_s=1), runner=slow_but_working)
+    assert result.failure is Failure.TURNS_EXHAUSTED and not result.transient
+    assert result.changed_paths == ("app.py",) and "after changing 1 file(s)" in result.summary
+    assert launch.timeout_for(30) == launch.DEFAULT_TIMEOUT_S and launch.timeout_for(120) == 7200

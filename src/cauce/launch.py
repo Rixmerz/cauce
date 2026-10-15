@@ -56,6 +56,13 @@ DEFAULT_MAX_TURNS = 30
 #: on Linux, and a role with its skills comes near.
 INLINE_PROMPT_CHARS = 16000
 DEFAULT_TIMEOUT_S = 1800
+#: Wall-clock time per turn: an attempt given more turns is given the time to use them.
+SECONDS_PER_TURN = 60
+
+
+def timeout_for(turns: int) -> int:
+    """How long an attempt of `turns` turns may run: never under the default."""
+    return max(DEFAULT_TIMEOUT_S, turns * SECONDS_PER_TURN)
 
 #: Tools a reading task never needs. Removing them is what makes "read-only"
 #: true instead of requested.
@@ -296,6 +303,14 @@ def run(
             check=False,
         )
     except subprocess.TimeoutExpired:
+        changed = changed_paths(before, tracked_state(spec.target_dir), spec.target_dir)
+        if changed:
+            # The work ran out of time, not the environment: it changed files, so
+            # it goes on with more turns (and the time they bring), from what it did.
+            return WorkerResult(
+                False, Failure.TURNS_EXHAUSTED,
+                f"the worker ran past its {spec.timeout_s}s time after changing {len(changed)} file(s), "
+                "without a verdict", changed_paths=changed, duration_s=float(spec.timeout_s))
         return WorkerResult(
             False, Failure.ENVIRONMENT, f"the worker exceeded its {spec.timeout_s}s timeout",
             duration_s=float(spec.timeout_s), transient=True,

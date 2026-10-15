@@ -49,6 +49,7 @@ CAUSES = {
     "cancelled": ("cancelled", "you"),
     "signal": ("cancelled", "outside"),
     "died": ("interrupted", "cauce"),
+    "turn": ("interrupted", "outside"),
     "crashed": ("failed", "cauce"),
     "converged": ("failed", "worker"),
     "review": ("blocked", "cauce"),
@@ -185,6 +186,8 @@ def what_to_do(stop: Stop) -> str:
         "cancelled": "resume it if you still want it",
         "signal": "resume it if you still want it",
         "died": "its process went away mid-run: resume it",
+        "turn": "nothing to resume: this was a turn of a session, not work cauce runs; ask again in the session "
+                "if its answer was lost",
         "crashed": "cauce itself failed: the reason has the error; resume once it is fixed",
         "converged": "the findings are the answer: read them in the worker's account and act on them; "
                      "resuming would only repeat them",
@@ -280,6 +283,11 @@ def of(store: Any, task: dict[str, Any]) -> Stop | None:
     if status in ("queued", "running", "done"):
         return None
     finished = store.last_event(task["id"], "finished")
+    if task.get("source") == "hook" and status in ("interrupted", "failed"):
+        # A session's turn that ended without its answer: no work of cauce's
+        # stopped, and there is nothing to resume.
+        reason = str(((finished or {}).get("data") or {}).get("reason") or task.get("result") or "")
+        return Stop("turn", reason or "the turn ended without its answer reaching cauce")
     data = (finished or {}).get("data") or {}
     found = read(data.get("stop"))
     if found is not None and found.status == status:

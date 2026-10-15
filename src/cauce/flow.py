@@ -75,9 +75,11 @@ def sweep(store: Store, *, now: datetime | None = None, is_alive: Callable[[int 
             continue
         gone = (f"no sign of life: its process ({task['pid']}) is gone" if task["source"] == "cauce" and task["pid"]
                 else "no sign of life")
-        # A session's prompt keeps the answer it had so far as its result.
-        stops.record(store, task["id"], stops.Stop("died", gone), pid=None, current_cell=None,
-                     result=task["source"] == "cauce")
+        # A session's turn is no work to resume: the session closed or was cut off
+        # before its answer arrived. It keeps the answer it had so far as its result.
+        stop = (stops.Stop("turn", "the session's turn ended without its answer reaching cauce")
+                if task["source"] == "hook" else stops.Stop("died", gone))
+        stops.record(store, task["id"], stop, pid=None, current_cell=None, result=task["source"] == "cauce")
         if task["dispatched"]:
             store.pause_lane(task["repo"], f"task #{task['id']} stopped with no sign of life")
         swept.append(task["id"])
@@ -107,14 +109,22 @@ def prune(store: Store, dirs: list[Path] | None = None, *, dry_run: bool = False
         dirs = list(seen.values())
     pruned = []
     for top in dirs:
-        for task_id, tip in isolate.kept_branches(top).items():
+        kept = isolate.kept_branches(top)
+        trees = {task_id: isolate.tree_of(top, tip) for task_id, tip in kept.items()}
+        for task_id, tip in sorted(kept.items()):
             task = store.get_task(task_id)
             if task is None or task["status"] not in PRUNE_STATUSES:
                 continue
             branch = isolate.branch_for(task_id)
             why = isolate.prunable(top, branch)
+            if why is None:
+                # Another kept branch holds the very same work: this copy loses nothing.
+                twin = next((other for other in sorted(trees) if other != task_id and trees[other]
+                             and trees[other] == trees[task_id]), None)
+                why = f"the same work as {isolate.branch_for(twin)}" if twin is not None else None
             if why is None or (not dry_run and not isolate.delete_branch(top, branch)):
                 continue
+            trees.pop(task_id, None)
             if not dry_run:
                 store.add_event(task_id, "branch_pruned", branch=branch, tip=tip, why=why, repo=str(top))
             pruned.append({"task": task_id, "branch": branch, "tip": tip, "why": why, "repo": str(top)})
@@ -158,6 +168,9 @@ def queued_options(task: dict, defaults: Options) -> Options:
         surfaces=tuple(raw.get("surfaces") or defaults.surfaces),
         ledger=raw.get("ledger") or defaults.ledger,
         keep_learned=bool(raw.get("keep_learned", defaults.keep_learned)),
+        carry=bool(raw.get("carry", defaults.carry)),
+        add_dirs=tuple(raw.get("add_dirs") or defaults.add_dirs),
+        services=tuple(raw.get("services") or defaults.services),
     )
 
 

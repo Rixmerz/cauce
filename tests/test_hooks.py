@@ -361,3 +361,24 @@ def test_a_subagent_s_report_joins_the_task_that_delegated_it(store: Store, tmp_
     assert hooks.user_prompt_submit({"session_id": "t", "prompt": '<agent-message from="x"> [Subagent hand-back] x',
                                      "prompt_id": "q"}, store) is None
     assert not [t for t in store.list_tasks() if t["session_id"] == "t"]
+
+
+def test_cauce_s_own_notices_are_no_turn_and_a_lost_turn_is_nothing_to_resume(store: Store, capsys):
+    from cauce import cli
+
+    notice = hooks.ENDINGS_HEADER + "\n#21 [done] add median"
+    for text in (notice, "The cauce plugin sent a message: " + notice):
+        assert hooks.user_prompt_submit({"session_id": "s", "prompt": text}, store) is None
+    assert store.list_tasks(source=("hook",)) == []
+    hooks.user_prompt_submit({"session_id": "s", "prompt": "y ahora que resultado da?", "prompt_id": "p1"}, store)
+    hooks.stop_failure({"session_id": "s", "error": "server_error"}, store)
+    turn = store.list_tasks(source=("hook",))[0]
+    assert turn["status"] == "failed"
+    stop = stops.of(store, turn)
+    assert stop.cause == "turn" and stop.reason == "server_error" and "nothing to resume" in stops.what_to_do(stop)
+    store.create_task("real work", status="done", source="cauce", kind="docs")
+    assert cli.main(["tasks", "--all"]) == 0
+    out = capsys.readouterr().out
+    assert "real work" in out and "resultado" not in out
+    assert cli.main(["tasks", "--all", "--turns"]) == 0
+    assert "y ahora que resultado da? (turn)" in capsys.readouterr().out

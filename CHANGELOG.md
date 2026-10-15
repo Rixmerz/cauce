@@ -54,8 +54,60 @@
 - An investigator that stops never pauses its project's lane: the person's own
   queue there goes on.
 
+- **`--service 'cmd@port'`** on `cauce run` and `cauce queue add`: cauce starts
+  the server in the task's directory, waits for its port, runs the attempts and
+  stops it after. 17 tasks of one machine had stopped on "this task needs
+  running servers", most of them cancelled.
+- **`--carry`** brings the person's uncommitted changes into the task's
+  worktree; without it, a task that names an uncommitted file is warned before
+  it starts. **`--add-dir`** gives the workers a sibling repository.
+- **Ignored paths a task names are copied into its worktree** (up to 50 MB;
+  never committed): a task about `scripts/slides/` found an empty folder.
+- **`cauce tasks --turns`** shows the sessions' own turns and subagents; by
+  default `cauce tasks` lists cauce's work only.
+
 ### Fixed
 
+From a compendium of 1,207 real tasks:
+
+- **A session's turns showed up as interrupted tasks to resume.** 67 chat
+  messages ended `interrupted: no sign of life` with "resume it", and the
+  endings notice the mod submits to wake a session became a task of its own
+  (one even `failed`). A turn that ends without its answer is now a `turn`
+  stop with nothing to resume, cauce's own notices are no turn, and
+  `cauce tasks` leaves turns out.
+- **Running out of turns read as a bug in the code.** When the worker ran out
+  of turns, its check passed in its place and the independent check then found
+  a problem, the next attempt climbed effort and model (sonnet/high → xhigh →
+  opus, about $6.50 on one task), and "two cells gave the same answer" fired on
+  the wrong cause. It now gets the same cell with twice the turns, and is no
+  dead end in memory.
+- **A timeout after real work was "the environment".** A feature that changed
+  24 files and ran past 1800 s was retried once and then blocked as
+  "environment failed twice". A timeout after changing files is now out of
+  turns: it goes on with more turns from what it did, and an attempt's time
+  grows with its turns (60 s per turn, never under 1800 s).
+- **UI and test work start with 60 turns**, as features do: at 30 they ran out
+  before a verdict more than any other kind.
+- **A new model looked for work that had been reset away.** After a wrong
+  approach the worktree goes back to the base; the next brief now says so, and
+  what the last attempt wrote is kept on `refs/cauce/aside/task-<id>-<n>`.
+- **Workers sourced nvm and were refused.** The brief now names the Node already
+  on the worker's PATH, forbids `source ~/.nvm/nvm.sh`, `nvm use` and
+  `bash -c`, and lists the shell commands the person's rules let through.
+- **An attempt was launched with $0.03 left on opus/xhigh.** After the first,
+  no attempt starts with less than its model can use (haiku $0.03, sonnet
+  $0.20, opus $0.50, fable $1): the task stops as `budget` with the resume
+  command.
+- **Criteria the request put out of scope failed the pass.** Items under a line
+  like "Part B (do not touch):" became S5 and S6, and a pass that left them
+  alone was a `spec_bug`. They are now no criteria, and the brief names them as
+  out of scope.
+- **A livespec index that cannot be built was retried by every task.** A
+  failure is kept and not tried again until the checkout moves.
+- **Duplicate `cauce/task-*` branches.** `cauce prune` deletes a finished
+  task's branch when another kept branch holds the same tree, and a task asked
+  again while one with the same text keeps its work points at `cauce resume`.
 - **The task drawer's attempts were squeezed into 140 px.** The map's
   milestones list shared the `.timeline` class, and its grid clipped every
   attempt's cell, turns and cost. The milestones have their own class now.

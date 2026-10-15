@@ -33,6 +33,17 @@ from cauce.matrix import KINDS, LADDERS, Cell
 from cauce.store import FIX_OUTCOMES, Store, home
 
 
+def _service(value: str) -> str:
+    """A `--service`, checked where it is read: a command and the port it listens on."""
+    from cauce import services
+
+    try:
+        services.parse(value)
+    except services.ServiceError as err:
+        raise argparse.ArgumentTypeError(str(err)) from None
+    return value
+
+
 def _cell(value: str) -> str:
     """A `--start` cell, checked where it is read: a cell cauce has no such dial
     for (`haiku/low`) is a usage error, never a traceback mid-run."""
@@ -131,6 +142,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         allow_tools=tuple(args.allow or ()),
         role=args.role,
         surfaces=_surfaces(args.surface),
+        carry=args.carry,
+        add_dirs=tuple(str(Path(d).expanduser().resolve()) for d in args.add_dir or ()),
+        services=tuple(args.service or ()),
     )
     store = Store.open()
     previous = _cancel_on_sigterm()
@@ -435,12 +449,15 @@ def cmd_matrix(_: argparse.Namespace) -> int:
 def cmd_tasks(args: argparse.Namespace) -> int:
     store = Store.open()
     try:
-        tasks = store.list_tasks(repo=_repo_key(args), status=args.status or None, limit=args.limit)
+        # cauce's own work by default: a session's turns are no task to resume or count.
+        sources = None if args.turns else ("cauce", "queue")
+        tasks = store.list_tasks(repo=_repo_key(args), status=args.status or None, limit=args.limit, source=sources)
     finally:
         store.close()
     for t in tasks:
         cell = t["final_cell"] or t["start_cell"] or ""
-        print(f"#{t['id']:<5} {t['status']:<14} {t['kind'] or '-':<16} {cell:<14} {t['title']}")
+        mark = {"hook": " (turn)", "delegation": " (subagent)"}.get(t["source"], "")
+        print(f"#{t['id']:<5} {t['status']:<14} {t['kind'] or '-':<16} {cell:<14} {t['title']}{mark}")
     return 0
 
 
@@ -850,7 +867,11 @@ def cmd_queue(args: argparse.Namespace) -> int:
             where = Path(args.repo or os.getcwd()).resolve()
             options = {k: v for k, v in {"budget_usd": args.budget, "verify": args.verify, "kind": args.kind,
                                          "start": args.start, "allow_tools": args.allow,
-                                         "surfaces": list(_surfaces(args.surface)) or None}.items() if v is not None}
+                                         "surfaces": list(_surfaces(args.surface)) or None,
+                                         "carry": args.carry or None,
+                                         "add_dirs": [str(Path(d).expanduser().resolve()) for d in args.add_dir]
+                                         if args.add_dir else None,
+                                         "services": args.service or None}.items() if v is not None}
             task = store.enqueue(_text(args.text), repo=repo.key(where), cwd=str(where), options=options,
                                  author="orchestrator" if os.environ.get("CAUCE_SESSION_ID") else "person",
                                  session_id=os.environ.get("CAUCE_SESSION_ID"))
@@ -1408,6 +1429,13 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--allow-approval", action="store_true", help="allow cells that need approval (Fable)")
         p.add_argument("--allow", action="append", metavar="RULE", help=ALLOW_HELP)
         p.add_argument("--no-isolate", action="store_true", help="work in the checkout, not a worktree")
+        p.add_argument("--carry", action="store_true",
+                       help="bring your checkout's uncommitted changes into the task's worktree")
+        p.add_argument("--add-dir", action="append", metavar="DIR",
+                       help="a directory beside the work the workers may use, e.g. a sibling repository (repeatable)")
+        p.add_argument("--service", action="append", metavar="CMD@PORT", type=_service,
+                       help="a server the task needs up, started before the work and stopped after: "
+                            "'npm run dev@4200' (repeatable)")
         p.add_argument("--no-model", action="store_true", help="classify with the rules only")
         switch = p.add_mutually_exclusive_group()
         switch.add_argument("--livespec", dest="livespec", action="store_true", default=None,
@@ -1458,6 +1486,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true", help="every repository")
     p.add_argument("--status", action="append")
     p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--turns", action="store_true", help="the sessions' own turns and subagents too")
     p.set_defaults(func=cmd_tasks)
 
     queue = sub.add_parser("queue", help="tasks waiting for a worker; `++ task` in a session queues too")
@@ -1474,6 +1503,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--surface", action="append", metavar="PATH",
                    help="a path or glob the task may change (repeatable); tasks with surfaces that cannot touch "
                         "run side by side")
+    p.add_argument("--carry", action="store_true",
+                   help="bring your checkout's uncommitted changes into the task's worktree")
+    p.add_argument("--add-dir", action="append", metavar="DIR",
+                   help="a directory beside the work the workers may use (repeatable)")
+    p.add_argument("--service", action="append", metavar="CMD@PORT", type=_service,
+                   help="a server the task needs up, started before the work and stopped after (repeatable)")
     p.add_argument("--json", action="store_true", help="print the queued task as JSON")
     p.set_defaults(func=cmd_queue)
     p = qsub.add_parser("list", help="what is waiting (this repository; --all for every one)")

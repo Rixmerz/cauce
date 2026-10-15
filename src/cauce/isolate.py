@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import os
+import re
 import shutil
 import subprocess
 import time
@@ -138,6 +140,119 @@ def _linked(ws: Workspace, path: str) -> bool:
     return any(path == rel or path.startswith(rel + "/") for rel in ws.links)
 
 
+#: Where the work an attempt left is set aside before a reset: a ref per attempt, so
+#: the next model starts clean and can still read what the last one did.
+ASIDE = "refs/cauce/aside"
+
+
+def set_aside(ws: Workspace, attempt: int) -> str | None:
+    """Keep the worktree's work as it is on a ref of its own, before a reset throws
+    it away. None when there is nothing to keep."""
+    if not has_changes(ws):
+        return None
+    _git(ws.path, "add", "-A")
+    tree = _git(ws.path, "write-tree")
+    commit = _git(ws.path, *_identity(ws.path), "commit-tree", tree, "-p", _git(ws.path, "rev-parse", "HEAD"),
+                  "-m", f"cauce: what attempt {attempt} left, set aside before a reset")
+    ref = f"{ASIDE}/{ws.branch.rsplit('/', 1)[-1]}-{attempt}"
+    _git(ws.path, "update-ref", ref, commit)
+    return ref
+
+
+def drop_aside(ws: Workspace) -> None:
+    """Forget the work set aside for this task: nothing will resume from it."""
+    prefix = f"{ASIDE}/{ws.branch.rsplit('/', 1)[-1]}-"
+    for ref in _git(ws.repo_dir, "for-each-ref", "--format=%(refname)", ASIDE, check=False).split():
+        if ref.startswith(prefix):
+            _git(ws.repo_dir, "update-ref", "-d", ref, check=False)
+
+
+def dirty(top: Path) -> list[str]:
+    """What a checkout holds that is not committed: changed, added, deleted or untracked
+    (ignored files aside)."""
+    status = _git(top, "status", "--porcelain", "-uall", "-z", check=False, strip=False)
+    return sorted({e[3:] for e in status.split("\0") if len(e) > 3 and e[2] == " " and not is_artifact(e[3:])})
+
+
+def named_in(text: str, paths: Sequence[str]) -> list[str]:
+    """The paths a task's text names: by path, or by a file name of four characters or more."""
+    low = text.lower()
+    out = []
+    for p in paths:
+        name = Path(p).name.lower()
+        if p.lower() in low or (len(name) >= 4 and re.search(rf"(?<![\w./-]){re.escape(name)}(?![\w-])", low)):
+            out.append(p)
+    return out
+
+
+def carry(ws: Workspace, paths: Sequence[str]) -> list[str]:
+    """Bring the person's uncommitted state of `paths` into the worktree, a deletion as
+    a deletion: work the task builds on that no commit holds yet."""
+    carried = []
+    for rel in paths:
+        src, dst = ws.repo_dir / rel, ws.path / rel
+        if src.is_file():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+        elif not src.exists() and dst.is_file():
+            dst.unlink()
+        else:
+            continue
+        carried.append(rel)
+    return carried
+
+
+#: A path-looking word of a task's text: `scripts/slides/`, `config.local.json`.
+_PATHLIKE = re.compile(r"(?<![\w/.-])((?:\.?[\w@-]+/)+[\w.@-]*|[\w-]+\.[A-Za-z0-9]{1,8})(?![\w/-])")
+#: The most a copied ignored path may weigh: past it, the task says so instead.
+BRING_BYTES = 50 * 1024 * 1024
+
+
+def _size(path: Path) -> int:
+    if path.is_file():
+        return path.stat().st_size
+    total = 0
+    for root, _, files in os.walk(path):
+        for f in files:
+            with contextlib.suppress(OSError):
+                total += (Path(root) / f).stat().st_size
+            if total > BRING_BYTES:
+                return total
+    return total
+
+
+def ignored_named(ws: Workspace, text: str) -> list[str]:
+    """Paths the task's text names that the person's checkout has, git ignores, and the
+    worktree therefore lacks."""
+    out = []
+    for word in sorted(set(_PATHLIKE.findall(text))):
+        rel = word.strip("/").removeprefix("./")
+        if not rel or ".." in rel.split("/") or not (ws.repo_dir / rel).exists() or (ws.path / rel).exists():
+            continue
+        if subprocess.run(["git", "check-ignore", "-q", rel], cwd=str(ws.repo_dir), check=False).returncode == 0:
+            out.append(rel)
+    return out
+
+
+def bring(ws: Workspace, rels: Sequence[str]) -> tuple[list[str], list[str]]:
+    """Copy ignored paths from the person's checkout into the worktree: (copied, too big).
+    Copies, never links: what the worker does to them stays out of the person's files,
+    and being ignored they are never committed."""
+    copied, big = [], []
+    for rel in rels:
+        src, dst = ws.repo_dir / rel, ws.path / rel
+        if _size(src) > BRING_BYTES:
+            big.append(rel)
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_dir():
+            shutil.copytree(src, dst, symlinks=True)
+        else:
+            shutil.copy2(src, dst)
+        copied.append(rel)
+    return copied, big
+
+
 def reset(ws: Workspace) -> None:
     """Back to the base commit, in the task's worktree only."""
     _git(ws.path, "reset", "--hard", ws.base)
@@ -201,6 +316,7 @@ def finish(ws: Workspace, *, keep: bool, message: str) -> str | None:
     _git(ws.repo_dir, "worktree", "remove", "--force", str(ws.path), check=False)
     if kept_branch is None:
         _git(ws.repo_dir, "branch", "-D", ws.branch, check=False)
+        drop_aside(ws)
     return kept_branch
 
 
@@ -233,12 +349,15 @@ def message(task_id: int, *, title: str, subject: str = "", summary: str = "", s
     return "\n\n".join(parts)
 
 
+def _identity(path: Path) -> list[str]:
+    return [] if _git(path, "config", "user.email", check=False) else [
+        "-c", "user.name=cauce", "-c", "user.email=cauce@localhost"]
+
+
 def _commit(ws: Workspace, message: str, *extra: str) -> None:
     # cauce's own snapshot of a worker's work, for a person to review: a
     # pre-commit hook that needs approval or a missing install must not lose it.
-    identity = [] if _git(ws.path, "config", "user.email", check=False) else [
-        "-c", "user.name=cauce", "-c", "user.email=cauce@localhost"]
-    _git(ws.path, *identity, "commit", "-q", "--no-verify", *extra, "-m", message)
+    _git(ws.path, *_identity(ws.path), "commit", "-q", "--no-verify", *extra, "-m", message)
 
 
 def head(repo_dir: Path, ref: str) -> str:
@@ -272,6 +391,11 @@ def kept_branches(repo_dir: Path) -> dict[int, str]:
         if number.isdigit() and tip:
             found[int(number)] = tip
     return found
+
+
+def tree_of(repo_dir: Path, ref: str) -> str:
+    """The tree a commit holds: two branches with one tree hold the same work."""
+    return _git(repo_dir, "rev-parse", f"{ref}^{{tree}}", check=False)
 
 
 def prunable(repo_dir: Path, branch: str) -> str | None:
