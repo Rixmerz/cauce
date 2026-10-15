@@ -134,3 +134,28 @@ def test_a_kept_branch_never_commits_tool_artifacts(git_repo, tmp_path):
     shown = git(git_repo, "show", "--name-only", "cauce/task-14")
     assert "fix.py" in shown
     assert ".playwright-mcp" not in shown
+
+
+def test_a_commit_message_reads_as_the_change_with_the_task_in_its_trailers():
+    msg = isolate.message(1144, title="Repo wapp-admin: the palette of the admin is wrong everywhere",
+                          subject="Use the brand palette in the admin theme", summary="theme.css now reads tokens",
+                          status="blocked")
+    subject, body, trailers = msg.split("\n\n")
+    assert subject == "Use the brand palette in the admin theme" and body == "theme.css now reads tokens"
+    assert trailers.splitlines() == ["Cauce-Task: #1144", "Cauce-Verified: no (blocked)"]
+    done = isolate.message(7, title="x " * 60, summary="")
+    assert done.split("\n\n")[0].endswith("…") and len(done.split("\n\n")[0]) <= isolate.SUBJECT_CHARS
+    assert done.split("\n\n")[-1] == "Cauce-Task: #7"
+    assert isolate.message(8, title="", subject="key sk-abcdefghijklmnop").startswith("key [secret]")
+    assert isolate.message(9, title="").startswith("Work of cauce task #9")
+    long = isolate.message(10, title="t", subject="word " * 30, summary="s " * 600)
+    assert len(long.splitlines()[0]) <= isolate.SUBJECT_CHARS and long.split("\n\n")[1].endswith("…")
+
+
+def test_work_kept_unverified_under_the_old_subject_is_still_read_as_such(git_repo, tmp_path):
+    ws = isolate.prepare(git_repo, 14, tmp_path / "home")
+    (ws.path / "half.py").write_text("half\n")
+    isolate.finish(ws, keep=True, message="cauce task #14 (unverified, blocked): half")
+    again = isolate.prepare(git_repo, 14, tmp_path / "home")
+    isolate.finish(again, keep=True, message=isolate.message(14, title="half"))
+    assert git(git_repo, "log", "-1", "--format=%s", "cauce/task-14") == "half"  # it passed since: said so

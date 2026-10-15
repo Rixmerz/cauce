@@ -482,7 +482,11 @@ def test_work_a_refusal_stopped_is_kept_unverified_and_the_report_says_what_git_
     assert script.specs[0].allowed_tools == ("Bash(npm run build)", f"Read(/{roles.bundled_skills_dir()}/**)")
     assert report.branch == f"cauce/task-{report.task_id}" and report.changed == ["routes.js"]
     assert "routes.js" in git(git_repo, "show", "--name-only", report.branch)
-    assert "(unverified, blocked)" in git(git_repo, "log", "-1", "--format=%s", report.branch)
+    message = git(git_repo, "log", "-1", "--format=%B", report.branch)
+    # The subject is the change's; the task and its state are trailers a history can read past.
+    assert message.splitlines()[0] == "create the training routes"
+    assert f"Cauce-Task: #{report.task_id}" in message and "Cauce-Verified: no (blocked)" in message
+    assert "created the routes; node was refused" in message
     text = report.text()
     assert "changed (from git): routes.js" in text
     assert "keeps this task's unverified work" in text and f"cauce resume {report.task_id}" in text
@@ -570,8 +574,8 @@ def test_a_resumed_worker_that_finds_the_work_done_is_settled_by_the_check(git_r
     report = run("create the routes", git_repo, store, Options(kind="implement", verify="test -f routes.js"),
                  registry={}, launcher=Script(again), task_id=first.task_id)
     assert report.status == "done" and report.changed == ["routes.js"]
-    assert "(unverified" in git(git_repo, "log", "-2", "--format=%s", report.branch).splitlines()[1]
-    assert "(unverified" not in git(git_repo, "log", "-1", "--format=%s", report.branch)
+    assert "Cauce-Verified: no" in git(git_repo, "log", "-1", "--format=%B", f"{report.branch}~1")
+    assert "Cauce-Verified: no" not in git(git_repo, "log", "-1", "--format=%B", report.branch)
 
 
 def test_a_worker_that_ran_out_of_turns_is_checked_by_cauce_and_a_red_check_reaches_the_next_brief(git_repo, store):
@@ -1037,3 +1041,13 @@ def test_a_validation_that_says_it_is_read_only_is_read_as_one(git_repo, store):
     assert "what you found is broken" in script.specs[0].prompt
     assert report.stop.cause == "converged"
     assert len(report.cells) == 2
+
+
+def test_the_kept_commit_carries_the_line_the_worker_proposed(git_repo, store):
+    script = Script(WorkerResult(True, None, "routes.js serves /health", "1 passed", commit="Serve a health route"),
+                    write="routes.js")
+    report = run("Repo api: we need some way to know it is alive", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"))
+    message = git(git_repo, "log", "-1", "--format=%B", report.branch)
+    assert message.splitlines()[0] == "Serve a health route"
+    assert "routes.js serves /health" in message and "Cauce-Verified" not in message

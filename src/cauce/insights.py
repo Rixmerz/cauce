@@ -1,5 +1,5 @@
 """What a person's own work says about the team they need: the facts the
-personal-team skill builds teams from.
+init skill (`/cauce:init`) builds the team from, beside `survey`.
 
 Read from what cauce already keeps and from the projects' checkouts, never
 from a model: per project, the kinds of work asked for and how each went (pass

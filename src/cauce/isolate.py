@@ -35,8 +35,14 @@ from pathlib import Path
 #: Folders a build needs and git does not carry. Linked, not copied: shared with
 #: the checkout, which is why the brief tells the worker not to reinstall them.
 DEPENDENCY_DIRS = frozenset({"node_modules", ".venv", "venv"})
-#: How the commit of work kept without a pass is marked.
-UNVERIFIED = "(unverified"
+#: How the commit of work kept without a pass is marked: a trailer, so the
+#: subject stays the change's. `UNVERIFIED_BEFORE` is how a subject said it once.
+UNVERIFIED = "Cauce-Verified: no"
+UNVERIFIED_BEFORE = "(unverified"
+#: The trailer that ties a commit to its task.
+TASK_TRAILER = "Cauce-Task"
+#: How long a commit's subject and the summary under it may be.
+SUBJECT_CHARS, BODY_CHARS = 72, 700
 #: The person's own permission rules for the project, never committed. Copied,
 #: not linked: the worker reads its own copy, and nothing it does reaches theirs.
 LOCAL_SETTINGS = ".claude/settings.local.json"
@@ -188,7 +194,7 @@ def finish(ws: Workspace, *, keep: bool, message: str) -> str | None:
             _git(ws.path, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--",
                  *(f":(glob)**/{d}/**" for d in sorted(ARTIFACT_DIRS)), check=False)
             _commit(ws, message)
-        elif UNVERIFIED in _git(ws.path, "log", "-1", "--format=%s") and UNVERIFIED not in message:
+        elif _unverified(_git(ws.path, "log", "-1", "--format=%B")) and not _unverified(message):
             # Work kept unverified has passed since, unchanged: the branch says so.
             _commit(ws, message, "--allow-empty")
         kept_branch = ws.branch
@@ -196,6 +202,35 @@ def finish(ws: Workspace, *, keep: bool, message: str) -> str | None:
     if kept_branch is None:
         _git(ws.repo_dir, "branch", "-D", ws.branch, check=False)
     return kept_branch
+
+
+def _unverified(message: str) -> bool:
+    return UNVERIFIED in message or UNVERIFIED_BEFORE in message.split("\n", 1)[0]
+
+
+def message(task_id: int, *, title: str, subject: str = "", summary: str = "", status: str = "done") -> str:
+    """The commit message of a task's work, as a project's history reads it: the
+    change in one line (the worker's, else the task's title), what it does, and
+    cauce's trailers: the task, and whether it was verified."""
+    import textwrap
+
+    from cauce.notes import _SECRET
+    from cauce.text import title_of
+
+    line = " ".join((subject or "").split()) or title_of(" ".join((title or "").split()), SUBJECT_CHARS)
+    line = _SECRET.sub("[secret]", line) or f"Work of cauce task #{task_id}"
+    if len(line) > SUBJECT_CHARS:
+        line = line[:SUBJECT_CHARS - 1].rsplit(" ", 1)[0] + "…"
+    parts = [line]
+    body = _SECRET.sub("[secret]", " ".join((summary or "").split()))
+    if body:
+        body = body if len(body) <= BODY_CHARS else body[:BODY_CHARS - 1].rsplit(" ", 1)[0] + "…"
+        parts.append(textwrap.fill(body, 72))
+    trailers = [f"{TASK_TRAILER}: #{task_id}"]
+    if status != "done":
+        trailers.append(f"{UNVERIFIED} ({status})")
+    parts.append("\n".join(trailers))
+    return "\n\n".join(parts)
 
 
 def _commit(ws: Workspace, message: str, *extra: str) -> None:

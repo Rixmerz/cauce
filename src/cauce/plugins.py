@@ -79,6 +79,11 @@ KNOWN: tuple[Neighbour, ...] = (
 )
 
 
+#: Neighbours that only measure and never change anything: the read-only
+#: independent check keeps them when the work had them, to measure what it reports.
+MEASURES: Mapping[str, str] = {n.server: n.hint for n in KNOWN if n.plugin == "layout-inspector"}
+
+
 def claude_dir(env: Mapping[str, str]) -> Path:
     configured = env.get("CLAUDE_CONFIG_DIR")
     return Path(configured) if configured else Path(env.get("HOME", "~")).expanduser() / ".claude"

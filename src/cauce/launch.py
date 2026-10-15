@@ -64,6 +64,7 @@ When you are done, end your reply with exactly one fenced block:
   "verdict": "pass" | "fail" | "inconclusive",
   "failure": "code_bug" | "test_bug" | "approach" | "spec_bug" | "architecture_bug" | "environment" | null,
   "summary": "one or two sentences: what you did, or what stopped you",
+  "commit": "the change in one line for the project's history, imperative, under 72 characters",
   "evidence": "the command you ran to check it and its real output, verbatim",
   "learned": ["a durable fact about this project that you confirmed and the next person would want"],
   "criteria": [{{"id": "S1", "met": true, "evidence": "what shows it"}}],
@@ -105,6 +106,11 @@ When you are done, end your reply with exactly one fenced block:
   no browser unless your tools include one; without it, answer `fail` with
   `environment` and say so, never describe a page you did not open.
 - Do not list the files you changed; they are read from git.
+- `commit` is the subject of the commit that keeps your work, as the project's
+  own history writes them (`Fix rounding of the checkout total`, or
+  `fix(checkout): round the total once` where its commits use a type): what the
+  change does, never the task's wording, a task number or a file list. `""`
+  when you changed nothing.
 - `learned` goes into the project's notes, read by whoever works here next. Put
   at most five facts you confirmed while working that outlive this task: a
   business rule, why the code is shaped this way, a convention, how to run or
@@ -197,6 +203,8 @@ class WorkerResult:
     permission_mode: str = ""
     #: Facts about the project the worker says it confirmed: filed in its notes on a pass.
     learned: tuple[str, ...] = ()
+    #: The one line the worker proposes as the commit's subject; "" when it gave none.
+    commit: str = ""
     #: What the worker says of each criterion `S#` of the task: id, met, evidence.
     criteria: tuple[dict[str, Any], ...] = ()
     #: The problems it reports, as records (`cauce.findings`).
@@ -354,6 +362,7 @@ def parse(
     summary = str(block.get("summary") or "")[:1000]
     evidence = str(block.get("evidence") or "")[:4000]
     common["learned"] = learned(block)
+    common["commit"] = commit_subject(block)
     common["criteria"] = criteria_mod.read(block)
     common["findings"] = findings_mod.read(block)
     common["verdicts"] = ledger_mod.read(block)
@@ -391,6 +400,22 @@ def learned(block: Mapping[str, Any]) -> tuple[str, ...]:
         return ()
     found = [" ".join(x.split())[:LEARNED_CHARS] for x in raw if isinstance(x, str) and x.strip()]
     return tuple(dict.fromkeys(found))[:MAX_LEARNED]
+
+
+#: The longest commit subject kept; a longer one is cut at a word.
+SUBJECT_CHARS = 72
+
+
+def commit_subject(block: Mapping[str, Any]) -> str:
+    """The commit subject a result block proposes: one line, short, no trailing dot; "" for none."""
+    raw = block.get("commit")
+    if not isinstance(raw, str):
+        return ""
+    line = " ".join(raw.strip().splitlines()[0].split()) if raw.strip() else ""
+    line = line.strip("`\"' ").rstrip(".")
+    if len(line) > SUBJECT_CHARS:
+        line = line[:SUBJECT_CHARS - 1].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    return line
 
 
 def _refused(failure: Failure, denied: Sequence[str]) -> Failure:

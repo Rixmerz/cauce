@@ -37,6 +37,7 @@ from cauce import (
     launch,
     models,
     notes,
+    plugins,
     project,
     repo,
     roles,
@@ -53,7 +54,7 @@ from cauce import surfaces as surfaces_mod
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify, narrow
 from cauce.escalate import Attempt, Decision, Failure, Move, decide
-from cauce.matrix import DEFAULT_TURNS, EFFORTS, READ_ONLY_KINDS, Cell, ladder_for, turns_for
+from cauce.matrix import DEFAULT_TURNS, READ_ONLY_KINDS, Cell, ladder_for, turns_for
 from cauce.store import Store, home
 
 #: Failures that describe something tried against the problem, worth keeping
@@ -564,6 +565,8 @@ def run(
     attempts: list[Attempt] = []
     changed: set[str] = set()
     decision: Decision | None = None
+    # The commit's subject: the last line a worker proposed for the change.
+    subject = ""
     # In the checkout itself, one run at a time: the work and its check share the
     # person's files. A run in a worktree has its own.
     in_place = workspace is None and ((writes and not declared_read_only) or bool(options.verify))
@@ -687,6 +690,7 @@ def run(
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
                               transient=result.transient, findings=result.findings)
             attempts.append(attempt)
+            subject = result.commit or subject
             say(f"cauce: #{task['id']} attempt {seq} " + ("passed" if result.passed else
                 f"ended {(result.failure or Failure.INCONCLUSIVE).value}: {result.summary[:160]}"))
             if review_stop is not None:
@@ -742,12 +746,13 @@ def run(
         if workspace is not None:
             report.isolated = True
             report.changed = list(isolate.changed(workspace))
-            unverified = "" if report.status == "done" else f" {isolate.UNVERIFIED}, {report.status})"
             # Work that outgrew its turns is kept too: the task was not wrong, only big.
             outgrew = report.stop is not None and report.stop.cause == "turns"
             report.branch = isolate.finish(
                 workspace, keep=report.status in KEEPS_WORK or outgrew,
-                message=f"cauce task #{task['id']}{unverified}: {task['title']}",
+                message=isolate.message(task["id"], title=task["title"], subject=subject,
+                                        summary=attempts[-1].summary if attempts else "",
+                                        status="done" if report.status == "done" else report.status),
             )
             if report.branch and report.status == "done":
                 # The fix that worked is anchored to the commit a person can check.
@@ -932,10 +937,13 @@ def _cheap(cell: Cell) -> bool:
 
 
 def verify_cell(cell: Cell) -> Cell:
-    """The verifier runs at least as strong as the work, and never on Haiku."""
+    """The verifier runs on the work's model (never Haiku) at high effort. Its
+    independence is a fresh session given the request verbatim, not effort: work
+    that climbed to xhigh or max is checked at high, which halves the wait on the
+    slowest tasks and finds what a probe shows as well."""
     if cell.model == "haiku":
         return Cell("sonnet", "high")
-    if cell.effort is not None and EFFORTS.index(cell.effort) < EFFORTS.index("high"):
+    if cell.effort is not None and cell.effort != "high":
         return Cell(cell.model, "high")
     return cell
 
@@ -964,18 +972,26 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
                        ) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int]:
     """A pass checked again by a worker that verifies the request, not the work.
 
-    The first problems it finds earn one correction; a second only while one of
-    those same problems is still there. Problems that were not there before do
-    not earn a round: the task stops for a person, its work kept. A check that
-    could not decide leaves the pass standing, and says so."""
+    The first problems it finds earn one correction. A later round is earned by
+    a problem that survived (until `MAX_CORRECTIONS`), or by progress: every
+    problem of the round before fixed, and a new one a probe shows. A new problem
+    found after that progress and only read from the code does not stop the work:
+    the pass stands and carries it, for a person to read. Whatever is left at the
+    cap stops the task for a person, its work kept. A check that could not decide
+    leaves the pass standing, and says so."""
     role = roles.internal("verifier")
     vcell = verify_cell(cell)
+    # It keeps only the neighbours that measure (layout-inspector): what it reports, it measures.
+    measuring = {name: server for name, server in spec.mcp_servers.items() if name in plugins.MEASURES}
     check = dataclasses.replace(
         spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values())), cell=vcell,
         model_id=models.pinned(vcell.model), permission_mode=grants.mode_for(vcell.model),
         disallowed_tools=tuple(dict.fromkeys([*spec.disallowed_tools, *launch.WRITE_TOOLS])),
-        append_system_prompt=roles.brief(role).system_prompt, mcp_servers={},
-        allowed_tools=tuple(r for r in spec.allowed_tools if not r.startswith("mcp__")))
+        append_system_prompt="\n\n".join([roles.brief(role).system_prompt,
+                                           *(f"{name}: {plugins.MEASURES[name]}" for name in measuring)]),
+        mcp_servers=measuring,
+        allowed_tools=tuple(r for r in spec.allowed_tools
+                            if not r.startswith("mcp__") or r.removeprefix("mcp__") in measuring))
     say(f"cauce: #{task_id} attempt {nth} passed; risk {risk.tier}: an independent check at {vcell.label}")
     verdict = launcher(check)
     cost = result.cost_usd + verdict.cost_usd
@@ -985,19 +1001,33 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
         blockers = [{"where": "", "what": verdict.summary or "the check failed without a finding",
                      "evidence_class": "inferential", "cause": "unknown", "proof": ""}]
     decided = verdict.passed or bool(blockers)
+    still = [f for f in blockers if any(findings_mod.same(f, g) for g in ledger.values())]
+    # Progress: the round before had problems and none of them is left.
+    progress = corrections > 0 and not still
+    carried = [f for f in blockers if f["evidence_class"] != "deterministic"] if progress else []
+    if carried:
+        blockers = [f for f in blockers if f not in carried]
     store.add_event(task_id, "verified", seq=nth, cell=vcell.label, risk=risk.data(), verdict=verdict.verdict,
                     passed=not blockers and decided, findings=list(shown)[:20], blocking=len(blockers),
-                    cost_usd=verdict.cost_usd, summary=verdict.summary[:500], round=corrections)
+                    carried=len(carried), cost_usd=verdict.cost_usd, summary=verdict.summary[:500],
+                    round=corrections)
     if not decided:
         say(f"cauce: #{task_id} the independent check could not decide; the pass stands")
         return dataclasses.replace(result, cost_usd=cost, evidence=result.evidence + "\n\n[independent check "
                                    f"inconclusive: {verdict.summary[:300]}]"), None, ledger, corrections
     if not blockers:
+        if carried:
+            say(f"cauce: #{task_id} the earlier problems are fixed; {len(carried)} new one(s) read from the code "
+                "go with the pass")
+            return dataclasses.replace(
+                result, cost_usd=cost, findings=(*result.findings, *carried),
+                evidence=result.evidence + "\n\n[independent check: the problems it found before are fixed. "
+                f"New, read from the code and not shown by a probe, for a person to read:\n"
+                f"{findings_mod.text(carried)[:1500]}]"), None, ledger, corrections
         return dataclasses.replace(result, cost_usd=cost), None, ledger, corrections
     found = findings_mod.text(blockers)
-    still = [f for f in blockers if any(findings_mod.same(f, g) for g in ledger.values())]
-    if corrections == 0 or (still and corrections < MAX_CORRECTIONS):
-        if corrections == 0:
+    if corrections == 0 or ((still or progress) and corrections < MAX_CORRECTIONS):
+        if corrections == 0 or progress:
             ledger = {findings_mod.key(f): f for f in blockers}
         say(f"cauce: #{task_id} the independent check found {len(blockers)} problem(s): a correction")
         failed = dataclasses.replace(
@@ -1005,8 +1035,9 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
             summary=f"the independent check found {len(blockers)} problem(s) this change caused: {result.summary}",
             evidence=f"The independent check found:\n{found}\n\nIts probes:\n{verdict.evidence[-1500:]}")
         return failed, None, ledger, corrections + 1
-    why = ("after the correction it found problems the first check had not: a new finding earns no round"
-           if not still else f"the same problem survived {MAX_CORRECTIONS} corrections")
+    why = (f"after {MAX_CORRECTIONS} corrections it still shows problems the earlier checks had not"
+           if progress else f"the same problem survived {MAX_CORRECTIONS} corrections" if len(still) == len(blockers)
+           else f"after {MAX_CORRECTIONS} corrections a problem it found before is still there, beside new ones")
     stop = stops.Stop("review", f"the independent check still finds problems; {why}", attempt=nth,
                       account=found[:2000])
     failed = dataclasses.replace(result, passed=False, failure=Failure.CODE_BUG, cost_usd=cost,

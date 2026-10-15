@@ -175,17 +175,21 @@ def test_the_commands(capsys, store, tmp_path, monkeypatch):
 # --- the skill ------------------------------------------------------------------------
 
 
-def test_the_personal_team_skill_is_a_plugin_skill_whose_commands_all_exist():
-    text = (ROOT / "skills" / "personal-team" / "SKILL.md").read_text()
+def test_the_init_skill_is_a_plugin_skill_whose_commands_all_exist():
+    text = (ROOT / "skills" / "init" / "SKILL.md").read_text()
     meta, body = roles.split_frontmatter(text)
-    assert meta["name"] == "personal-team" and len(meta["description"]) > 80
+    assert meta["name"] == "init" and len(meta["description"]) > 80
+    assert not (ROOT / "skills" / "personal-team").exists()
     parser = cli.build_parser()
     blocks = "\n".join(re.findall(r"```bash\n(.*?)```", body, re.S)).replace("\\\n", " ")
-    commands = [line.split("#")[0].strip() for line in blocks.splitlines() if line.startswith("cauce ")]
-    assert len(commands) >= 10
+    commands = [line.split("  #")[0].strip() for line in blocks.splitlines() if line.startswith("cauce ")]
+    assert len(commands) >= 20
     for line in commands:
-        argv = shlex.split(line.replace("<<'TXT'", ""))[1:]
-        if argv[0] in ("roles", "team"):
-            parser.parse_args(argv)  # every flag the skill tells a session to pass is one cauce takes
-        else:
-            assert argv[0] in parser._subparsers._group_actions[0].choices, line
+        argv = shlex.split(line.replace("<<'TXT'", "").replace("<<'JSON'", ""))[1:]
+        parser.parse_args(argv)  # every flag the skill tells a session to pass is one cauce takes
+    # The workflow it shows is one cauce accepts as written.
+    from cauce import workflows
+
+    shown = re.search(r"<<'JSON'\n(.*?)\nJSON", body, re.S).group(1)
+    defn = workflows.normalize(json.loads(shown))
+    assert [s["id"] for s in defn["steps"]] == ["build", "review", "fix"]

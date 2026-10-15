@@ -932,7 +932,22 @@ def cmd_init(args: argparse.Namespace) -> int:
     except project.NotAProject as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    print(f"enrolled: {folder} — this project and its sessions now show in the UI")
+    print(f"enrolled: {folder} — this project and its sessions now show in the UI; in a session, /cauce:init "
+          "builds your team, workflows and memory from every session on this machine")
+    return 0
+
+
+def cmd_survey(args: argparse.Namespace) -> int:
+    """What every local Claude Code session and its repository's history say: read only."""
+    from cauce import survey
+
+    only = repo.key(Path(args.repo).resolve()) if args.repo else None
+    store = Store.open()
+    try:
+        found = survey.gather(store, days=args.days, limit=args.sessions, per_project=args.per_project, only=only)
+    finally:
+        store.close()
+    print(survey.as_json(found) if args.json else survey.text(found))
     return 0
 
 
@@ -1488,6 +1503,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("dir", nargs="?", help="a directory in the project (default: here)")
     p.set_defaults(func=cmd_init)
 
+    p = sub.add_parser("survey", help="what every Claude Code session on this machine and its repository's "
+                                       "history say about how you work; read only, no model. /cauce:init builds "
+                                       "your team, workflows and memory from it")
+    p.add_argument("--days", type=int, default=180, help="sessions touched in the last N days (default 180)")
+    p.add_argument("--sessions", type=int, default=400, help="the most sessions read, newest first (default 400)")
+    p.add_argument("--per-project", type=int, default=60, help="the most sessions read per project (default 60)")
+    p.add_argument("--repo", help="only this project")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_survey)
     p = sub.add_parser("index-livespec", help=argparse.SUPPRESS)
     p.add_argument("dir")
     p.set_defaults(func=cmd_index_livespec)
