@@ -2,6 +2,53 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-15
+
+### Added
+
+- **`/cauce:init`**, which replaces `/cauce:personal-team`. It reads every
+  Claude Code session on the machine and the history of every repository they
+  ran in, finds the flows the person's work follows, and — once they agree —
+  builds one team covering every flow, one workflow per flow with measurable
+  criteria, and the memory of what was already solved: project notes and the
+  problems with the fixes that worked. It writes only through `cauce roles`,
+  `cauce team`, `cauce workflow`, `cauce note` and `cauce memory record`.
+- **`cauce survey`** (`--json`, `--repo`, `--days`, `--sessions`,
+  `--per-project`): read only, no model. Per project: what the person asks for
+  and the shape each session takes (`plan → implement → check → commit → pr`);
+  friction (corrections with what the agent said before them, interrupts,
+  refused calls, bare "go on"s, pasted logs); errors solved in-session, with
+  the files changed between and what the agent said before the pass, and the
+  ones never solved; the commands and checks run, skills, subagents and slash
+  commands used; and the repository's history: cadence, commit types, fix
+  share, reverts, merges, branch prefixes, agent share, hot and fragile files,
+  recent fix subjects. Across projects, each session shape is counted with the
+  projects that show it, never quoted. A cauce worker's worktree, the home
+  directory and `/` are no project's.
+
+### Changed
+
+- **Commits read as the change.** A worker proposes the commit's subject
+  (`commit` in its result block); the kept commit is that line (else the task's
+  title), the worker's summary under it, and the task in trailers:
+  `Cauce-Task: #12`, `Cauce-Verified: no (blocked)` while unverified. A
+  Before, a merged branch read as `cauce task #1144: Repo wapp-admin…` in the history.
+- **The independent check no longer stops work that is getting better.**
+  Fixing every problem the round before found is progress and earns the next
+  round (two corrections at most, as before) when a probe shows a new problem;
+  a new problem after progress that is only read from the code goes with the
+  pass, recorded on the `verified` event and in the task's findings. Before,
+  any new finding after the first correction stopped the task as `review`:
+  a palette change was blocked with each round fixing what the last found.
+- **The verifier measures, and is told to.** It keeps the neighbours that only
+  measure (layout-inspector) when the work had them, and its instructions say
+  to report everything on the first look, to measure UI findings, and that
+  taste is no finding.
+- **The verifier runs at high effort** on the work's model (never Haiku):
+  work that climbed to xhigh or max was checked at that effort too, doubling
+  the wait on the slowest tasks. Its independence is the fresh session given
+  the request verbatim.
+
 ## [0.14.2] - 2026-10-13
 
 ### Fixed

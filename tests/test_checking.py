@@ -156,11 +156,37 @@ def test_a_risky_pass_is_checked_and_its_findings_earn_one_correction(git_repo, 
     assert "risk high" in report.text()
 
 
-def test_a_new_finding_after_a_correction_stops_for_a_person(git_repo, store, verifier_on):
-    script = Script(passing(), check("fail", [BUG]), passing("fixed"), check("fail", [OTHER]), write="app.py")
+def test_progress_earns_the_next_round_and_what_is_left_at_the_cap_goes_to_a_person(git_repo, store, verifier_on):
+    """The palette that never passed: each round fixed what the one before found, and the
+    check showed something new. Fixing every earlier problem is progress, and earns a round
+    up to the cap; what is still shown there stops the task for a person."""
+    third = {**OTHER, "where": "theme.css:4", "what": "a third contrast failure"}
+    script = Script(passing(), check("fail", [BUG]), passing("fixed"), check("fail", [OTHER]), passing("fixed too"),
+                    check("fail", [third]), write="app.py")
     report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
-    assert report.status == "blocked" and report.stop.cause == "review" and "new finding" in report.stop.reason
-    assert report.branch and "a new crash" in report.stop.account
+    assert len(report.cells) == 3 and "a new crash" in script.specs[4].prompt
+    assert report.status == "blocked" and report.stop.cause == "review"
+    assert "still shows problems the earlier checks had not" in report.stop.reason
+    assert report.branch and "a third contrast failure" in report.stop.account
+
+
+def test_after_progress_a_finding_only_read_from_the_code_goes_with_the_pass(git_repo, store, verifier_on):
+    read = {**OTHER, "evidence_class": "inferential", "what": "the hover colour may be too light"}
+    script = Script(passing(), check("fail", [BUG]), passing("fixed"), check("fail", [read]), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert report.status == "done" and len(script.specs) == 4
+    events = store.events_of(report.task_id, "verified")
+    assert [(e["data"]["blocking"], e["data"]["carried"]) for e in events] == [(1, 0), (0, 1)]
+    assert "the hover colour may be too light" in store.attempts(report.task_id)[-1]["evidence"]
+    finished = store.last_event(report.task_id, "finished")["data"]
+    assert any(f["what"] == read["what"] for f in finished["findings"])
+
+
+def test_a_problem_that_survives_beside_new_ones_stops_at_the_cap(git_repo, store, verifier_on):
+    script = Script(passing(), check("fail", [BUG]), passing(), check("fail", [BUG, OTHER]), passing(),
+                    check("fail", [BUG, OTHER]), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert report.status == "blocked" and "still there, beside new ones" in report.stop.reason
 
 
 def test_the_same_problem_twice_earns_a_second_correction_then_a_person(git_repo, store, verifier_on):
@@ -198,7 +224,7 @@ def test_no_check_for_a_change_without_risk_or_a_reading_task(git_repo, store, v
 def test_the_verifier_cell_and_brief():
     assert verify_cell(Cell("haiku", "low")) == Cell("sonnet", "high")
     assert verify_cell(Cell("opus", "medium")) == Cell("opus", "high")
-    assert verify_cell(Cell("opus", "max")) == Cell("opus", "max")
+    assert verify_cell(Cell("opus", "max")) == Cell("opus", "high")  # independence is the session, not effort
     text = verifier_brief("Do:\n- a\n- b", "implement", home(), None, [f"f{i}" for i in range(25)])
     assert "S2: b" in text and "uncommitted" in text and "and 5 more" in text
 
@@ -573,3 +599,19 @@ def test_the_cli_sets_a_step_s_ledger_part(git_repo, capsys, monkeypatch):
     capsys.readouterr()
     assert cli.main(["workflow", "show", "rv", "--json"]) == 0
     assert "ledger" not in json.loads(capsys.readouterr().out)["steps"][1]
+
+
+def test_the_check_keeps_only_the_neighbours_that_measure(git_repo, store, verifier_on):
+    from cauce import capabilities as caps
+
+    registry = {"layout-inspector": caps.Capability("layout-inspector", {"command": "li"}),
+                "rastro": caps.Capability("rastro", {"command": "rastro"})}
+    script = Script(passing(), check("pass"), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry=registry, launcher=script,
+                 classifier=kind("implement"))
+    assert report.status == "done"
+    work, verifier = script.specs
+    assert set(work.mcp_servers) == {"layout-inspector", "rastro"}
+    assert set(verifier.mcp_servers) == {"layout-inspector"}
+    assert "mcp__layout-inspector" in verifier.allowed_tools and "mcp__rastro" not in verifier.allowed_tools
+    assert "layout-inspector: measure the rendered page" in verifier.append_system_prompt

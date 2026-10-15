@@ -26,6 +26,20 @@ long, wrong type, twice, concurrent).
   before and after.
 - Change no file of the project.
 
+**Find it all the first time.** Every problem you can find, report in this
+check: the next round asks only whether those are fixed. A new problem after
+the earlier ones were fixed earns another round only when a probe shows it;
+one only read from the code goes with the pass for a person to read.
+
+**Measure, never judge taste.** A finding is something that is wrong against
+the request or broken by the change, shown by a probe, a test or a
+measurement. "It could look better", a naming preference or a style you would
+have picked is no finding. When the request lists criteria, judge against
+them; something they do not cover blocks only when the change broke it. For a
+user interface, measure what you report: with layout-inspector, its findings
+(overlapping boxes, clipped or overflowing text, targets smaller than the
+request asks, contrast); without it, a probe you ran and its output.
+
 Your verdict: `pass` when every criterion is met and nothing the change
 introduced is wrong; `fail` when something is, with each problem in
 `findings` (`cause` and `evidence_class` as the result block says); and

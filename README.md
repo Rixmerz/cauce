@@ -291,7 +291,11 @@ before the task. `cauce run` writes in a git worktree on `cauce/task-<id>`; noth
 your checkout until you merge that branch. A task that passed leaves it to
 review; one that stopped for a person (blocked, waiting on approval) leaves it
 too, committed as unverified, and `cauce resume <id>` continues on it; one that
-failed or must be replanned leaves nothing. Whatever stopped it — a refusal, the
+failed or must be replanned leaves nothing. The commit reads as the change
+(`Round the cart total once`, the line the worker proposes, else the task's
+title), with what it does under it and the task in trailers
+(`Cauce-Task: #12`, and `Cauce-Verified: no (blocked)` while unverified), so a
+merged branch reads in your history like any other. Whatever stopped it — a refusal, the
 budget, the environment, the approval gate, a cancel from the UI or
 `cauce cancel`, a process that died — the report, `cauce show <id>`, the board
 and the session that asked for it say which, and give the command that goes on. The worktree gets the checkout's
@@ -680,15 +684,27 @@ cauce team                  # this project's team, every member in full
 cauce team use --none       # back to the bundled team
 ```
 
-**A team built from how you work.** In a session, `/cauce:personal-team` reads
-what cauce kept of your projects (`cauce team insights`: the kinds you ask
-for, how each went, where it passed, the languages and checks of each
-project, the team it uses) and proposes one team per purpose. Once you agree,
-it builds the roles on cauce's own (`cauce roles new implementer-go --extends
-implementer --match go.mod --skill go-rules`), creates the teams and gives
-each project its own. A role built with `extends` keeps cauce's instructions
-and follows them as cauce improves; one project's facts go to that project's
-notes, not into a role every project of the team shares.
+**A team and workflows built from how you work.** In a session,
+`/cauce:init` reads every Claude Code session kept on this machine and the
+history of every repository they ran in (`cauce survey`: what you ask for and
+the shape each session takes, the turns where you corrected the agent,
+interrupted it or refused a call, the errors solved in-session and the call
+that passed after them, the checks you run, and per repository the commit
+cadence, fixes, reverts and the files fixed most), beside what cauce kept of
+its own tasks (`cauce team insights`). It finds the flows your work follows
+and, once you agree, builds **one** team covering all of them (roles built on
+cauce's own, `cauce roles new implementer-go --extends implementer --match
+go.mod --skill go-rules`, with the instructions your corrections call for),
+**one workflow per flow** with measurable criteria, and the memory of what
+was already solved: each project's notes (`cauce note`) and the problems and
+the fixes that worked (`cauce memory record`). It writes nothing before you
+agree, and only through cauce's own commands; a note goes only to the project
+it came from.
+
+```bash
+cauce survey                 # read only, no model: what /cauce:init builds from
+cauce survey --repo . --json # one project, in full
+```
 
 Which team a project uses is kept in your cauce home, never in the
 repository. The **Teams** screen of `cauce ui` lists every team, the roles in
@@ -719,8 +735,14 @@ See [`src/cauce/skills/README.md`](src/cauce/skills/README.md) and
   or code changed with no test beside it. Only ever raised.
 - **Independent verifier.** A high-risk pass, or a medium one a cheap cell
   made, is re-checked by another cell that sees the request and the diff, not
-  the worker's summary. A blocker gets at most two correction rounds; new
-  findings stop the task for you as `review`. `cauce config verifier off`.
+  the worker's summary, at high effort on the work's model. It measures what
+  it reports (layout-inspector, when the work had it), never judges taste. A
+  blocker that persists, or progress (every earlier blocker fixed and a new one
+  a probe shows), earns a correction round, two at most; a new finding after
+  progress that is only read from the code goes with the pass for you to
+  read; what is left at the cap stops the task for you as `review`. Give UI
+  work measurable criteria (`- no clipped text at 375 px`, `- buttons at least
+  44 px`) and the check has something to verify. `cauce config verifier off`.
 - **Surfaces.** `cauce run --surface 'src/api/**' "…"` bounds where a task
   writes; a change outside is undone and fails the attempt. Tasks with
   disjoint surfaces run side by side in one repository.

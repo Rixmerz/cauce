@@ -19,6 +19,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/plugins.py` | neighbours the person installed as Claude Code plugins (layout-inspector, rastro), read from the plugin cache or PATH and handed over as capabilities with their skill |
 | `src/cauce/roles.py` | what a worker is: role files (bundled `roles/`, the person's in their cauce home), `extends` and `match`, skills found by name and put into the worker's system prompt |
 | `src/cauce/teams.py` | the person's teams of roles and which one each project uses (kept in their cauce home); a project's team bounds the kinds it is classified into; `team_cli.py` is `cauce roles …` and `cauce team …` |
+| `src/cauce/survey.py` | what this machine says about how the person works (`cauce survey`): every Claude Code session it kept (requests, shapes, friction, errors and the call that passed after them) and each repository's commit history; read only, no model |
 | `src/cauce/insights.py` | what the person's projects say about the teams they need (`cauce team insights`): kinds asked and how each went, languages, checks, the team each uses; read only, no model |
 | `src/cauce/criteria.py` | a request's listed items as criteria `S1..Sn`, verbatim; a pass answers each |
 | `src/cauce/findings.py` | findings as records: where, what, `evidence_class`, `cause`; which block a change |
@@ -27,7 +28,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/surfaces.py` | where a task may write (`--surface`, a step's `surfaces`): checked after each attempt, and whether two tasks can never touch the same file |
 | `src/cauce/phase.py` | what a running worker is doing (exploring, implementing, checking), read from the tail of the tool-call log |
 | `src/cauce/roles_internal/` | roles cauce runs itself and no team holds: the independent `verifier` |
-| `skills/personal-team/` | the plugin's one skill: builds the person's teams from `insights`, with their agreement, through `cauce roles` and `cauce team` only |
+| `skills/init/` | the plugin's one skill (`/cauce:init`): from `survey` and `insights`, with the person's agreement, one team for every flow, one workflow per flow, and the memory of what was solved, through cauce's own commands only |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
 | `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `prune`, `plugins`, `verifier`, `engram`, `engram_write`, all on/off), copied from plugin options by SessionStart |
@@ -160,10 +161,14 @@ yields the default kind, not a guess.
 - A risk tier is only raised, never lowered; a change that cannot be read is
   high. A high change, or a medium one a cheap cell made, is checked by the
   independent verifier before it passes: another cell, read-only, given the
-  request verbatim and the diff, never the worker's summary. A correction
-  round is earned only by a blocker that persists, at most `MAX_CORRECTIONS`;
-  new findings alone stop the task as `review`. A verifier that cannot decide
-  keeps the pass and says so. Tests run with `CAUCE_VERIFIER=off`.
+  request verbatim and the diff, never the worker's summary; it runs at high
+  effort on the work's model (never Haiku), and keeps only the neighbours that
+  measure (`plugins.MEASURES`). A correction round is earned by a blocker that
+  persists or by progress (every blocker of the round before fixed and a new
+  one a probe shows), at most `MAX_CORRECTIONS`; a new finding after progress
+  that is only read from the code goes with the pass, recorded, never a
+  blocker; what is left at the cap stops the task as `review`. A verifier that
+  cannot decide keeps the pass and says so. Tests run with `CAUCE_VERIFIER=off`.
 - Surfaces narrow and grant nothing: a change outside them fails the attempt
   and is undone in its worktree, never in a person's checkout. Two tasks whose
   surfaces are provably disjoint run side by side without Haiku; in doubt,
@@ -199,6 +204,9 @@ yields the default kind, not a guess.
   holds only artifacts; never one checked out, never one of a task that may
   resume. Its tip is kept on a `branch_pruned` event. It runs in hooks and the
   server thread, never in a GET.
+- A kept commit's subject is the change's: the line the worker proposed
+  (`commit`), else the task's title, never a task number; the task and an
+  unverified state are trailers (`Cauce-Task`, `Cauce-Verified: no`).
 - Files a worker's tools write for themselves (`isolate.ARTIFACT_DIRS`) are
   never a changed file and never committed, and a branch holding only them is
   never a review.
@@ -337,10 +345,15 @@ yields the default kind, not a guess.
   the team covers, the nearest kind of the same nature (reading or writing)
   when it would be another. A tag or `--kind` is narrowed the same way and
   says so. A team left with no role serves as the bundled one, and says so.
-- Insights are read, never written, and never by a model: one project's
-  tasks, habits and files at a time; notes are counted, never quoted. The
-  personal-team skill writes nothing before the person agrees, and only
-  through `cauce roles` and `cauce team`.
+- Insights and the survey are read, never written, and never by a model: one
+  project's tasks, habits, files, sessions and commits at a time; what crosses
+  projects is counted (a session shape and the projects that show it), never
+  quoted; notes are counted, never quoted. Every text the survey keeps is
+  clipped and masked as a note is, `<private>` text left out; a session in a
+  cauce worktree, the home directory or `/` is no project's. The init skill
+  writes nothing before the person agrees, and only through `cauce roles`,
+  `cauce team`, `cauce workflow`, `cauce note` and `cauce memory record`; a
+  note goes only to the project its evidence came from.
 - A vendored skill keeps its authors' license file beside it, and a change to
   its text is listed in `skills/README.md` with the source commit. Never one
   whose license does not allow redistribution.

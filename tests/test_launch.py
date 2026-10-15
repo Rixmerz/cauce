@@ -296,3 +296,12 @@ def test_changed_paths_leave_out_tool_artifacts():
     before = {"a.py": " M"}
     after = {"a.py": "M ", ".playwright-mcp/page.yml": "??", "web/.playwright-mcp/c.log": "??"}
     assert launch.changed_paths(before, after) == ("a.py",)
+
+
+def test_the_commit_subject_a_worker_proposes_is_one_short_line():
+    from cauce.launch import commit_subject
+
+    assert commit_subject({"commit": "  `Fix rounding of the total.`\nmore"}) == "Fix rounding of the total"
+    assert commit_subject({"commit": 3}) == "" and commit_subject({}) == "" and commit_subject({"commit": " "}) == ""
+    cut = commit_subject({"commit": "word, " * 30})
+    assert len(cut) <= 72 and cut.endswith("…")
