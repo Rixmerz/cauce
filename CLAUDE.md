@@ -214,8 +214,10 @@ yields the default kind, not a guess.
 - A kept branch is deleted only when nothing is lost (`isolate.prunable`):
   its commits are on another branch, HEAD holds every file it changed, it
   holds only artifacts, or another kept branch holds the same tree; never one
-  checked out, never one of a task that may resume. A task asked again while
-  one with the same text keeps its work points at `cauce resume`.
+  checked out, never one of a task that may resume. Its tip is kept on a
+  `branch_pruned` event. It runs in hooks and the server thread, never in a
+  GET. A task asked again while one with the same text keeps its work points
+  at `cauce resume`.
 - A worktree gets what the task needs from the person's checkout and nothing
   more: ignored paths the task names are copied (never linked, never
   committed, up to `isolate.BRING_BYTES`); uncommitted changes come only with
@@ -232,8 +234,7 @@ yields the default kind, not a guess.
 - A session's turn is recorded for coupling, never as work: `cauce tasks`
   and the board leave it out (`--turns` shows it), a turn that ended without
   its answer is a `turn` stop with nothing to resume, and a notice cauce put
-  in a session (the endings, a plugin's message) is no turn. Its tip is kept on a `branch_pruned` event. It runs in hooks and the
-  server thread, never in a GET.
+  in a session (the endings, a plugin's message) is no turn.
 - A kept commit's subject is the change's: the line the worker proposed
   (`commit`), else the task's title, never a task number; the task and an
   unverified state are trailers (`Cauce-Task`, `Cauce-Verified: no`).
