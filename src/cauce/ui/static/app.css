@@ -279,11 +279,12 @@ code.anchor { font-family: var(--mono); font-size: 12px; margin-right: 6px; over
 .attach { display: grid; gap: 6px; border-top: 1px solid var(--line); padding-top: 10px; }
 
 /* Milestones: what already happened, newest first. */
-.timeline { list-style: none; margin: 0; padding: 0 0 0 4px; border-left: 2px solid var(--line); }
-.timeline li { display: grid; grid-template-columns: 140px 1fr; gap: 12px; padding: 8px 0 8px 14px; position: relative; }
-.timeline li::before { content: ""; position: absolute; left: -7px; top: 14px; width: 10px; height: 10px; border-radius: 50%;
-                       background: var(--accent); border: 2px solid var(--bg); }
-.timeline time { color: var(--muted); font-size: 12.5px; }
+/* Scoped: the task drawer's attempts are a .timeline too, and must not take this grid. */
+.milestones { list-style: none; margin: 0; padding: 0 0 0 4px; border-left: 2px solid var(--line); }
+.milestones li { display: grid; grid-template-columns: 140px 1fr; gap: 12px; padding: 8px 0 8px 14px; position: relative; }
+.milestones li::before { content: ""; position: absolute; left: -7px; top: 14px; width: 10px; height: 10px; border-radius: 50%;
+                         background: var(--accent); border: 2px solid var(--bg); }
+.milestones time { color: var(--muted); font-size: 12.5px; }
 .chip.decision { border-color: var(--warn); color: var(--warn); }
 .chip.workflow { border-color: var(--ok); color: var(--ok); }
 button.linkish { border: 0; background: none; padding: 0; font-weight: 600; text-align: left; }

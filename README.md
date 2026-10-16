@@ -7,6 +7,28 @@ remembers what failed — across every repository on the machine.
 
 > *cauce* (Spanish): a riverbed. It does not do the work; it channels it.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/board-dark.png">
+  <img alt="The cauce board for one project: tasks that need you with who made the call and the command that continues each, running and queued work, and finished branches to merge" src="docs/images/board.png">
+</picture>
+
+## At a glance
+
+| | |
+|---|---|
+| **Routes every task** | Classifies the request, picks a model × effort cell, runs a one-shot worker with only the tools and MCP servers that task needs, and climbs on evidence: shallow work gets more effort, a wrong approach gets another model. |
+| **Checks without trusting the worker** | A pass needs evidence; changed files come from git; risky changes get an independent read-only verifier that measures what it reports and never reads the worker's summary. |
+| **Says why it stopped** | Every task that stops says who made the call (you, your permission settings, the budget, the environment, cauce's rules) and the command that continues it. |
+| **Remembers** | Problems and the fixes that did or did not work, across every repository; each project's notes, by topic and anchored to code. |
+| **Chains work** | Workflows: plan → build → review → fix, advanced by the engine, each step on the commit the one before kept. Dual review with a refuter: reviewers never vote. |
+| **Learns how you work** | `/cauce:init` sends cauce's own read-only workers through every project and plugin on your machine, in parallel, and builds your team, your workflows and your memory from what they find. |
+| **Shows it all** | `cauce ui`: the board, every task's ladder and moves, workflow graphs, a mind map of what each project knows, routing evidence, spend. |
+
+<p>
+  <img alt="A task: its plan and risk, the ladder of cells with each attempt, the move between them with its evidence chain, and the independent check" src="docs/images/task.png" width="49%">
+  <img alt="A workflow run as a graph of its steps, and the workflows the project can run" src="docs/images/workflows.png" width="49%">
+</p>
+
 ## Why
 
 Two problems, one cause.
@@ -284,6 +306,28 @@ cauce memory search "redirect query string"                    # dead ends, ever
 cauce memory record --problem "redirect drops query" --fix "use url_for(_external)" --outcome failed --why "..."
 ```
 
+**What the worktree holds.** A worktree is a clean checkout: it has your
+ignored dependency folders (linked) and your local settings, and nothing you
+have not committed. A task that names a file you changed but did not commit
+says so before it starts; `--carry` brings your uncommitted changes into its
+worktree. An ignored path the task names (`scripts/slides/`) is copied in, and
+being ignored is never committed. `--add-dir ../api` lets the workers use a
+sibling repository. When a new model takes over after a wrong approach, it
+starts from the base commit; what the last one wrote is kept on
+`refs/cauce/aside/…` and its brief says how to read it.
+
+```bash
+cauce run "finish the change in checkout.ts" --carry      # your uncommitted work comes along
+cauce run "check the cart page at localhost:4200" --service "npm run dev@4200"
+cauce run "align the client with the API" --add-dir ../api
+```
+
+**Servers the task needs.** A worker's own dev server stops when the worker
+does. `--service 'npm run dev@4200'` (repeatable) has cauce start the command
+in the task's directory, wait until the port listens, run the attempts, and
+stop it after; a port already up is left alone, and a server that never
+listens stops the task before any money is spent.
+
 `cauce run` prints the task number at once, and each attempt as it starts
 and ends, on stderr; the report comes on stdout when the task stops. A
 livespec index that is missing or stale is rebuilt in the background, never
@@ -530,6 +574,15 @@ repository's cards at once.
   refactors and plans that passed.
 - **Spend**, **Memory**, **Habits** — the same numbers as the CLI.
 
+<p>
+  <img alt="The project map: topics, the notes under each, and the problems worked on with every fix tried" src="docs/images/map.png" width="49%">
+  <img alt="Routing: each kind's ladder, where its tasks started and passed, how often they climbed, what they cost" src="docs/images/routing.png" width="49%">
+</p>
+<p>
+  <img alt="Spend by day and model, for sessions and for workers by cell" src="docs/images/spend.png" width="49%">
+  <img alt="Teams: every team, the kinds it covers and the projects using it, and each role in full" src="docs/images/teams.png" width="49%">
+</p>
+
 Work is never typed into the page: it is asked for in a session, where it has
 the session's context and its record.
 
@@ -685,25 +738,41 @@ cauce team use --none       # back to the bundled team
 ```
 
 **A team and workflows built from how you work.** In a session,
-`/cauce:init` reads every Claude Code session kept on this machine and the
-history of every repository they ran in (`cauce survey`: what you ask for and
-the shape each session takes, the turns where you corrected the agent,
-interrupted it or refused a call, the errors solved in-session and the call
-that passed after them, the checks you run, and per repository the commit
-cadence, fixes, reverts and the files fixed most), beside what cauce kept of
-its own tasks (`cauce team insights`). It finds the flows your work follows
-and, once you agree, builds **one** team covering all of them (roles built on
-cauce's own, `cauce roles new implementer-go --extends implementer --match
-go.mod --skill go-rules`, with the instructions your corrections call for),
-**one workflow per flow** with measurable criteria, and the memory of what
-was already solved: each project's notes (`cauce note`) and the problems and
-the fixes that worked (`cauce memory record`). It writes nothing before you
-agree, and only through cauce's own commands; a note goes only to the project
-it came from.
+`/cauce:init` finds out, in depth, how your work goes and where it fails,
+and builds from it. It does not guess from counts: **cauce's own read-only
+workers** (`claude -p` processes cauce runs, routes and checks, never
+subagents of your session) investigate every project, one each, side by side
+in their own lanes, starting on `opus/high`:
+
+- every branch, merged or not, against the default one, and the commits that
+  never landed (a fix or security work stranded on a branch is flagged);
+- each chain of fixes and reverts that followed a change on the same files,
+  opened commit by commit, with its cause and whether the fix held;
+- every error you pasted or quoted in a session, matched to the change that
+  fixed it, or marked unsolved; shell and tool noise is left out;
+- the corrections you kept making, turned into worker instructions;
+- cauce's own tasks that stopped, and what would have let them pass;
+- the plugins your work relies on: their phases, gates and personas, written
+  as cauce workflows and roles.
+
+What each must cover is listed as criteria its pass has to answer, and each
+returns a structured report. From the reports, and once you agree, the
+session builds **one** team covering every flow (roles built on cauce's own,
+`cauce roles new implementer-go --extends implementer --match go.mod --skill
+go-rules`, carrying the instructions and plugin skills the reports call for),
+**one workflow per flow** with measurable criteria and the memory each step
+carries, and the memory of what was already solved: problems with their fixes
+(`cauce memory record`) and each project's notes (`cauce note`). Nothing is
+written, and no worker starts, before you agree to the scope and its cost.
+Run that session on your strongest model at high effort (Opus): the synthesis
+across reports is the hard part.
 
 ```bash
-cauce survey                 # read only, no model: what /cauce:init builds from
-cauce survey --repo . --json # one project, in full
+cauce survey                        # read only, no model: every session and repository, at a glance
+cauce survey --repo . --deep --json # one project in depth: branches, chains, reported errors, stops
+cauce investigate start --dry-run   # what the investigation would read, and the most it can cost
+cauce investigate start --plugin some-helper   # one read-only worker per project and plugin
+cauce investigate status --wait 540            # each ending as it happens; --json for the reports
 ```
 
 Which team a project uses is kept in your cauce home, never in the

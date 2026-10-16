@@ -209,3 +209,22 @@ def test_the_real_schema_is_read_read_only(tmp_path, git_repo):
     a.brief("charge_card", git_repo, a.inspect(git_repo))
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT count(*) FROM spec").fetchone()[0] == 1
+
+
+def test_a_failed_index_is_not_tried_again_until_the_checkout_moves(tmp_path, git_repo):
+    failing = adapter(tmp_path, tool(tmp_path, "uvx"), runner=lambda argv, **kw: subprocess.CompletedProcess(
+        argv, 1, "", "Workspace directory not found: /old/path"))
+    assert failing.last_failure(git_repo) is None
+    failing.refresh(git_repo)
+    assert failing.last_failure(git_repo) == "Workspace directory not found: /old/path"
+    (git_repo / "next.py").write_text("x\n")
+    subprocess.run(["git", "add", "-A"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "next"], cwd=git_repo, check=True)
+    assert failing.last_failure(git_repo) is None  # the checkout moved: worth one more try
+    failing.refresh(git_repo)
+    working = adapter(tmp_path, tool(tmp_path, "uvx"),
+                      runner=lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "{}", ""))
+    working.refresh(git_repo)
+    assert working.last_failure(git_repo) is None
+    failing._failure_path(git_repo).write_text("not json")
+    assert failing.last_failure(git_repo) is None

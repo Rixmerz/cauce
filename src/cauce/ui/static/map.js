@@ -164,7 +164,7 @@ async function milestones(ctx) {
   if (!list.length) {
     return h("div", { class: "empty" }, "No milestone yet: a workflow run that finishes, a decision a note keeps, a feature or refactor that passes.");
   }
-  return h("ol", { class: "timeline" }, list.map((m) => h("li", {},
+  return h("ol", { class: "timeline milestones" }, list.map((m) => h("li", {},
     h("time", { datetime: m.at }, when(m.at)),
     h("div", {}, h("div", { class: "row" }, h("span", { class: `chip ${m.kind}` }, m.kind),
       ["feature", "refactor", "plan"].includes(m.kind)

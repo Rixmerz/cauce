@@ -177,7 +177,7 @@ def test_the_sweep_marks_dead_runs_and_abandoned_prompts(store: Store):
     assert store.lanes()[0]["paused"]
     assert "999999" in store.get_task(dead["id"])["result"]
     assert store.get_task(prompt["id"])["result"] is None  # a prompt keeps its own answer
-    assert store.last_event(prompt["id"], "finished")["data"]["stop"]["cause"] == "died"
+    assert store.last_event(prompt["id"], "finished")["data"]["stop"]["cause"] == "turn"  # a turn, not work to resume
     assert flow.alive(None) is False and flow.alive(1) is True and flow.alive(999999) is False
 
 
@@ -244,3 +244,48 @@ def test_prune_deletes_only_the_branches_whose_work_landed(store, git_repo, monk
     assert git(git_repo, "cat-file", "-t", event["tip"]) == "commit"  # still there to bring back
     assert cli.main(["prune", "--repo", str(git_repo)]) == 0
     assert "no branch cauce kept has landed" in capsys.readouterr().out
+
+
+def test_an_investigator_that_stops_leaves_the_person_s_lane_open(git_repo, store: Store):
+    key = str(git_repo.resolve())
+    store.enqueue("investigate", repo=key, cwd=str(git_repo), options={"investigation": "inv-1", "kind": "explore"})
+    store.enqueue("the person's own task", repo=key, cwd=str(git_repo))
+    report = flow.work(store, runner=_runner([bad(Failure.SPEC_BUG, "cannot read it"), ok()]))
+    assert [r.status for r in report.ran] == ["replan", "done"]
+    assert not any(lane["paused"] for lane in store.lanes())
+
+
+def test_prune_deletes_a_finished_copy_of_work_another_branch_keeps(store, git_repo):
+    from cauce import flow, isolate
+
+    from .conftest import git
+
+    ids = []
+    for _ in range(3):
+        task = store.create_task("rename the field", status="done", source="cauce", cwd=str(git_repo))
+        ids.append(task["id"])
+        git(git_repo, "checkout", "-qb", isolate.branch_for(task["id"]))
+        (git_repo / "field.py").write_text("renamed\n")
+        git(git_repo, "add", "-A")
+        git(git_repo, "commit", "-qm", f"try {task['id']}")
+        git(git_repo, "checkout", "-q", "main")
+    store.update_task(ids[2], status="blocked")  # the newest may resume: it stays
+    pruned = flow.prune(store, [git_repo])
+    assert [(p["task"], p["why"]) for p in pruned] == [(ids[0], f"the same work as cauce/task-{ids[1]}"),
+                                                        (ids[1], f"the same work as cauce/task-{ids[2]}")]
+    assert list(isolate.kept_branches(git_repo)) == [ids[2]]
+
+
+def test_a_task_asked_again_points_at_the_one_that_keeps_its_work(git_repo, store):
+    from cauce.escalate import Failure as F
+
+    from .test_orchestrate import Script
+
+    first = run("migrate the totals to cents", git_repo, store, registry={}, adapters=[],
+                launcher=Script(WorkerResult(False, F.PERMISSION, "refused", denied=("Bash(x)",)), write="m.py"),
+                classifier=kind("implement"))
+    said = []
+    run("migrate the totals to cents", git_repo, store, registry={}, adapters=[], launcher=Script(ok()),
+        classifier=kind("implement"), progress=said.append)
+    assert any(f"task #{first.task_id} asked the same and keeps its work" in s and f"cauce resume {first.task_id}" in s
+               for s in said)

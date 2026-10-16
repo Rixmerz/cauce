@@ -1051,3 +1051,112 @@ def test_the_kept_commit_carries_the_line_the_worker_proposed(git_repo, store):
     message = git(git_repo, "log", "-1", "--format=%B", report.branch)
     assert message.splitlines()[0] == "Serve a health route"
     assert "routes.js serves /health" in message and "Cauce-Verified" not in message
+
+
+# --- what a worktree holds ----------------------------------------------------------------
+
+
+def test_work_a_reset_throws_away_is_kept_on_a_ref_and_the_brief_says_so(git_repo, store):
+    script = Script(bad(Failure.APPROACH, "rewrote the wrong module"), bad(Failure.APPROACH, "still wrong"),
+                    write="wrong.py")
+    report = run("refactor auth flow", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    second = script.specs[1].prompt
+    assert "reset to the base commit" in second and "refs/cauce/aside/task-1-1" in second
+    assert "Take what is right from them, not their approach" in second
+    # The run ended for good: nothing resumes from what was set aside, so it is gone.
+    assert report.branch is None and git(git_repo, "for-each-ref", "refs/cauce/aside") == ""
+
+
+def test_a_task_naming_uncommitted_files_is_warned_and_carry_brings_them(git_repo, store):
+    (git_repo / "app.py").write_text("print('work in progress')\n")
+    said = []
+    script = Script(ok())
+    run("finish the change in app.py", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+        progress=said.append)
+    assert any("uncommitted changes in your checkout" in s for s in said)
+    assert "app.py" in script.specs[0].prompt and "say so (`environment`)" in script.specs[0].prompt
+    seen = []
+
+    def launcher(spec):
+        seen.append((spec.target_dir / "app.py").read_text())
+        return ok()
+
+    report = run("finish the change in app.py", git_repo, store, Options(carry=True), registry={},
+                 launcher=launcher, classifier=kind("implement"))
+    assert seen == ["print('work in progress')\n"]
+    assert store.events_of(report.task_id, "carried")[0]["data"]["paths"] == ["app.py"]
+    assert "work in progress" in git(git_repo, "show", f"{report.branch}:app.py")
+
+
+def test_ignored_paths_the_task_names_are_copied_into_the_worktree(git_repo, store):
+    (git_repo / ".gitignore").write_text("scripts/slides/\nbig.bin\n")
+    git(git_repo, "add", ".gitignore")
+    git(git_repo, "commit", "-q", "-m", "ignore")
+    (git_repo / "scripts" / "slides").mkdir(parents=True)
+    (git_repo / "scripts" / "slides" / "deck.js").write_text("slides\n")
+    (git_repo / "big.bin").write_bytes(b"x" * 10)
+    seen = []
+
+    def launcher(spec):
+        seen.append(((spec.target_dir / "scripts" / "slides" / "deck.js").is_file(), "too big to copy" in spec.prompt))
+        return ok()
+
+    import cauce.isolate as isolate_mod
+
+    original = isolate_mod.BRING_BYTES
+    isolate_mod.BRING_BYTES = 5
+    try:
+        report = run("update the deck in scripts/slides/ and read big.bin", git_repo, store, registry={},
+                     launcher=launcher, classifier=kind("implement"))
+    finally:
+        isolate_mod.BRING_BYTES = original
+    assert seen == [(False, True)]  # 7 bytes is over a 5-byte cap: said, not copied
+    assert report.status == "done"
+    script = Script(ok())
+    run("update the deck in scripts/slides/", git_repo, store, registry={}, launcher=script,
+        classifier=kind("implement"))
+    assert "Copied from the person's checkout" in script.specs[0].prompt and "scripts/slides" in script.specs[0].prompt
+    assert "scripts/slides" not in git(git_repo, "ls-tree", "-r", "--name-only", "HEAD")
+
+
+def test_a_sibling_directory_reaches_the_worker(git_repo, store, tmp_path):
+    sibling = tmp_path / "api"
+    sibling.mkdir()
+    script = Script(ok())
+    run("align the client with the api", git_repo, store, Options(add_dirs=(str(sibling),)), registry={},
+        launcher=script, classifier=kind("implement"))
+    assert sibling.resolve() in script.specs[0].extra_dirs
+    assert Options(add_dirs=("x",)).stored()["add_dirs"] == ["x"]
+
+
+def test_the_brief_says_which_node_is_on_path_and_which_commands_pass(git_repo, store, monkeypatch):
+    from cauce import orchestrate, runtime
+
+    monkeypatch.setattr(runtime, "node_bin", lambda workdir, env=None: runtime.Node("22.23.2", git_repo, ".nvmrc"))
+    script = Script(ok())
+    run("fix the cart total", git_repo, store, Options(allow_tools=("Bash(npm test:*)", "mcp__x")), registry={},
+        launcher=script, classifier=kind("implement"))
+    prompt = script.specs[0].prompt
+    assert "Node 22.23.2 (what .nvmrc asks for) is already first on your PATH" in prompt
+    assert "Never `source ~/.nvm/nvm.sh`" in prompt and "in these forms only, one per call: Bash(npm test:*)" in prompt
+    assert "mcp__x" not in prompt.split("in these forms only")[1].splitlines()[0]
+    monkeypatch.setattr(runtime, "node_bin", lambda workdir, env=None: None)
+    assert orchestrate.how_to_run(git_repo, ()) == []
+
+
+def test_no_attempt_starts_on_a_budget_too_small_for_its_cell(git_repo, store):
+    script = Script(bad(Failure.CODE_BUG, "missed a case", cost=0.35), ok())
+    report = run("fix the cart total", git_repo, store, Options(budget_usd=0.5), registry={}, launcher=script,
+                 classifier=kind("implement"))
+    assert len(script.specs) == 1 and report.status == "blocked" and report.stop.cause == "budget"
+    assert "$0.15 left of the $0.50 budget cannot pay for an attempt at sonnet/high" in report.stop.reason
+    assert "--budget" in report.stop.reason
+
+
+def test_an_index_that_failed_at_this_commit_is_not_restarted_by_each_task(git_repo, store, tmp_path, monkeypatch):
+    adapter = _livespec(tmp_path, popen=lambda argv, **kw: pytest.fail("no refresh while it still fails"))
+    monkeypatch.setattr(adapter, "last_failure", lambda repo_dir: "Workspace directory not found: /old")
+    report = run("parse_amount rounds wrong", git_repo, store, Options(dry_run=True), registry={},
+                 classifier=kind("implement"), adapters=[adapter])
+    assert any("its last index here failed (Workspace directory not found: /old); not tried again" in r
+               for r in report.plan.reasons)

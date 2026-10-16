@@ -45,12 +45,24 @@ from cauce.matrix import Cell
 
 RESULT_FENCE = "cauce-result"
 _FENCE_RE = re.compile(rf"```{RESULT_FENCE}\s*\n(?P<body>.*?)\n?```", re.DOTALL | re.IGNORECASE)
+#: A report a reading worker was asked for, beside its result block: findings too many
+#: and too structured for `summary` and `evidence`. Kept on the task, never a verdict.
+REPORT_FENCE = "cauce-report"
+_REPORT_RE = re.compile(rf"```{REPORT_FENCE}\s*\n(?P<body>.*?)\n```", re.DOTALL | re.IGNORECASE)
+REPORT_CHARS = 60_000
 
 DEFAULT_MAX_TURNS = 30
 #: Past this a system prompt goes in a file: one argument is capped at 128 KiB
 #: on Linux, and a role with its skills comes near.
 INLINE_PROMPT_CHARS = 16000
 DEFAULT_TIMEOUT_S = 1800
+#: Wall-clock time per turn: an attempt given more turns is given the time to use them.
+SECONDS_PER_TURN = 60
+
+
+def timeout_for(turns: int) -> int:
+    """How long an attempt of `turns` turns may run: never under the default."""
+    return max(DEFAULT_TIMEOUT_S, turns * SECONDS_PER_TURN)
 
 #: Tools a reading task never needs. Removing them is what makes "read-only"
 #: true instead of requested.
@@ -205,6 +217,8 @@ class WorkerResult:
     learned: tuple[str, ...] = ()
     #: The one line the worker proposes as the commit's subject; "" when it gave none.
     commit: str = ""
+    #: The report its task asked for (a `cauce-report` block), parsed; None when there is none.
+    report: dict[str, Any] | None = None
     #: What the worker says of each criterion `S#` of the task: id, met, evidence.
     criteria: tuple[dict[str, Any], ...] = ()
     #: The problems it reports, as records (`cauce.findings`).
@@ -289,6 +303,14 @@ def run(
             check=False,
         )
     except subprocess.TimeoutExpired:
+        changed = changed_paths(before, tracked_state(spec.target_dir), spec.target_dir)
+        if changed:
+            # The work ran out of time, not the environment: it changed files, so
+            # it goes on with more turns (and the time they bring), from what it did.
+            return WorkerResult(
+                False, Failure.TURNS_EXHAUSTED,
+                f"the worker ran past its {spec.timeout_s}s time after changing {len(changed)} file(s), "
+                "without a verdict", changed_paths=changed, duration_s=float(spec.timeout_s))
         return WorkerResult(
             False, Failure.ENVIRONMENT, f"the worker exceeded its {spec.timeout_s}s timeout",
             duration_s=float(spec.timeout_s), transient=True,
@@ -363,6 +385,7 @@ def parse(
     evidence = str(block.get("evidence") or "")[:4000]
     common["learned"] = learned(block)
     common["commit"] = commit_subject(block)
+    common["report"] = report_block(text)
     common["criteria"] = criteria_mod.read(block)
     common["findings"] = findings_mod.read(block)
     common["verdicts"] = ledger_mod.read(block)
@@ -480,6 +503,19 @@ def denials(envelope: Mapping[str, Any] | None) -> tuple[str, ...]:
         if rule not in found:
             found.append(rule)
     return tuple(found)
+
+
+def report_block(text: str) -> dict[str, Any] | None:
+    """The last `cauce-report` block: its JSON object, or its text when it is not one; None without one."""
+    found = _REPORT_RE.findall(text or "")
+    if not found:
+        return None
+    body = found[-1][:REPORT_CHARS]
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return {"unparsed": body}
+    return parsed if isinstance(parsed, dict) else {"unparsed": body}
 
 
 def result_block(text: str) -> dict[str, Any] | None:

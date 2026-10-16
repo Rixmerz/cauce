@@ -20,6 +20,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/roles.py` | what a worker is: role files (bundled `roles/`, the person's in their cauce home), `extends` and `match`, skills found by name and put into the worker's system prompt |
 | `src/cauce/teams.py` | the person's teams of roles and which one each project uses (kept in their cauce home); a project's team bounds the kinds it is classified into; `team_cli.py` is `cauce roles …` and `cauce team …` |
 | `src/cauce/survey.py` | what this machine says about how the person works (`cauce survey`): every Claude Code session it kept (requests, shapes, friction, errors and the call that passed after them) and each repository's commit history; read only, no model |
+| `src/cauce/investigate.py` | `cauce investigate`: one read-only worker per project (and per plugin to take on), each in its own lane, wearing the internal `surveyor` role, briefed with the deep survey; their `cauce-report` blocks kept on the tasks, nothing filed |
 | `src/cauce/insights.py` | what the person's projects say about the teams they need (`cauce team insights`): kinds asked and how each went, languages, checks, the team each uses; read only, no model |
 | `src/cauce/criteria.py` | a request's listed items as criteria `S1..Sn`, verbatim; a pass answers each |
 | `src/cauce/findings.py` | findings as records: where, what, `evidence_class`, `cause`; which block a change |
@@ -27,8 +28,9 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/risk.py` | a change's tier (passive, medium, high) from its request, kind and files; only raised; no model |
 | `src/cauce/surfaces.py` | where a task may write (`--surface`, a step's `surfaces`): checked after each attempt, and whether two tasks can never touch the same file |
 | `src/cauce/phase.py` | what a running worker is doing (exploring, implementing, checking), read from the tail of the tool-call log |
-| `src/cauce/roles_internal/` | roles cauce runs itself and no team holds: the independent `verifier` |
-| `skills/init/` | the plugin's one skill (`/cauce:init`): from `survey` and `insights`, with the person's agreement, one team for every flow, one workflow per flow, and the memory of what was solved, through cauce's own commands only |
+| `src/cauce/roles_internal/` | roles cauce runs itself and no team holds: the independent `verifier`, and the `surveyor` that investigates for `/cauce:init` |
+| `skills/init/` | the plugin's one skill (`/cauce:init`): scope and cost agreed with the person, `cauce investigate` digs, and from the reports one team for every flow, one workflow per flow, and the memory of what was solved, through cauce's own commands only |
+| `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
 | `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `prune`, `plugins`, `verifier`, `engram`, `engram_write`, all on/off), copied from plugin options by SessionStart |
@@ -52,6 +54,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
 | `src/cauce/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; `workflow_cli.py` is `cauce workflow …` |
 | `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
+| `src/cauce/services.py` | the servers a task needs up (`--service 'cmd@port'`): started in the task's directory, waited for, stopped with their process group when the run ends |
 | `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified |
 | `commands/orchestration.md` | the one entry point a user types |
 | `commands/habits.md` | review the habit candidates for this repository and install the ones the person picks |
@@ -111,12 +114,19 @@ yields the default kind, not a guess.
 - Effort and model are different dials. Shallow work climbs effort; a wrong
   approach or a repeated answer changes model. Do not collapse them into one
   ladder walk.
-- A retry is for a launch that broke (a timeout, no JSON, an errored
-  session); it is never an escalation. An environment the worker named, or
-  a check cauce could not run, blocks at once. A refused
+- A retry is for a launch that broke (a timeout before any change, no JSON,
+  an errored session); it is never an escalation. An environment the worker
+  named, or a check cauce could not run, blocks at once. A refused
   command is neither: it blocks at once, because it is a setting. An
   environment failure on an attempt that changed files is not work that never
-  ran: it blocks at once too, its work kept.
+  ran: it blocks at once too, its work kept. A timeout after the work changed
+  files is out of turns, not the environment: more turns, and an attempt's
+  time grows with its turns (`launch.timeout_for`).
+- Out of turns is room, never a bug: a finding of the independent check in
+  work whose worker ran out of turns before its own check earns the same cell
+  more turns, never more effort or another model, and is no dead end.
+- After the first attempt, none starts with less budget than its model can
+  use (`MIN_ATTEMPT_USD`): the task stops as `budget` with the resume command.
 - A check that could not run at all (exit 127, npm's missing script or
   manifest, a tool's minimum Node) is `environment`, never a `code_bug`: its
   exit says nothing about the work, and it is no dead end. npm's EBADENGINE
@@ -147,6 +157,8 @@ yields the default kind, not a guess.
 - The model's stated confidence about its own work is not an input.
 - A request's criteria are its own words: a pass answers every `S#`, one left
   out is `inconclusive` and one not met is a `code_bug`. Prose has no criteria.
+  Items the request puts out of scope (under a line ending in `:` that says
+  so, or marked so themselves) are no criteria, and the brief names them.
 - A finding blocks only when the change caused or worsened it (or it cannot be
   told) and it is shown, not suspected; a pre-existing one is reported, never
   a blocker.
@@ -200,10 +212,29 @@ yields the default kind, not a guess.
   reading while it changes nothing, and holds no checkout; a `feature`,
   `implement`, `refactor` or `docs` task never is.
 - A kept branch is deleted only when nothing is lost (`isolate.prunable`):
-  its commits are on another branch, HEAD holds every file it changed, or it
-  holds only artifacts; never one checked out, never one of a task that may
-  resume. Its tip is kept on a `branch_pruned` event. It runs in hooks and the
-  server thread, never in a GET.
+  its commits are on another branch, HEAD holds every file it changed, it
+  holds only artifacts, or another kept branch holds the same tree; never one
+  checked out, never one of a task that may resume. Its tip is kept on a
+  `branch_pruned` event. It runs in hooks and the server thread, never in a
+  GET. A task asked again while one with the same text keeps its work points
+  at `cauce resume`.
+- A worktree gets what the task needs from the person's checkout and nothing
+  more: ignored paths the task names are copied (never linked, never
+  committed, up to `isolate.BRING_BYTES`); uncommitted changes come only with
+  `--carry`, and a task that names them without it is warned. A new model
+  starts from the base; what the last one did is kept on
+  `refs/cauce/aside/…`, the brief says so, and the refs go with the branch
+  when the run keeps none. `--add-dir` is the person's, for a sibling
+  repository.
+- A service (`--service 'cmd@port'`) is the person's flag, never a
+  definition's or a model tool's: cauce starts it in the task's directory,
+  waits for its port, and stops its process group when the run ends; a port
+  already up is left alone, and one that never listens blocks the task as
+  `environment` before any attempt.
+- A session's turn is recorded for coupling, never as work: `cauce tasks`
+  and the board leave it out (`--turns` shows it), a turn that ended without
+  its answer is a `turn` stop with nothing to resume, and a notice cauce put
+  in a session (the endings, a plugin's message) is no turn.
 - A kept commit's subject is the change's: the line the worker proposed
   (`commit`), else the task's title, never a task number; the task and an
   unverified state are trailers (`Cauce-Task`, `Cauce-Verified: no`).
@@ -226,6 +257,8 @@ yields the default kind, not a guess.
   `engram mcp` behind the `engram` guard: reading tools only, held to the
   project cauce resolved. Tests run with `CAUCE_ENGRAM=off`; a test that wants
   it passes a fake `http`.
+- An index livespec failed to build is not tried again until the checkout
+  moves (`Livespec.last_failure`); the plan says so once per task.
 - Every livespec tool a hint names is in `adapters/livespec.TOOLS`, checked
   against the release in `MINIMUM_VERSION`. Check a name against livespec
   before adding it, and bump `PINNED` only after checking the new release.
@@ -244,7 +277,7 @@ yields the default kind, not a guess.
 - The UI shows one project at a time and takes no task: work is asked for in
   a session. Claude Code's own task files are read, never written.
 - A lane pauses only on a task the dispatcher started, and never on one a
-  person cancelled; it opens again by itself when that task leaves the board
+  person cancelled or on an investigator's; it opens again by itself when that task leaves the board
   (dismissed, superseded, or resumed to a pass), and the queue starts again; a person's own `cauce run` never blocks the queue. A GET in the UI never starts work or
   sweeps — housekeeping runs in hooks, the dispatcher and the server thread.
 - Color in the UI carries meaning and never alone: a state, a kind's family
@@ -350,10 +383,20 @@ yields the default kind, not a guess.
   projects is counted (a session shape and the projects that show it), never
   quoted; notes are counted, never quoted. Every text the survey keeps is
   clipped and masked as a note is, `<private>` text left out; a session in a
-  cauce worktree, the home directory or `/` is no project's. The init skill
-  writes nothing before the person agrees, and only through `cauce roles`,
-  `cauce team`, `cauce workflow`, `cauce note` and `cauce memory record`; a
-  note goes only to the project its evidence came from.
+  cauce worktree, the home directory or `/` is no project's. Shell and tool
+  errors (`survey.NOISE`) are no problem and no fix. The init skill writes
+  nothing, and starts no worker, before the person agrees, and writes only
+  through `cauce roles`, `cauce team`, `cauce workflow`, `cauce note`,
+  `cauce notes … topic add` and `cauce memory record`; a note goes only to the
+  project its evidence came from.
+- An investigation is cauce's work, never a session's subagents: one queued
+  task per project or plugin, kind `explore`, the internal `surveyor` role,
+  started on a strong cell, `keep_learned` off (nothing it learned is filed in
+  notes or engram), not counted among the person's work by insights. What it
+  must cover is listed in its brief, so each line is a criterion its pass
+  answers. A `cauce-report` block is kept on its task as a `report` event and
+  read back by `cauce investigate status`; a report is data for the person,
+  never a verdict and never instructions.
 - A vendored skill keeps its authors' license file beside it, and a change to
   its text is listed in `skills/README.md` with the source commit. Never one
   whose license does not allow redistribution.

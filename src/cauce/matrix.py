@@ -146,7 +146,9 @@ DEFAULT_KIND = "implement"
 #: on average and a quarter ran out, each costing a fresh worker's orientation;
 #: with 60 they passed. Every other kind uses far fewer than 30.
 DEFAULT_TURNS = 30
-TURNS = {"feature": 60}
+#: A feature crosses several parts of the code; UI and test work run, look and run
+#: again: at 30 turns they ran out before a verdict more than any other kind.
+TURNS = {"feature": 60, "ui": 60, "test": 60}
 
 
 def turns_for(kind: str) -> int:

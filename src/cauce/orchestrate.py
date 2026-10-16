@@ -50,6 +50,7 @@ from cauce import criteria as criteria_mod
 from cauce import findings as findings_mod
 from cauce import ledger as ledger_mod
 from cauce import risk as risk_mod
+from cauce import services as services_mod
 from cauce import surfaces as surfaces_mod
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify, narrow
@@ -119,6 +120,17 @@ class Options:
     step_role: str | None = None
     #: A workflow step's part in a review ledger (`cauce.ledger`): its role, round and rows.
     ledger: dict | None = None
+    #: What a passing worker learned is filed in the project's notes (and engram, when
+    #: writing there is on). Off for a task whose findings wait on a person's agreement.
+    keep_learned: bool = True
+    #: Bring the person's uncommitted changes into a new worktree: work the task
+    #: builds on that no commit holds yet.
+    carry: bool = False
+    #: Directories beside the work a worker may read and use (a sibling repository).
+    add_dirs: tuple[str, ...] = ()
+    #: Servers the task needs up, `command@port`, started and stopped by cauce
+    #: around the run (`cauce.services`): the person's flag, never a file's.
+    services: tuple[str, ...] = ()
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -128,8 +140,11 @@ class Options:
                   "allow_approval": self.allow_approval, "allow_tools": list(self.allow_tools),
                   "livespec": self.livespec, "no_isolate": not self.isolate, "role": self.role,
                   "step_role": self.step_role, "surfaces": list(self.surfaces),
-                  "ledger": self.ledger}
-        return {k: v for k, v in values.items() if v not in (None, [], False)}
+                  "ledger": self.ledger, "add_dirs": list(self.add_dirs), "services": list(self.services)}
+        kept = {k: v for k, v in values.items() if v not in (None, [], False)}
+        if not self.keep_learned:
+            kept["keep_learned"] = False  # a task whose findings wait on a person's word
+        return kept
 
 
 @dataclass
@@ -323,7 +338,11 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
             # index as it is; the next one gets the fresh one.
             what = "index" if runnable_absent else "refresh"
             meanwhile = "this task runs without it" if runnable_absent else "this task uses the index as it is"
-            if adapter.server() is None:
+            failed = getattr(adapter, "last_failure", lambda _d: None)(repo_dir)
+            if failed:
+                neighbour_notes.append(f"{adapter.name}: its last index here failed ({failed[:160]}); not tried "
+                                       f"again until the checkout moves; {meanwhile}")
+            elif adapter.server() is None:
                 neighbour_notes.append(f"{adapter.name}: cannot {what} here; {meanwhile}")
             elif options.dry_run:
                 neighbour_notes.append(f"{adapter.name}: would {what} in the background")
@@ -375,7 +394,7 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     if learned:
         context.append("Steps that came before passing attempts on this kind of task here: "
                        + "; ".join(learned) + ". Use them unless the task says otherwise.")
-    neighbour_notes += _unmet(text, registry)
+    neighbour_notes += _unmet(text, registry, served=bool(options.services))
     for lag in models.lagging(store):
         neighbour_notes.append(f"workers last ran {lag['workers']} for `{lag['alias']}` while your sessions use "
                                f"{lag['sessions']}: the installed Claude Code's alias is older. Pin it with "
@@ -418,6 +437,8 @@ def _team(options: Options, key: str | None, catalog: roles.Catalog) -> tuple[st
     lines: list[str] = []
     if options.role:
         try:
+            if options.role in roles.INTERNAL and options.role not in catalog.roles:
+                return "cauce's own", [roles.internal(options.role, catalog)], []
             return "named for this run", [catalog.get(options.role)], []
         except roles.RoleError as exc:
             # A queued or resumed task whose role is gone since: it runs, as its team.
@@ -511,11 +532,15 @@ def run(
     # Said as it happens: a run in a background shell is otherwise silent until
     # its report, and silence reads as a run that never started.
     say(f"cauce: task #{task['id']} started: {the_plan.kind}, at {the_plan.start.label}")
+    if task_id is None:
+        for twin in _twins(store, task, repo_dir):
+            the_plan.reasons.append(f"task #{twin} asked the same and keeps its work on {isolate.branch_for(twin)}: "
+                                    f"`cauce resume {twin}` continues it instead of starting over")
     if not options.max_turns and turns_for(the_plan.kind) != DEFAULT_TURNS:
         the_plan.reasons.append(f"{the_plan.kind} work starts with {turns_for(the_plan.kind)} turns: "
                                 f"at {DEFAULT_TURNS} its attempts ran out")
     for reason in the_plan.reasons:
-        if reason.startswith(("this task needs", "workers here were refused before")):
+        if reason.startswith(("this task needs", "workers here were refused before", "task #")):
             say(f"cauce: #{task['id']} warning: {reason}")
     store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label,
                     role=the_plan.role.name if the_plan.role else None, team=the_plan.team,
@@ -539,7 +564,10 @@ def run(
         if workspace.links:
             context.append("Linked from the person's checkout and shared with it: "
                            + ", ".join(workspace.links) + ". Use them; do not delete or reinstall them.")
+        if not resumed:
+            context += _fill_worktree(store, task["id"], workspace, text, options.carry, say)
     workdir = workspace.path if workspace else repo_dir
+    context += how_to_run(workdir, (*options.allow_tools, *grants.granted(key)))
     launch_dir = options.launch_dir.resolve() if options.launch_dir else workdir
 
     # Strict, as the prompt hook: a task's text shares a word or two with
@@ -565,6 +593,8 @@ def run(
     attempts: list[Attempt] = []
     changed: set[str] = set()
     decision: Decision | None = None
+    # What the brief says of work set aside when a new model started from the base.
+    aside: list[str] = []
     # The commit's subject: the last line a worker proposed for the change.
     subject = ""
     # In the checkout itself, one run at a time: the work and its check share the
@@ -577,11 +607,30 @@ def run(
                 held.enter_context(isolate.in_place(
                     home(), place, task["id"], waiting=lambda who: _waits(store, task["id"], who, say),
                     check=lambda: _check_cancel(store, task["id"])))
-        while True:
+        ready = True
+        if options.services:
+            try:
+                up = held.enter_context(services_mod.running(
+                    [services_mod.parse(s) for s in options.services], workdir,
+                    home() / "work" / f"services-{task['id']}.log", run_env))
+            except services_mod.ServiceError as exc:
+                # The servers the task needs never came up: nothing a worker does helps.
+                report.stop = stops.Stop("environment", str(exc))
+                report.status, report.summary, ready = "blocked", str(exc), False
+            else:
+                say(f"cauce: #{task['id']} servers up: " + "; ".join(up))
+                context.append("Servers up for this task, started and stopped by cauce (do not start or stop them "
+                               "yourself): " + "; ".join(up))
+        while ready:
             remaining = options.budget_usd - report.cost_usd
-            if remaining < 0.01:
-                report.stop = stops.Stop("budget", f"the ${options.budget_usd:.2f} budget is spent",
-                                         budget_usd=options.budget_usd, attempt=len(attempts) or None)
+            floor = MIN_ATTEMPT_USD.get(cell.model, 0.01)
+            if remaining < 0.01 or (attempts and remaining < floor):
+                spent = remaining < 0.01
+                report.stop = stops.Stop(
+                    "budget", f"the ${options.budget_usd:.2f} budget is spent" if spent else
+                    f"the ${remaining:.2f} left of the ${options.budget_usd:.2f} budget cannot pay for an attempt "
+                    f"at {cell.label} (it needs at least ${floor:.2f}): resume it with a larger --budget",
+                    budget_usd=options.budget_usd, attempt=len(attempts) or None)
                 report.status, report.summary = "blocked", report.stop.reason
                 break
             if len(attempts) >= options.max_attempts:
@@ -599,11 +648,12 @@ def run(
                 model_id=models.pinned(cell.model),
                 permission_mode=grants.mode_for(cell.model),
                 prompt=brief(text, the_plan.kind, workdir, [*history, *attempts], dead, options.verify,
-                             writes and not declared_read_only, context, options.surfaces),
+                             writes and not declared_read_only, [*context, *aside], options.surfaces),
                 cell=cell,
                 launch_dir=launch_dir,
                 workdir=workdir if workdir != launch_dir else None,
                 max_turns=turns,
+                timeout_s=launch.timeout_for(turns),
                 max_budget_usd=round(remaining, 2),
                 disallowed_tools=tuple(dict.fromkeys([*(() if writes else launch.WRITE_TOOLS),
                                                       *(the_plan.role.disallowed_tools if the_plan.role else ())])),
@@ -615,8 +665,9 @@ def run(
                                                    *(f"mcp__{name}" for name in selection.servers),
                                                    *(roles.read_rules(briefing) if briefing else ()),
                                                    *(f"Read(/{Path(d).resolve()}/**)" for d in selection.read_dirs)])),
-                extra_dirs=tuple(workspace.repo_dir / rel for rel in workspace.links
-                                 if (workspace.repo_dir / rel).is_dir()) if workspace else (),
+                extra_dirs=(*(tuple(workspace.repo_dir / rel for rel in workspace.links
+                                    if (workspace.repo_dir / rel).is_dir()) if workspace else ()),
+                            *(Path(d).expanduser().resolve() for d in options.add_dirs)),
                 mcp_servers=selection.servers,
                 append_system_prompt="\n\n".join(p for p in (briefing.system_prompt if briefing else "",
                                                                selection.system_prompt()) if p),
@@ -633,6 +684,9 @@ def run(
                             **({"role": the_plan.role.name, "team": the_plan.team,
                                 "skills": list(briefing.skills)} if briefing else {}))
             result = launcher(spec)
+            # Out of turns (or time) before its own check: whatever the check finds next,
+            # the work had no room to finish, and room is what the next attempt gets.
+            outgrew = result.failure is Failure.TURNS_EXHAUSTED
             if result.passed and options.verify:
                 result = _verified(result, options.verify, workdir)
             elif _settles(result, options.verify) and (
@@ -660,7 +714,7 @@ def run(
                         result, text=text, kind=the_plan.kind, cell=cell, spec=spec, workdir=workdir,
                         base=base_commit, changed=so_far, risk=the_plan.risk, ledger=ledger,
                         corrections=corrections, launcher=launcher, store=store, task_id=task["id"], nth=nth,
-                        say=say)
+                        say=say, outgrew=outgrew)
             if result.passed and deciding:
                 settled = ledger_mod.outcome(deciding, result.verdicts)
                 store.add_event(task["id"], "ledger_decided", seq=nth, **settled.data())
@@ -691,6 +745,8 @@ def run(
                               transient=result.transient, findings=result.findings)
             attempts.append(attempt)
             subject = result.commit or subject
+            if result.report is not None:
+                store.add_event(task["id"], "report", seq=seq, passed=result.passed, report=result.report)
             say(f"cauce: #{task['id']} attempt {seq} " + ("passed" if result.passed else
                 f"ended {(result.failure or Failure.INCONCLUSIVE).value}: {result.summary[:160]}"))
             if review_stop is not None:
@@ -732,7 +788,15 @@ def run(
                     next_cell=decision.cell.label if decision.cell else None, account=result.summary[:2000])
                 break
             if decision.move is Move.NEXT_MODEL and workspace is not None:
+                # A new model starts from the base, not the bet that lost; what the
+                # last one did is kept on a ref, and the brief says both.
+                ref = isolate.set_aside(workspace, seq)
                 isolate.reset(workspace)
+                if ref:
+                    aside.append(f"Before this attempt the worktree was reset to the base commit {workspace.base[:12]}"
+                                 f": attempt {seq}'s changes ({cell.label}) are not in it. They are kept: "
+                                 f"`git diff {workspace.base[:12]} {ref}` shows them. Take what is right from them, "
+                                 "not their approach.")
             cell, turns = decision.cell, decision.max_turns
     except Cancelled:
         report.stop = _cancelled(store, task["id"], len(attempts) or None)
@@ -775,15 +839,19 @@ def run(
         # A person's cancel is their call on this task, not a broken state the
         # next one would start on: the queue behind it goes on.
         by_a_person = report.stop is not None and report.stop.cause == "cancelled" and report.stop.who == "you"
-        if status != "done" and store.get_task(task["id"])["dispatched"] and not by_a_person:
+        # An investigator's stop is no broken state of the project: the person's queue goes on.
+        reading_for_init = '"investigation"' in (store.get_task(task["id"]).get("options") or "")
+        if status != "done" and store.get_task(task["id"])["dispatched"] and not by_a_person and not reading_for_init:
             store.pause_lane(key, f"task #{task['id']} ended {status}: {report.summary[:200]}")
         if workspace is None:
             report.changed = sorted(changed)
-        if status == "done" and report.learned and config.enabled("notes", os.environ, options.notes):
+        if status == "done" and report.learned and options.keep_learned and config.enabled(
+                "notes", os.environ, options.notes):
             _note(store, task, key, report, the_plan, workspace.repo_dir if workspace else repo_dir,
                   isolate.head(workspace.repo_dir, report.branch) if workspace and report.branch else None,
                   notes_ask)
-        if status == "done" and report.learned and config.enabled("engram_write", os.environ):
+        if status == "done" and report.learned and options.keep_learned and config.enabled(
+                "engram_write", os.environ):
             _to_engram(store, task, report, the_plan, workspace.repo_dir if workspace else repo_dir)
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
@@ -845,7 +913,7 @@ def _all_listening(text: str) -> bool:
     return bool(ports) and all(_listening(p) for p in ports)
 
 
-def _unmet(text: str, registry: Mapping[str, caps.Capability]) -> list[str]:
+def _unmet(text: str, registry: Mapping[str, caps.Capability], *, served: bool = False) -> list[str]:
     """What a task asks for that a one-shot worker does not have, said before any
     money is spent: a worker has no browser unless a capability gives it one,
     and a server it starts ends with it."""
@@ -854,9 +922,10 @@ def _unmet(text: str, registry: Mapping[str, caps.Capability]) -> list[str]:
         notes.append("this task needs a browser and workers have none: register a browser MCP server in "
                      "your cauce capabilities.json (`cauce capabilities --example` has one) and allow its tools "
                      "(--allow 'mcp__browser'), or check the pages yourself")
-    if _SERVER.search(text) and not _all_listening(text):
-        notes.append("this task needs running servers: start them yourself before dispatching, or pass the "
-                     "--allow rules that start them; a server a worker starts stops when it finishes")
+    if _SERVER.search(text) and not served and not _all_listening(text):
+        notes.append("this task needs running servers: pass them with --service 'npm run dev@4200' (cauce starts "
+                     "each before the work and stops it after), or start them yourself before dispatching; a "
+                     "server a worker starts stops when it finishes")
     return notes
 
 
@@ -920,8 +989,70 @@ def _cancelled(store: Store, task_id: int, attempt: int | None) -> stops.Stop:
                       "(a closed terminal, or the process was killed)", attempt=attempt)
 
 
+#: The least an attempt on each model can do anything with: an attempt launched with
+#: less reaches its cap before a verdict, and only spends what is left.
+MIN_ATTEMPT_USD = {"haiku": 0.03, "sonnet": 0.20, "opus": 0.50, "fable": 1.00}
+
+
+def how_to_run(workdir: Path, rules: Sequence[str]) -> list[str]:
+    """Brief lines on running the project's tools: the Node already on the worker's
+    PATH, and the commands its settings let through, in the forms that pass. Workers
+    that sourced a version manager or wrapped a command in a shell were refused."""
+    lines = []
+    node = runtime.node_bin(workdir)
+    if node is not None:
+        lines.append(f"Node {node.version} (what {node.source} asks for) is already first on your PATH: run "
+                     "`npm test`, `npx tsc` and the project's scripts by name. Never `source ~/.nvm/nvm.sh`, "
+                     "`nvm use` or `bash -c '…'`: they are refused, and a refused command stops the task.")
+    allowed = [r for r in rules if r.startswith("Bash(")]
+    if allowed:
+        lines.append("Shell commands your settings let through without asking, in these forms only, one per "
+                     "call: " + ", ".join(dict.fromkeys(allowed[:20])))
+    return lines
+
+
 #: Fewer corrections than this a verifier's findings may earn; then a person decides.
 MAX_CORRECTIONS = 2
+
+
+def _twins(store: Store, task: Mapping[str, object], repo_dir: Path) -> list[int]:
+    """Earlier tasks here with the same text that stopped and keep their work on a branch."""
+    if repo.toplevel(repo_dir) is None:
+        return []
+    body = (task.get("body") or "").strip()
+    return [t["id"] for t in store.list_tasks(repo=task.get("repo"), status=list(stops.DISMISSABLE),
+                                              source=("cauce", "queue"), limit=200)
+            if t["id"] != task["id"] and (t.get("body") or "").strip() == body and isolate.kept(repo_dir, t["id"])]
+
+
+def _fill_worktree(store: Store, task_id: int, workspace: isolate.Workspace, text: str, carry: bool,
+                   say: Callable[[str], None]) -> list[str]:
+    """What a new worktree lacks that the task needs, from the person's checkout: their
+    uncommitted changes (brought with `carry`, else warned about when the task names
+    them), and the ignored paths the task names (copied). Brief lines for each."""
+    lines = []
+    dirty = isolate.dirty(workspace.repo_dir)
+    named = isolate.named_in(text, dirty)
+    if carry and dirty:
+        carried = isolate.carry(workspace, dirty)
+        store.add_event(task_id, "carried", paths=carried[:100])
+        say(f"cauce: #{task_id} brought {len(carried)} uncommitted change(s) from your checkout into its worktree")
+        lines.append("The person's uncommitted changes were brought into this worktree, as a starting point: "
+                     + ", ".join(carried[:15]) + (f" and {len(carried) - 15} more" if len(carried) > 15 else ""))
+    elif named:
+        store.add_event(task_id, "uncommitted", paths=named[:100])
+        say(f"cauce: #{task_id} warning: {', '.join(named[:5])} have uncommitted changes in your checkout that "
+            "its worktree does not have; commit them, or run it with --carry to bring them")
+        lines.append("These files have uncommitted changes in the person's checkout that are not in this worktree: "
+                     + ", ".join(named[:15]) + ". If the task needs that work, say so (`environment`) rather than "
+                     "recreating it.")
+    copied, big = isolate.bring(workspace, isolate.ignored_named(workspace, text))
+    if copied:
+        lines.append("Copied from the person's checkout (ignored by git, so never committed): " + ", ".join(copied))
+    if big:
+        lines.append("Named by the task but ignored by git and too big to copy here: " + ", ".join(big)
+                     + ". If the task needs them, say so (`environment`).")
+    return lines
 
 
 def _head(repo_dir: Path) -> str | None:
@@ -968,7 +1099,7 @@ def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, change
 def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec,
                        workdir: Path, base: str | None, changed: Sequence[str], risk: risk_mod.Risk,
                        ledger: dict[str, Mapping[str, str]], corrections: int, launcher: Launcher, store: Store,
-                       task_id: int, nth: int, say: Callable[[str], None]
+                       task_id: int, nth: int, say: Callable[[str], None], outgrew: bool = False
                        ) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int]:
     """A pass checked again by a worker that verifies the request, not the work.
 
@@ -978,7 +1109,9 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     found after that progress and only read from the code does not stop the work:
     the pass stands and carries it, for a person to read. Whatever is left at the
     cap stops the task for a person, its work kept. A check that could not decide
-    leaves the pass standing, and says so."""
+    leaves the pass standing, and says so. Work whose worker ran out of turns
+    before its own check (`outgrew`) failed for room, not for a bug: the next
+    attempt gets more turns on the same cell, never a stronger model."""
     role = roles.internal("verifier")
     vcell = verify_cell(cell)
     # It keeps only the neighbours that measure (layout-inspector): what it reports, it measures.
@@ -1026,13 +1159,16 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
                 f"{findings_mod.text(carried)[:1500]}]"), None, ledger, corrections
         return dataclasses.replace(result, cost_usd=cost), None, ledger, corrections
     found = findings_mod.text(blockers)
+    failure = Failure.TURNS_EXHAUSTED if outgrew else Failure.CODE_BUG
+    room = " (the worker had run out of turns before checking its own work)" if outgrew else ""
     if corrections == 0 or ((still or progress) and corrections < MAX_CORRECTIONS):
         if corrections == 0 or progress:
             ledger = {findings_mod.key(f): f for f in blockers}
         say(f"cauce: #{task_id} the independent check found {len(blockers)} problem(s): a correction")
         failed = dataclasses.replace(
-            result, passed=False, failure=Failure.CODE_BUG, cost_usd=cost,
-            summary=f"the independent check found {len(blockers)} problem(s) this change caused: {result.summary}",
+            result, passed=False, failure=failure, cost_usd=cost,
+            summary=f"the independent check found {len(blockers)} problem(s) this change caused{room}: "
+                    f"{result.summary}",
             evidence=f"The independent check found:\n{found}\n\nIts probes:\n{verdict.evidence[-1500:]}")
         return failed, None, ledger, corrections + 1
     why = (f"after {MAX_CORRECTIONS} corrections it still shows problems the earlier checks had not"
@@ -1040,8 +1176,8 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
            else f"after {MAX_CORRECTIONS} corrections a problem it found before is still there, beside new ones")
     stop = stops.Stop("review", f"the independent check still finds problems; {why}", attempt=nth,
                       account=found[:2000])
-    failed = dataclasses.replace(result, passed=False, failure=Failure.CODE_BUG, cost_usd=cost,
-                                 summary=f"the independent check still finds problems: {result.summary}",
+    failed = dataclasses.replace(result, passed=False, failure=failure, cost_usd=cost,
+                                 summary=f"the independent check still finds problems{room}: {result.summary}",
                                  evidence=found)
     return failed, stop, ledger, corrections
 
