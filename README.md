@@ -20,9 +20,11 @@ remembers what failed — across every repository on the machine.
 | **Checks without trusting the worker** | A pass needs evidence; changed files come from git; risky changes get an independent read-only verifier that measures what it reports and never reads the worker's summary. |
 | **Says why it stopped** | Every task that stops says who made the call (you, your permission settings, the budget, the environment, cauce's rules) and the command that continues it. |
 | **Remembers** | Problems and the fixes that did or did not work, across every repository; each project's notes, by topic and anchored to code. |
+| **Keeps the thread** | The scribe reads every turn of a session from its transcript, with no model: work the session sends gets the person's own words it needs, notes are filed every few turns, and `/cauce:relay` hands the thread to a fresh session instead of a compaction's summary. |
 | **Chains work** | Workflows: plan → build → review → fix, advanced by the engine, each step on the commit the one before kept. Dual review with a refuter: reviewers never vote. |
 | **Learns how you work** | `/cauce:init` sends cauce's own read-only workers through every project and plugin on your machine, in parallel, and builds your team, your workflows and your memory from what they find. |
-| **Shows it all** | `cauce ui`: the board, every task's ladder and moves, workflow graphs, a mind map of what each project knows, routing evidence, spend. |
+| **Measures itself** | Every run's phases are timed (queued, planning, setting up, working, checking, verifying); `cauce stats` and the UI's Analysis screen show pass rates, time and cost per pass by kind and cell, and whether the session's thread in a brief changes how runs go. |
+| **Shows it all** | `cauce ui`: the board, every task's ladder and moves, workflow graphs, a mind map of what each project knows, routing evidence, analysis, spend. |
 
 <p>
   <img alt="A task: its plan and risk, the ladder of cells with each attempt, the move between them with its evidence chain, and the independent check" src="docs/images/task.png" width="49%">
@@ -163,6 +165,38 @@ One SQLite file in `$CAUCE_HOME` (default `~/.local/share/cauce`):
   **across repositories**. A matching dead end is put in front of the model
   before it starts (`UserPromptSubmit`) and in every worker's brief.
 
+### The scribe and the relay
+
+A worker used to start from the task's text alone, and a session that never
+compacted kept everything it learned until it ended. At the end of every turn
+the **scribe** reads what the session's transcript gained since the last time
+and keeps the facts of the session in `$CAUCE_HOME/scribe/<session>.json`: the
+person's requests verbatim (and which of them corrected the agent), the files
+the session wrote, the calls that failed and the call that passed after them.
+No model reads or writes it, and it never touches the session's context: it
+reads a file on disk, so it can leave things out to fit but never paraphrase.
+
+- **Work a session sends** gets the part of that thread it needs in its brief:
+  the newest requests, the older ones that share the task's words, the files
+  the session wrote, and the calls still failing there, marked as context, not
+  instructions. The task's text is still what to do. An investigation gets
+  none: its brief is the survey.
+- **The project's notes** are filed every few turns (8 requests, or about 16k
+  characters of conversation), by the same detached Haiku that used to wait for
+  a compaction or the session's end.
+- **The relay** is the alternative to `/compact` for a person who never
+  compacts so as not to lose the thread. `/cauce:relay` (or `cauce relay`)
+  marks the hand-over; the next session that starts in the same place — type
+  `/clear`, or open a new one — begins from the old session's thread: the
+  requests in the person's words, the commits made, the files written, the
+  calls still failing and the cauce tasks still open. Those tasks, and the
+  endings the old session never heard, report to the new session from then on.
+  The old session stays as it was; a relay is taken once, never by a resume,
+  and is dropped after a day.
+
+States of sessions not seen for 30 days are forgotten. Turn it off with the
+`scribe` plugin setting or `cauce config scribe off`.
+
 ### Project notes
 
 Problems and fixes are global: a dead end in one repository is a dead end in
@@ -192,7 +226,7 @@ Notes are written at three moments, never whenever a model feels like it:
 | When | Who | How |
 |---|---|---|
 | a worker passes | the worker | its result block lists what it `learned`; Haiku files each fact (topic, title, links, the changed files it is about) |
-| before a session compacts, and when it ends | Haiku | reads what the person and the agent said since the last time (no tool output, no injected context) and keeps the durable facts |
+| every few turns of a session, before it compacts, and when it ends | Haiku | reads what the person and the agent said since the last time (no tool output, no injected context) and keeps the durable facts |
 | any time | a person | `cauce note "<fact>" --topic business --anchor src/cart.ts --link 12:explains` |
 
 And read back in four places: every worker's brief gets the project's notes
@@ -213,6 +247,33 @@ session views show both apart: `turns` for the session's own, `workers` for
 cauce's. `cauce route` says what finished tasks of the same kind
 cost on average before a run is paid for. Dollars are API rates on the token
 counts; on a subscription they measure how much of the plan work used.
+
+### Where the time goes
+
+Every run records its phases on its events: how long it waited in its lane,
+planning, setting up (the worktree, waiting for the checkout, starting
+servers), the workers' own time, cauce running `--verify`, the independent
+check, and the rest; every attempt adds its wall time, turns and tokens.
+`cauce stats` reads them back with no model:
+
+```bash
+cauce stats                      # every repository, last 30 days
+cauce stats --repo . --days 7    # one repository
+cauce stats --json               # everything, for a script
+cauce stats --runs --csv         # one row per run, for a spreadsheet
+```
+
+It answers what the routing needs evidence for: how often each kind passes at
+the first attempt and how often it climbs, what a pass costs and how long it
+takes, where the waiting is, which cells pass and fail and why, how runs stop,
+and what a session's own turns take beside the work it sends. Runs a session
+sent are split by whether their brief had the session's thread, so the scribe
+is measured too (observed, not a trial). Runs recorded before the phases were
+timed count by their timestamps and are left out of the breakdown rather than
+guessed. The UI's **Analysis** screen shows the same, for one project or every
+one, with an export of all of it as JSON.
+
+<p><img alt="Analysis: pass rates, median run and cost per pass, where the time of the runs went by phase, and each kind's first-try rate, time and cost" src="docs/images/analysis.png"></p>
 
 ### Fixes that stop working
 
@@ -555,6 +616,11 @@ repository's cards at once.
 - **Routing** — per kind, where tasks started and passed, and how each ladder
   was really climbed: every move with the failure behind it and how often the
   next attempt passed. The evidence for tuning a ladder.
+- **Analysis** — where the runs' time and money went, by phase, kind, cell,
+  workflow and day; how runs stopped and moved; the session's own turns; runs
+  with the session's thread in their brief beside runs without; the slowest and
+  costliest runs. For one project or every one, with a JSON export. See
+  [Where the time goes](#where-the-time-goes).
 - **Workflows** — each run of the project as a graph of its steps, left to
   right as they depend on each other. Every step shows its state (passed,
   running, waiting on you, not started), cell and tries, and opens its task.

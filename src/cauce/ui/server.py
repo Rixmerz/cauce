@@ -286,6 +286,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(HTTPStatus.OK, detail) if detail else self._error(HTTPStatus.NOT_FOUND, "no such task")
         if path == "/api/spend":
             return self._json(HTTPStatus.OK, api.spend(store, days=_int(query, "days", 7, 1, 365)))
+        if path == "/api/analysis":
+            return self._json(HTTPStatus.OK, api.analysis_view(store, days=_int(query, "days", 30, 0, 3650),
+                                                               repo_key=(query.get("repo") or [""])[0] or None))
         if path == "/api/routing":
             return self._json(HTTPStatus.OK, api.routing(store, days=_int(query, "days", 0, 0, 3650)))
         if path == "/api/notes":

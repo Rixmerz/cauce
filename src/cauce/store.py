@@ -151,6 +151,9 @@ STRICT_OVERLAP = 3
 
 TASK_STATES = ("queued", "running", "done", "failed", "interrupted", "blocked", "replan", "needs_approval",
                "cancelled", "dismissed")
+#: The work a relay hands to the session that continues the one that sent it:
+#: still going, or waiting on the person.
+OPEN_FOR_A_RELAY = ("queued", "running", "blocked", "needs_approval", "replan")
 
 #: Columns added after a table first shipped. `CREATE TABLE IF NOT EXISTS` never
 #: alters a table that exists, so each one is added here when it is missing.
@@ -746,6 +749,46 @@ class Store:
             (since,)).fetchall()
         return [dict(r) for r in rows]
 
+    #: The events that tell how a run went and where its time went.
+    RUN_EVENTS = ("planned", "briefed", "attempt_started", "attempt_finished", "verified", "moved", "finished")
+
+    def runs_since(self, since: str, *, repo: str | None = None) -> tuple[list[dict], list[dict]]:
+        """The tasks cauce ran (not a session's turns, not an investigation's
+        reading) that moved since `since`, and the events of their runs, oldest
+        first: what `cauce.analysis` reads."""
+        scope, params = ("AND t.repo = ?", [repo]) if repo is not None else ("", [])
+        tasks = [dict(r) for r in self._conn.execute(
+            "SELECT t.id, t.repo, t.title, t.kind, t.status, t.source, t.session_id, t.options, t.workflow_run, "  # noqa: S608
+            "t.workflow_step, t.start_cell, t.final_cell, t.cost_usd, t.pinned, t.created_at, t.updated_at, "
+            "w.name AS workflow FROM tasks t LEFT JOIN workflow_runs w ON w.id = t.workflow_run "
+            f"WHERE t.source IN ('cauce', 'queue') AND t.updated_at >= ? {scope} ORDER BY t.id",
+            [since, *params])]
+        tasks = [t for t in tasks if '"investigation"' not in (t.get("options") or "")]
+        if not tasks:
+            return [], []
+        ids = [t["id"] for t in tasks]
+        events = []
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            rows = self._conn.execute(
+                f"SELECT task_id, ts, kind, data FROM events WHERE task_id IN ({', '.join('?' * len(chunk))}) "  # noqa: S608
+                f"AND kind IN ({', '.join('?' * len(self.RUN_EVENTS))}) ORDER BY id", [*chunk, *self.RUN_EVENTS])
+            events += [{**dict(r), "data": json.loads(r["data"])} for r in rows]
+        return tasks, events
+
+    def turns_since(self, since: str, *, repo: str | None = None) -> list[dict]:
+        """A session's own turns and its subagents' delegations since `since`, each
+        with the tokens its messages used, by model: what they took and cost."""
+        scope, params = ("AND t.repo = ?", [repo]) if repo is not None else ("", [])
+        rows = self._conn.execute(
+            "SELECT t.id, t.source, t.status, t.session_id, t.created_at, t.updated_at, u.model, "  # noqa: S608
+            "sum(u.input_tokens) AS input_tokens, sum(u.output_tokens) AS output_tokens, "
+            "sum(u.cache_read) AS cache_read, sum(u.cache_write) AS cache_write "
+            "FROM tasks t LEFT JOIN usage u ON u.task_id = t.id "
+            f"WHERE t.source IN ('hook', 'delegation') AND t.created_at >= ? {scope} "
+            "GROUP BY t.id, u.model ORDER BY t.id", [since, *params]).fetchall()
+        return [dict(r) for r in rows]
+
     def events_of(self, task_id: int, kind: str) -> list[dict]:
         rows = self._conn.execute("SELECT * FROM events WHERE task_id = ? AND kind = ? ORDER BY id", (task_id, kind))
         return [{**dict(r), "data": json.loads(r["data"])} for r in rows]
@@ -885,6 +928,21 @@ class Store:
         except BaseException:
             self._conn.execute("ROLLBACK")
             raise
+
+    def hand_over(self, old: str, new: str) -> int:
+        """A relay: the work one session sent that is still open, waits on the
+        person, or ended without that session hearing of it reports to the session
+        that continues it, and so do its active workflow runs. How many tasks moved."""
+        with self.immediate():
+            ids = {int(t["id"]) for t in self.unreported(old, limit=200)}
+            marks = ", ".join("?" * len(OPEN_FOR_A_RELAY))
+            ids |= {int(r[0]) for r in self._conn.execute(
+                f"SELECT id FROM tasks WHERE session_id = ? AND source IN ('cauce', 'queue') "  # noqa: S608
+                f"AND status IN ({marks})", (old, *OPEN_FOR_A_RELAY))}
+            self._conn.executemany("UPDATE tasks SET session_id = ? WHERE id = ?", [(new, i) for i in ids])
+            self._conn.execute("UPDATE workflow_runs SET session_id = ? WHERE session_id = ? AND status = 'active'",
+                               (new, old))
+        return len(ids)
 
     def mark_reported(self, task_ids: Iterable[int], *, via: str) -> None:
         for task_id in task_ids:

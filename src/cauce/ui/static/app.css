@@ -367,3 +367,12 @@ pre.diff { max-height: 480px; overflow: auto; font-size: 11.5px; }
 pre.diff span { display: block; } pre.diff .add { color: var(--ok); background: var(--ok-soft); }
 pre.diff .del { color: var(--bad); background: var(--bad-soft); } pre.diff .hunk { color: var(--accent); }
 pre.diff .file { font-weight: 600; }
+
+/* Analysis: where a run's time goes, one tone per phase, always beside its word. */
+.phasebar { display: flex; height: 22px; border-radius: var(--radius-sm); overflow: hidden; background: var(--sunk);
+            margin-bottom: 10px; }
+.phasebar span { flex: 0 1 0; min-width: 2px; }
+.ph-queued { background: var(--queue); } .ph-plan { background: var(--m-sonnet); } .ph-setup { background: var(--warn); }
+.ph-worker { background: var(--accent); } .ph-check { background: var(--ok); } .ph-verifier { background: var(--m-opus); }
+.ph-other { background: transparent; box-shadow: inset 0 0 0 1px var(--muted); }
+.split { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--gap); }

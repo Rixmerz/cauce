@@ -77,8 +77,10 @@ Request: $ARGUMENTS
    the task as written will not get far: say so to the person before waiting
    on it.
 
-   Write the task in full: the worker sees nothing of this conversation. Add
-   `--verify` whenever the repository has a command that proves the work — a
+   Write the task in full. The worker gets the person's own words from this
+   session that relate to it (cauce's scribe puts them in its brief), but none
+   of your reasoning, what you read or what you decided: say in the task what
+   it needs of those. Add `--verify` whenever the repository has a command that proves the work — a
    worker's own claim of success is not evidence, and cauce runs the check
    itself, so it needs no permission. `--budget` (default $5) bounds the task.
    Leave `--kind` out: cauce classifies the task. Pass it only with one of
@@ -172,3 +174,10 @@ Request: $ARGUMENTS
    already tried against similar problems, in any repository. When a fix is
    confirmed or refuted outside a worker, record it:
    `cauce memory record --problem "<title>" --fix "<what changed>" --outcome worked|failed --why "<why>"`.
+
+7. **A fresh start that keeps the thread.** When the person wants to clear a
+   long session without losing what it was doing, run `cauce relay` and tell
+   them to type `/clear`: the new session starts from their requests verbatim,
+   the commits made and the cauce tasks still open, which report there from
+   then on. Never write that summary yourself; the relay reads it from the
+   transcript and git.

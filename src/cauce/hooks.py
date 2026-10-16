@@ -8,11 +8,14 @@
   notes, so are they.
 - **Stop** — the turn's final message is the task's result. Any other task
   still running in the session belongs to a turn the user interrupted; Claude
-  Code fires no Stop for those, so they are marked interrupted now.
+  Code fires no Stop for those, so they are marked interrupted now. The scribe
+  reads what the transcript gained (`cauce.scribe`) and, every few turns, has
+  the project's notes filed.
 - **StopFailure** — the turn died; its task failed.
 - **SessionStart** — on resume or compaction, the unfinished tasks of the
-  session; always, the recent dead ends of this repository and the index of
-  its notes. When `cauce` does not resolve on PATH, it is put there for the
+  session; on a new session where a person left a relay (`cauce relay`), the
+  thread of the session it continues; always, the recent dead ends of this
+  repository and the index of its notes. When `cauce` does not resolve on PATH, it is put there for the
   session's commands.
 - **PreCompact**, **SessionEnd** — a detached Haiku reads what the session
   said since the last time and keeps its durable facts in the project's notes,
@@ -39,7 +42,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from cauce import config, project, repo, stops
-from cauce.store import Store, home
+from cauce.store import OPEN_FOR_A_RELAY, Store, home
 from cauce.text import fold, words
 
 _NUDGES = frozenset({
@@ -202,6 +205,7 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
                    "repo": target["repo"] if target else None}
         usage.ingest(store, event["transcript_path"], **counted)
         usage.ingest_subagents(store, event["transcript_path"], **counted)
+    _scribe(event, home(), os.environ)
     from cauce import naming
 
     naming.maybe_start(store, session_id, home(), os.environ)
@@ -211,6 +215,47 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
         # it goes on, once per ending, to tell the person and continue.
         return {"decision": "block", "reason": notice}
     return None
+
+
+def _scribe(event: Mapping[str, Any], root: Path, env: Mapping[str, str]) -> None:
+    """The scribe keeps the session's facts as it goes (`cauce.scribe`), and every few
+    turns has the project's notes filed: a session that never compacts still feeds
+    them. Its own failure is noted, and never costs the turn its endings."""
+    if not event.get("transcript_path") or not config.enabled("scribe", env):
+        return
+    try:
+        from cauce import scribe
+
+        state = scribe.update(root, str(event["session_id"]), str(event["transcript_path"]),
+                              max_bytes=scribe.HOOK_BYTES)
+        if state is not None and scribe.notes_due(state) and keep_notes(event, root, env):
+            scribe.notes_started(root, state)
+    except Exception:  # the turn's endings still go out
+        _note_error(root, "Stop (scribe)")
+
+
+def _relay(store: Store, root: Path, session_id: str, cwd: str, transcript: str | None) -> str | None:
+    """A session started where a person handed one over (`cauce relay`): it starts
+    from that session's thread, and the work that session sent reports here now."""
+    from cauce import compact, scribe
+
+    source = scribe.take_relay(root, session_id, cwd)
+    state = scribe.load(root, source) if source else None
+    if source is None or state is None:
+        return None
+    if state.get("transcript"):
+        state = scribe.update(root, source, state["transcript"]) or state
+    moved = store.hand_over(source, session_id)
+    tasks = store.list_tasks(session_id=session_id, status=OPEN_FOR_A_RELAY, source=("cauce", "queue"),
+                             limit=15)
+    text = scribe.relay_text(state, tasks=tasks, changed=compact._changed(Path(cwd)),
+                             commits=scribe.commits_since(state.get("cwd") or cwd, state.get("started")))
+    if transcript:
+        scribe.save(root, scribe.fresh(session_id, Path(transcript)) | {"relayed_from": source})
+    if moved:
+        text += (f"\n\n{moved} cauce task(s) that session sent (open, waiting on the person, or ended unheard) "
+                 "report to this session now.")
+    return text or None
 
 
 def _enroll(cwd: str) -> None:
@@ -328,6 +373,14 @@ def session_start(
         kept = compact.recall(root, str(session_id))
         if kept:
             blocks.append(kept)
+    if event.get("source") in ("startup", "clear") and cwd and config.enabled("scribe", {**os.environ, **env}):
+        relayed = _relay(store, root, str(session_id), str(cwd), event.get("transcript_path"))
+        if relayed:
+            blocks.append(relayed)
+    if event.get("source") == "startup":
+        from cauce import scribe
+
+        scribe.prune(root)
     # Only a project that uses cauce: indexing writes `.mcp-docs/` into the
     # checkout, and a session opened anywhere else is none of cauce's business.
     if cwd and repo.toplevel(Path(cwd)) is not None and project.find(cwd) is not None:
