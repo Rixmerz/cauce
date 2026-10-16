@@ -252,7 +252,7 @@ def test_the_cli_makes_changes_runs_and_shows(git_repo, kicks, capsys, monkeypat
     assert run_status["state"] == "running" and run_status["now"] == ["do"]
     assert cli.main(["workflow", "status"]) == 0
     out = capsys.readouterr().out
-    assert f"run #{run_status['id']} ship — running" in out and "now: do" in out
+    assert f"#{run_status['id']} ship — running" in out and "step do (1/2): queued" in out
     assert cli.main(["workflow", "retry", str(run_status["id"]), "do"]) == 1
     assert cli.main(["workflow", "cancel", str(run_status["id"])]) == 0
     assert cli.main(["workflow", "rm", "ship2", "--scope", "user"]) == 0
@@ -339,8 +339,12 @@ def test_a_step_carries_the_memory_attached_to_it(git_repo, store: Store, kicks)
         f"note:{elsewhere}", "topic:nothing", "problem:999"]}))
     with pytest.raises(workflows.WorkflowError) as err:
         workflows.start(store, "zoned", git_repo, {"goal": "x"})
-    for part in (f"no note #{elsewhere} in this project", "topic 'nothing' holds no live note", "no problem #999"):
+    for part in (f"no note #{elsewhere} in this project", "no problem #999"):
         assert part in str(err.value)
+    # A topic with no note yet (a new project has none) is no reason not to start: it is said.
+    workflows.edit("zoned", git_repo, lambda d: workflows.set_step(d, "build", {"memory": ["topic:nothing"]}))
+    started = workflows.start(store, "zoned", git_repo, {"goal": "x"})
+    assert started["gaps"] and "topic 'nothing' holds no note in this project yet" in started["gaps"][0]
     with pytest.raises(workflows.WorkflowError, match="memory is a list"):
         workflows.normalize({"name": "x", "steps": [{"id": "a", "prompt": "do", "memory": ["zone:1"]}]})
 
@@ -506,3 +510,81 @@ def test_the_bundled_feature_builds_with_its_tests_and_a_clean_review_ends_it(gi
     assert workflows.load("bugfix", git_repo, "bundled")["steps"][0]["kind"] == "debug-repro"
     # review-fix reads code with no change under review: its findings are not excused as pre-existing.
     assert "so `unknown`" in workflows.load("review-fix", git_repo, "bundled")["steps"][0]["prompt"]
+
+
+def test_a_run_says_what_it_takes_before_the_first_try(git_repo, store: Store, kicks, capsys, monkeypatch):
+    monkeypatch.chdir(git_repo)
+    _save({"name": "change", "inputs": ["goal", "check"], "steps": [
+        {"id": "build", "prompt": "Build {goal}; then {check}", "kind": "implement", "memory": ["topic:conventions"]},
+        {"id": "review", "prompt": "Review {goal}", "kind": "review-routine", "needs": ["build"]}]}, git_repo)
+    # The listing says what a run asks for.
+    assert cli.main(["workflow", "list"]) == 0
+    listed = capsys.readouterr().out
+    assert "inputs: goal, check · memory: topic:conventions" in listed
+    # Text without a name fills the one input left; with two left, the error names them all.
+    assert cli.main(["workflow", "run", "change", "the export"]) == 1
+    assert "--input goal='…' --input check='…'" in capsys.readouterr().err
+    # A dry run checks everything and queues nothing; the memory it would start without is said.
+    assert cli.main(["workflow", "run", "change", "the export", "--input", "check=npm test", "--dry-run",
+                     "--verify", "npm run lint"]) == 0
+    dry = capsys.readouterr().out
+    assert "nothing is queued" in dry and "goal: the export" in dry and "holds no note in this project yet" in dry
+    assert "build (implement), checked by `npm run lint`" in dry and "review (review-routine) after build\n" in dry
+    assert store.list_runs() == []
+    assert cli.main(["workflow", "run", "change", "the export", "--input", "check=npm test", "--dry-run",
+                     "--verify", "npm run lint", "--json"]) == 0
+    planned = json.loads(capsys.readouterr().out)
+    assert [s["verify"] for s in planned["steps"]] == ["npm run lint", None] and planned["gaps"]
+    # The run's check goes to the step that writes, never to the review.
+    assert cli.main(["workflow", "run", "change", "the export", "--input", "check=npm test",
+                     "--verify", "npm run lint"]) == 0
+    assert "note: step 'build'" in capsys.readouterr().out
+    (build,) = store.run_tasks(store.list_runs()[0]["id"])
+    assert json.loads(build["options"])["verify"] == "npm run lint"
+    assert workflows.step_check({"kind": "review-routine"}, {"verify": "npm run lint"}) is None
+
+
+def test_a_flag_a_command_does_not_take_says_what_was_meant(capsys):
+    with pytest.raises(SystemExit) as stop:
+        cli.main(["workflow", "run", "change", "the goal", "two words", "--allw", "x"])
+    assert stop.value.code == 2
+    said = capsys.readouterr().err
+    assert "--allw: did you mean --allow?" in said and "--input name=value" in said
+    with pytest.raises(SystemExit):
+        cli.main(["run", "fix it", "--input", "goal=x"])
+    assert "--input is taken by cauce workflow run, not by `cauce run`" in capsys.readouterr().err
+
+
+def test_the_status_says_how_far_each_run_got_in_a_line(git_repo, store: Store, kicks, capsys, monkeypatch):
+    monkeypatch.chdir(git_repo)
+    _save(CHAIN, git_repo)
+    brief = "Build the export of every order " + "with all its details " * 20
+    started = workflows.start(store, "chain", git_repo, {"goal": brief})
+    seen: list[dict] = []
+    flow.work(store, runner=_runner([ok("built it"), ok("no problems"), ok("polished")], seen))
+    shown = workflows.status(store, started["id"], detail=True)
+    build = shown["steps"][0]
+    # A done step says the commit it kept and the files it touched, from git and its events.
+    assert build["attempt"] == 1 and build["files"] == ["step1.txt"] and build["commit"].split()[1:]
+    assert cli.main(["workflow", "status"]) == 0
+    line = capsys.readouterr().out.splitlines()[0]
+    assert line.startswith(f"#{started['id']} chain — done") and "step polish (3/3)" in line and "1 file(s)" in line
+    assert brief not in line
+    # One run step by step: its input on one line unless asked for whole.
+    assert cli.main(["workflow", "status", str(started["id"])]) == 0
+    out = capsys.readouterr().out
+    assert "goal: Build the export" in out and brief.strip() not in out and "attempt 1 at" in out
+    assert cli.main(["workflow", "status", str(started["id"]), "--full"]) == 0
+    assert brief.strip() in capsys.readouterr().out
+
+
+def test_a_running_step_says_its_attempt_and_the_files_it_touched_so_far(git_repo, store: Store):
+    from cauce import isolate
+    from cauce.store import home
+
+    task = store.create_task("build it", status="running", source="queue", cwd=str(git_repo))
+    store.add_event(task["id"], "attempt_started", seq=2, cell="sonnet/high")
+    ws = isolate.prepare(git_repo, task["id"], home())
+    (ws.path / "export.py").write_text("print('rows')\n")
+    found = workflows.progress(store, {"cwd": str(git_repo)}, store.get_task(task["id"]))
+    assert found["attempt"] == 2 and found["files"] == ["export.py"] and "phase" in found

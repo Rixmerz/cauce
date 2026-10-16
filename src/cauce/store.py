@@ -937,6 +937,39 @@ class Store:
             self._conn.execute("ROLLBACK")
             raise
 
+    def busy(self, repos: Sequence[str]) -> list[int]:
+        """Tasks of these projects that are queued or running."""
+        if not repos:
+            return []
+        marks = ",".join("?" * len(repos))
+        return [int(r[0]) for r in self._conn.execute(
+            f"SELECT id FROM tasks WHERE repo IN ({marks}) AND status IN ('queued', 'running')",  # noqa: S608
+            list(repos))]
+
+    def rekey(self, old: str, new: str, prefix: str = "") -> dict[str, int]:
+        """Move a project's memory and history to another key, in one transaction (a
+        repository joining a workspace): its notes, their anchors named with `prefix`
+        in front, its topics, tasks, workflow runs, sessions and usage. Problems and
+        fixes are global and stay as they are. How many notes and tasks moved."""
+        with self.immediate():
+            notes = [int(r[0]) for r in self._conn.execute("SELECT id FROM notes WHERE project = ?", (old,))]
+            self._conn.execute("UPDATE notes SET project = ? WHERE project = ?", (new, old))
+            self._conn.execute("UPDATE memory_fts SET repo = ? WHERE kind = 'note' AND repo = ?", (new, old))
+            if prefix:
+                for start in range(0, len(notes), 500):
+                    chunk = notes[start:start + 500]
+                    self._conn.execute(
+                        f"UPDATE note_anchors SET path = ? || path WHERE note_id IN ({','.join('?' * len(chunk))}) "  # noqa: S608
+                        "AND substr(path, 1, ?) != ?", [prefix, *chunk, len(prefix), prefix])
+            self._conn.execute("INSERT OR IGNORE INTO note_topics (project, name, description, created_at) "
+                               "SELECT ?, name, description, created_at FROM note_topics WHERE project = ?", (new, old))
+            self._conn.execute("DELETE FROM note_topics WHERE project = ?", (old,))
+            tasks = self._conn.execute("UPDATE tasks SET repo = ? WHERE repo = ?", (new, old)).rowcount
+            for table in ("workflow_runs", "sessions", "usage"):
+                self._conn.execute(f"UPDATE {table} SET repo = ? WHERE repo = ?", (new, old))  # noqa: S608
+            self._conn.execute("DELETE FROM lanes WHERE repo = ?", (old,))
+        return {"notes": len(notes), "tasks": tasks}
+
     def hand_over(self, old: str, new: str) -> int:
         """A relay: the work one session sent that is still open, waits on the
         person, or ended without that session hearing of it reports to the session

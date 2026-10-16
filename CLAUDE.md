@@ -48,6 +48,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/allow.py` | a refused call → the `--allow` rules that let it through, one per program; suggestions only, nothing is granted |
 | `src/cauce/stops.py` | why a task stopped, who made the call, and the command that continues it; one account on its `finished` event; light, the hooks and the UI read it |
 | `src/cauce/project.py` | a project's `.cauce/` folder: enrollment (only enrolled projects show in the UI) and `sessions.json`, the session names; stdlib, no git call |
+| `src/cauce/workspaces.py` | a folder of repositories that is one project (`cauce workspace`): declared in the person's cauce home, read by `repo.key` and `project.find`; a member's files are named with it in front in the notes |
 | `src/cauce/naming.py` | Haiku names a session, started detached by the Stop hook; a name a person wrote is never replaced |
 | `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step; `svg.js` draws the workflow graphs and the project map node by node |
 | `src/cauce/compact.py` | the facts of a session (requests verbatim, failed calls, changed files), written before a compaction and put back after it; no model call |
@@ -124,7 +125,12 @@ yields the default kind, not a guess.
   environment failure on an attempt that changed files is not work that never
   ran: it blocks at once too, its work kept. A timeout after the work changed
   files is out of turns, not the environment: more turns, and an attempt's
-  time grows with its turns (`launch.timeout_for`).
+  time grows with its turns (`launch.timeout_for`). A network that dropped
+  (`launch.NETWORK_DOWN`; for a session's own call also `NETWORK_FLAKY`, never
+  read in a check's output) is neither: the same cell again after each of
+  `escalate.NETWORK_WAITS`, from the work it kept, a try that counts toward no
+  attempt ceiling; one that stays down stops the task as `network`, its work
+  kept.
 - Out of turns is room, never a bug: a finding of the independent check in
   work whose worker ran out of turns before its own check earns the same cell
   more turns, never more effort or another model, and is no dead end.
@@ -143,6 +149,8 @@ yields the default kind, not a guess.
   warning is not such a line. Dead ends reach a brief only on a strict match.
 - A request that opens with a verb of change is never read as a read-only
   kind unless a tag or `--kind` says so.
+- The plan says a task needs servers only when its check talks to one (or it
+  has no check), and names the words that set it off: a mention is no need.
 - Work that stopped for a person (blocked, needs approval) is kept on its
   branch, unverified, and so is work that outgrew its turns (a `replan` for
   turns resumes with more); only `failed`, a `replan` for a wrong task and
@@ -294,7 +302,19 @@ yields the default kind, not a guess.
 - A session belongs to the `.cauce/` in its own directory or up to the top of
   its checkout, never above it; outside a checkout, its own directory only.
   The home directory and `/` are never a project, a dotfiles checkout at home
-  included.
+  included. The one exception is a workspace the person declared.
+- A workspace (`cauce workspace add`) is a folder of two or more repositories
+  that is one project: `repo.key` and `project.find` answer with the folder for
+  each of them and for their worktrees, so notes, tasks, lanes, sessions, the
+  team and the rules kept with `cauce allow` are the folder's. It lives in the
+  person's cauce home, never in a repository; a repository outside the folder
+  is linked in, and nothing is made before everything is checked. Making one
+  moves what its repositories kept (`Store.rekey`) and merges a fact two of them
+  kept; it waits while one of them has work queued or running. A member's file
+  is named with the member in front in the notes (`api/src/x.py`), and a
+  member reviews only its own anchors. A task in the folder holds every
+  checkout in it, a linked one included. cauce offers a workspace (a task that
+  reaches a sibling with `--add-dir`) and never makes one for the person.
 - `.cauce/sessions.json` belongs to the person as much as to Haiku: a `name`
   that differs from `haiku_name` is theirs, and nothing in cauce overwrites it.
 - The UI shows one project at a time and takes no task: work is asked for in
@@ -342,7 +362,7 @@ yields the default kind, not a guess.
 - Nothing in cauce writes to a settings file except `cauce habits install`,
   run by a person.
 - Problems and fixes are global; notes belong to one project and are never
-  read from another. A note is written by a passing worker (`learned`), by
+  read from another (a workspace is one project). A note is written by a passing worker (`learned`), by
   Haiku from a session's conversation (every few turns, when the scribe finds
   them due, before a compaction, at its end), or by a person — never by a failed
   attempt, whose facts no pass confirmed. Haiku files under topics that
@@ -379,8 +399,9 @@ yields the default kind, not a guess.
   past are marked reported. A step that stops stops the run there; it goes on
   by a resume to a pass or `cauce workflow retry`.
 - A workflow definition grants nothing and caps nothing: no rule, no
-  approval, no capability, no dollar limit; rules and approvals are the
-  person's flags on `cauce workflow run`, so a definition a repository commits
+  approval, no capability, no dollar limit; rules, approvals and a run's check
+  (`--verify`, for every step that writes and names none) are the person's
+  flags on `cauce workflow run`, so a definition a repository commits
   runs with what the person gives, and a `budget_usd` an older one holds is
   dropped. A bundled template is never written: a change copies it to the user
   scope.
@@ -404,8 +425,10 @@ yields the default kind, not a guess.
   pending revision that applies when the last such run ends or is cancelled,
   unless a person passes `--now`; removing it needs `--force`.
 - A step's `memory` is read when the step is queued, never written. A note
-  comes only from the run's own project; a run whose memory cannot be read
-  there does not start, and a note gone since says so in the brief.
+  comes only from the run's own project; a run with a note or problem that
+  cannot be read there does not start, a topic with no note yet is said when
+  it starts (the step goes without it), and a note gone since says so in the
+  brief. `cauce workflow run --dry-run` checks all of it and queues nothing.
 - The capability registry is read from the user's cauce home only. A
   repository must never be able to add an MCP server by committing a file.
   Installed neighbours (`plugins.KNOWN`) are read from the person's Claude
@@ -445,7 +468,7 @@ yields the default kind, not a guess.
   errors (`survey.NOISE`) are no problem and no fix. The init skill writes
   nothing, and starts no worker, before the person agrees to the scope and to
   an estimate of its cost (an estimate, never a cap), and writes only
-  through `cauce roles`, `cauce team`, `cauce workflow`, `cauce note`,
+  through `cauce workspace add`, `cauce roles`, `cauce team`, `cauce workflow`, `cauce note`,
   `cauce notes … topic add` and `cauce memory record`; a note goes only to the
   project its evidence came from.
 - An investigation is cauce's work, never a session's subagents: one queued

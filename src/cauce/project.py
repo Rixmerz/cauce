@@ -3,7 +3,9 @@
 A repository is enrolled when it has a `.cauce/` folder — at the top of the
 checkout, or in the directory a session runs in. Nothing above a checkout
 counts: a `.cauce/` in a folder that holds several projects, or in the home
-directory, does not enroll every session below it. Outside a checkout only the
+directory, does not enroll every session below it — unless the person declared
+that folder a workspace (`cauce.workspaces`), which makes its repositories one
+project. Outside a checkout only the
 session's own directory counts, and the home directory and `/` are never a
 project (a home that is itself a git checkout, for dotfiles, included). Only enrolled projects, and
 the sessions that run in them, appear in the UI: having the plugin on while
@@ -21,7 +23,7 @@ Haiku writes `name` and keeps a copy in `haiku_name`. A person may change
 touches that session's entry again.
 
 Standard library only, no git call: the hooks and the UI read this for every
-session they list.
+session they list (the workspaces it reads are a file in the cauce home).
 """
 from __future__ import annotations
 
@@ -62,11 +64,20 @@ def _scope(cwd: str | Path) -> list[Path]:
     return [here]
 
 
+def _workspace(cwd: str | Path) -> Path | None:
+    from cauce import workspaces
+
+    return workspaces.of(cwd)
+
+
 def find(cwd: str | Path | None) -> Path | None:
     """The `.cauce/` folder a session in `cwd` belongs to: in `cwd` itself, or in a
-    parent up to and including the top of its git checkout. Never above it."""
+    parent up to and including the top of its git checkout. Never above it, but
+    for a workspace the person declared: then the workspace folder's."""
     if not cwd:
         return None
+    if (folder := _workspace(cwd)) is not None:
+        return folder / FOLDER if (folder / FOLDER).is_dir() else None
     for d in _scope(cwd):
         if (d / FOLDER).is_dir():
             return d / FOLDER
@@ -83,7 +94,7 @@ def enroll(cwd: str | Path) -> Path:
     scope = _scope(cwd)
     if not scope:
         raise NotAProject(f"{Path(cwd).resolve()} is not a project: run cauce inside one")
-    top = scope[-1]
+    top = _workspace(cwd) or scope[-1]
     folder = top / FOLDER
     folder.mkdir(exist_ok=True)
     ignore = folder / ".gitignore"

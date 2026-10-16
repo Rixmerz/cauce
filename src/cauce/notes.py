@@ -38,7 +38,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from cauce import repo
+from cauce import repo, workspaces
 from cauce.store import Store, home
 from cauce.text import fold, reads_alike, title_of, words
 
@@ -191,6 +191,23 @@ def same_as(store: Store, project: str, topic: str, fact: str) -> int | None:
     return None
 
 
+def merge_same(store: Store, project: str) -> int:
+    """Retire the copies of one fact under one topic (two repositories that joined a
+    workspace each kept it): the oldest stays, the others point at it. How many went."""
+    kept: dict[tuple[str, str], int] = {}
+    gone = 0
+    for note in sorted(store.notes(project, states=LIVE, limit=100_000), key=lambda n: n["id"]):
+        same = (note["topic"], fold(" ".join(note["text"].split())))
+        if same not in kept:
+            kept[same] = note["id"]
+            continue
+        store.update_note(note["id"], state="replaced", replaced_by=kept[same],
+                          state_reason=f"the same fact as note #{kept[same]}, kept by another repository of the "
+                                       "workspace")
+        gone += 1
+    return gone
+
+
 def link(store: Store, from_id: int, to_id: int, kind: str) -> bool:
     """Link two notes of one project. `replaces` retires the note it replaces."""
     if kind not in LINKS:
@@ -242,9 +259,12 @@ def anchor(store: Store, note_id: int, repo_dir: Path, paths: Iterable[str] = ()
         sha = commit or _git(top, "rev-parse", "HEAD").stdout.strip() or None
         if sha:
             blobs = _blobs(top, sha, sorted({p for p, _ in wanted}))
+    # In a workspace, a member's file is named with the member in front (`api/…`):
+    # two members' files of the same name are two files of the one project.
+    pre = workspaces.prefix(top)
     made = 0
     for path, symbol in dict.fromkeys(wanted):
-        store.add_anchor(note_id, path, symbol=symbol, commit_sha=sha if path in blobs else None,
+        store.add_anchor(note_id, pre + path, symbol=symbol, commit_sha=sha if path in blobs else None,
                          blob=blobs.get(path))
         made += 1
     return made
@@ -258,17 +278,20 @@ def review(store: Store, project: str, repo_dir: Path) -> list[tuple[int, str]]:
     top = repo.toplevel(repo_dir)
     if top is None:
         return []
-    anchors = [a for a in store.project_anchors(project) if a["commit_sha"] and a["blob"]]
+    # In a workspace, only this member's anchors are this checkout's to review.
+    pre = workspaces.prefix(top)
+    anchors = [{**a, "file": a["path"][len(pre):]} for a in store.project_anchors(project)
+               if a["commit_sha"] and a["blob"] and a["path"].startswith(pre)]
     if not anchors:
         return []
     head = _git(top, "rev-parse", "HEAD").stdout.strip()
     if not head:
         return []
-    now = _blobs(top, head, sorted({a["path"] for a in anchors}))
+    now = _blobs(top, head, sorted({a["file"] for a in anchors}))
     ancestors: dict[str, bool] = {}
     flagged: dict[int, str] = {}
     for a in anchors:
-        current = now.get(a["path"])
+        current = now.get(a["file"])
         if current == a["blob"]:
             if a["commit_sha"] != head:
                 store.update_anchor(a["id"], commit_sha=head, blob=current)
@@ -294,10 +317,12 @@ def confirm(store: Store, note_id: int, repo_dir: Path | None) -> dict | None:
     if repo_dir is not None:
         top = repo.toplevel(repo_dir)
         head = _git(top, "rev-parse", "HEAD").stdout.strip() if top else ""
-        anchors = store.note_anchors([note_id])
-        blobs = _blobs(top, head, sorted({a["path"] for a in anchors})) if top and head else {}
+        pre = workspaces.prefix(top)
+        anchors = [a for a in store.note_anchors([note_id]) if a["path"].startswith(pre)]
+        blobs = _blobs(top, head, sorted({a["path"][len(pre):] for a in anchors})) if top and head else {}
         for a in anchors:
-            store.update_anchor(a["id"], commit_sha=head if a["path"] in blobs else None, blob=blobs.get(a["path"]))
+            file = a["path"][len(pre):]
+            store.update_anchor(a["id"], commit_sha=head if file in blobs else None, blob=blobs.get(file))
     return store.update_note(note_id, state="current", state_reason=None)
 
 

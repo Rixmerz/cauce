@@ -19,7 +19,7 @@ remembers what failed — across every repository on the machine.
 | **Routes every task** | Classifies the request, picks a model × effort cell, runs a one-shot worker with only the tools and MCP servers that task needs, and climbs on evidence: shallow work gets more effort, a wrong approach gets another model. |
 | **Checks without trusting the worker** | A pass needs evidence; changed files come from git; risky changes get an independent read-only verifier that measures what it reports and never reads the worker's summary. |
 | **Says why it stopped** | Every task that stops says who made the call (you, your permission settings, the environment, cauce's rules) and the command that continues it. Cost is measured and shown on every attempt, cell and task, and never stops work: turns are what bound an attempt. |
-| **Remembers** | Problems and the fixes that did or did not work, across every repository; each project's notes, by topic and anchored to code. |
+| **Remembers** | Problems and the fixes that did or did not work, across every repository; each project's notes, by topic and anchored to code. A folder of repositories worked on together (an API and its front end) is one project: one memory, one board. |
 | **Keeps the thread** | The scribe reads every turn of a session from its transcript, with no model: work the session sends gets the person's own words it needs, notes are filed every few turns, and `/cauce:relay` hands the thread to a fresh session instead of a compaction's summary. |
 | **Chains work** | Workflows cut where context changes hands: build with its tests → blind review → refute → fix → recheck, advanced by the engine, each step on the commit the one before kept. Reviewers never vote: a refuter decides what only one saw. |
 | **Learns how you work** | `/cauce:init` sends cauce's own read-only workers through every project and plugin on your machine, in parallel, and builds your team, your workflows and your memory from what they find. |
@@ -87,6 +87,7 @@ docs             haiku/medium → haiku/high → sonnet/medium
 | shallow: a bug left, a case missed, no verification | **more effort**, same model |
 | wrong approach, or two cells gave the same answer | **next model**, worktree reset |
 | timeout, missing tool | **retry** once at the same cell |
+| the network dropped (`ENOTFOUND`, a connection error) | **retry** at the same cell after 30s, 90s, 270s, from the work it kept; `network` stop only if it stays down |
 | a command the permission settings refused | **blocked** at once — a stronger model gets the same refusal |
 | hit its turn ceiling | `--verify` run by cauce; **more turns**, again while the work keeps moving (cap 200), then split |
 | the task contradicts itself or its check | **replan** — no model fixes a wrong task |
@@ -237,6 +238,27 @@ them on demand. The UI's **Notes** tab shows them by topic, with their links
 and anchors. Without Haiku a fact is still kept, under the topic its words
 point to. A fact that looks like a secret is never kept. Turn the whole thing
 off with the `notes` plugin setting or `cauce config notes off`.
+
+**Workspaces.** Work that spans two or more repositories — an API and the front
+end that shares its spec — is one project to the person who does it. Make the
+folder that holds them a workspace and cauce tracks the folder, not each
+repository: one set of notes, one board, one lane, one team, and a task that
+spans both runs in the folder, which holds every checkout in it while it runs.
+
+```bash
+cauce workspace add ~/work/shop --with ~/work/api --with ~/work/web   # links them in; made if missing
+cauce workspace list
+cauce workspace rm ~/work/shop          # new work is each repository's again; what was kept stays
+```
+
+A repository already in the folder needs no `--with`; one elsewhere is linked
+in under its own name. What each repository kept before (notes, tasks, the
+rules kept with `cauce allow`, its team) moves to the folder, and a fact both
+kept is merged into one note. A note about a file names the repository in front
+(`api/src/cart.ts`), so two files of the same name stay two. Workspaces are kept
+in your cauce home, never in a repository. A task that reaches a sibling
+repository with `--add-dir` while they are tracked apart says so, with the
+command that makes them one project.
 
 ### Spend
 
@@ -407,7 +429,9 @@ cauce run "align the client with the API" --add-dir ../api
 does. `--service 'npm run dev@4200'` (repeatable) has cauce start the command
 in the task's directory, wait until the port listens, run the attempts, and
 stop it after; a port already up is left alone, and a server that never
-listens stops the task before any money is spent.
+listens stops the task before any money is spent. A task that only mentions a
+dev server, and whose check (`--verify`) needs none (lint, tests, a build), is
+not told to start one.
 
 `cauce run` prints the task number at once, and each attempt as it starts
 and ends, on stderr; the report comes on stdout when the task stops. A
@@ -544,9 +568,12 @@ once, at its end or when a step waits on the person. A watcher sees where the
 run is, step by step.
 
 ```bash
-cauce workflow list                                   # project, user and bundled scopes; nearest wins
+cauce workflow list                                   # each one's inputs and memory; nearest scope wins
 cauce workflow run feature "add CSV export to the orders page"
-cauce workflow status 3                               # each step: state, task, cell; the branch so far
+cauce workflow run my-change --input goal="…" --input check="npm test" --verify "npm run lint && npm test"
+cauce workflow run my-change --input goal="…" --dry-run    # checks inputs and memory, queues nothing
+cauce workflow status                                 # one line per run: step, attempt, last commit, files
+cauce workflow status 3                               # each step: state, attempt, phase, commit, files
 cauce workflow new release-notes --from review-fix    # start from an existing one
 cauce workflow step add release-notes publish --prompt "..." --kind docs --after fix
 cauce workflow step set release-notes fix --verify "npm test"
@@ -567,8 +594,11 @@ Definitions are JSON files:
 
 A definition holds steps (`id`, `prompt` with `{input}` names, `needs`,
 `kind`, `verify`, `start`, `max_turns`, `memory`) and never a permission rule,
-an approval, a capability or a dollar limit. Rules and approvals are the
-person's flags on `run`; a `budget_usd` an older definition holds is read and
+an approval, a capability or a dollar limit. Rules, approvals and a run-wide
+check (`--verify`, for every step that writes and names none) are the person's
+flags on `run`. A step's `memory` topic with no note yet is said, never a
+reason not to start; a note that cannot be read is. A `budget_usd` an older
+definition holds is read and
 ignored.
 
 A workflow in the user scope is global: one definition that several projects

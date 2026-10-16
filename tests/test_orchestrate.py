@@ -663,13 +663,13 @@ def test_the_task_text_says_who_wrote_it(git_repo, store):
 def test_the_plan_says_when_a_task_needs_a_browser_or_running_servers(git_repo, store, tmp_path):
     text = "Start both dev servers (app on 4200) and open the browser at localhost:4200 to check the admin panel"
     dry = run(text, git_repo, store, Options(dry_run=True), registry={}, classifier=kind("test"))
-    notes = [r for r in dry.plan.reasons if r.startswith("this task needs")]
+    notes = [r for r in dry.plan.reasons if r.startswith("this task ")]
     assert len(notes) == 2 and "browser MCP server" in notes[0] and "--allow 'mcp__browser'" in notes[0]
-    assert "start them yourself" in notes[1]
+    assert "start them yourself" in notes[1] and "mentions 'Start both dev servers'" in notes[1]
     (tmp_path / "caps.json").write_text(json.dumps({"browser": caps.EXAMPLE["browser"]}))
     registry = caps.load(tmp_path / "caps.json")
     dry = run(text, git_repo, store, Options(dry_run=True), registry=registry, classifier=kind("explore"))
-    assert [r for r in dry.plan.reasons if r.startswith("this task needs")] == [notes[1]]
+    assert [r for r in dry.plan.reasons if r.startswith("this task ")] == [notes[1]]
     plain = run("fix the parser", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"))
     assert not any(r.startswith("this task needs") for r in plain.plan.reasons)
 
@@ -1008,6 +1008,12 @@ def test_servers_named_by_a_port_that_answers_need_no_warning():
     assert len(warned) == 1
     assert "running servers" in warned[0]
     assert orchestrate._unmet("start the dev server", {})  # no port named: still said
+    # A check that needs no server (lint, tests, a build) is not told to start one for a word in the
+    # task's text; one that talks to a server still is, with the words that set it off.
+    checks = "npm run lint && npm test && npm run build"
+    assert orchestrate._unmet("the app runs with npm run dev", {}, verify=checks) == []
+    said = orchestrate._unmet("the app runs with npm run dev", {}, verify="npx playwright test")
+    assert len(said) == 1 and "mentions 'npm run dev'" in said[0]
 
 
 @pytest.mark.parametrize("text", ["TASK: Final browser validation (READ-ONLY)", "Valida el flujo, solo lectura",
@@ -1181,3 +1187,45 @@ def test_an_attempt_keeps_the_start_and_the_end_of_long_evidence():
     long = "start " + "x" * 5000 + " the last line"
     kept = kept_evidence(long)
     assert len(kept) <= 4000 and kept.startswith("start ") and kept.endswith(" the last line") and "\n…\n" in kept
+
+
+def _dropped(summary="the session errored: API Error: Connection error."):
+    return WorkerResult(False, Failure.ENVIRONMENT, summary, transient=True, network="Connection error", cost_usd=0.1)
+
+
+def test_a_network_drop_waits_and_goes_on_from_the_work_it_kept(git_repo, store, monkeypatch):
+    from cauce import orchestrate
+
+    slept = []
+    monkeypatch.setattr(orchestrate, "_sleep", slept.append)
+    script = Script(_dropped(), ok("finished it"), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert report.status == "done" and len(script.specs) == 2
+    # The same cell again, after the first wait, and the second try sees what the first one wrote.
+    assert script.specs[1].cell == script.specs[0].cell and sum(slept) == 30
+    moved = store.last_event(report.task_id, "moved")["data"]
+    assert moved["move"] == "retry" and moved["wait_s"] == 30 and moved["network"] == "Connection error"
+
+
+def test_a_network_that_stays_down_stops_as_the_network_with_the_work_kept(git_repo, store, monkeypatch):
+    from cauce import orchestrate, stops
+    from cauce.escalate import NETWORK_WAITS
+
+    monkeypatch.setattr(orchestrate, "_sleep", lambda s: None)
+    drops = len(NETWORK_WAITS) + 1
+    script = Script(*[_dropped() for _ in range(drops)], write="app.py")
+    # More drops than the attempt ceiling allows attempts: a try after a drop is no attempt at the work.
+    report = run("fix the cart total", git_repo, store, Options(max_attempts=2), registry={}, launcher=script,
+                 classifier=kind("implement"))
+    assert len(script.specs) == drops and report.status == "blocked"
+    assert report.stop.cause == "network" and stops.WHO[report.stop.who] == "the network" and report.branch
+    assert "resume it once the network is back" in stops.what_to_do(report.stop)
+
+
+def test_a_check_that_lost_the_network_is_no_bug_in_the_work(tmp_path):
+    from cauce import orchestrate
+
+    lost = orchestrate._verified(ok(), "echo 'npm ERR! code ENOTFOUND registry.npmjs.org'; exit 1", tmp_path)
+    assert lost.failure is Failure.ENVIRONMENT and lost.network == "ENOTFOUND" and "lost the network" in lost.summary
+    red = orchestrate._verified(ok(), "echo '1 failed'; exit 1", tmp_path)
+    assert red.failure is Failure.CODE_BUG and red.network == ""

@@ -219,3 +219,29 @@ def test_an_environment_failure_after_work_ran_blocks_at_once():
     # changed files on another failure change nothing about how it climbs
     bug = dataclasses.replace(fail("sonnet/medium", Failure.CODE_BUG), changed=("a.py",))
     assert decide(IMPLEMENT, [bug]).move is Move.MORE_EFFORT
+
+
+def dropped(cell: str, changed: tuple[str, ...] = ("app.py",)) -> Attempt:
+    """The network went away under the work, after it changed files."""
+    return Attempt(Cell.parse(cell), 30, False, Failure.ENVIRONMENT, "the session errored: Connection error",
+                   changed=changed, transient=True, network="Connection error")
+
+
+def test_a_network_that_dropped_earns_the_same_cell_after_a_wait_and_stops_only_when_it_stays_down():
+    from cauce.escalate import NETWORK_WAITS
+
+    attempts = [fail("sonnet/medium", Failure.CODE_BUG), dropped("sonnet/high")]
+    waits = []
+    for _ in NETWORK_WAITS:
+        d = decide(IMPLEMENT, attempts)
+        # Work that changed files is not blocked for a network drop: it goes on from the worktree.
+        assert d.move is Move.RETRY and d.cell == Cell("sonnet", "high") and "stay in the worktree" in d.because[2]
+        waits.append(d.wait_s)
+        attempts.append(dropped("sonnet/high"))
+    assert waits == list(NETWORK_WAITS)
+    d = decide(IMPLEMENT, attempts)
+    assert d.move is Move.BLOCKED and "stayed down" in d.reason and d.wait_s == 0
+    # A drop after a try that got somewhere starts the count again.
+    again = [*attempts[:-1], fail("sonnet/high", Failure.CODE_BUG), dropped("sonnet/xhigh", changed=())]
+    d = decide(IMPLEMENT, again)
+    assert d.move is Move.RETRY and d.wait_s == NETWORK_WAITS[0] and "starts it again" in d.because[2]

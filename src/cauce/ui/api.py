@@ -437,11 +437,13 @@ def projects(store: Store, enrolled_only: bool = True) -> list[dict[str, Any]]:
     """Every repository cauce has worked in, at the top of the checkout it was last used from.
     Only enrolled ones (a `.cauce/` folder) unless asked: the plugin being on is not using cauce."""
     from cauce import repo as repo_mod
+    from cauce import workspaces
 
     out = []
     for p in store.projects():
         where = Path(p["cwd"]) if p["cwd"] else None
-        top = repo_mod.toplevel(where) if where is not None and where.is_dir() else None
+        # A workspace is shown as its folder, whichever of its repositories was used last.
+        top = (workspaces.of(where) or repo_mod.toplevel(where)) if where is not None and where.is_dir() else None
         enrolled = project.find(where) is not None if where is not None else False
         if enrolled_only and not enrolled:
             continue

@@ -344,3 +344,18 @@ def test_a_worker_s_cache_is_counted_apart_and_forks_are_off_in_it(monkeypatch):
     assert usage["cache_write_tokens"] == 900
     monkeypatch.setenv("CLAUDE_CODE_FORK_SUBAGENT", "1")
     assert launch.worker_env()["CLAUDE_CODE_FORK_SUBAGENT"] == "0"
+
+
+def test_a_network_that_dropped_is_named_wherever_it_shows(tmp_path):
+    lost = json.dumps({"is_error": True, "subtype": "success", "result": "API Error: Connection error."})
+    assert parse(proc(lost), spec(tmp_path)).network == "Connection error"
+    silent = parse(proc("", code=1, stderr="Error: getaddrinfo ENOTFOUND api.anthropic.com"), spec(tmp_path))
+    assert silent.network.startswith("getaddrinfo ENOTFOUND") and silent.transient
+    named = '{"verdict": "fail", "failure": "environment", "summary": "npm install failed", ' \
+            '"evidence": "npm ERR! code ENOTFOUND registry.npmjs.org"}'
+    worker = parse(proc(json.dumps({"result": f"```cauce-result\n{named}\n```"})), spec(tmp_path))
+    assert worker.failure is Failure.ENVIRONMENT and worker.network == "ENOTFOUND"
+    # A usage limit is no network, and a test that prints a reset is no network either.
+    limited = json.dumps({"is_error": True, "subtype": "success", "result": "Claude AI usage limit reached"})
+    assert parse(proc(limited), spec(tmp_path)).network == ""
+    assert launch.network_trouble("expected ECONNRESET to be retried") == ""

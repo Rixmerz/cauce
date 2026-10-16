@@ -75,6 +75,11 @@ def branch_for(task_id: int) -> str:
     return f"cauce/task-{task_id}"
 
 
+def last_commit(repo_dir: Path, branch: str) -> str | None:
+    """`<sha> <subject>` of a branch's newest commit, or None when it is gone."""
+    return _git(repo_dir, "log", "-1", "--format=%h %s", f"refs/heads/{branch}", "--", check=False) or None
+
+
 def kept(repo_dir: Path, task_id: int) -> bool:
     """Whether the task's branch exists: work it kept, verified or not."""
     return bool(_git(repo_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_for(task_id)}", check=False))

@@ -103,7 +103,8 @@ def listing(cwd: str | Path | None) -> list[dict[str, Any]]:
             try:
                 defn = normalize(_read(path), name)
                 entry.update(description=defn.get("description", ""), steps=[s["id"] for s in defn["steps"]],
-                             inputs=defn.get("inputs", []))
+                             inputs=defn.get("inputs", []),
+                             memory=list(dict.fromkeys(m for s in defn["steps"] for m in s.get("memory") or [])))
             except WorkflowError as exc:
                 entry.update(error=str(exc))
             seen.add(name)
@@ -281,9 +282,8 @@ def _memory_ref(ref: str | int) -> str:
 
 def memory_problems(store: Store, project_key: str | None, refs: list[str]) -> list[str]:
     """Why each memory a step names cannot be read in this project: a note of
-    another project is not this one's, and a dropped note says nothing now."""
-    from cauce import notes as notes_mod
-
+    another project is not this one's, and a dropped note says nothing now. A
+    topic with no note yet is no problem (`memory_gaps`): a new project has none."""
     out = []
     for ref in refs:
         kind, _, value = ref.partition(":")
@@ -293,12 +293,18 @@ def memory_problems(store: Store, project_key: str | None, refs: list[str]) -> l
                 out.append(f"no note #{value} in this project")
             elif note["state"] == "dropped":
                 out.append(f"note #{value} was dropped")
-        elif kind == "topic":
-            if not store.notes(project_key or "", topics=[value], states=notes_mod.LIVE, limit=1):
-                out.append(f"topic {value!r} holds no live note in this project")
-        elif store.problem(int(value)) is None:
+        elif kind == "problem" and store.problem(int(value)) is None:
             out.append(f"no problem #{value}")
     return out
+
+
+def memory_gaps(store: Store, project_key: str | None, refs: list[str]) -> list[str]:
+    """The topics a step names that hold no note in this project yet: the step
+    starts without them, and the person is told before it does."""
+    from cauce import notes as notes_mod
+
+    return [value for kind, _, value in (ref.partition(":") for ref in refs)
+            if kind == "topic" and not store.notes(project_key or "", topics=[value], states=notes_mod.LIVE, limit=1)]
 
 
 def memory_text(store: Store, project_key: str | None, refs: list[str]) -> str:
@@ -559,26 +565,47 @@ def _kick(cwd: str, key: str | None) -> bool:
     return dispatch.held(root, key or "*") or dispatch.start(Path(cwd), root, key or "*")
 
 
-def start(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] | None = None, *,
-          scope: str | None = None, session_id: str | None = None, options: Mapping[str, Any] | None = None,
-          kick: Kick | None = None) -> dict[str, Any]:
-    """A run of a saved workflow in a directory: its first steps queued, the dispatcher started.
-    `options` are the person's (`allow_tools`, `allow_approval`)."""
-    promote(locate(name, cwd, scope)[1], store)
+def example(defn: Mapping[str, Any]) -> str:
+    """The command that starts a run of `defn`, every input named."""
+    return " ".join([f"cauce workflow run {defn['name']}", *(f"--input {i}='…'" for i in defn["inputs"])])
+
+
+def prepare(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] | None = None, *,
+            scope: str | None = None) -> dict[str, Any]:
+    """What a run is checked against before it starts, all at once: the inputs it
+    takes, the memory it can read here. Raises with every problem; `gaps` are the
+    topics it would start without. Writes nothing (`--dry-run` is this alone)."""
     defn = load(name, cwd, scope)
     where = Path(cwd).resolve()
     given = {k: str(v) for k, v in (inputs or {}).items()}
+    problems = []
     missing = [i for i in defn["inputs"] if not given.get(i, "").strip()]
     if missing:
-        raise WorkflowError(f"{name} needs {', '.join(missing)}: pass --input {missing[0]}=...")
+        problems.append(f"{name} needs {', '.join(missing)}: `{example(defn)}`")
     extra = sorted(set(given) - set(defn["inputs"]))
     if extra:
-        raise WorkflowError(f"{name} takes no input {', '.join(extra)}; it takes {defn['inputs'] or 'none'}")
+        problems.append(f"{name} takes no input {', '.join(extra)}; it takes {defn['inputs'] or 'none'}")
     key = repo.key(where)
     unreadable = [f"step {s['id']!r}: {why}" for s in defn["steps"]
                   for why in memory_problems(store, key, s.get("memory") or [])]
     if unreadable:
-        raise WorkflowError("its memory cannot be read here: " + "; ".join(unreadable))
+        problems.append("its memory cannot be read here: " + "; ".join(unreadable))
+    if problems:
+        raise WorkflowError("; ".join(problems))
+    gaps = [f"step {s['id']!r}: topic {topic!r} holds no note in this project yet; the step starts without it "
+            f"(`cauce note --topic {topic} \"…\"` adds one)"
+            for s in defn["steps"] for topic in memory_gaps(store, key, s.get("memory") or [])]
+    return {"defn": defn, "where": where, "given": given, "key": key, "gaps": gaps}
+
+
+def start(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] | None = None, *,
+          scope: str | None = None, session_id: str | None = None, options: Mapping[str, Any] | None = None,
+          kick: Kick | None = None) -> dict[str, Any]:
+    """A run of a saved workflow in a directory: its first steps queued, the dispatcher started.
+    `options` are the person's (`allow_tools`, `allow_approval`, `verify`)."""
+    promote(locate(name, cwd, scope)[1], store)
+    ready = prepare(store, name, cwd, inputs, scope=scope)
+    defn, where, given, key = ready["defn"], ready["where"], ready["given"], ready["key"]
     if repo.toplevel(where) is not None:
         # Where the run started: every step's brief can say what the run changed since.
         with contextlib.suppress(isolate.IsolationError):
@@ -589,7 +616,7 @@ def start(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] | 
                            repo=key, cwd=str(where), session_id=session_id)
     queued = _queue_ready(store, run)
     (kick or _kick)(str(where), key)
-    return {**run, "queued": queued}
+    return {**run, "queued": queued, "gaps": ready["gaps"]}
 
 
 def _definition(run: Mapping[str, Any]) -> dict[str, Any]:
@@ -675,7 +702,7 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         body += ("\n\nEverything this workflow changed so far is in this checkout: "
                  f"`git diff {options['origin'][:12]}` shows it.")
     opts = {k: v for k, v in {
-        "kind": step.get("kind"), "verify": step.get("verify"), "start": step.get("start"),
+        "kind": step.get("kind"), "verify": step_check(step, options), "start": step.get("start"),
         "max_turns": step.get("max_turns"),
         "allow_tools": options.get("allow_tools") or None, "allow_approval": options.get("allow_approval") or None,
         "base": base, "step_role": step.get("role"), "surfaces": step.get("surfaces"),
@@ -699,6 +726,17 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         store.add_event(task["id"], "reported", via="workflow")
         task = store.get_task(task["id"])
     return task
+
+
+def writes(step: Mapping[str, Any]) -> bool:
+    """A step whose kind changes code: the one a run's `--verify` checks."""
+    kind = step.get("kind")
+    return bool(kind) and kind not in READ_ONLY_KINDS and step.get("ledger") in (None, "fix")
+
+
+def step_check(step: Mapping[str, Any], options: Mapping[str, Any]) -> str | None:
+    """The check a step runs: its own, else the run's `--verify` for a step that writes."""
+    return step.get("verify") or (options.get("verify") if writes(step) else None)
 
 
 def _findings_of(store: Store, task: Mapping[str, Any] | None) -> list[dict]:
@@ -843,8 +881,38 @@ def _next_round(store: Store, run: Mapping[str, Any], task: Mapping[str, Any]) -
     return [queued["id"]] if queued["status"] == "queued" else []
 
 
-def status(store: Store, run_id: int) -> dict[str, Any]:
-    """Where a run is: each step's state and task, the steps running now, and the run's own state."""
+def progress(store: Store, run: Mapping[str, Any], task: Mapping[str, Any]) -> dict[str, Any]:
+    """How far one step's task got, read from git and its events: its attempt and
+    what it is doing (running), the files it touched, the last commit it kept."""
+    from cauce import phase
+
+    out: dict[str, Any] = {}
+    started = store.last_event(task["id"], "attempt_started")
+    if started:
+        out["attempt"] = started["data"].get("seq")
+    if task["status"] == "running":
+        out["phase"] = phase.of(task["id"], out.get("attempt"))
+        tree = home() / "worktrees" / f"task-{task['id']}"
+        if tree.is_dir():
+            with contextlib.suppress(isolate.IsolationError, OSError):
+                ws = isolate.Workspace(Path(run["cwd"]), tree, isolate.branch_for(task["id"]),
+                                       isolate.head(tree, "HEAD"))
+                out["files"] = list(isolate.changed(ws))
+        return out
+    finished = (store.last_event(task["id"], "finished") or {}).get("data") or {}
+    out["files"] = list(finished.get("changed") or [])
+    branch = finished.get("branch")
+    if branch and run["cwd"] and Path(run["cwd"]).is_dir():
+        with contextlib.suppress(isolate.IsolationError, OSError):
+            line = isolate.last_commit(Path(run["cwd"]), branch)
+            if line:
+                out["commit"] = line
+    return out
+
+
+def status(store: Store, run_id: int, *, detail: bool = False) -> dict[str, Any]:
+    """Where a run is: each step's state and task, the steps running now, and the run's own state.
+    `detail` adds each started step's progress (git and events; `progress`)."""
     run = store.get_run(run_id)
     if run is None:
         raise WorkflowError(f"no workflow run #{run_id}")
@@ -860,6 +928,8 @@ def status(store: Store, run_id: int) -> dict[str, Any]:
                          cost_usd=round(task.get("cost_usd") or 0, 2), result=task.get("result"),
                          branch=(finished or {}).get("data", {}).get("branch") if state == "done" else None,
                          tries=sum(1 for t in store.run_tasks(run_id) if t["workflow_step"] == step["id"]))
+            if detail:
+                entry.update(progress(store, run, task))
         steps.append(entry)
     states = {s["state"] for s in steps}
     if run["status"] == "cancelled":

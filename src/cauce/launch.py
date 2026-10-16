@@ -56,6 +56,18 @@ _REPORT_RE = re.compile(rf"```{REPORT_FENCE}\s*\n(?P<body>.*?)\n```", re.DOTALL 
 #: A JSON decoder that takes control characters (a raw tab) inside strings.
 _DECODER = json.JSONDecoder(strict=False)
 REPORT_CHARS = 60_000
+#: A network that is down: a name that does not resolve, a host that cannot be
+#: reached. Said by a tool (npm, git, curl) or by the session's own API call.
+NETWORK_DOWN = re.compile(
+    r"\b(ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|ERR_INTERNET_DISCONNECTED|getaddrinfo\b[^\n]{0,40}|"
+    r"could not resolve host|temporary failure in name resolution|name or service not known|"
+    r"network is unreachable|npm ERR! network)", re.IGNORECASE)
+#: What else drops a session's own call to the API for a moment: a reset, a
+#: timeout, an overload. Read only where the session itself errored, never in a
+#: check's output, where a test may well print it.
+NETWORK_FLAKY = re.compile(
+    r"\b(ECONNRESET|ETIMEDOUT|socket hang up|fetch failed|connection error|connection reset|overloaded_error|"
+    r"API Error: 5\d\d|bad gateway|service unavailable|gateway timeout|request timed out)", re.IGNORECASE)
 
 DEFAULT_MAX_TURNS = 30
 #: Past this a system prompt goes in a file: one argument is capped at 128 KiB
@@ -239,6 +251,9 @@ class WorkerResult:
     #: The launch broke (a timeout, no JSON, an errored session), not the work:
     #: the one failure a retry can help.
     transient: bool = False
+    #: What says the network dropped under it (`ENOTFOUND`, a connection error):
+    #: the same cell again after a wait, its work kept, never a block at once.
+    network: str = ""
 
 
 def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path: Path | None = None,
@@ -368,7 +383,8 @@ def parse(
     if envelope is None:
         detail = (proc.stderr or "").strip()[:300]
         return WorkerResult(False, Failure.ENVIRONMENT,
-                            f"the CLI produced no JSON (exit {proc.returncode}): {detail}", transient=True, **common)
+                            f"the CLI produced no JSON (exit {proc.returncode}): {detail}", transient=True,
+                            network=network_trouble(proc.stderr or "", proc.stdout or "", flaky=True), **common)
     text = str(envelope.get("result") or "")
     if envelope.get("is_error"):
         subtype = str(envelope.get("subtype") or "")
@@ -379,7 +395,7 @@ def parse(
         # subtype "success": the reason is in the result text, never the subtype.
         why = text.strip()[:200] if subtype in ("", "success") and text.strip() else subtype or "no reason given"
         return WorkerResult(False, Failure.ENVIRONMENT, f"the session errored: {why}", raw=text, transient=True,
-                            **common)
+                            network=network_trouble(text, flaky=True), **common)
     block = result_block(text)
     if block is None:
         return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
@@ -413,7 +429,20 @@ def parse(
                                 evidence, raw=text, verdict=verdict, **common)
         return WorkerResult(True, None, summary, evidence, raw=text, verdict=verdict, **common)
     failure = _refused(_failure(block.get("failure"), verdict), denied)
-    return WorkerResult(False, failure, summary, evidence, raw=text, verdict=verdict, **common)
+    # The worker found the network down (npm could not reach its registry): the
+    # environment of a moment, not a wall to fix by hand.
+    dropped = network_trouble(summary, evidence, flaky=True) if failure is Failure.ENVIRONMENT else ""
+    return WorkerResult(False, failure, summary, evidence, raw=text, verdict=verdict, network=dropped, **common)
+
+
+def network_trouble(*texts: str, flaky: bool = False) -> str:
+    """What in `texts` says the network dropped, or "". `flaky` also reads what
+    only a session's own failed call says (a reset, an overload)."""
+    for text in texts:
+        found = NETWORK_DOWN.search(text or "") or (NETWORK_FLAKY.search(text or "") if flaky else None)
+        if found:
+            return found.group(0).strip()[:80]
+    return ""
 
 
 #: How many facts one attempt may add to the notes, and how long each may be.
@@ -657,15 +686,29 @@ def _status(directory: Path) -> dict[str, str] | None:
     return state
 
 
+def _linked_members(directory: Path) -> set[Path]:
+    """The members of the workspace `directory` is the folder of that are linked
+    into it: its checkouts as much as the ones in it. Other links are not followed."""
+    from cauce import workspaces
+
+    folder = workspaces.of(directory)
+    if folder is None or folder != directory.resolve():
+        return set()
+    entry = next((w for w in workspaces.declared() if Path(w["folder"]) == folder), None)
+    return {directory / m["name"] for m in (entry or {}).get("members") or ()}
+
+
 def nested_checkouts(directory: Path) -> list[Path]:
-    """Git checkouts below `directory`, at most `NESTED_DEPTH` levels down."""
+    """Git checkouts below `directory`, at most `NESTED_DEPTH` levels down (a
+    workspace's members linked into its folder included)."""
     found: list[Path] = []
+    linked = _linked_members(directory)
     level = [directory]
     for _ in range(NESTED_DEPTH):
         below: list[Path] = []
         for parent in level:
             try:
-                children = sorted(p for p in parent.iterdir() if p.is_dir() and not p.is_symlink())
+                children = sorted(p for p in parent.iterdir() if p.is_dir() and (not p.is_symlink() or p in linked))
             except OSError:
                 continue
             for child in children:
