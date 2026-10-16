@@ -50,6 +50,16 @@ def test_an_installed_plugin_s_server_is_read_newest_first_with_its_root_filled_
     assert cap.read_dir == str(newest / "skills" / "layout-inspection")
 
 
+def test_a_clone_plugin_install_left_half_done_is_never_read_as_the_plugin():
+    install("layout-inspector", "0.3.0", files={".mcp.json": LAYOUT})
+    clone = claude() / "plugins" / "cache" / "temp_git_1" / "layout-inspector"
+    (clone / "9.9.9").mkdir(parents=True)
+    (clone / "9.9.9" / ".mcp.json").write_text(json.dumps(LAYOUT))
+    (clone / "README.md").write_text("x")
+    assert plugins.installed()["layout-inspector"].source == "plugin 0.3.0"
+    assert [p.name for p in plugins.versions(os.environ)] == ["0.3.0"]
+
+
 def test_rastro_runs_without_its_saved_routines_from_a_plugin_or_from_path(tmp_path, monkeypatch):
     install("rastro", "0.4.0", files={".mcp.json": {"mcpServers": {"rastro": {"command": "rastro", "args": ["mcp"]}}}})
     found = plugins.installed()["rastro"]

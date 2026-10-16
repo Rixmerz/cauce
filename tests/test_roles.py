@@ -222,6 +222,10 @@ def test_skills_are_found_nearest_first_and_in_installed_plugins(tmp_path, monke
         folder = claude / "plugins" / "cache" / "market" / "layout-inspector" / version / "skills" / "layout-inspection"
         folder.mkdir(parents=True)
         (folder / "SKILL.md").write_text(f"---\ndescription: v{version}\n---\nmeasure\n")
+    clone = claude / "plugins" / "cache" / "temp_github_1" / "layout-inspector" / "9.0.0" / "skills"
+    clone = clone / "layout-inspection"
+    clone.mkdir(parents=True)
+    (clone / "SKILL.md").write_text("---\ndescription: half a clone\n---\nx\n")
     plugin = roles.find_skill("layout-inspector:layout-inspection")
     assert plugin.origin == "plugin" and plugin.description == "v1.10.0"
     personal = claude / "skills" / "mine"

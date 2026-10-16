@@ -420,15 +420,12 @@ def skill_folders(name: str, env: Mapping[str, str] | None = None) -> list[tuple
     claude = claude_dir(env)
     if ":" in name:
         plugin, skill = name.split(":", 1)
-        found = sorted(claude.glob(f"plugins/cache/*/{plugin}/*/skills/{skill}"),
-                       key=lambda p: _version_key(p.parent.parent.name), reverse=True)
-        return [("plugin", p) for p in found]
+        from cauce import plugins
+
+        return [("plugin", root / "skills" / skill) for root in plugins.versions(os.environ if env is None else env,
+                                                                                    plugin)]
     return [("user", home() / "skills" / name), ("bundled", bundled_skills_dir() / name),
             ("claude", claude / "skills" / name)]
-
-
-def _version_key(text: str) -> tuple[int, ...]:
-    return tuple(int(n) for n in re.findall(r"\d+", text)) or (0,)
 
 
 def find_skill(name: str, env: Mapping[str, str] | None = None) -> Skill | None:

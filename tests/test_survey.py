@@ -366,3 +366,21 @@ def test_the_installed_plugins_are_listed_with_their_skills(tmp_path):
     assert found["helper"]["commands"] == [{"name": "ship", "description": ""}]
     assert found["broken"]["agents"][0]["name"] == "a" and "empty" not in found
     assert survey.have()["plugins"]
+
+
+def test_files_and_the_clones_plugin_install_left_half_done_are_no_plugins(tmp_path):
+    cache = tmp_path / "claude-config" / "plugins" / "cache"
+    root = cache / "market" / "helper" / "1.0.0"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "helper"}))
+    # `/plugin` clones a marketplace whole under temp_* and leaves it there when it stops.
+    clone = cache / "temp_github_1791313198446_abcmpm"
+    (clone / "src" / "lib").mkdir(parents=True)
+    (clone / ".gitignore").write_text("node_modules\n")
+    (clone / "README.md").write_text("# a repository\n")
+    (cache / "temp_subdir_1").mkdir()
+    (cache / "stray.txt").write_text("x")
+    (cache / "market" / ".DS_Store").write_text("x")
+    (cache / "market" / "helper" / "notes.txt").write_text("x")
+    assert [p["name"] for p in survey.plugins()] == ["helper"]
+    assert survey.plugins({"CLAUDE_CONFIG_DIR": str(tmp_path / "nowhere")}) == []
