@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-10-16
+
+### Fixed
+
+- **`cauce survey` (and with it `/cauce:init` and `cauce investigate`) stopped
+  on a plugin cache with a file in it.** `/plugin` clones a marketplace whole
+  under `plugins/cache/temp_*` before it moves it in place, and a clone it
+  never finished stays there: a repository's files, a `.gitignore` among them,
+  at the level cauce reads plugins from. Listing the installed plugins opened
+  that file as a folder and the survey exited before it read any session. The
+  plugin cache is now read in one place (`plugins.versions`): only folders, at
+  every level, and never a `temp_*` clone, for the plugin list, the neighbours
+  cauce hands a worker and the skills a role names as `plugin:skill`. A clone
+  of a neighbour left half done is no longer read as that neighbour.
+
 ## [0.16.0] - 2026-10-15
 
 ### Added

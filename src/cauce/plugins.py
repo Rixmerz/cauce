@@ -23,6 +23,7 @@ An entry of the same name in the person's `capabilities.json` wins, and
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -93,6 +94,24 @@ def _version(text: str) -> tuple[int, ...]:
     return tuple(int(n) for n in re.findall(r"\d+", text)[:3]) or (0,)
 
 
+#: `/plugin` clones a marketplace under one of these names before it moves it in
+#: place; one it never finished is a whole repository's files, no marketplace.
+UNFINISHED = re.compile(r"^temp_")
+
+
+def versions(env: Mapping[str, str], plugin: str = "*") -> list[Path]:
+    """Every installed version folder (`plugins/cache/<marketplace>/<plugin>/<version>`)
+    of a plugin, or of all of them, newest first. A file at any of those levels, and
+    a half-done clone `/plugin` left in the cache, is no plugin."""
+    found = []
+    for path in claude_dir(env).glob(f"plugins/cache/*/{plugin}/*"):
+        with contextlib.suppress(OSError):
+            if (path.is_dir() and path.parent.is_dir() and path.parent.parent.is_dir()
+                    and not UNFINISHED.match(path.parent.parent.name)):
+                found.append(path)
+    return sorted(found, key=lambda p: (_version(p.name), str(p)), reverse=True)
+
+
 def _servers_of(root: Path) -> dict[str, Any]:
     """A plugin's `mcpServers`: inline in its manifest, a file the manifest names,
     or its `.mcp.json`."""
@@ -156,9 +175,7 @@ def guarded(server: Mapping[str, Any], policy: str) -> dict[str, Any]:
 def find(neighbour: Neighbour, env: Mapping[str, str]) -> Found | None:
     """An installed plugin's own server entry, newest version first, then the
     program on PATH; None when neither is there."""
-    roots = sorted(claude_dir(env).glob(f"plugins/cache/*/{neighbour.plugin}/*"),
-                   key=lambda p: _version(p.name), reverse=True)
-    for root in roots:
+    for root in versions(env, neighbour.plugin):
         server = _servers_of(root).get(neighbour.server)
         if isinstance(server, dict) and isinstance(server.get("command"), str):
             server = _fill(server, root)

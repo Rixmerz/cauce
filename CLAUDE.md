@@ -16,7 +16,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/launch.py` | one attempt as `claude -p`: argv, the result contract, parsing, git-read changes |
 | `src/cauce/capabilities.py` | which MCP servers a worker gets, from the user-level registry |
 | `src/cauce/mcp_guard.py` | a JSON-RPC guard between a worker and an MCP server: the calls a policy refuses never reach the server; stdlib, imports nothing of cauce |
-| `src/cauce/plugins.py` | neighbours the person installed as Claude Code plugins (layout-inspector, rastro), read from the plugin cache or PATH and handed over as capabilities with their skill |
+| `src/cauce/plugins.py` | neighbours the person installed as Claude Code plugins (layout-inspector, rastro), read from the plugin cache or PATH and handed over as capabilities with their skill; `versions` is the one reader of the cache (folders only, never a `temp_*` clone `/plugin` left half done) |
 | `src/cauce/roles.py` | what a worker is: role files (bundled `roles/`, the person's in their cauce home), `extends` and `match`, skills found by name and put into the worker's system prompt |
 | `src/cauce/teams.py` | the person's teams of roles and which one each project uses (kept in their cauce home); a project's team bounds the kinds it is classified into; `team_cli.py` is `cauce roles …` and `cauce team …` |
 | `src/cauce/survey.py` | what this machine says about how the person works (`cauce survey`): every Claude Code session it kept (requests, shapes, friction, errors and the call that passed after them) and each repository's commit history; read only, no model |

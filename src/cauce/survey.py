@@ -32,6 +32,7 @@ in the home directory or `/`, which are never a project.
 from __future__ import annotations
 
 import json
+import os
 import re
 import statistics
 import subprocess
@@ -42,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from cauce import classify, compact, repo, roles, teams, usage
+from cauce import plugins as cauce_plugins
 from cauce.notes import _PRIVATE
 from cauce.store import Store, home
 from cauce.text import fold
@@ -868,14 +870,11 @@ def plugins(env: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
     """The Claude Code plugins the person installed, newest version of each: what it
     says it is, and its skills, commands and agents by name and description. Where a
     plugin's own workflow lives, for `/cauce:init` to bring into cauce's terms."""
-    cache = roles.claude_dir(env) / "plugins" / "cache"
+    newest: dict[Path, Path] = {}
+    for root in cauce_plugins.versions(os.environ if env is None else env):
+        newest.setdefault(root.parent, root)
     out = []
-    for folder in sorted(cache.glob("*/*")) if cache.is_dir() else []:
-        versions = sorted((v for v in folder.iterdir() if v.is_dir()), key=lambda v: roles._version_key(v.name),
-                          reverse=True)
-        if not versions:
-            continue
-        root = versions[0]
+    for folder, root in sorted(newest.items()):
         try:
             manifest = json.loads((root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
