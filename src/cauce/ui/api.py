@@ -341,6 +341,13 @@ def spend(store: Store, days: int = 7) -> dict[str, Any]:
     return report
 
 
+def analysis_view(store: Store, days: int = 30, repo_key: str | None = None) -> dict[str, Any]:
+    """Where cauce's time and money go (`cauce.analysis`): one project, or every one."""
+    from cauce import analysis
+
+    return analysis.compute(store, days=days, repo=repo_key or None, keep_runs=12)
+
+
 def routing(store: Store, days: int = 0) -> list[dict[str, Any]]:
     """`days` keeps the last few days only (0: everything): a rule fixed last
     week should not keep showing as a rung that fails."""

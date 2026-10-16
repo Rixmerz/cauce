@@ -22,8 +22,10 @@ import shlex
 import socket
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from cauce import allow as allow_rules
@@ -498,10 +500,14 @@ def run(
     """Run a task. `history` is a resumed task's earlier attempts: shown to its
     workers, never counted by the escalation, which starts over."""
     options = options or Options()
+    # Wall time of the run and of its phases, kept on its events: where a task's
+    # time goes (waiting, setting up, working, checking) is evidence for the router.
+    clock = time.monotonic()
     registry = registry if registry is not None else caps.load_all(home() / "capabilities.json")
     launcher = launcher or launch.run
     repo_dir = repo_dir.resolve()
     the_plan = plan(text, repo_dir, store, options, registry, classifier=classifier, adapters=adapters)
+    plan_s = time.monotonic() - clock
     if options.dry_run:
         return Report(None, "dry run", the_plan)
     with contextlib.suppress(OSError, project.NotAProject):
@@ -513,10 +519,13 @@ def run(
         repo=key, cwd=str(repo_dir), kind=the_plan.kind, complexity=c.complexity, class_source=c.source,
         class_reason=c.reason, start_cell=the_plan.start.label, pinned=int(options.start is not None),
     )
+    queued_s = None
     if task_id is not None:
         # A queued or resumed task: it keeps its id, its messages, its cost so
         # far and its place in the lane's history.
         before = store.get_task(task_id)
+        if before["status"] == "queued" and not store.last_event(task_id, "finished"):
+            queued_s = _seconds_since(before["created_at"])
         store.update_task(task_id, status="running", source="cauce",
                           cost_usd=float(before["cost_usd"] or 0) + c.cost_usd, **fields)
         task = store.get_task(task_id)
@@ -546,7 +555,8 @@ def run(
                     role=the_plan.role.name if the_plan.role else None, team=the_plan.team,
                     risk=the_plan.risk.data(),
                     ladder=[x.label for x in the_plan.ladder], reasons=the_plan.reasons,
-                    neighbours=[st.line() for st in the_plan.neighbours])
+                    neighbours=[st.line() for st in the_plan.neighbours], plan_s=round(plan_s, 2),
+                    queued_s=queued_s)
 
     workspace = None
     writes = the_plan.kind not in READ_ONLY_KINDS
@@ -568,6 +578,10 @@ def run(
             context += _fill_worktree(store, task["id"], workspace, text, options.carry, say)
     workdir = workspace.path if workspace else repo_dir
     context += how_to_run(workdir, (*options.allow_tools, *grants.granted(key)))
+    # The thread of the session that sent it, as the scribe kept it: the worker
+    # does not start from the task's text alone.
+    from_session, got = _session_context(task, text)
+    context += from_session
     launch_dir = options.launch_dir.resolve() if options.launch_dir else workdir
 
     # Strict, as the prompt hook: a task's text shares a word or two with
@@ -577,6 +591,8 @@ def run(
     if dead:
         # What the workers are shown, kept as shown: the memory grows after the run.
         store.add_event(task["id"], "dead_ends", shown=dead)
+    store.add_event(task["id"], "briefed", session=got, dead_ends=len(dead),
+                    context_chars=sum(len(line) for line in context))
     # The runtime the project declares goes first on the worker's PATH, and on its
     # check's: a worker given the wrong Node hunts for another and is refused each one.
     run_env = runtime.env_for(workdir)
@@ -601,14 +617,18 @@ def run(
     # person's files. A run in a worktree has its own.
     in_place = workspace is None and ((writes and not declared_read_only) or bool(options.verify))
     held = contextlib.ExitStack()
+    timing = {"hold_s": 0.0, "services_s": 0.0, "worker_s": 0.0, "check_s": 0.0, "verifier_s": 0.0}
     try:
+        mark = time.monotonic()
         if in_place:
             for place in isolate.held_by(repo_dir, repo.toplevel(repo_dir)):
                 held.enter_context(isolate.in_place(
                     home(), place, task["id"], waiting=lambda who: _waits(store, task["id"], who, say),
                     check=lambda: _check_cancel(store, task["id"])))
+        timing["hold_s"] = time.monotonic() - mark
         ready = True
         if options.services:
+            mark = time.monotonic()
             try:
                 up = held.enter_context(services_mod.running(
                     [services_mod.parse(s) for s in options.services], workdir,
@@ -618,6 +638,7 @@ def run(
                 report.stop = stops.Stop("environment", str(exc))
                 report.status, report.summary, ready = "blocked", str(exc), False
             else:
+                timing["services_s"] = time.monotonic() - mark
                 say(f"cauce: #{task['id']} servers up: " + "; ".join(up))
                 context.append("Servers up for this task, started and stopped by cauce (do not start or stop them "
                                "yourself): " + "; ".join(up))
@@ -681,17 +702,22 @@ def run(
             store.add_event(task["id"], "attempt_started", seq=nth, cell=cell.label,
                             model=spec.model_id or cell.model,
                             max_turns=turns, budget_usd=spec.max_budget_usd, capabilities=list(selection.names),
+                            since_start_s=round(time.monotonic() - clock, 2), brief_chars=len(spec.prompt),
                             **({"role": the_plan.role.name, "team": the_plan.team,
                                 "skills": list(briefing.skills)} if briefing else {}))
+            mark = time.monotonic()
             result = launcher(spec)
+            worker_s = time.monotonic() - mark
             # Out of turns (or time) before its own check: whatever the check finds next,
             # the work had no room to finish, and room is what the next attempt gets.
             outgrew = result.failure is Failure.TURNS_EXHAUSTED
+            mark = time.monotonic()
             if result.passed and options.verify:
                 result = _verified(result, options.verify, workdir)
             elif _settles(result, options.verify) and (
                     isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
                 result = _settled(result, options.verify, workdir)
+            check_s = time.monotonic() - mark
             strayed = surfaces_mod.outside(options.surfaces, result.changed_paths)
             if strayed:
                 if workspace is not None:
@@ -706,6 +732,7 @@ def run(
                 store.add_event(task["id"], "outside_surfaces", seq=nth, paths=strayed[:50],
                                 surfaces=list(options.surfaces), undone=workspace is not None)
             review_stop = None
+            mark = time.monotonic()
             if result.passed and verifying:
                 so_far = list(isolate.changed(workspace)) if workspace else sorted({*changed, *result.changed_paths})
                 risk_mod.of_change(the_plan.risk, so_far if (workspace or base_commit) else None)
@@ -715,6 +742,10 @@ def run(
                         base=base_commit, changed=so_far, risk=the_plan.risk, ledger=ledger,
                         corrections=corrections, launcher=launcher, store=store, task_id=task["id"], nth=nth,
                         say=say, outgrew=outgrew)
+            verifier_s = time.monotonic() - mark
+            timing["worker_s"] += worker_s
+            timing["check_s"] += check_s
+            timing["verifier_s"] += verifier_s
             if result.passed and deciding:
                 settled = ledger_mod.outcome(deciding, result.verdicts)
                 store.add_event(task["id"], "ledger_decided", seq=nth, **settled.data())
@@ -739,6 +770,9 @@ def run(
                             allow=list(result.allow), served_model=result.served_model,
                             permission_mode=result.permission_mode,
                             changed=list(result.changed_paths)[:50],
+                            wall_s=round(worker_s, 2), duration_s=round(result.duration_s, 2),
+                            check_s=round(check_s, 2), verifier_s=round(verifier_s, 2),
+                            input_tokens=result.input_tokens, output_tokens=result.output_tokens,
                             **({"refused_but_written": list(result.overcome)} if result.overcome else {}))
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
@@ -858,6 +892,8 @@ def run(
                         changed=report.changed[:50], stop=report.stop.data() if report.stop else None,
                         risk=the_plan.risk.data(),
                         findings=list(attempts[-1].findings)[:30] if status == "done" and attempts else [],
+                        wall_s=round(time.monotonic() - clock, 2), attempts=len(attempts),
+                        **{k: round(v, 2) for k, v in timing.items()},
                         **({"ledger": settled.data()} if settled else {}))
         store.add_message(task["id"], "worker", report.text())
         if task.get("workflow_run"):
@@ -1015,6 +1051,36 @@ def how_to_run(workdir: Path, rules: Sequence[str]) -> list[str]:
 MAX_CORRECTIONS = 2
 
 
+def _seconds_since(stamp: str | None) -> float | None:
+    """Seconds from a stored timestamp to now; None when it cannot be read."""
+    try:
+        then = datetime.fromisoformat(str(stamp))
+    except ValueError:
+        return None
+    return round(max((datetime.now(UTC) - then).total_seconds(), 0.0), 1)
+
+
+def _session_context(task: Mapping[str, object], text: str) -> tuple[list[str], dict[str, int] | None]:
+    """The part of the sending session's thread this task needs, as the scribe kept
+    it, read up to now (the turn that sent it is not over). An investigator gets
+    none: its brief is the survey. Reading it never fails the run."""
+    session_id = str(task.get("session_id") or "")
+    if not session_id or '"investigation"' in str(task.get("options") or "") or not config.enabled(
+            "scribe", os.environ):
+        return [], None
+    from cauce import scribe
+
+    try:
+        state = scribe.load(home(), session_id)
+        transcript = (state or {}).get("transcript") or scribe.find_transcript(session_id)
+        if transcript:
+            state = scribe.update(home(), session_id, transcript) or state
+        lines, got = scribe.context_for(state, text)
+    except (OSError, ValueError, KeyError, TypeError):
+        return [], None
+    return lines, (got if lines else None)
+
+
 def _twins(store: Store, task: Mapping[str, object], repo_dir: Path) -> list[int]:
     """Earlier tasks here with the same text that stopped and keep their work on a branch."""
     if repo.toplevel(repo_dir) is None:
@@ -1126,7 +1192,9 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
         allowed_tools=tuple(r for r in spec.allowed_tools
                             if not r.startswith("mcp__") or r.removeprefix("mcp__") in measuring))
     say(f"cauce: #{task_id} attempt {nth} passed; risk {risk.tier}: an independent check at {vcell.label}")
+    mark = time.monotonic()
     verdict = launcher(check)
+    wall_s = time.monotonic() - mark
     cost = result.cost_usd + verdict.cost_usd
     shown = findings_mod.read({"findings": list(verdict.findings)})
     blockers = findings_mod.blocking(shown)
@@ -1143,7 +1211,8 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     store.add_event(task_id, "verified", seq=nth, cell=vcell.label, risk=risk.data(), verdict=verdict.verdict,
                     passed=not blockers and decided, findings=list(shown)[:20], blocking=len(blockers),
                     carried=len(carried), cost_usd=verdict.cost_usd, summary=verdict.summary[:500],
-                    round=corrections)
+                    round=corrections, wall_s=round(wall_s, 2), duration_s=round(verdict.duration_s, 2),
+                    turns=verdict.turns)
     if not decided:
         say(f"cauce: #{task_id} the independent check could not decide; the pass stands")
         return dataclasses.replace(result, cost_usd=cost, evidence=result.evidence + "\n\n[independent check "

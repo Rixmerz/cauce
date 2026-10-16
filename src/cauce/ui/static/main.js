@@ -9,15 +9,19 @@ import { renderHabits } from "./habits.js";
 import { renderWorkflows } from "./workflows.js";
 import { renderMap } from "./map.js";
 import { renderTeams } from "./teams.js";
+import { renderAnalysis } from "./analysis.js";
 import { openTask } from "./task.js";
 import { h, repoName } from "./util.js";
 
 const views = { board: renderBoard, sessions: renderSessions, spend: renderSpend, routing: renderRouting,
                 notes: renderNotes, memory: renderMemory, habits: renderHabits, workflows: renderWorkflows,
-                map: renderMap, teams: renderTeams };
+                map: renderMap, teams: renderTeams, analysis: renderAnalysis };
 // The board, the sessions, the notes, the workflows and the map are always one project's:
 // never every card at once.
 const scoped = new Set(["board", "sessions", "notes", "workflows", "map"]);
+// The analysis reads one project or every one: the picker chooses which, but it
+// is not redrawn on every event (it reads every run of the period).
+const pickable = new Set([...scoped, "analysis"]);
 const main = document.getElementById("view");
 const picker = document.getElementById("project");
 let current = "board";
@@ -50,7 +54,7 @@ export async function show(name = current) {
   for (const tab of document.querySelectorAll(".tabs button")) {
     tab.setAttribute("aria-selected", String(tab.dataset.view === name));
   }
-  picker.disabled = !scoped.has(name);
+  picker.disabled = !pickable.has(name);
   if (scoped.has(name) && !project) {
     main.replaceChildren(h("div", { class: "empty" },
       "No project is enrolled yet. A project enrolls when work is queued or run in it through cauce, or with cauce init; it gets a .cauce/ folder."));

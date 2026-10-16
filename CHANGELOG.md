@@ -2,6 +2,55 @@
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-16
+
+### Added
+
+- **The scribe.** A worker started from the task's text alone, and a session
+  that never compacted (to keep its thread) fed its project's notes only when
+  it ended. At the end of every turn the Stop hook now reads what the session's
+  transcript gained since the last time and keeps the facts of the session in
+  the cauce home: the person's requests verbatim and which of them corrected
+  the agent, the files it wrote, the calls that failed and the call that passed
+  after them. No model reads or writes it and the session's context is never
+  touched: it can leave things out to fit, never paraphrase. A failure of the
+  scribe is noted and never costs the turn its endings.
+- **Work a session sends gets its thread.** A task's brief carries the part of
+  the sending session's thread it needs: its newest requests, the older ones
+  that share the task's words, the files it wrote and the calls still failing
+  there, verbatim and marked as context, not instructions. It is read up to the
+  moment the task starts, so the turn that sent it is in. An investigation gets
+  none. A `briefed` event records what went in.
+- **Notes as the session goes.** The project's notes are filed every few turns
+  (8 requests, or about 16k characters of conversation) by the detached Haiku
+  that used to wait for a compaction or the session's end.
+- **`cauce relay` and `/cauce:relay`**, the alternative to compacting: the next
+  session that starts in the same place (`/clear`, or a new one) begins from the
+  old session's thread — the requests in the person's words, the commits made,
+  the files written, the calls still failing, the cauce tasks still open — and
+  that open work, and the endings the old session never heard, report to the
+  new session from then on. Taken once, never by a resume, dropped after a day.
+- **Every run's phases are timed**, on its events: the wait in its lane, the
+  planning, the setting up (worktree, waiting for the checkout, servers), each
+  attempt's wall time, tokens and turns, cauce's `--verify`, the independent
+  check (now with its duration and turns), and the run's wall time.
+- **`cauce stats`** (`--repo`, `--days`, `--json`, `--runs [--csv]`) and the UI's
+  **Analysis** screen: pass rate and first-try rate, time and cost per pass, by
+  kind, cell, workflow and day; where the time went, phase by phase; how runs
+  stopped and moved; a session's own turns and its subagents' delegations; runs
+  with the session's thread in their brief beside runs without it; the slowest
+  and costliest runs, and a JSON export. Read only, no model; a run recorded
+  before the phases were timed counts by its timestamps and is left out of the
+  breakdown rather than guessed.
+- The `scribe` setting (plugin option, `cauce config scribe off`).
+
+### Changed
+
+- The orchestration guide says what a worker now sees of the session (the
+  person's own words that relate to its task, never the session's reasoning),
+  and offers the relay when a person wants a fresh start.
+- Scribe states of sessions not seen for 30 days are forgotten at session start.
+
 ## [0.16.1] - 2026-10-16
 
 ### Fixed

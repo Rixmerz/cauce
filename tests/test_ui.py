@@ -209,7 +209,8 @@ def test_pages_and_reads(ui):
     res, data = call(ui, "GET", "/static/board.js")
     assert res.status == 200 and res.getheader("Content-Type").startswith("text/javascript")
     for path in ("/api/board?repo=r", "/api/sessions?repo=r", "/api/projects", "/api/spend?days=3",
-                 "/api/routing", "/api/memory?q=x", "/api/habits", "/api/events?after=0", "/static/sessions.js"):
+                 "/api/routing", "/api/memory?q=x", "/api/habits", "/api/events?after=0", "/static/sessions.js",
+                 "/api/analysis", "/api/analysis?days=0&repo=r", "/static/analysis.js"):
         res, data = call(ui, "GET", path)
         assert res.status == 200, path
         if path.startswith("/api/"):

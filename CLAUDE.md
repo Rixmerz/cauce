@@ -33,7 +33,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `prune`, `plugins`, `verifier`, `engram`, `engram_write`, all on/off), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `engram`, `engram_write`, all on/off), copied from plugin options by SessionStart |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
 | `src/cauce/habits.py` | mining sequences per repository (and the ones several repositories share), recipes for the brief, and approval-gated habit hooks |
@@ -51,6 +51,8 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/naming.py` | Haiku names a session, started detached by the Stop hook; a name a person wrote is never replaced |
 | `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step; `svg.js` draws the workflow graphs and the project map node by node |
 | `src/cauce/compact.py` | the facts of a session (requests verbatim, failed calls, changed files), written before a compaction and put back after it; no model call |
+| `src/cauce/scribe.py` | the scribe: at every turn's end, what a session's transcript gained (requests verbatim, corrections, files written, failed calls and the one that passed after), kept in the cauce home; the thread a task the session sent gets in its brief, when the notes are due, and the relay to a fresh session; no model call |
+| `src/cauce/analysis.py` | where cauce's time and money go (`cauce stats`, the UI's Analysis): runs from `planned` to `finished`, their timed phases, attempts by cell, the session's thread in briefs, a session's own turns; read only, no model |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
 | `src/cauce/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; `workflow_cli.py` is `cauce workflow …` |
 | `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
@@ -60,6 +62,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `commands/habits.md` | review the habit candidates for this repository and install the ones the person picks |
 | `commands/workflow.md` | make, change, copy, run and watch workflows |
 | `commands/watch.md` | a session that watches every other one: `overview`, the endings as they happen, `SendMessage` to send work |
+| `commands/relay.md` | `/cauce:relay`: hand the session's thread to the next session started in the same place (`/clear`), instead of compacting |
 | `bin/cauce` | the launcher every hook and command goes through |
 | `src/cauce/interpreter.py` | which Python runs cauce; imported before the version check, so it must run on any python3 |
 | `src/cauce/link.py` | `cauce link`: a shim on a terminal's PATH that survives plugin updates; `forward_to`, which sends a typed command from an old install to the newest (never a hook, never a checkout) |
@@ -300,6 +303,18 @@ yields the default kind, not a guess.
 - A compaction digest is read from the transcript and git, never written by
   a model: it may leave things out to fit, never paraphrase. A person's
   words are kept as typed; harness text (commands, reminders) is not theirs.
+- The scribe reads a session's transcript, never its context, and never with a
+  model: the same rules as a compaction digest, kept as the session goes, in the
+  cauce home, secrets masked. Its failure never costs a turn its endings. A
+  task a session sent gets the part of the thread it needs in its brief,
+  verbatim and marked as context, never instructions (the task's text is what
+  to do); an investigation gets none, and reading it never fails a run.
+- A relay is the person's (`cauce relay`, `/cauce:relay`): taken once, by the
+  next session that starts (or is cleared) in the same place, never by a
+  resume, and dropped after `scribe.RELAY_HOURS`. The work the old session
+  sent that is open, waits on the person or ended unheard reports to the new
+  session from then on, its active workflow runs too; the old session is left
+  as it was.
 - Habits are per project: mined from one repository's events and gated on
   them alone; a habit of other repositories is offered apart, never counted as
   this one's. An event's repository is read from its task or session, never
@@ -308,7 +323,8 @@ yields the default kind, not a guess.
   run by a person.
 - Problems and fixes are global; notes belong to one project and are never
   read from another. A note is written by a passing worker (`learned`), by
-  Haiku before a session compacts or ends, or by a person — never by a failed
+  Haiku from a session's conversation (every few turns, when the scribe finds
+  them due, before a compaction, at its end), or by a person — never by a failed
   attempt, whose facts no pass confirmed. Haiku files under topics that
   exist and never invents a link; without Haiku a fact is kept by its words.
   A fact that looks like a secret is never kept.
@@ -378,6 +394,11 @@ yields the default kind, not a guess.
   the team covers, the nearest kind of the same nature (reading or writing)
   when it would be another. A tag or `--kind` is narrowed the same way and
   says so. A team left with no role serves as the bundled one, and says so.
+- The analysis is read, never written, and never by a model. A run's phases
+  are kept on its events as it runs (`plan_s`, `queued_s`, `since_start_s`,
+  each attempt's `wall_s`, `check_s`, `verifier_s`, the run's `wall_s`); a phase
+  a run never measured is left out of the breakdown, never guessed. The session
+  thread comparison is observed, never presented as a trial.
 - Insights and the survey are read, never written, and never by a model: one
   project's tasks, habits, files, sessions and commits at a time; what crosses
   projects is counted (a session shape and the projects that show it), never

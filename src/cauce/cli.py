@@ -973,6 +973,62 @@ def cmd_survey(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stats(args: argparse.Namespace) -> int:
+    """Where cauce's time and money go, read from the store: no model."""
+    from cauce import analysis
+
+    key = repo.key(Path(args.repo).resolve()) if args.repo else None
+    store = Store.open()
+    try:
+        report = analysis.compute(store, days=args.days, repo=key, keep_runs=None if args.runs else 20)
+    finally:
+        store.close()
+    if args.runs:
+        sys.stdout.write(analysis.runs_csv(report["runs"]) if args.csv else analysis.as_json(report["runs"]) + "\n")
+    else:
+        print(analysis.as_json(report) if args.json else analysis.text(report))
+    return 0
+
+
+def cmd_relay(args: argparse.Namespace) -> int:
+    """Hand a session's thread to the next session that starts in its place."""
+    from cauce import compact, scribe
+    from cauce.store import OPEN_FOR_A_RELAY
+
+    where = Path(os.getcwd()).resolve()
+    store = Store.open()
+    try:
+        session = args.session or os.environ.get("CAUCE_SESSION_ID")
+        if not session and (key := repo.key(where)):
+            found = store.sessions(repos=[key], limit=1)
+            session = found[0]["id"] if found else None
+        if not session:
+            print("cauce: no session to relay from here: run it from the session itself (/cauce:relay), or pass "
+                  "--session", file=sys.stderr)
+            return 1
+        state = scribe.load(home(), session)
+        transcript = (state or {}).get("transcript") or scribe.find_transcript(session)
+        if transcript:
+            state = scribe.update(home(), session, transcript) or state
+        if not state or not state.get("requests"):
+            print(f"cauce: session {session} has no thread to hand over yet", file=sys.stderr)
+            return 1
+        place = state.get("cwd") or str(where)
+        scribe.mark_relay(home(), session, place)
+        tasks = store.list_tasks(session_id=session, status=OPEN_FOR_A_RELAY, source=("cauce", "queue"), limit=15)
+    finally:
+        store.close()
+    print(f"relay ready: the next session that starts in {place} continues {session} with its thread "
+          f"({len(state['requests'])} request(s) verbatim, {len(state['written'])} file(s) written, {len(tasks)} "
+          "open cauce task(s), which will report there). Type /clear, or open a new session there, to start it; "
+          "this session stays as it is.")
+    if args.show:
+        print()
+        print(scribe.relay_text(state, tasks=tasks, changed=compact._changed(Path(place)),
+                                commits=scribe.commits_since(place, state.get("started"))))
+    return 0
+
+
 def cmd_name_session(args: argparse.Namespace) -> int:
     """Run detached by the Stop hook: Haiku names one session."""
     from cauce import dispatch, naming
@@ -1551,6 +1607,19 @@ def build_parser() -> argparse.ArgumentParser:
                                                        "the chains of fixes and reverts, cauce's stops")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_survey)
+    p = sub.add_parser("stats", help="where cauce's time and money go: runs by kind and cell, their phases, the "
+                       "session's thread in briefs, and the session's own turns")
+    p.add_argument("--days", type=int, default=30, help="the last N days (0: everything)")
+    p.add_argument("--repo", help="only this repository (default: every one)")
+    p.add_argument("--json", action="store_true", help="everything, as JSON")
+    p.add_argument("--runs", action="store_true", help="one record per run instead of the summary (JSON)")
+    p.add_argument("--csv", action="store_true", help="with --runs: CSV, for a spreadsheet")
+    p.set_defaults(func=cmd_stats)
+    p = sub.add_parser("relay", help="hand this session's thread to a fresh one: the next session that starts "
+                       "here (after /clear) begins from its requests verbatim, what landed and what is open")
+    p.add_argument("--session", help="the session to hand over (default: the one this runs in)")
+    p.add_argument("--show", action="store_true", help="also print what the fresh session will be told")
+    p.set_defaults(func=cmd_relay)
     p = sub.add_parser("index-livespec", help=argparse.SUPPRESS)
     p.add_argument("dir")
     p.set_defaults(func=cmd_index_livespec)

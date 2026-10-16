@@ -32,6 +32,10 @@ DEFAULTS: dict[str, Any] = {
     # Each project keeps notes of what it knows, by topic: workers and sessions
     # add to them (Haiku files them), workers and sessions read them back.
     "notes": True,
+    # The scribe keeps each session's facts as it goes (requests verbatim, files,
+    # failed calls), from its transcript and without a model: work the session sends
+    # gets its thread, and the notes are filed every few turns. See `cauce.scribe`.
+    "scribe": True,
     # A branch cauce kept is deleted once its work landed: merged, squash-merged,
     # or holding only tool artifacts. Its tip stays on the task's events.
     "prune": True,
