@@ -71,7 +71,7 @@ Request: $ARGUMENTS
    not pass results along yourself: that is what the run does without you.
    You hear of the run once, when it ends or when a step waits on the person.
    `cauce workflow status <run>` shows where it is. A step that stopped is
-   continued with `cauce resume <task>` or `cauce workflow retry <run> <step>`,
+   continued with `cauce resume <task> --unattended` or `cauce workflow retry <run> <step>`,
    and the run goes on from there.
 
    When no saved workflow fits and the same shape will come back, make one

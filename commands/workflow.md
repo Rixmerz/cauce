@@ -147,9 +147,10 @@ one step in depth.
 When a step stopped:
 
 - **Read why:** `cauce show <task>`.
-- **Can go on:** `cauce resume <task>`, or `cauce workflow retry <run> <step>`
-  to queue it again as a new task. Either way the run goes on by itself once
-  the step passes.
+- **Can go on:** `cauce resume <task> --unattended`, or `cauce workflow retry
+  <run> <step>` to queue it again as a new task. Either way the run goes on by
+  itself once the step passes. Leave `--unattended` off only for a resume that
+  carries what the person just granted (`--allow`, `--allow-approval`, `--keep`).
 - **Should stop:** `cauce workflow cancel <run>`. No further step starts.
 
 Some things only the person may clear: a refused command, an approval, a
