@@ -4,7 +4,7 @@ A task that writes code runs in its own worktree on its own branch. The user's
 checkout is never touched while the attempts run, and a task that passed leaves
 exactly one branch to merge.
 
-A task that stopped for a person — blocked on a refused command, a spent budget,
+A task that stopped for a person — blocked on a refused command,
 a cell that needs approval — keeps its branch too, marked unverified: the work
 its workers did is real, and throwing it away is what made "I created the
 routes" read as a lie when the files were nowhere. `cauce resume` continues on

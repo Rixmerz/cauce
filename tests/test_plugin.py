@@ -50,3 +50,12 @@ def test_every_setting_is_an_option_on_the_plugin_s_settings_screen():
     assert set(config.DEFAULTS) <= set(plugin["userConfig"])
     for key, default in config.DEFAULTS.items():
         assert plugin["userConfig"][key]["default"] is default
+
+
+def test_no_guidance_tells_a_session_to_pass_a_budget():
+    """Cost is measured, never a brake: guidance that runs in other people's
+    repositories never hands a session a budget flag that no command takes."""
+    root = Path(__file__).resolve().parent.parent
+    texts = [*root.glob("commands/*.md"), *root.glob("skills/*/SKILL.md"), *root.glob("hooks/*.tsx"),
+             *root.glob("src/cauce/roles*/*.md")]
+    assert texts and not [p.name for p in texts if "--budget" in p.read_text(encoding="utf-8")]

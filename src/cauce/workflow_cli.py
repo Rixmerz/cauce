@@ -22,7 +22,7 @@ from cauce.store import Store
 NOW_HELP = ("write the change at once even while runs use the workflow (they go on with the copy they started "
             "with); without it the change waits for them")
 STEP_FLAGS = (("title", str), ("prompt", str), ("kind", str), ("role", str), ("verify", str), ("start", str),
-              ("budget_usd", float), ("max_turns", int), ("ledger", str))
+              ("max_turns", int), ("ledger", str))
 
 
 def _cwd(args: argparse.Namespace) -> Path:
@@ -65,7 +65,7 @@ def _print_definition(defn: dict[str, Any]) -> None:
     print(f"  inputs: {', '.join(defn['inputs']) or 'none'}")
     for step in defn["steps"]:
         after = f" after {', '.join(step['needs'])}" if step["needs"] else " (first)"
-        extra = ", ".join(f"{k} {step[k]}" for k in ("kind", "start", "verify", "budget_usd", "max_turns")
+        extra = ", ".join(f"{k} {step[k]}" for k in ("kind", "start", "verify", "max_turns")
                           if step.get(k) is not None)
         print(f"\n  {step['id']} — {step['title']}{after}" + (f" [{extra}]" if extra else ""))
         for line in step["prompt"].splitlines():
@@ -252,7 +252,7 @@ def _run(args: argparse.Namespace) -> int:
         if len(defn["inputs"]) != 1:
             raise workflows.WorkflowError(f"{args.name} takes {defn['inputs'] or 'no input'}: use --input name=value")
         inputs[defn["inputs"][0]] = sys.stdin.read() if args.text == "-" else args.text
-    options = {k: v for k, v in {"budget_usd": args.budget, "allow_tools": args.allow,
+    options = {k: v for k, v in {"allow_tools": args.allow,
                                  "allow_approval": args.allow_approval or None}.items() if v is not None}
     with contextlib.suppress(OSError, project.NotAProject):
         project.enroll(where)
@@ -381,7 +381,6 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("name")
     p.add_argument("text", nargs="?", help="the value of its one input (- reads stdin)")
     p.add_argument("--input", action="append", metavar="NAME=VALUE")
-    p.add_argument("--budget", type=float, help="dollars each step may spend (default: the step's own, else 5)")
     p.add_argument("--allow", action="append", metavar="RULE", help="a permission rule every step's workers get")
     p.add_argument("--allow-approval", action="store_true", help="steps may reach cells that need approval (Fable)")
     p.add_argument("--json", action="store_true")

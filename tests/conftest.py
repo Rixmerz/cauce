@@ -30,6 +30,8 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("CAUCE_ENGRAM", "off")
     monkeypatch.setenv("CAUCE_ENGRAM_WRITE", "off")
     monkeypatch.delenv("CAUCE_SESSION_ID", raising=False)
+    # cauce's own suite may run inside a cauce worker, which refuses to start work.
+    monkeypatch.delenv("CAUCE_WORKER_TASK", raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     for var, value in {
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",

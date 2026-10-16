@@ -192,4 +192,4 @@ def test_the_init_skill_is_a_plugin_skill_whose_commands_all_exist():
 
     shown = re.search(r"<<'JSON'\n(.*?)\nJSON", body, re.S).group(1)
     defn = workflows.normalize(json.loads(shown))
-    assert [s["id"] for s in defn["steps"]] == ["build", "review", "fix"]
+    assert [s["id"] for s in defn["steps"]] == ["build", "review", "refute", "fix", "recheck"]

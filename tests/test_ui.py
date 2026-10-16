@@ -606,7 +606,8 @@ def test_resume_from_the_ui_runs_the_rules_cauce_suggested_never_the_requests(ui
 
 @pytest.mark.parametrize(("cause", "extra", "keep", "expected"), [
     ("approval", {}, False, ["--allow-approval"]),
-    ("budget", {"budget_usd": 5.0}, False, ["--budget", "10.0"]),
+    ("budget", {"budget_usd": 5.0}, False, []),  # an older cauce's stop: a plain resume
+    ("budget", {"budget_usd": 5.0}, True, None),
     ("turns", {}, False, []),
     ("turns", {}, True, None),
     ("permission", {}, False, None),

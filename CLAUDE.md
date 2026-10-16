@@ -29,7 +29,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/surfaces.py` | where a task may write (`--surface`, a step's `surfaces`): checked after each attempt, and whether two tasks can never touch the same file |
 | `src/cauce/phase.py` | what a running worker is doing (exploring, implementing, checking), read from the tail of the tool-call log |
 | `src/cauce/roles_internal/` | roles cauce runs itself and no team holds: the independent `verifier`, and the `surveyor` that investigates for `/cauce:init` |
-| `skills/init/` | the plugin's one skill (`/cauce:init`): scope and cost agreed with the person, `cauce investigate` digs, and from the reports one team for every flow, one workflow per flow, and the memory of what was solved, through cauce's own commands only |
+| `skills/init/` | the plugin's one skill (`/cauce:init`): scope and an estimate of its cost agreed with the person, `cauce investigate` digs, and from the reports one team for every flow, one workflow per flow, and the memory of what was solved, through cauce's own commands only |
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
@@ -128,8 +128,15 @@ yields the default kind, not a guess.
 - Out of turns is room, never a bug: a finding of the independent check in
   work whose worker ran out of turns before its own check earns the same cell
   more turns, never more effort or another model, and is no dead end.
-- After the first attempt, none starts with less budget than its model can
-  use (`MIN_ATTEMPT_USD`): the task stops as `budget` with the resume command.
+- Cost is measured and shown, never a brake: every attempt keeps what it cost
+  (its own and its independent check's apart, and how much of its input the
+  cache served), and the report, the board, `cauce spend` and `cauce stats`
+  show it; no task stops, skips a cell or gets a shorter attempt for money,
+  and no worker is given a dollar cap. Turns are the one room dial: an attempt
+  is bounded by its turns, never above `escalate.MAX_TURNS_CEILING` however
+  many are asked for, and the time they earn (`launch.timeout_for`); a run by
+  its attempts. A resume nobody approved is refused after
+  `cli.UNATTENDED_ATTEMPTS`.
 - A check that could not run at all (exit 127, npm's missing script or
   manifest, a tool's minimum Node) is `environment`, never a `code_bug`: its
   exit says nothing about the work, and it is no dead end. npm's EBADENGINE
@@ -156,6 +163,8 @@ yields the default kind, not a guess.
 - Every ending short of a pass records a `stops.Stop` on its `finished`
   event: a new way for a task to stop adds its cause there, and a status set
   without one is read back and marked `recovered`, never presented as recorded.
+  A cause no run records any more (`budget`) keeps its words for the records
+  that hold it, and resumes plainly.
   A cancel says where it came from; "a person did it" is never a guess.
 - The model's stated confidence about its own work is not an input.
 - A request's criteria are its own words: a pass answers every `S#`, one left
@@ -164,7 +173,8 @@ yields the default kind, not a guess.
   so, or marked so themselves) are no criteria, and the brief names them.
 - A finding blocks only when the change caused or worsened it (or it cannot be
   told) and it is shown, not suspected; a pre-existing one is reported, never
-  a blocker.
+  a blocker. A finding is `deterministic` only with its proof (the command or
+  hunk that shows it); one claimed without it is read as `inferential`.
 - Reviewers never vote: their findings are added together, so one is enough
   and there is no tie. A row only one saw and could only read from the code is
   decided by a refuter with its own proof, never by a count; a row it cannot
@@ -183,7 +193,13 @@ yields the default kind, not a guess.
   one a probe shows), at most `MAX_CORRECTIONS`; a new finding after progress
   that is only read from the code goes with the pass, recorded, never a
   blocker; what is left at the cap stops the task as `review`. A verifier that
-  cannot decide keeps the pass and says so. Tests run with `CAUCE_VERIFIER=off`.
+  cannot decide keeps the pass and says so. It is told why it runs (the
+  risk's reasons) and, for a fix, to show the failure at the base and gone; it
+  has its own turns (`VERIFIER_TURNS`), never the worker's raised ones, and is
+  never told to stash the work it checks. A resume after a `review` stop (a
+  dismissed one too) gives its first check the blockers the `verified` event
+  kept.
+  Tests run with `CAUCE_VERIFIER=off`.
 - Surfaces narrow and grant nothing: a change outside them fails the attempt
   and is undone in its worktree, never in a person's checkout. Two tasks whose
   surfaces are provably disjoint run side by side without Haiku; in doubt,
@@ -192,7 +208,11 @@ yields the default kind, not a guess.
   attempt ended with, the rule, where it goes) and `skipped` the rungs passed
   over. A new branch in `decide` gives both; the `moved` event keeps them.
 - History may raise where a task starts, never lower it below its ladder.
-- Fable needs a person: `#fable` or `--allow-approval`.
+- Fable needs a person: `#fable` or `--allow-approval`. An approval is the
+  person's for the run they approved: a resume nobody approved (`--unattended`)
+  never uses one an earlier run stored, nor starts on a cell that needs one (a
+  `#fable` task's tag is its approval). A resume a session starts on its own
+  carries `--unattended` (`commands/orchestration.md`).
 - A worker gets a model alias unless a person pinned it (`cauce config model`).
   cauce never hard-codes a model id; the model that served an attempt is read
   from the CLI's `modelUsage`, never assumed from the alias.
@@ -244,8 +264,8 @@ yields the default kind, not a guess.
 - Files a worker's tools write for themselves (`isolate.ARTIFACT_DIRS`) are
   never a changed file and never committed, and a branch holding only them is
   never a review.
-- A worker that stopped before its own check (refused, out of turns or
-  money) is checked with `--verify` by cauce when the task changed something;
+- A worker that stopped before its own check (refused, or out of turns) is
+  checked with `--verify` by cauce when the task changed something;
   a red check is evidence for the next brief, never a pass.
 - An adopted neighbour is read, never written: the livespec index is opened
   `mode=ro`, and the index is built only through livespec's own CLI. Absent
@@ -338,7 +358,7 @@ yields the default kind, not a guess.
   a button the person presses in the web board, or on a neighbour's page
   through `cauce resume <id> --pressed`, does, and its rules are read
   from cauce's account of the stop (`stops.resume_args`), never from the
-  request; `--pressed` refuses any rule, approval or budget passed with it. The board lives in the web UI only; the mod draws no copy of it. Tool schemas carry no `enum`: the handler
+  request; `--pressed` refuses any rule or approval passed with it. The board lives in the web UI only; the mod draws no copy of it. Tool schemas carry no `enum`: the handler
   reads a value and says what cauce takes. Only the reading tools (`recall`,
   `tasks`, `note`) turn an `ask` into an allow; a deny stays a deny. Without the mod, everything still works through
   the classic hooks.
@@ -358,10 +378,27 @@ yields the default kind, not a guess.
   at its end or when a step waits on the person — and steps the engine went
   past are marked reported. A step that stops stops the run there; it goes on
   by a resume to a pass or `cauce workflow retry`.
-- A workflow definition grants nothing: no rule, no approval, no capability;
-  those are the person's flags on `cauce workflow run`, so a definition a
-  repository commits runs with what the person gives. A bundled template is
-  never written: a change copies it to the user scope.
+- A workflow definition grants nothing and caps nothing: no rule, no
+  approval, no capability, no dollar limit; rules and approvals are the
+  person's flags on `cauce workflow run`, so a definition a repository commits
+  runs with what the person gives, and a `budget_usd` an older one holds is
+  dropped. A bundled template is never written: a change copies it to the user
+  scope.
+- Work is cut where context changes hands, never by role: the phases of one
+  task are one worker's (the one that builds writes its tests; the one that
+  reproduces fixes). A review step of a change reads blind, as the verifier
+  does: the request and the diff, never what earlier steps said of their work;
+  one with no diff to read (a plan's critique) gets what came before. Other
+  steps get the findings of the steps they wait on as records, beside their
+  summaries. The bundled templates follow this; their review chain fixes only
+  what the ledger confirms, and costs nothing more when the review is clean.
+  A refuter is told whether one review or two found its rows.
+- A worker never starts cauce work (`run`, `resume`, `work`, `queue add`,
+  `workflow run|retry`, `investigate start` refuse under `CAUCE_WORKER_TASK`),
+  and forks are off inside it (`CLAUDE_CODE_FORK_SUBAGENT=0`): what is left
+  goes in its result. The main session does what fits in what it holds, sends
+  to cauce what earns a worker, and a judgment that needs the conversation to
+  Claude Code's own fork, never to cauce (`commands/orchestration.md`).
 - A run runs the copy of its definition it started with, never the file. A
   definition an active run uses (in any project) is held: a change becomes a
   pending revision that applies when the last such run ends or is cancelled,
@@ -406,13 +443,16 @@ yields the default kind, not a guess.
   clipped and masked as a note is, `<private>` text left out; a session in a
   cauce worktree, the home directory or `/` is no project's. Shell and tool
   errors (`survey.NOISE`) are no problem and no fix. The init skill writes
-  nothing, and starts no worker, before the person agrees, and writes only
+  nothing, and starts no worker, before the person agrees to the scope and to
+  an estimate of its cost (an estimate, never a cap), and writes only
   through `cauce roles`, `cauce team`, `cauce workflow`, `cauce note`,
   `cauce notes … topic add` and `cauce memory record`; a note goes only to the
   project its evidence came from.
 - An investigation is cauce's work, never a session's subagents: one queued
   task per project or plugin, kind `explore`, the internal `surveyor` role,
-  started on a strong cell, `keep_learned` off (nothing it learned is filed in
+  started on a strong cell with its turns (`investigate.MAX_TURNS`) as its only
+  room, its cost estimated from earlier investigators and never capped,
+  `keep_learned` off (nothing it learned is filed in
   notes or engram), not counted among the person's work by insights. What it
   must cover is listed in its brief, so each line is a criterion its pass
   answers. A `cauce-report` block is kept on its task as a `report` event and

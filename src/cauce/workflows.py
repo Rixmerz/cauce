@@ -36,7 +36,9 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from cauce import dispatch, isolate, ledger, project, repo, surfaces
-from cauce.matrix import KINDS, Cell
+from cauce import findings as findings_mod
+from cauce.escalate import MAX_TURNS_CEILING
+from cauce.matrix import KINDS, READ_ONLY_KINDS, Cell
 from cauce.store import Store, home
 
 SCOPES = ("project", "user", "bundled")
@@ -47,12 +49,19 @@ INPUT = re.compile(r"\{([a-z][a-z0-9_]{0,31})\}")
 TOP_KEYS = frozenset({"name", "description", "inputs", "steps", "version"})
 #: What a step may say. Nothing here widens what a worker may do: rules,
 #: approvals and capabilities are the person's flags on `run`, never a file's.
-STEP_KEYS = frozenset({"id", "title", "prompt", "kind", "needs", "verify", "start", "budget_usd", "max_turns",
+STEP_KEYS = frozenset({"id", "title", "prompt", "kind", "needs", "verify", "start", "max_turns",
                        "memory", "role", "surfaces", "ledger"})
+#: Keys an older cauce took in a step and nothing reads any more: a definition or
+#: a run's frozen copy that still holds one loads, and the key is dropped. A step
+#: has no dollar limit: its room is its turns.
+LEGACY_STEP_KEYS = frozenset({"budget_usd"})
 #: What a step may carry from cauce's memory into its brief: a project note by
 #: id, every live note of a topic, or a problem with every fix tried on it.
 MEMORY_REF = re.compile(r"^(?:(note|problem):)?(\d{1,9})$|^topic:([a-z0-9][a-z0-9_-]{0,39})$")
 MEMORY_CHARS = 2000
+#: The findings a step hands the step that waits on it: as records, bounded.
+FINDINGS_HANDED = 30
+FINDINGS_CHARS = 4000
 PROMPT_CHARS = 8000
 RESULT_CHARS = 1500
 
@@ -178,7 +187,7 @@ def normalize(defn: Mapping[str, Any], name: str | None = None) -> dict[str, Any
         if not isinstance(raw, dict):
             errors.append(f"{where} is not an object")
             continue
-        step = dict(raw)
+        step = {k: v for k, v in raw.items() if k not in LEGACY_STEP_KEYS}
         steps[n] = step
         extra = set(step) - STEP_KEYS
         if extra:
@@ -230,10 +239,13 @@ def normalize(defn: Mapping[str, Any], name: str | None = None) -> dict[str, Any
                 errors.append(f"{where}: a recheck comes after the fix it checks")
         if step.get("verify") is not None and not isinstance(step["verify"], str):
             errors.append(f"{where}: verify is a command, as text")
-        for key, kind in (("budget_usd", (int, float)), ("max_turns", int)):
-            if step.get(key) is not None and (not isinstance(step[key], kind) or isinstance(step[key], bool)
-                                              or step[key] <= 0):
-                errors.append(f"{where}: {key} is a positive number")
+        turns = step.get("max_turns")
+        if turns is not None and (not isinstance(turns, int) or isinstance(turns, bool) or turns <= 0):
+            errors.append(f"{where}: max_turns is a whole number from 1 (at most {MAX_TURNS_CEILING} are used)")
+        elif turns is not None and turns > MAX_TURNS_CEILING:
+            # More than an attempt ever gets (a definition or a run an older cauce
+            # kept): read as the ceiling, as a run would clamp it.
+            step["max_turns"] = MAX_TURNS_CEILING
         if step.get("memory") is not None:
             refs = step["memory"] if isinstance(step["memory"], list) else None
             if refs is None or not all(isinstance(r, (str, int)) and not isinstance(r, bool)
@@ -551,7 +563,7 @@ def start(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] | 
           scope: str | None = None, session_id: str | None = None, options: Mapping[str, Any] | None = None,
           kick: Kick | None = None) -> dict[str, Any]:
     """A run of a saved workflow in a directory: its first steps queued, the dispatcher started.
-    `options` are the person's (`budget_usd` per step, `allow_tools`, `allow_approval`)."""
+    `options` are the person's (`allow_tools`, `allow_approval`)."""
     promote(locate(name, cwd, scope)[1], store)
     defn = load(name, cwd, scope)
     where = Path(cwd).resolve()
@@ -632,11 +644,25 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         held = _ledger(store, run, defn, step, latest, options)
         body += "\n\n" + held.pop("brief")
         earlier = []
+    elif str(step.get("kind") or "").startswith("review") and options.get("origin") and \
+            _base(store, run, defn, step["id"], latest):
+        # A review of a change is blind, as the independent check is: the request and
+        # the change (the diff below), never what the steps before said of their own
+        # work. With no change to read (a plan to critique), it gets what came before.
+        earlier = []
     for sid in earlier:
         task = latest.get(sid)
-        if task and task.get("result"):
-            result = task["result"] if len(task["result"]) <= RESULT_CHARS else task["result"][:RESULT_CHARS] + "…"
-            notes.append(f"- {sid} (task #{task['id']}): {result}")
+        if not task:
+            continue
+        said = []
+        if task.get("result"):
+            said.append(task["result"] if len(task["result"]) <= RESULT_CHARS else task["result"][:RESULT_CHARS] + "…")
+        # A step it waits on hands over its findings as records, not only its summary.
+        found = findings_mod.read({"findings": _findings_of(store, task)}) if sid in step["needs"] else ()
+        if found:
+            said.append("Its findings:\n" + findings_mod.text(found[:FINDINGS_HANDED])[:FINDINGS_CHARS])
+        if said:
+            notes.append(f"- {sid} (task #{task['id']}): " + "\n".join(said))
     if notes:
         body += (f"\n\nThis is step {step['id']!r} of the workflow {defn['name']!r}. What the steps before it "
                  "found and did (their changes are already in this checkout):\n" + "\n".join(notes))
@@ -650,7 +676,7 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
                  f"`git diff {options['origin'][:12]}` shows it.")
     opts = {k: v for k, v in {
         "kind": step.get("kind"), "verify": step.get("verify"), "start": step.get("start"),
-        "budget_usd": step.get("budget_usd") or options.get("budget_usd"), "max_turns": step.get("max_turns"),
+        "max_turns": step.get("max_turns"),
         "allow_tools": options.get("allow_tools") or None, "allow_approval": options.get("allow_approval") or None,
         "base": base, "step_role": step.get("role"), "surfaces": step.get("surfaces"),
         "ledger": held}.items() if v is not None}
@@ -691,8 +717,9 @@ def _ledger(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step:
     Every step sees the same rows by the same ids: the ledger is rebuilt the same way each time."""
     role, earlier = step["ledger"], _before(defn, step["id"])
     by_id = {s["id"]: s for s in defn["steps"]}
-    rows = ledger.collect([(sid, _findings_of(store, latest.get(sid)))
-                           for sid in earlier if not by_id[sid].get("ledger")])
+    sources = [sid for sid in earlier if not by_id[sid].get("ledger")]
+    reviewers = [sid for sid in sources if by_id[sid].get("kind") in READ_ONLY_KINDS]
+    rows = ledger.collect([(sid, _findings_of(store, latest.get(sid))) for sid in sources])
     known = {r["id"]: r for r in rows}
     nearest = {r: next((sid for sid in reversed(earlier) if by_id[sid].get("ledger") == r), None)
                for r in ledger.ROLES}
@@ -729,7 +756,8 @@ def _ledger(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step:
         spec["agreed"] = agreed
     if role == "fix":
         spec["base"] = _base(store, run, defn, step["id"], latest) or options.get("origin")
-    spec["brief"] = ledger.brief(role, mine, round_=round_, sha=sha, diff=diff) if mine else \
+    spec["brief"] = ledger.brief(role, mine, round_=round_, sha=sha, diff=diff,
+                                 reviewers=max(1, len(reviewers))) if mine else \
         f"Ledger ({role}): nothing to do."
     return spec
 

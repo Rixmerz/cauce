@@ -56,7 +56,7 @@ from cauce import services as services_mod
 from cauce import surfaces as surfaces_mod
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify, narrow
-from cauce.escalate import Attempt, Decision, Failure, Move, decide
+from cauce.escalate import MAX_TURNS_CEILING, Attempt, Decision, Failure, Move, decide
 from cauce.matrix import DEFAULT_TURNS, READ_ONLY_KINDS, Cell, ladder_for, turns_for
 from cauce.store import Store, home
 
@@ -91,7 +91,6 @@ Launcher = Callable[[launch.LaunchSpec], launch.WorkerResult]
 
 @dataclass
 class Options:
-    budget_usd: float = 5.0
     max_attempts: int = 6
     allow_approval: bool = False
     isolate: bool = True
@@ -138,7 +137,7 @@ class Options:
         """What a resumed run is started with again, as the task's `options`. A run
         in the checkout itself resumes there: in a worktree it could not see the
         uncommitted work it was continuing."""
-        values = {"budget_usd": self.budget_usd, "verify": self.verify, "kind": self.kind,
+        values = {"verify": self.verify, "kind": self.kind,
                   "allow_approval": self.allow_approval, "allow_tools": list(self.allow_tools),
                   "livespec": self.livespec, "no_isolate": not self.isolate, "role": self.role,
                   "step_role": self.step_role, "surfaces": list(self.surfaces),
@@ -496,9 +495,12 @@ def run(
     history: Sequence[Attempt] = (),
     notes_ask: notes.Ask | None = None,
     progress: Callable[[str], None] | None = None,
+    known_findings: Sequence[Mapping[str, str]] = (),
 ) -> Report:
     """Run a task. `history` is a resumed task's earlier attempts: shown to its
-    workers, never counted by the escalation, which starts over."""
+    workers, never counted by the escalation, which starts over. `known_findings`
+    are what the independent check found before a resume: its first check says for
+    each whether it is fixed."""
     options = options or Options()
     # Wall time of the run and of its phases, kept on its events: where a task's
     # time goes (waiting, setting up, working, checking) is evidence for the router.
@@ -545,6 +547,9 @@ def run(
         for twin in _twins(store, task, repo_dir):
             the_plan.reasons.append(f"task #{twin} asked the same and keeps its work on {isolate.branch_for(twin)}: "
                                     f"`cauce resume {twin}` continues it instead of starting over")
+    if options.max_turns and options.max_turns > MAX_TURNS_CEILING:
+        the_plan.reasons.append(f"{options.max_turns} turns were asked for; an attempt gets at most "
+                                f"{MAX_TURNS_CEILING}: work bigger than that is split")
     if not options.max_turns and turns_for(the_plan.kind) != DEFAULT_TURNS:
         the_plan.reasons.append(f"{the_plan.kind} work starts with {turns_for(the_plan.kind)} turns: "
                                 f"at {DEFAULT_TURNS} its attempts ran out")
@@ -599,13 +604,15 @@ def run(
     briefing = roles.brief(the_plan.role) if the_plan.role is not None else None
     # The independent check: what it found first, and how many corrections it has had.
     verifying = writes and not declared_read_only and config.enabled("verifier", os.environ)
-    ledger: dict[str, Mapping[str, str]] = {}
+    ledger: dict[str, Mapping[str, str]] = {findings_mod.key(f): f for f in known_findings}
     corrections = 0
     # A workflow step that decides ledger rows: a pass answers each, and its answers decide the run.
     deciding = options.ledger if options.ledger and options.ledger.get("role") in ledger_mod.WORDS else None
     settled: ledger_mod.Outcome | None = None
     base_commit = workspace.base if workspace else _head(repo_dir)
-    cell, turns = the_plan.start, options.max_turns or turns_for(the_plan.kind)
+    # Turns are the one room dial, and they have one ceiling: a number asked for from
+    # outside (a resume, a model's tool call) never raises it.
+    cell, turns = the_plan.start, min(options.max_turns or turns_for(the_plan.kind), MAX_TURNS_CEILING)
     attempts: list[Attempt] = []
     changed: set[str] = set()
     decision: Decision | None = None
@@ -643,17 +650,6 @@ def run(
                 context.append("Servers up for this task, started and stopped by cauce (do not start or stop them "
                                "yourself): " + "; ".join(up))
         while ready:
-            remaining = options.budget_usd - report.cost_usd
-            floor = MIN_ATTEMPT_USD.get(cell.model, 0.01)
-            if remaining < 0.01 or (attempts and remaining < floor):
-                spent = remaining < 0.01
-                report.stop = stops.Stop(
-                    "budget", f"the ${options.budget_usd:.2f} budget is spent" if spent else
-                    f"the ${remaining:.2f} left of the ${options.budget_usd:.2f} budget cannot pay for an attempt "
-                    f"at {cell.label} (it needs at least ${floor:.2f}): resume it with a larger --budget",
-                    budget_usd=options.budget_usd, attempt=len(attempts) or None)
-                report.status, report.summary = "blocked", report.stop.reason
-                break
             if len(attempts) >= options.max_attempts:
                 report.stop = stops.Stop("attempts", f"{options.max_attempts} attempts without a pass",
                                          attempt=len(attempts))
@@ -675,7 +671,6 @@ def run(
                 workdir=workdir if workdir != launch_dir else None,
                 max_turns=turns,
                 timeout_s=launch.timeout_for(turns),
-                max_budget_usd=round(remaining, 2),
                 disallowed_tools=tuple(dict.fromkeys([*(() if writes else launch.WRITE_TOOLS),
                                                       *(the_plan.role.disallowed_tools if the_plan.role else ())])),
                 # The person's rules, for this run and for this repository, the
@@ -701,7 +696,7 @@ def run(
             say(f"cauce: #{task['id']} attempt {nth} at {cell.label}")
             store.add_event(task["id"], "attempt_started", seq=nth, cell=cell.label,
                             model=spec.model_id or cell.model,
-                            max_turns=turns, budget_usd=spec.max_budget_usd, capabilities=list(selection.names),
+                            max_turns=turns, capabilities=list(selection.names),
                             since_start_s=round(time.monotonic() - clock, 2), brief_chars=len(spec.prompt),
                             **({"role": the_plan.role.name, "team": the_plan.team,
                                 "skills": list(briefing.skills)} if briefing else {}))
@@ -733,6 +728,7 @@ def run(
                                 surfaces=list(options.surfaces), undone=workspace is not None)
             review_stop = None
             mark = time.monotonic()
+            worker_cost = result.cost_usd
             if result.passed and verifying:
                 so_far = list(isolate.changed(workspace)) if workspace else sorted({*changed, *result.changed_paths})
                 risk_mod.of_change(the_plan.risk, so_far if (workspace or base_commit) else None)
@@ -758,7 +754,7 @@ def run(
             seq = store.add_attempt(
                 task["id"], cell=cell.label, max_turns=turns, passed=int(result.passed),
                 failure=result.failure.value if result.failure else None, summary=result.summary,
-                evidence=result.evidence[:4000], cost_usd=result.cost_usd,
+                evidence=kept_evidence(result.evidence), cost_usd=result.cost_usd,
                 input_tokens=result.input_tokens, output_tokens=result.output_tokens, turns=result.turns,
                 duration_s=result.duration_s, changed_paths=result.changed_paths,
                 served_model=result.served_model or None,
@@ -773,6 +769,10 @@ def run(
                             wall_s=round(worker_s, 2), duration_s=round(result.duration_s, 2),
                             check_s=round(check_s, 2), verifier_s=round(verifier_s, 2),
                             input_tokens=result.input_tokens, output_tokens=result.output_tokens,
+                            cache_read_tokens=result.cache_read_tokens, cache_write_tokens=result.cache_write_tokens,
+                            # The attempt's cost holds its independent check's; each is kept apart here.
+                            worker_cost_usd=round(worker_cost, 4),
+                            verifier_cost_usd=round(result.cost_usd - worker_cost, 4),
                             **({"refused_but_written": list(result.overcome)} if result.overcome else {}))
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
@@ -809,7 +809,7 @@ def run(
                             trigger=(result.failure or Failure.INCONCLUSIVE).value,
                             because=list(decision.because), skipped=list(decision.skipped),
                             turns_from=turns, turns_to=decision.max_turns if decision.continues else None,
-                            budget_left=round(options.budget_usd - report.cost_usd, 4))
+                            spent_usd=round(report.cost_usd, 4))
             if not decision.continues:
                 # The worker's own account goes with the reason: "the task is
                 # wrong" is only actionable next to what it found wrong.
@@ -879,6 +879,7 @@ def run(
             store.pause_lane(key, f"task #{task['id']} ended {status}: {report.summary[:200]}")
         if workspace is None:
             report.changed = sorted(changed)
+        mark = time.monotonic()
         if status == "done" and report.learned and options.keep_learned and config.enabled(
                 "notes", os.environ, options.notes):
             _note(store, task, key, report, the_plan, workspace.repo_dir if workspace else repo_dir,
@@ -887,6 +888,8 @@ def run(
         if status == "done" and report.learned and options.keep_learned and config.enabled(
                 "engram_write", os.environ):
             _to_engram(store, task, report, the_plan, workspace.repo_dir if workspace else repo_dir)
+        # Filing what it learned runs before the ending and the next workflow step: timed.
+        timing["notes_s"] = time.monotonic() - mark
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
                         changed=report.changed[:50], stop=report.stop.data() if report.stop else None,
@@ -1025,11 +1028,6 @@ def _cancelled(store: Store, task_id: int, attempt: int | None) -> stops.Stop:
                       "(a closed terminal, or the process was killed)", attempt=attempt)
 
 
-#: The least an attempt on each model can do anything with: an attempt launched with
-#: less reaches its cap before a verdict, and only spends what is left.
-MIN_ATTEMPT_USD = {"haiku": 0.03, "sonnet": 0.20, "opus": 0.50, "fable": 1.00}
-
-
 def how_to_run(workdir: Path, rules: Sequence[str]) -> list[str]:
     """Brief lines on running the project's tools: the Node already on the worker's
     PATH, and the commands its settings let through, in the forms that pass. Workers
@@ -1145,13 +1143,36 @@ def verify_cell(cell: Cell) -> Cell:
     return cell
 
 
+#: The turns of one independent check: it reads a diff and runs probes, and a
+#: worker that climbed to many turns does not hand it the same room.
+VERIFIER_TURNS = 40
+#: Kinds whose change must make a failure go away: the check shows it at the base, and gone.
+_REPRODUCES = frozenset({"debug-repro", "debug-unclear"})
+
+
+def kept_evidence(text: str, room: int = 4000) -> str:
+    """What an attempt's record keeps of its evidence: its start and its end, so a
+    resume's brief that quotes the last lines quotes the real ones."""
+    if len(text) <= room:
+        return text
+    half = (room - 3) // 2
+    return f"{text[:half]}\n…\n{text[-half:]}"
+
+
 def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, changed: Sequence[str],
-                   known: Sequence[Mapping[str, str]] = ()) -> str:
-    """What the verifier is given: the request in its words and the change, never the worker's account."""
+                   known: Sequence[Mapping[str, str]] = (), why: Sequence[str] = ()) -> str:
+    """What the verifier is given: the request in its words, the change, and why it is
+    checked (the risk's reasons, in the router's words) — never the worker's account."""
     shown = ", ".join(changed[:20]) + (f" and {len(changed) - 20} more" if len(changed) > 20 else "")
     parts = [f"Check this change. The request it answers ({kind}), verbatim:\n{text}"]
     if listed := criteria_mod.brief(text):
         parts.append(listed)
+    if why:
+        parts.append("Why this check runs: " + "; ".join(why) + ". Probe those first.")
+    if kind in _REPRODUCES and base:
+        parts.append(f"This change fixes a failure: show it at the base commit {base[:12]} (`git show "
+                     f"{base[:12]}:<path>`, or a temporary `git worktree add` of it outside the project that you "
+                     "remove after; never `git stash`), then show it is gone on the change.")
     where = (f"The change is in {workdir}: `git diff {base}` shows it against the base commit {base}, the state "
              "before it." if base else f"The change is in {workdir}, uncommitted: `git diff` shows it.")
     parts.append(f"{where} Files it changed: {shown}.")
@@ -1183,7 +1204,9 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     # It keeps only the neighbours that measure (layout-inspector): what it reports, it measures.
     measuring = {name: server for name, server in spec.mcp_servers.items() if name in plugins.MEASURES}
     check = dataclasses.replace(
-        spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values())), cell=vcell,
+        spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values()), risk.reasons),
+        cell=vcell, max_turns=min(spec.max_turns, VERIFIER_TURNS),
+        timeout_s=launch.timeout_for(min(spec.max_turns, VERIFIER_TURNS)),
         model_id=models.pinned(vcell.model), permission_mode=grants.mode_for(vcell.model),
         disallowed_tools=tuple(dict.fromkeys([*spec.disallowed_tools, *launch.WRITE_TOOLS])),
         append_system_prompt="\n\n".join([roles.brief(role).system_prompt,
@@ -1210,6 +1233,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
         blockers = [f for f in blockers if f not in carried]
     store.add_event(task_id, "verified", seq=nth, cell=vcell.label, risk=risk.data(), verdict=verdict.verdict,
                     passed=not blockers and decided, findings=list(shown)[:20], blocking=len(blockers),
+                    blockers=list(blockers)[:20],
                     carried=len(carried), cost_usd=verdict.cost_usd, summary=verdict.summary[:500],
                     round=corrections, wall_s=round(wall_s, 2), duration_s=round(verdict.duration_s, 2),
                     turns=verdict.turns)
@@ -1272,8 +1296,9 @@ def brief(
     if not writes:
         parts.append("This task is read-only: find out and report. Do not change files. The answer is the "
                      "deliverable, whatever it says: when you checked what was asked, the verdict is `pass`, also "
-                     "when what you found is broken, missing or failing. Put each finding in `summary` and what "
-                     "shows it (file:line, a command and its output) in `evidence`. `code_bug` is never about the "
+                     "when what you found is broken, missing or failing. Put the answer in `summary`, each finding "
+                     "in `findings` (where, what, how it is known, and its proof), and what shows them (file:line, "
+                     "a command and its output) in `evidence`. `code_bug` is never about the "
                      "code you read: use `inconclusive` for something you could not check, and `fail` with "
                      "`spec_bug` when the task asks for a change, which you cannot make here.")
     if verify:
@@ -1377,12 +1402,12 @@ def _verified(result: launch.WorkerResult, command: str, workdir: Path) -> launc
 
 #: Attempts that stopped before the worker could check its own work, through no
 #: verdict of its own: the repository's check is run for them.
-_UNCHECKED = frozenset({Failure.TURNS_EXHAUSTED, Failure.BUDGET_EXHAUSTED})
+_UNCHECKED = frozenset({Failure.TURNS_EXHAUSTED})
 
 
 def _settles(result: launch.WorkerResult, command: str | None) -> bool:
     """A worker that could not run the command that would show its work — refused
-    it, or ran out of turns or money first — and did not call it a failure: on a
+    it, or ran out of turns first — and did not call it a failure: on a
     task that has written something, the repository's own check can still
     decide. Its claim alone never would. Run by cauce, the check costs the
     worker nothing, and a red one hands the next attempt the failing output."""
@@ -1397,10 +1422,8 @@ def _settled(result: launch.WorkerResult, command: str, workdir: Path) -> launch
     code, output = _check(command, workdir)
     if result.failure is Failure.PERMISSION:
         cause = f"the worker was refused {', '.join(result.denied[:3])}"
-    elif result.failure is Failure.TURNS_EXHAUSTED:
-        cause = "the worker ran out of turns before checking its work"
     else:
-        cause = "the worker reached its spending cap before checking its work"
+        cause = "the worker ran out of turns before checking its work"
     if code != 0:
         why = "timed out" if code is None else f"exited {code}"
         return dataclasses.replace(result, evidence=f"`{command}` {why}:\n{output}".strip(),

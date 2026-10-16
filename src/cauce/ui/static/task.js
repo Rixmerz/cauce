@@ -23,7 +23,7 @@ function climb(c, move) {
   return h("div", { class: `climb climb-${c.axis}` },
     h("div", { class: "row" }, ...head,
       c.turns_to && c.turns_to !== c.turns_from ? h("span", { class: "meta" }, `turns ${c.turns_from} → ${c.turns_to}`) : null,
-      c.budget_left !== undefined && c.budget_left !== null ? h("span", { class: "meta" }, `$${Number(c.budget_left).toFixed(2)} left`) : null),
+      c.spent_usd !== undefined && c.spent_usd !== null ? h("span", { class: "meta" }, `$${Number(c.spent_usd).toFixed(2)} spent`) : null),
     c.because.length ? h("ol", {}, c.because.map((line) => h("li", {}, line))) : null,
     c.skipped.length ? h("div", { class: "meta" }, "skipped: ", c.skipped.join("; ")) : null,
     c.recovered ? h("div", { class: "meta" }, "from before cauce kept the evidence of each move: the reason is all it recorded") : null);
@@ -109,7 +109,7 @@ export async function openTask(id, quiet = false) {
   }
   const stop = d.stop;
   if (stop && stop.next && t.status !== "cancelled") {
-    // What a press resumes with (rules, an approval, a budget) is read from
+    // What a press resumes with (rules or an approval) is read from
     // cauce's account on the server, never sent from here.
     const label = { permission: "Allow & resume", approval: "Approve & resume" }[stop.cause] || "Resume";
     const press = (keep) => async () => {

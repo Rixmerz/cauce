@@ -78,12 +78,18 @@ def rows_text(rows: Sequence[Mapping[str, Any]]) -> str:
                      for r in rows)
 
 
+def _refute(reviewers: int) -> str:
+    """The refuter's ask, true to how the rows came: from one review or from two."""
+    who = ("Two reviewers worked apart; each row below was found by only one of them and was read from the code, "
+           "not shown." if reviewers > 1 else "A review read each row below from the code; nothing showed it.")
+    return (f"You are the refuter. {who} Decide each row yourself, read-only, with your own proof: `confirmed` "
+            "(you can show the problem, and, when a change is under review, that it caused or worsened it), "
+            "`refuted` (you can show it is no problem, or that the change under review did not cause it) or "
+            "`unsure` (you cannot tell; a person decides it). You are not voting: never decide a row by who "
+            "reported it. Add no finding.")
+
+
 _ASK = {
-    "refute": ("You are the refuter. Two reviewers worked apart; each row below was found by only one of them "
-               "and was read from the code, not shown. Decide each row yourself, read-only, with your own proof: "
-               "`confirmed` (you can show the problem, and that the change caused or worsened it), `refuted` (you "
-               "can show it is no problem, or that the change did not cause it) or `unsure` (you cannot tell; a "
-               "person decides it). You are not voting: never decide a row by who reported it. Add no finding."),
     "fix": ("Fix exactly the rows below, and nothing else: no other change, no new finding, no row rewritten. "
             "Run the project's tests before you stop. A row you cannot fix, say which and why in `summary`."),
     "recheck": ("Check, read-only, whether the fix resolved each row below: `fixed` (you can show it), "
@@ -92,9 +98,10 @@ _ASK = {
 }
 
 
-def brief(role: str, rows: Sequence[Mapping[str, Any]], *, round_: int, sha: str, diff: str = "") -> str:
-    lines = [f"Ledger ({role}, round {round_} of {ROUNDS}), frozen; sha256 {sha}:", rows_text(rows), "",
-             _ASK[role]]
+def brief(role: str, rows: Sequence[Mapping[str, Any]], *, round_: int, sha: str, diff: str = "",
+          reviewers: int = 2) -> str:
+    ask = _refute(reviewers) if role == "refute" else _ASK[role]
+    lines = [f"Ledger ({role}, round {round_} of {ROUNDS}), frozen; sha256 {sha}:", rows_text(rows), "", ask]
     if diff:
         lines.append(f"The fix is `{diff}`.")
     if role in WORDS:

@@ -1,11 +1,45 @@
 {
   "name": "review-fix",
-  "description": "Review a part of the code, then fix what the review found",
-  "inputs": ["target"],
+  "description": "Review a part of the code, then fix only what a refuter or a probe confirms; re-check each fix",
+  "inputs": [
+    "target"
+  ],
   "steps": [
-    {"id": "review", "title": "Review it", "kind": "review-routine",
-     "prompt": "Review, without changing any file: {target}\n\nList each real problem with its file and line: bugs, missing tests, risky code. Say plainly when there is none."},
-    {"id": "fix", "title": "Fix what it found", "kind": "implement",
-     "prompt": "Fix every problem the review below found in: {target}\n\nIf it found none, stop. Run the tests before you stop."}
+    {
+      "id": "review",
+      "title": "Review it",
+      "kind": "review-routine",
+      "prompt": "Review, without changing any file: {target}\n\nBugs, missing tests, risky code. Report each real problem in `findings`: its place (file:line), what is wrong, how it is known (`deterministic` with the command or hunk that shows it as `proof`, else `inferential`) and its `cause`: when the target names a change (a branch, a commit, a diff), whether that change caused it; when it names code as it stands, there is no change to blame or excuse, so `unknown`. Say plainly when there is none."
+    },
+    {
+      "id": "refute",
+      "title": "Decide what the review only read",
+      "kind": "review-routine",
+      "ledger": "refute",
+      "needs": [
+        "review"
+      ],
+      "prompt": "Decide, without changing any file, the findings on: {target}"
+    },
+    {
+      "id": "fix",
+      "title": "Fix the confirmed findings",
+      "kind": "implement",
+      "ledger": "fix",
+      "needs": [
+        "refute"
+      ],
+      "prompt": "Fix the confirmed findings below, in: {target}\n\nRun the tests before you stop."
+    },
+    {
+      "id": "recheck",
+      "title": "Check each fix",
+      "kind": "review-routine",
+      "ledger": "recheck",
+      "needs": [
+        "fix"
+      ],
+      "prompt": "Check, without changing any file, the fix just made in: {target}"
+    }
   ]
 }

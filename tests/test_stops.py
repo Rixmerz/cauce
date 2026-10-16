@@ -20,7 +20,6 @@ def _stop(store: Store, task_id: int) -> stops.Stop:
     [
         ([refused()], Options(), "permission", "settings"),
         ([bad(Failure.ENVIRONMENT), bad(Failure.ENVIRONMENT)], Options(), "environment", "environment"),
-        ([bad(Failure.CODE_BUG, cost=0.6)], Options(budget_usd=0.5), "budget", "budget"),
         ([bad(Failure.SPEC_BUG, "the API has no such field")], Options(), "spec", "worker"),
         ([bad(Failure.TURNS_EXHAUSTED)] * 2, Options(), "turns", "cauce"),
         ([bad(Failure.CODE_BUG, "still broken")] * 3, Options(), "ladder", "cauce"),
@@ -49,15 +48,19 @@ def test_a_refusal_names_the_rules_and_the_command_that_allows_them(git_repo, st
     assert f"  cauce resume {report.task_id} --allow 'Bash(node:*)'" in report.text()
 
 
-def test_approval_and_budget_say_how_to_go_on(tmp_path, store):
+def test_approval_and_an_old_budget_stop_say_how_to_go_on(tmp_path, store):
     script = Script(bad(Failure.INCONCLUSIVE, "could not read the queue"),
                     bad(Failure.INCONCLUSIVE, "the scheduler is unclear"))
     report = run("design it", tmp_path, store, registry={}, launcher=script, classifier=kind("plan"))
     stop = _stop(store, report.task_id)
     assert stop.cause == "approval" and stop.next_cell == "fable/high"
     assert stops.next_step(report.task_id, stop).endswith("--allow-approval")
-    budget = stops.Stop("budget", "spent", budget_usd=2.5)
-    assert stops.next_step(7, budget) == "cauce resume 7 --budget 5"
+    # A stop an older cauce wrote on a dollar budget reads back, its amount kept, and resumes plainly.
+    old = stops.read({"cause": "budget", "reason": "the $5.00 budget is spent", "budget_usd": 5.0})
+    assert old.status == "blocked" and old.data()["budget_usd"] == 5.0 and "older cauce" in old.line()
+    assert stops.next_step(7, old) == "cauce resume 7" and "no longer exists" in stops.what_to_do(old)
+    assert stops.resume_args(7, {"cause": "budget", "budget_usd": 5.0, "next": "cauce resume 7"}) == [
+        "resume", "7", "--detach"]
     assert stops.next_step(7, stops.Stop("spec", "wrong")) is None
     assert stops.next_step(7, stops.Stop("cancelled", "x"), resumable=False) is None
 

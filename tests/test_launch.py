@@ -44,13 +44,13 @@ def test_a_pinned_model_id_replaces_the_alias_and_the_served_model_is_read_from_
 
 def test_argv_carries_every_ceiling_and_restriction(tmp_path):
     work = tmp_path / "work"
-    s = spec(tmp_path, workdir=work, max_turns=12, max_budget_usd=1.5, tools=("Read", "Bash"),
+    s = spec(tmp_path, workdir=work, max_turns=12, tools=("Read", "Bash"),
              disallowed_tools=("Edit", "Write"), append_system_prompt="hint")
     argv = build_argv(s, mcp_config_path=tmp_path / "m.json")
     def val(flag):
         return argv[argv.index(flag) + 1]
     assert val("--model") == "sonnet" and val("--effort") == "high"
-    assert val("--max-turns") == "12" and val("--max-budget-usd") == "1.50"
+    assert val("--max-turns") == "12" and "--max-budget-usd" not in argv
     assert val("--tools") == "Read,Bash" and val("--disallowedTools") == "Edit,Write"
     assert val("--add-dir") == str(work) and val("--mcp-config") == str(tmp_path / "m.json")
     assert val("--append-system-prompt") == "hint"
@@ -85,7 +85,8 @@ def test_a_pass_needs_evidence(tmp_path):
         (envelope("no block at all"), Failure.INCONCLUSIVE),
         (envelope(block(verdict="pass") + block(verdict="fail")), Failure.INCONCLUSIVE),
         (json.dumps({"is_error": True, "subtype": "error_max_turns"}), Failure.TURNS_EXHAUSTED),
-        (json.dumps({"is_error": True, "subtype": "error_max_budget_usd"}), Failure.BUDGET_EXHAUSTED),
+        # cauce sets no dollar cap; one set elsewhere reads as the session erroring.
+        (json.dumps({"is_error": True, "subtype": "error_max_budget_usd"}), Failure.ENVIRONMENT),
         (json.dumps({"is_error": True, "subtype": "error_during_execution"}), Failure.ENVIRONMENT),
         ("not json", Failure.ENVIRONMENT),
     ],
@@ -107,6 +108,23 @@ def test_an_errored_session_says_why_not_its_subtype(tmp_path):
 def test_result_block_rejects_garbage():
     assert result_block("```cauce-result\n[1]\n```") is None
     assert result_block("```cauce-result\n{bad\n```") is None
+
+
+def test_a_block_whose_strings_hold_a_fence_or_a_tab_is_still_read():
+    evidence = "pytest -q:\n```\n3 passed\n```\nand\ta raw tab"
+    raw = '{"verdict": "pass", "summary": "done", "evidence": ' + json.dumps(evidence).replace("\\t", "\t") + "}"
+    block = result_block(f"Done.\n```cauce-result\n{raw}\n```\n")
+    assert block["verdict"] == "pass" and "3 passed" in block["evidence"] and "\t" in block["evidence"]
+    # Two blocks are still no verdict, and a block that never closes is read as far as its JSON goes.
+    assert result_block(f"```cauce-result\n{raw}\n```\n```cauce-result\n{raw}\n```") is None
+    assert result_block(f"```cauce-result\n{raw}")["summary"] == "done"
+    # Two verdicts in one block, or anything after its JSON, are no verdict either.
+    failing = '{"verdict": "fail", "failure": "code_bug", "summary": "no"}'
+    assert result_block(f"```cauce-result\n{raw}\n{failing}\n```") is None
+    assert result_block(f"```cauce-result\n{raw}\n}}\n```") is None
+    report ='```cauce-report\n{"project": "x", "note": "a ```fenced``` word"}\n```'
+    assert launch.report_block(report) == {"project": "x", "note": "a ```fenced``` word"}
+    assert launch.report_block("```cauce-report\nnot json") == {"unparsed": "not json"}
 
 
 def test_run_reads_changes_from_git_and_cleans_its_mcp_file(git_repo):
@@ -316,3 +334,13 @@ def test_a_timeout_after_the_work_changed_files_is_out_of_turns_not_the_environm
     assert result.failure is Failure.TURNS_EXHAUSTED and not result.transient
     assert result.changed_paths == ("app.py",) and "after changing 1 file(s)" in result.summary
     assert launch.timeout_for(30) == launch.DEFAULT_TIMEOUT_S and launch.timeout_for(120) == 7200
+
+
+def test_a_worker_s_cache_is_counted_apart_and_forks_are_off_in_it(monkeypatch):
+    usage = launch._usage({"total_cost_usd": 0.3, "num_turns": 4, "usage": {
+        "input_tokens": 100, "cache_read_input_tokens": 9000, "cache_creation_input_tokens": 900,
+        "output_tokens": 50}})
+    assert usage["input_tokens"] == 10000 and usage["cache_read_tokens"] == 9000
+    assert usage["cache_write_tokens"] == 900
+    monkeypatch.setenv("CLAUDE_CODE_FORK_SUBAGENT", "1")
+    assert launch.worker_env()["CLAUDE_CODE_FORK_SUBAGENT"] == "0"

@@ -1,7 +1,7 @@
 """After a failed attempt: which way to move, if any.
 
 A failure is evidence about *where* the problem lives, and each place has one
-right response. Conflating them is how an orchestrator burns a budget going in
+right response. Conflating them is how an orchestrator burns attempts and money going in
 circles:
 
 - **Retry** — the work never happened (a timeout, a missing binary). Same cell,
@@ -43,7 +43,6 @@ class Failure(StrEnum):
     ENVIRONMENT = "environment"  # never attempted: timeout, missing tool, transport
     PERMISSION = "permission"  # a tool call the worker needed was refused by the permission settings
     TURNS_EXHAUSTED = "turns_exhausted"
-    BUDGET_EXHAUSTED = "budget_exhausted"  # the attempt's own spending cap
 
 
 #: What each failure says about where the problem lives, as a move explains itself.
@@ -57,10 +56,9 @@ MEANING = {
     Failure.ENVIRONMENT: "the work never ran: a timeout, a missing tool, a transport error",
     Failure.PERMISSION: "a tool call the worker needed was refused by the permission settings",
     Failure.TURNS_EXHAUSTED: "the worker used all its turns before a verdict",
-    Failure.BUDGET_EXHAUSTED: "the attempt reached its own spending cap before a verdict",
 }
 
-EFFORT_AXIS = frozenset({Failure.CODE_BUG, Failure.TEST_BUG, Failure.INCONCLUSIVE, Failure.BUDGET_EXHAUSTED})
+EFFORT_AXIS = frozenset({Failure.CODE_BUG, Failure.TEST_BUG, Failure.INCONCLUSIVE})
 REPLAN = frozenset({Failure.SPEC_BUG, Failure.ARCHITECTURE_BUG})
 
 
@@ -270,7 +268,7 @@ def decide(
             why = f"{last.max_turns} turns is the cap"
         else:
             why = "the turns were raised and the raised attempt changed nothing"
-        return Decision(Move.REPLAN, reason="the task does not fit even the raised turn budget; split it",
+        return Decision(Move.REPLAN, reason="the task does not fit even the raised turn ceiling; split it",
                         because=(seen, f"{why}: the task is bigger than one worker, so it is split, not climbed"))
 
     pair = _repeated_pair(attempts)

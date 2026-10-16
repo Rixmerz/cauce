@@ -9,7 +9,6 @@ export type CauceStop = {
   next: string | null
   allow: string[]
   denied?: string[]
-  budget_usd?: number
 }
 
 export type CauceCard = {

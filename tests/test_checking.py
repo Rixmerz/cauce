@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from cauce import criteria, findings, flow, launch, risk
+from cauce import criteria, findings, flow, launch, orchestrate, risk
 from cauce.escalate import Attempt, Failure, Move, decide
 from cauce.launch import LaunchSpec, WorkerResult
 from cauce.matrix import LADDERS, Cell
@@ -76,6 +76,10 @@ def test_findings_are_records_and_only_the_change_s_own_shown_ones_block():
     assert findings.places(read) == {"src/a.py", "src/b.py", "src/c.py"}
     assert "- [introduced, deterministic] src/a.py:12: Off by one in the loop — pytest -k loop" in findings.text(read)
     assert findings.read({"findings": "no"}) == ()
+    # Shown by a command means its proof is given: a claim of it without one is read from the code.
+    claimed = findings.read({"findings": [{"where": "a.py", "what": "x", "evidence_class": "deterministic",
+                                           "cause": "introduced", "proof": "  "}]})
+    assert claimed[0]["evidence_class"] == "inferential"
 
 
 def test_two_reviews_that_place_the_same_findings_converge():
@@ -129,9 +133,9 @@ def check(verdict="pass", found=(), summary="checked"):
 BUG = {"where": "app.py:3", "what": "drops the last item", "evidence_class": "deterministic", "cause": "introduced",
        "proof": "python probe.py"}
 OTHER = {"where": "lib.py:9", "what": "a new crash", "evidence_class": "deterministic", "cause": "introduced",
-         "proof": ""}
+         "proof": "python -c 'import lib'"}
 OLD = {"where": "old.py", "what": "was always so", "evidence_class": "deterministic", "cause": "pre-existing",
-       "proof": ""}
+       "proof": "git stash; pytest old_test.py"}
 
 
 @pytest.fixture
@@ -154,6 +158,10 @@ def test_a_risky_pass_is_checked_and_its_findings_earn_one_correction(git_repo, 
     attempts = store.attempts(report.task_id)
     assert attempts[0]["cost_usd"] == pytest.approx(0.15)
     assert "risk high" in report.text()
+    # The check is told why it runs, in the router's words, and its own cost is kept apart.
+    assert "Why this check runs: " in verifier.prompt and verifier.max_turns <= orchestrate.VERIFIER_TURNS
+    first = store.events_of(report.task_id, "attempt_finished")[0]["data"]
+    assert first["worker_cost_usd"] == pytest.approx(0.1) and first["verifier_cost_usd"] == pytest.approx(0.05)
 
 
 def test_progress_earns_the_next_round_and_what_is_left_at_the_cap_goes_to_a_person(git_repo, store, verifier_on):
@@ -177,6 +185,8 @@ def test_after_progress_a_finding_only_read_from_the_code_goes_with_the_pass(git
     assert report.status == "done" and len(script.specs) == 4
     events = store.events_of(report.task_id, "verified")
     assert [(e["data"]["blocking"], e["data"]["carried"]) for e in events] == [(1, 0), (0, 1)]
+    # The blockers themselves are kept, so a resume after a stop answers exactly them.
+    assert [f["what"] for f in events[0]["data"]["blockers"]] == [BUG["what"]] and events[1]["data"]["blockers"] == []
     assert "the hover colour may be too light" in store.attempts(report.task_id)[-1]["evidence"]
     finished = store.last_event(report.task_id, "finished")["data"]
     assert any(f["what"] == read["what"] for f in finished["findings"])
@@ -226,7 +236,20 @@ def test_the_verifier_cell_and_brief():
     assert verify_cell(Cell("opus", "medium")) == Cell("opus", "high")
     assert verify_cell(Cell("opus", "max")) == Cell("opus", "high")  # independence is the session, not effort
     text = verifier_brief("Do:\n- a\n- b", "implement", home(), None, [f"f{i}" for i in range(25)])
-    assert "S2: b" in text and "uncommitted" in text and "and 5 more" in text
+    assert "S2: b" in text and "uncommitted" in text and "and 5 more" in text and "Why this check" not in text
+    fixing = verifier_brief("the export drops rows", "debug-repro", home(), "abc123def4567", ["x.py"],
+                            why=["the request is about data"])
+    assert "Why this check runs: the request is about data" in fixing and "at the base commit abc123def456" in fixing
+    # It is read-only, as its role says: never told to stash the work it checks.
+    assert "never `git stash`" in fixing and "git worktree add" in fixing
+
+
+def test_a_worker_that_climbed_to_many_turns_does_not_hand_them_to_its_check(git_repo, store, verifier_on):
+    script = Script(passing(), check("pass"), write="app.py")
+    run("fix the cart total", git_repo, store, Options(max_turns=150), registry={}, launcher=script,
+        classifier=kind("implement"))
+    worker, verifier = script.specs
+    assert worker.max_turns == 150 and verifier.max_turns == orchestrate.VERIFIER_TURNS
 
 
 def test_a_person_s_verifier_role_takes_the_bundled_one_s_place():
@@ -426,7 +449,8 @@ def test_the_diff_route_answers(ui, store, git_repo):  # noqa: F811
 def _found(*rows):
     from cauce import findings
 
-    return findings.read({"findings": [dict(zip(("where", "what", "evidence_class", "cause"), r, strict=True))
+    return findings.read({"findings": [dict(zip(("where", "what", "evidence_class", "cause"), r, strict=True),
+                                            proof="a probe shows it" if r[2] == "deterministic" else "")
                                        for r in rows]})
 
 
@@ -468,6 +492,10 @@ def test_the_ledger_adds_reviews_together_and_sends_only_one_sided_readings_to_a
         ("tax.py:5", "tax on the gross", "inferential", "worsened")))]))
     text = ledger.brief("refute", rows[2:], round_=1, sha="abc")
     assert "never decide a row by who reported it" in text and "F3" in text and "confirmed, refuted, unsure" in text
+    assert "Two reviewers worked apart" in text
+    # One review before it (the bundled feature, bugfix and review-fix): its brief says so.
+    alone_text = ledger.brief("refute", rows[2:], round_=1, sha="abc", reviewers=1)
+    assert "A review read each row" in alone_text and "Two reviewers" not in alone_text
 
     refuted = ledger.outcome({"role": "refute", "ids": ["F3"], "agreed": ["F1"]}, [{"id": "F3", "verdict": "x"}])
     assert refuted.confirmed == ["F1"] and refuted.held == ["F3"] and not refuted.stop

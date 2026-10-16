@@ -1,15 +1,54 @@
 {
   "name": "feature",
-  "description": "Plan a feature, build it, review the change, and fix what the review found",
-  "inputs": ["goal"],
+  "description": "Build a feature with its tests in one worker, review the change blind, and fix only what a refuter or a probe confirms; a clean review ends it",
+  "inputs": [
+    "goal"
+  ],
   "steps": [
-    {"id": "plan", "title": "Plan it", "kind": "plan",
-     "prompt": "Plan this feature without changing any file: {goal}\n\nRead the code it touches. Answer with the files to change, the order, the tests that prove it works, and the risks. Keep it short enough for the next worker to follow."},
-    {"id": "build", "title": "Build it", "kind": "feature",
-     "prompt": "Build this feature, following the plan below: {goal}\n\nAdd or update the tests the plan names and run them before you stop."},
-    {"id": "review", "title": "Review the change", "kind": "review-routine",
-     "prompt": "Review, without changing any file, the change the step before made for: {goal}\n\nRead what the workflow changed so far (the diff is named below). List each real problem with its file and line: bugs, missing tests, broken behaviour. Say plainly when there is none."},
-    {"id": "fix", "title": "Fix what the review found", "kind": "implement",
-     "prompt": "Fix every problem the review below found in the change for: {goal}\n\nIf the review found none, run the tests and stop. Run the tests before you stop."}
+    {
+      "id": "build",
+      "title": "Build it, with its tests",
+      "kind": "feature",
+      "prompt": "Build this feature: {goal}\n\nRead the code it touches and decide the approach yourself, then build it with the tests that prove it works. Run them, and the suite around them, before you stop."
+    },
+    {
+      "id": "review",
+      "title": "Review the change",
+      "kind": "review-routine",
+      "needs": [
+        "build"
+      ],
+      "prompt": "Review, without changing any file, the change made for: {goal}\n\nRead the diff named below: bugs, missing tests, broken behaviour. Report each real problem in `findings`: its place (file:line), what is wrong, how it is known (`deterministic` with the command or hunk that shows it as `proof`, else `inferential`) and whether this change caused it. Say plainly when there is none."
+    },
+    {
+      "id": "refute",
+      "title": "Decide what the review only read",
+      "kind": "review-routine",
+      "ledger": "refute",
+      "needs": [
+        "review"
+      ],
+      "prompt": "Decide, without changing any file, the findings on the change for: {goal}"
+    },
+    {
+      "id": "fix",
+      "title": "Fix the confirmed findings",
+      "kind": "implement",
+      "ledger": "fix",
+      "needs": [
+        "refute"
+      ],
+      "prompt": "Fix the confirmed findings below, in the change for: {goal}\n\nRun the tests before you stop."
+    },
+    {
+      "id": "recheck",
+      "title": "Check each fix",
+      "kind": "review-routine",
+      "ledger": "recheck",
+      "needs": [
+        "fix"
+      ],
+      "prompt": "Check, without changing any file, the fix just made in the change for: {goal}"
+    }
   ]
 }

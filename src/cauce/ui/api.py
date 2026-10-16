@@ -18,7 +18,7 @@ TASK_SOURCES = ("cauce", "queue")  # what the board shows: work cauce runs or ho
 #: States that are waiting on a person, and what each one asks of them.
 NEEDS_YOU = {
     "failed": "every cell on its ladder failed: read the attempts",
-    "blocked": "a refused command, the environment or the budget stopped it: clear it, then `cauce resume`",
+    "blocked": "a refused command or the environment stopped it: clear it, then `cauce resume`",
     "replan": "the task as written cannot be done: rewrite or split it",
     "needs_approval": "the next cell needs your approval",
     "interrupted": "it stopped with no sign of life",
@@ -72,7 +72,7 @@ def climbs_of(store: Store, task_id: int, attempts: list[dict]) -> list[dict[str
             out.append({"from": found.get("from_cell"), "to": found.get("to_cell"), "axis": found.get("axis"),
                         "trigger": found.get("trigger"), "because": found.get("because") or [],
                         "skipped": found.get("skipped") or [], "turns_from": found.get("turns_from"),
-                        "turns_to": found.get("turns_to"), "budget_left": found.get("budget_left")})
+                        "turns_to": found.get("turns_to"), "spent_usd": found.get("spent_usd")})
             continue
         following = attempts[i + 1] if i + 1 < len(attempts) and a["move"] in _AXIS else None
         out.append({"from": a["cell"], "to": following["cell"] if following else None,
@@ -90,7 +90,7 @@ def worker_of(store: Store, task: dict[str, Any], steps: int) -> dict[str, Any] 
         return None
     d = started["data"]
     return {"seq": d.get("seq"), "cell": d.get("cell"), "model": d.get("model"), "max_turns": d.get("max_turns"),
-            "budget_usd": d.get("budget_usd"), "capabilities": d.get("capabilities") or [],
+            "capabilities": d.get("capabilities") or [],
             "started_at": started["ts"], "alive": flow.alive(task.get("pid"))}
 
 

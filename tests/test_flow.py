@@ -157,10 +157,12 @@ def test_the_dispatcher_runs_parallel_work_and_waits_for_it(git_repo, store: Sto
 
 
 def test_queued_options_reach_the_run():
-    task = {"options": '{"budget_usd": 1.5, "verify": "pytest", "kind": "docs", "start": "sonnet/high"}'}
+    # A budget an older cauce stored is left where it is: nothing reads it.
+    task = {"options": '{"budget_usd": "x", "verify": "pytest", "kind": "docs", "start": "sonnet/high"}'}
     options = flow.queued_options(task, Options(max_attempts=3))
-    assert (options.budget_usd, options.verify, options.kind, options.start.label, options.max_attempts) == (
-        1.5, "pytest", "docs", "sonnet/high", 3)
+    assert (options.verify, options.kind, options.start.label, options.max_attempts) == (
+        "pytest", "docs", "sonnet/high", 3)
+    assert not hasattr(options, "budget_usd")
     assert flow.queued_options({"options": "{}"}, Options()).verify is None
 
 
