@@ -38,7 +38,7 @@ from typing import Any, NamedTuple
 from cauce import dispatch, isolate, ledger, project, repo, surfaces
 from cauce import findings as findings_mod
 from cauce.escalate import MAX_TURNS_CEILING
-from cauce.matrix import KINDS, Cell
+from cauce.matrix import KINDS, READ_ONLY_KINDS, Cell
 from cauce.store import Store, home
 
 SCOPES = ("project", "user", "bundled")
@@ -240,9 +240,12 @@ def normalize(defn: Mapping[str, Any], name: str | None = None) -> dict[str, Any
         if step.get("verify") is not None and not isinstance(step["verify"], str):
             errors.append(f"{where}: verify is a command, as text")
         turns = step.get("max_turns")
-        if turns is not None and (not isinstance(turns, int) or isinstance(turns, bool) or turns <= 0
-                                  or turns > MAX_TURNS_CEILING):
-            errors.append(f"{where}: max_turns is a whole number from 1 to {MAX_TURNS_CEILING}")
+        if turns is not None and (not isinstance(turns, int) or isinstance(turns, bool) or turns <= 0):
+            errors.append(f"{where}: max_turns is a whole number from 1 (at most {MAX_TURNS_CEILING} are used)")
+        elif turns is not None and turns > MAX_TURNS_CEILING:
+            # More than an attempt ever gets (a definition or a run an older cauce
+            # kept): read as the ceiling, as a run would clamp it.
+            step["max_turns"] = MAX_TURNS_CEILING
         if step.get("memory") is not None:
             refs = step["memory"] if isinstance(step["memory"], list) else None
             if refs is None or not all(isinstance(r, (str, int)) and not isinstance(r, bool)
@@ -641,9 +644,11 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         held = _ledger(store, run, defn, step, latest, options)
         body += "\n\n" + held.pop("brief")
         earlier = []
-    elif str(step.get("kind") or "").startswith("review"):
-        # A review is blind, as the independent check is: the request and the change
-        # (the diff below), never what the steps before said of their own work.
+    elif str(step.get("kind") or "").startswith("review") and options.get("origin") and \
+            _base(store, run, defn, step["id"], latest):
+        # A review of a change is blind, as the independent check is: the request and
+        # the change (the diff below), never what the steps before said of their own
+        # work. With no change to read (a plan to critique), it gets what came before.
         earlier = []
     for sid in earlier:
         task = latest.get(sid)
@@ -712,8 +717,9 @@ def _ledger(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step:
     Every step sees the same rows by the same ids: the ledger is rebuilt the same way each time."""
     role, earlier = step["ledger"], _before(defn, step["id"])
     by_id = {s["id"]: s for s in defn["steps"]}
-    rows = ledger.collect([(sid, _findings_of(store, latest.get(sid)))
-                           for sid in earlier if not by_id[sid].get("ledger")])
+    sources = [sid for sid in earlier if not by_id[sid].get("ledger")]
+    reviewers = [sid for sid in sources if by_id[sid].get("kind") in READ_ONLY_KINDS]
+    rows = ledger.collect([(sid, _findings_of(store, latest.get(sid))) for sid in sources])
     known = {r["id"]: r for r in rows}
     nearest = {r: next((sid for sid in reversed(earlier) if by_id[sid].get("ledger") == r), None)
                for r in ledger.ROLES}
@@ -750,7 +756,8 @@ def _ledger(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step:
         spec["agreed"] = agreed
     if role == "fix":
         spec["base"] = _base(store, run, defn, step["id"], latest) or options.get("origin")
-    spec["brief"] = ledger.brief(role, mine, round_=round_, sha=sha, diff=diff) if mine else \
+    spec["brief"] = ledger.brief(role, mine, round_=round_, sha=sha, diff=diff,
+                                 reviewers=max(1, len(reviewers))) if mine else \
         f"Ledger ({role}): nothing to do."
     return spec
 

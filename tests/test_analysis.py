@@ -137,13 +137,15 @@ def test_a_check_s_cost_and_the_cache_are_kept_apart(store):
         store.add_event(task["id"], kind_, **data)
     old = store.create_task("older work", status="done", source="cauce", kind="implement")
     for kind_, data in (("planned", {"kind": "implement"}),
+                        ("verified", {"passed": True, "cost_usd": 0.1}),
                         ("attempt_finished", {"cell": "sonnet/medium", "passed": True, "cost_usd": 0.4,
                                               "input_tokens": 50_000}),
                         ("finished", {"status": "done", "cost_usd": 0.4})):
         store.add_event(old["id"], kind_, **data)
     report = analysis.compute(store, days=0)
     cell = report["cells"][0]
-    # The cell's own cost leaves its check out; the cache share counts only attempts that recorded it.
-    assert cell["cost_usd"] == 0.7 and cell["verifier_cost_usd"] == 0.2 and cell["cache_read_share"] == 0.8
-    assert report["summary"]["verifier_cost_usd"] == 0.2 and report["summary"]["cache_read_share"] == 0.8
-    assert "independent checks $0.20" in analysis.text(report) and "cache read 80%" in analysis.text(report)
+    # The cell's own cost leaves its check out (an older attempt's check is read from its `verified`
+    # event); the cache share counts only attempts that recorded it.
+    assert cell["cost_usd"] == 0.6 and cell["verifier_cost_usd"] == 0.3 and cell["cache_read_share"] == 0.8
+    assert report["summary"]["verifier_cost_usd"] == 0.3 and report["summary"]["cache_read_share"] == 0.8
+    assert "independent checks $0.30" in analysis.text(report) and "cache read 80%" in analysis.text(report)

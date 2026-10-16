@@ -1172,3 +1172,12 @@ def test_an_index_that_failed_at_this_commit_is_not_restarted_by_each_task(git_r
                  classifier=kind("implement"), adapters=[adapter])
     assert any("its last index here failed (Workspace directory not found: /old); not tried again" in r
                for r in report.plan.reasons)
+
+
+def test_an_attempt_keeps_the_start_and_the_end_of_long_evidence():
+    from cauce.orchestrate import kept_evidence
+
+    assert kept_evidence("short") == "short"
+    long = "start " + "x" * 5000 + " the last line"
+    kept = kept_evidence(long)
+    assert len(kept) <= 4000 and kept.startswith("start ") and kept.endswith(" the last line") and "\n…\n" in kept

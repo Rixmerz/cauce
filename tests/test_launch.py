@@ -118,7 +118,11 @@ def test_a_block_whose_strings_hold_a_fence_or_a_tab_is_still_read():
     # Two blocks are still no verdict, and a block that never closes is read as far as its JSON goes.
     assert result_block(f"```cauce-result\n{raw}\n```\n```cauce-result\n{raw}\n```") is None
     assert result_block(f"```cauce-result\n{raw}")["summary"] == "done"
-    report = '```cauce-report\n{"project": "x", "note": "a ```fenced``` word"}\n```'
+    # Two verdicts in one block, or anything after its JSON, are no verdict either.
+    failing = '{"verdict": "fail", "failure": "code_bug", "summary": "no"}'
+    assert result_block(f"```cauce-result\n{raw}\n{failing}\n```") is None
+    assert result_block(f"```cauce-result\n{raw}\n}}\n```") is None
+    report ='```cauce-report\n{"project": "x", "note": "a ```fenced``` word"}\n```'
     assert launch.report_block(report) == {"project": "x", "note": "a ```fenced``` word"}
     assert launch.report_block("```cauce-report\nnot json") == {"unparsed": "not json"}
 

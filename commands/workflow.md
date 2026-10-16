@@ -93,7 +93,8 @@ How to write the steps:
   definition holds is read and ignored.
 - **Cut where context changes hands, never by role:** one step builds with its
   tests (or reproduces and fixes); a review is its own step and reads blind (the
-  request and the diff, not what earlier steps said); fixing what it found goes
+  request and the diff, not what earlier steps said; one with no diff to read,
+  such as a plan's critique, gets what came before); fixing what it found goes
   through the ledger (`refute`, `fix`, `recheck`), skipped when the review is
   clean. A step gets the findings of the steps it waits on as records.
 - **Changing a bundled template:** it is copied to the user scope first, and

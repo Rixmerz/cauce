@@ -202,11 +202,14 @@ def cmd_resume(args: argparse.Namespace) -> int:
             return 1
         # A dismissed task resumes as what it was before: a dismissal hides a
         # task, it never makes one that was found wrong resumable.
-        was = task["status"]
+        was, hidden = task["status"], None
         if was == "dismissed" and (stop := stops.of(store, task)) is not None:
             was = str(stop.extra.get("was") or was)
+            hidden = stop.extra.get("had_cause")
             task = {**task, "status": was}
-        outgrew = was == "replan" and (stop := stops.of(store, task)) is not None and stop.cause == "turns"
+        # What stopped it: a dismissal keeps the cause it took off the board.
+        cause = hidden or ((stop := stops.of(store, task)) and stop.cause)
+        outgrew = was == "replan" and cause == "turns"
         if was not in RESUMABLE and not outgrew:
             print(f"task #{args.id} is {was}; only a task that stopped ({', '.join(RESUMABLE)}) resumes"
                   + ("; rewrite it as a new task" if was == "replan" else ""), file=sys.stderr)
@@ -263,11 +266,15 @@ def cmd_resume(args: argparse.Namespace) -> int:
                    for a in attempts]
         # A task the independent check stopped resumes with what it found: its first
         # check says for each whether it is fixed, instead of starting blind.
-        stop = stops.of(store, task)
-        checked = store.last_event(args.id, "verified") if stop is not None and stop.cause == "review" else None
-        known = findings_mod.blocking(findings_mod.read({"findings": checked["data"].get("findings") or []})
-                                      ) if checked else []
-        kept = options.stored() | ({"allow_approval": True} if inherited else {})
+        checked = (store.last_event(args.id, "verified") or {}).get("data") or {} if cause == "review" else {}
+        if "blockers" in checked:
+            known = list(findings_mod.read({"findings": checked["blockers"]}))
+        else:  # a check an older cauce recorded kept only what it showed
+            known = findings_mod.blocking(findings_mod.read({"findings": checked.get("findings") or []}))
+        # What the task is beyond its run options (an investigator's mark) stays on it.
+        prior = json.loads(task["options"] or "{}")
+        kept = (options.stored() | {k: prior[k] for k in ("investigation",) if k in prior}
+                | ({"allow_approval": True} if inherited else {}))
         store.update_task(args.id, options=json.dumps(kept), dispatched=0, cancel_requested=0)
         report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=args.id, history=history,
                                  progress=_say, known_findings=known)
@@ -295,7 +302,8 @@ def _needs_a_person(store: Store, task: dict, args: argparse.Namespace) -> str |
     from cauce import grants
 
     stop = stops.of(store, task)
-    tried = len(store.attempts(task["id"]))
+    attempts = store.attempts(task["id"])
+    tried = len(attempts)
     if tried >= UNATTENDED_ATTEMPTS:
         # No dollar cap stops work any more: a model resuming a task that keeps
         # failing is stopped by the attempts it already had.
@@ -304,6 +312,14 @@ def _needs_a_person(store: Store, task: dict, args: argparse.Namespace) -> str |
     if task["status"] == "needs_approval" and not args.allow_approval:
         return (f"task #{task['id']} waits for a cell that needs the person's approval: they resume it "
                 f"(`cauce resume {task['id']} --allow-approval`)")
+    start = args.start or (attempts[-1]["cell"] if attempts else None)
+    tagged = LADDERS.get(task["kind"] or "", ())[:1]
+    if (start and not args.allow_approval and Cell.parse(start).needs_approval
+            and not (tagged and tagged[0].needs_approval)):
+        # The approval an earlier run had was for that run: a resume nobody approved
+        # does not start on the cell it opened. A `#fable` task's tag is its approval.
+        return (f"task #{task['id']} would start again on {start}, which needs the person's approval: they "
+                f"resume it (`cauce resume {task['id']} --allow-approval`)")
     if stop is not None and stop.cause == "permission":
         needed = list(stop.allow or allow_rules.from_refusals(stop.denied))
         have = {*grants.granted(task["repo"]), *(args.allow or ())}

@@ -105,8 +105,8 @@ ends.
 
 **Check each report before you use it.** An investigator that stopped
 (`stopped` in the status), or a report with an empty section the facts say
-should not be empty, is not done: resume it (`cauce resume <id>`, with
-`--max-turns 200` when it ran out of turns), or start that project again with
+should not be empty, is not done: resume it (`cauce resume <id> --unattended`,
+with `--max-turns 200` when it ran out of turns), or start that project again with
 more turns (`cauce investigate start --repo <dir> --max-turns 200`). Never fill
 a gap with a guess.
 
@@ -271,8 +271,9 @@ What makes a workflow fit:
 - A definition grants nothing: no rule, approval or capability.
 
 Start from a bundled workflow when one is close (`cauce workflow copy bugfix
-my-bugfix`), then change its steps (`cauce workflow step set my-bugfix fix
---verify "npm test"`).
+my-bugfix`), then change its steps (`cauce workflow step set my-bugfix repair
+--verify "npm test"`: `repair` writes the fix; the ledger's `fix` runs only for
+findings a review confirmed, and can take the same check).
 
 ## 7. Check and report
 

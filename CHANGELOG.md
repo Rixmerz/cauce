@@ -13,25 +13,33 @@
   `--max-budget-usd` handed to a worker, and no attempt refused for the money
   left. What every attempt, check and run cost is still recorded and shown in
   the report, the board, `cauce stats` and the Analysis screen. Turns are the
-  one dial of room: a task's are clamped to 200, and attempts stay the ceiling
-  of a run. A task an older cauce stopped on a budget reads back as such and
+  one dial of room: a task's are clamped to 200 (a workflow step's too: one an
+  older cauce saved with more reads as 200), and attempts stay the ceiling of
+  a run. A task an older cauce stopped on a budget reads back as such and
   resumes plainly; a workflow step's old `budget_usd` is dropped when the
   definition is read.
-- **An unattended resume has a bound of its own**: twice the attempts a run
-  takes, beyond which it needs a person. An approval for Fable a person gave is
-  kept on the task, and a resume by a model never carries it.
+- **An unattended resume has a bound of its own** (`--unattended`: the mod's
+  `resume` tool, and the resumes the orchestration guide now has a session
+  start on its own): twice the attempts a run takes, beyond which it needs a
+  person. An approval for Fable a person gave stays on the task for their own
+  next resume; an unattended one never uses it, nor starts on a cell that
+  needs it.
 - **`cauce investigate` gives an estimate, not a cap**: the average cost of the
   investigators run before (when there are any) times the number of projects,
   in the dry run and when it starts. The init skill says so.
 - **The bundled workflows are cut where context changes hands, never by
   role.** `feature`: build (the change with its tests) → review → refute → fix
   → recheck. `bugfix`: repair (a failing test first, then the fix) → review →
-  refute → fix → recheck. `review-fix`: review → refute → fix → recheck. A
-  clean review ends them after two workers; the ledger steps run only for the
-  findings there are.
-- **A review step reads blind**: the change itself, never what the steps before
-  said of it. A step that needs another gets its findings as records (where,
-  what, evidence, cause, proof), not its prose.
+  refute → fix → recheck. `review-fix`: review → refute → fix → recheck, its
+  review told that code with no change under review has nothing to excuse as
+  pre-existing. A clean review ends `feature` and `bugfix` after two workers
+  and `review-fix` after one; the ledger steps run only for the findings there
+  are, and the refuter is told whether one review or two found them.
+- **A review step of a change reads blind**: the change itself, never what the
+  steps before said of it (a review with no change to read, such as a plan's
+  critique, still gets what came before). A step that needs another gets its
+  findings as records (where, what, evidence, cause, proof) beside its
+  summary.
 - **One agent first.** The orchestration guide starts from the session doing
   the work itself, and names what earns a worker (a context to keep clean, work
   to run beside it, another cell, an independent check). A judgment that needs
@@ -43,21 +51,25 @@
 ### Added
 
 - The independent verifier is told why it runs (the risk's reasons, to probe
-  first), reproduces a bug at the base for a debugging task, and gets its own
-  room (40 turns at most, with a timeout to match).
-- A task the check stopped for review resumes with what the check found: its
-  blocking findings seed the next round's ledger.
+  first), reproduces a bug at the base for a debugging task (in a worktree of
+  its own, never by stashing the work it checks), and gets its own room (40
+  turns at most, with a timeout to match).
+- A task the check stopped for review resumes with what the check found, also
+  after a dismissal: the blockers it stopped on (now kept on its `verified`
+  event) seed the next round's ledger.
 - What an attempt cost is split: the worker's own cost and the independent
   check's, and the prompt cache's reads and writes. `cauce stats` and the
   Analysis screen show what the checks cost and how much of the input the
-  cache served, per cell and in all.
+  cache served, per cell and in all; an older run's checks are read from its
+  `verified` events.
 - How long filing notes takes is timed with the run's other phases.
 
 ### Fixed
 
 - **A result block that quoted a fenced snippet, or held a raw tab in a
   string, lost the attempt its verdict.** The block's JSON is now decoded from
-  where it opens, not cut at the next fence; two openers are still no verdict.
+  where it opens, not cut at the next fence; two openers, or anything but the
+  closing fence after its JSON (a second verdict), are still no verdict.
 - A finding claimed as deterministic without its proof is read as inferential,
   so a refuter decides it instead of the claim.
 - A reading worker is told where its answer and findings go in the result
@@ -66,6 +78,10 @@
   `work`, `queue add`, `workflow run`, `workflow retry` and `investigate start`
   refuse inside a worker (every reading command still answers), and a worker's
   Claude Code runs with forks off.
+- An attempt's record keeps the start and the end of long evidence, so a
+  resume's brief quotes the real last lines.
+- A resumed investigator stays one: it still counts toward the estimate and
+  stays out of insights.
 
 ## [0.17.0] - 2026-10-16
 

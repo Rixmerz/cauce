@@ -9,7 +9,7 @@
       "id": "review",
       "title": "Review it",
       "kind": "review-routine",
-      "prompt": "Review, without changing any file: {target}\n\nBugs, missing tests, risky code. Report each real problem in `findings`: its place (file:line), what is wrong, how it is known (`deterministic` with the command or hunk that shows it as `proof`, else `inferential`) and whether this change caused it. Say plainly when there is none."
+      "prompt": "Review, without changing any file: {target}\n\nBugs, missing tests, risky code. Report each real problem in `findings`: its place (file:line), what is wrong, how it is known (`deterministic` with the command or hunk that shows it as `proof`, else `inferential`) and its `cause`: when the target names a change (a branch, a commit, a diff), whether that change caused it; when it names code as it stands, there is no change to blame or excuse, so `unknown`. Say plainly when there is none."
     },
     {
       "id": "refute",

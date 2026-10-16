@@ -67,7 +67,7 @@ Request: $ARGUMENTS
 
    Its steps are ordinary cauce tasks that the engine chains by itself. Each
    one starts from the commit the step before kept, and is told what the
-   earlier steps found (a review step excepted: it reads blind). Do not wait on a step to start the next one, and do
+   earlier steps found (a review of a change excepted: it reads blind). Do not wait on a step to start the next one, and do
    not pass results along yourself: that is what the run does without you.
    You hear of the run once, when it ends or when a step waits on the person.
    `cauce workflow status <run>` shows where it is. A step that stopped is
@@ -157,7 +157,7 @@ Request: $ARGUMENTS
      split it from the report's reason, then dispatch again. Do not rerun it as is.
    - `blocked` — a refused command or the environment stopped it (an older
      task may say a dollar budget stopped it: budgets are gone, and
-     `cauce resume <id>` continues it as it is).
+     `cauce resume <id> --unattended` continues it as it is).
      The report's `stopped by …` line says which, and the line under it is the
      command that continues it. Tell the user both, in those words. Its work
      so far is on its branch, marked unverified. When the user grants what was
@@ -169,8 +169,14 @@ Request: $ARGUMENTS
      (`cauce show <id>`); do not try it yourself in this context.
 
    - `replan` because it outgrew its turns — the task is not wrong: continue it
-     with `cauce resume <id> --max-turns 120` (its work stays), or split what
-     the report says is left.
+     with `cauce resume <id> --max-turns 120 --unattended` (its work stays), or
+     split what the report says is left.
+
+   A resume you start on your own, with nothing the person just granted,
+   carries `--unattended`: it refuses what only they can clear (a refused
+   rule, a cell that needs their approval) and stops after two runs' worth of
+   attempts. Leave it off only for a resume that carries what they granted in
+   this conversation (`--allow`, `--allow-approval`, `--keep`).
 
    A task that stops pauses its lane, and the queued work behind it waits.
    When its ending says the lane is paused, deal with the stop first, then

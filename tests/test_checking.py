@@ -185,6 +185,8 @@ def test_after_progress_a_finding_only_read_from_the_code_goes_with_the_pass(git
     assert report.status == "done" and len(script.specs) == 4
     events = store.events_of(report.task_id, "verified")
     assert [(e["data"]["blocking"], e["data"]["carried"]) for e in events] == [(1, 0), (0, 1)]
+    # The blockers themselves are kept, so a resume after a stop answers exactly them.
+    assert [f["what"] for f in events[0]["data"]["blockers"]] == [BUG["what"]] and events[1]["data"]["blockers"] == []
     assert "the hover colour may be too light" in store.attempts(report.task_id)[-1]["evidence"]
     finished = store.last_event(report.task_id, "finished")["data"]
     assert any(f["what"] == read["what"] for f in finished["findings"])
@@ -238,6 +240,8 @@ def test_the_verifier_cell_and_brief():
     fixing = verifier_brief("the export drops rows", "debug-repro", home(), "abc123def4567", ["x.py"],
                             why=["the request is about data"])
     assert "Why this check runs: the request is about data" in fixing and "at the base commit abc123def456" in fixing
+    # It is read-only, as its role says: never told to stash the work it checks.
+    assert "never `git stash`" in fixing and "git worktree add" in fixing
 
 
 def test_a_worker_that_climbed_to_many_turns_does_not_hand_them_to_its_check(git_repo, store, verifier_on):
@@ -488,6 +492,10 @@ def test_the_ledger_adds_reviews_together_and_sends_only_one_sided_readings_to_a
         ("tax.py:5", "tax on the gross", "inferential", "worsened")))]))
     text = ledger.brief("refute", rows[2:], round_=1, sha="abc")
     assert "never decide a row by who reported it" in text and "F3" in text and "confirmed, refuted, unsure" in text
+    assert "Two reviewers worked apart" in text
+    # One review before it (the bundled feature, bugfix and review-fix): its brief says so.
+    alone_text = ledger.brief("refute", rows[2:], round_=1, sha="abc", reviewers=1)
+    assert "A review read each row" in alone_text and "Two reviewers" not in alone_text
 
     refuted = ledger.outcome({"role": "refute", "ids": ["F3"], "agreed": ["F1"]}, [{"id": "F3", "verdict": "x"}])
     assert refuted.confirmed == ["F1"] and refuted.held == ["F3"] and not refuted.stop

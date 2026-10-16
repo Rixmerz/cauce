@@ -195,8 +195,10 @@ yields the default kind, not a guess.
   blocker; what is left at the cap stops the task as `review`. A verifier that
   cannot decide keeps the pass and says so. It is told why it runs (the
   risk's reasons) and, for a fix, to show the failure at the base and gone; it
-  has its own turns (`VERIFIER_TURNS`), never the worker's raised ones. A
-  resume after a `review` stop gives its first check the findings to answer.
+  has its own turns (`VERIFIER_TURNS`), never the worker's raised ones, and is
+  never told to stash the work it checks. A resume after a `review` stop (a
+  dismissed one too) gives its first check the blockers the `verified` event
+  kept.
   Tests run with `CAUCE_VERIFIER=off`.
 - Surfaces narrow and grant nothing: a change outside them fails the attempt
   and is undone in its worktree, never in a person's checkout. Two tasks whose
@@ -208,7 +210,9 @@ yields the default kind, not a guess.
 - History may raise where a task starts, never lower it below its ladder.
 - Fable needs a person: `#fable` or `--allow-approval`. An approval is the
   person's for the run they approved: a resume nobody approved (`--unattended`)
-  never uses one an earlier run stored.
+  never uses one an earlier run stored, nor starts on a cell that needs one (a
+  `#fable` task's tag is its approval). A resume a session starts on its own
+  carries `--unattended` (`commands/orchestration.md`).
 - A worker gets a model alias unless a person pinned it (`cauce config model`).
   cauce never hard-codes a model id; the model that served an attempt is read
   from the CLI's `modelUsage`, never assumed from the alias.
@@ -382,11 +386,13 @@ yields the default kind, not a guess.
   scope.
 - Work is cut where context changes hands, never by role: the phases of one
   task are one worker's (the one that builds writes its tests; the one that
-  reproduces fixes). A review step reads blind, as the verifier does: the
-  request and the diff, never what earlier steps said of their work. Other
+  reproduces fixes). A review step of a change reads blind, as the verifier
+  does: the request and the diff, never what earlier steps said of their work;
+  one with no diff to read (a plan's critique) gets what came before. Other
   steps get the findings of the steps they wait on as records, beside their
   summaries. The bundled templates follow this; their review chain fixes only
   what the ledger confirms, and costs nothing more when the review is clean.
+  A refuter is told whether one review or two found its rows.
 - A worker never starts cauce work (`run`, `resume`, `work`, `queue add`,
   `workflow run|retry`, `investigate start` refuse under `CAUCE_WORKER_TASK`),
   and forks are off inside it (`CLAUDE_CODE_FORK_SUBAGENT=0`): what is left

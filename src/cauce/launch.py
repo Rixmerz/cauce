@@ -509,12 +509,17 @@ def denials(envelope: Mapping[str, Any] | None) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _decoded(text: str, start: int) -> Any:
-    """The JSON value that begins at `start` (after whitespace), or None."""
+def _decoded(text: str, start: int, *, closed: bool = False) -> Any:
+    """The JSON value that begins at `start` (after whitespace), or None. `closed`
+    asks that nothing but the closing fence (or the end) follows it: a second value,
+    or anything else, in the block makes it no value at all."""
     rest = text[start:]
     try:
-        value, _ = _DECODER.raw_decode(rest, len(rest) - len(rest.lstrip()))
+        value, end = _DECODER.raw_decode(rest, len(rest) - len(rest.lstrip()))
     except ValueError:
+        return None
+    tail = rest[end:].lstrip()
+    if closed and tail and not tail.startswith("```"):
         return None
     return value
 
@@ -538,7 +543,7 @@ def result_block(text: str) -> dict[str, Any] | None:
     opened = list(_OPEN_RE.finditer(text or ""))
     if len(opened) != 1:
         return None
-    value = _decoded(text, opened[0].end())
+    value = _decoded(text, opened[0].end(), closed=True)
     return value if isinstance(value, dict) else None
 
 

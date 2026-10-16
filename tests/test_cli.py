@@ -922,3 +922,60 @@ def test_a_task_the_check_stopped_resumes_with_what_the_check_found(tmp_path, mo
     assert cli.main(["resume", str(task["id"]), "--no-report"]) == 0
     assert [f["what"] for f in seen["known_findings"]] == ["drops the last item"]
     assert seen["history"][0].evidence == "The independent check found: x"
+
+
+def test_an_unattended_resume_never_starts_on_a_cell_only_a_person_approves(capsys, git_repo, monkeypatch):
+    ran = []
+    monkeypatch.setattr(orchestrate, "run", lambda *a, **kw: ran.append(kw["task_id"]) or orchestrate.Report(
+        kw["task_id"], "done", None))  # type: ignore[arg-type]
+    monkeypatch.setattr(orchestrate.Report, "text", lambda self: "ok")
+    store = Store.open()
+    climbed = store.create_task("plan the migration", status="running", source="cauce", repo="r",
+                                cwd=str(git_repo), kind="plan", options=json.dumps({"allow_approval": True}))
+    tagged = store.create_task("#fable plan it", status="running", source="cauce", repo="r", cwd=str(git_repo),
+                               kind="frontier")
+    for task in (climbed, tagged):
+        store.add_attempt(task["id"], cell="fable/high", max_turns=30, passed=0, failure="environment",
+                          summary="no network", evidence="", cost_usd=1.0, input_tokens=0, output_tokens=0,
+                          turns=1, duration_s=1, changed_paths=(), capabilities=())
+        stops.record(store, task["id"], stops.Stop("environment", "no network"))
+    store.close()
+    # The approval its first run had is not a model's to use: refused before anything runs.
+    assert cli.main(["resume", str(climbed["id"]), "--unattended", "--detach"]) == 3
+    assert "would start again on fable/high" in capsys.readouterr().err
+    # The person's own resume, or one they approve, goes on; a #fable task's tag is its approval.
+    assert cli.main(["resume", str(climbed["id"]), "--unattended", "--allow-approval"]) == 0
+    assert cli.main(["resume", str(tagged["id"]), "--unattended"]) == 0
+    assert ran == [climbed["id"], tagged["id"]]
+
+
+def test_a_dismissed_review_resumes_with_the_blockers_the_check_recorded(tmp_path, monkeypatch):
+    work = tmp_path / "work"
+    work.mkdir()
+    store = Store.open()
+    task = store.create_task("fix it", status="blocked", source="cauce", repo="r", cwd=str(work), kind="implement",
+                             options=json.dumps({"investigation": "inv-1", "kind": "implement"}))
+    shown = {"where": "app.py:3", "what": "drops the last item", "evidence_class": "deterministic",
+             "cause": "introduced", "proof": "python probe.py"}
+    carried = {"where": "app.py:9", "what": "may be slow", "evidence_class": "inferential", "cause": "introduced",
+               "proof": ""}
+    store.add_event(task["id"], "verified", seq=1, findings=[shown, carried], blocking=1, carried=1,
+                    blockers=[shown])
+    stops.record(store, task["id"], stops.Stop("review", "the check still finds problems"))
+    assert stops.dismiss(store, store.get_task(task["id"]), via="cli") is not None
+    store.close()
+    seen = {}
+
+    def fake_run(text, repo_dir, store, options, **kw):
+        seen.update(kw)
+        return orchestrate.Report(kw.get("task_id"), "done", None)
+
+    monkeypatch.setattr(orchestrate, "run", fake_run)
+    monkeypatch.setattr(orchestrate.Report, "text", lambda self: "done")
+    assert cli.main(["resume", str(task["id"]), "--no-report"]) == 0
+    # The blockers the check stopped on, never the finding that went with the pass.
+    assert [f["what"] for f in seen["known_findings"]] == ["drops the last item"]
+    store = Store.open()
+    # An investigator stays one when it is resumed.
+    assert json.loads(store.get_task(task["id"])["options"])["investigation"] == "inv-1"
+    store.close()

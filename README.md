@@ -21,7 +21,7 @@ remembers what failed — across every repository on the machine.
 | **Says why it stopped** | Every task that stops says who made the call (you, your permission settings, the environment, cauce's rules) and the command that continues it. Cost is measured and shown on every attempt, cell and task, and never stops work: turns are what bound an attempt. |
 | **Remembers** | Problems and the fixes that did or did not work, across every repository; each project's notes, by topic and anchored to code. |
 | **Keeps the thread** | The scribe reads every turn of a session from its transcript, with no model: work the session sends gets the person's own words it needs, notes are filed every few turns, and `/cauce:relay` hands the thread to a fresh session instead of a compaction's summary. |
-| **Chains work** | Workflows: plan → build → review → fix, advanced by the engine, each step on the commit the one before kept. Dual review with a refuter: reviewers never vote. |
+| **Chains work** | Workflows cut where context changes hands: build with its tests → blind review → refute → fix → recheck, advanced by the engine, each step on the commit the one before kept. Reviewers never vote: a refuter decides what only one saw. |
 | **Learns how you work** | `/cauce:init` sends cauce's own read-only workers through every project and plugin on your machine, in parallel, and builds your team, your workflows and your memory from what they find. |
 | **Measures itself** | Every run's phases are timed (queued, planning, setting up, working, checking, verifying); `cauce stats` and the UI's Analysis screen show pass rates, time and cost per pass by kind and cell, and whether the session's thread in a brief changes how runs go. |
 | **Shows it all** | `cauce ui`: the board, every task's ladder and moves, workflow graphs, a mind map of what each project knows, routing evidence, analysis, spend. |
@@ -251,8 +251,9 @@ counts; on a subscription they measure how much of the plan work used.
 Cost is measured and shown, never a limit. No task stops, skips a cell or gets
 a shorter attempt for money: an attempt is bounded by its turns (at most 200,
 however many are asked for) and the time they earn, a run by its attempts, and
-a resume nobody approved (a model's) is refused after two runs' worth of
-attempts. Each attempt keeps its own cost apart from its independent check's,
+a resume nobody approved (`--unattended`: the mod's `resume` tool, and the
+resumes the orchestration guide has a session start on its own) is refused
+after two runs' worth of attempts. Each attempt keeps its own cost apart from its independent check's,
 and how much of its input the prompt cache served, so `cauce stats` shows where
 the money goes. A task an older cauce stopped on a dollar budget still says so,
 and `cauce resume <id>` continues it.
@@ -536,8 +537,9 @@ check, escalation and stops. The engine chains the steps, not a session. When
 a step passes, cauce queues the steps that waited on it. A writing step starts
 its worktree from the commit the step before it kept, and every step's brief
 says what the earlier steps found, with the findings of the steps it waits on
-as records. A review step is the exception: it reads blind, the request and
-the diff, as the independent verifier does. The session that started a run hears of it
+as records. A review of a change is the exception: it reads blind, the
+request and the diff, as the independent verifier does (one with no diff to
+read, such as a plan's critique, gets what came before). The session that started a run hears of it
 once, at its end or when a step waits on the person. A watcher sees where the
 run is, step by step.
 

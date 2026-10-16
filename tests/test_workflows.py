@@ -67,16 +67,18 @@ def test_a_definition_is_checked_and_completed():
     with pytest.raises(workflows.WorkflowError) as err:
         workflows.normalize({"name": "x", "inputs": ["goal"], "steps": [
             {"id": "a", "prompt": "do {other}", "kind": "nope", "allow_tools": ["Bash(*)"]},
-            {"id": "a", "prompt": "", "needs": ["z"], "start": "gpt/high", "max_turns": 999}]})
+            {"id": "a", "prompt": "", "needs": ["z"], "start": "gpt/high", "max_turns": 0}]})
     said = str(err.value)
     for part in ("allow_tools", "flags of `cauce workflow run`", "{other}", "no kind 'nope'", "used twice",
-                 "needs a prompt", "'z'", "no cell", "max_turns is a whole number from 1 to 200"):
+                 "needs a prompt", "'z'", "no cell", "max_turns is a whole number from 1"):
         assert part in said
     # A step an older cauce saved with a dollar budget still loads; the key is dropped, even a bad value.
+    # Turns over the ceiling (an older cauce took any number) read as the ceiling.
     old = workflows.normalize({"name": "old", "inputs": ["goal"], "steps": [
-        {"id": "a", "prompt": "do {goal}", "kind": "implement", "budget_usd": 2.0},
+        {"id": "a", "prompt": "do {goal}", "kind": "implement", "budget_usd": 2.0, "max_turns": 300},
         {"id": "b", "prompt": "check", "kind": "review-routine", "needs": ["a"], "budget_usd": -1}]})
     assert all("budget_usd" not in step for step in old["steps"])
+    assert old["steps"][0]["max_turns"] == 200
     with pytest.raises(workflows.WorkflowError, match="no workflow name"):
         workflows.skeleton("Bad Name")
 
@@ -480,6 +482,18 @@ def test_a_review_step_is_blind_and_the_step_after_it_gets_its_findings_as_recor
     assert "- build (task #" in polish["prompt"]
 
 
+def test_a_review_with_no_change_to_read_gets_what_came_before(git_repo, store: Store, kicks):
+    _save({"name": "critique", "inputs": ["goal"], "steps": [
+        {"id": "plan", "prompt": "Plan {goal}", "kind": "plan"},
+        {"id": "critique", "prompt": "Review the plan the step before wrote", "kind": "review-critical",
+         "needs": ["plan"]}]}, git_repo)
+    workflows.start(store, "critique", git_repo, {"goal": "the export"})
+    seen: list[dict] = []
+    flow.work(store, runner=_runner([ok("step 1: split the writer"), ok("the plan holds")], seen))
+    # A plan keeps no branch: there is no diff to read, so the plan itself is what it reviews.
+    assert "step 1: split the writer" in seen[1]["prompt"] and "git diff" not in seen[1]["prompt"]
+
+
 def test_the_bundled_feature_builds_with_its_tests_and_a_clean_review_ends_it(git_repo, store: Store, kicks):
     defn = workflows.load("feature", git_repo, "bundled")
     assert [s["id"] for s in defn["steps"]] == ["build", "review", "refute", "fix", "recheck"]
@@ -490,3 +504,5 @@ def test_the_bundled_feature_builds_with_its_tests_and_a_clean_review_ends_it(gi
     # Two workers: the build and its review. The ledger steps had nothing to decide.
     assert len(seen) == 2 and workflows.status(store, started["id"])["state"] == "done"
     assert workflows.load("bugfix", git_repo, "bundled")["steps"][0]["kind"] == "debug-repro"
+    # review-fix reads code with no change under review: its findings are not excused as pre-existing.
+    assert "so `unknown`" in workflows.load("review-fix", git_repo, "bundled")["steps"][0]["prompt"]

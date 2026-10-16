@@ -754,7 +754,7 @@ def run(
             seq = store.add_attempt(
                 task["id"], cell=cell.label, max_turns=turns, passed=int(result.passed),
                 failure=result.failure.value if result.failure else None, summary=result.summary,
-                evidence=result.evidence[:4000], cost_usd=result.cost_usd,
+                evidence=kept_evidence(result.evidence), cost_usd=result.cost_usd,
                 input_tokens=result.input_tokens, output_tokens=result.output_tokens, turns=result.turns,
                 duration_s=result.duration_s, changed_paths=result.changed_paths,
                 served_model=result.served_model or None,
@@ -1150,6 +1150,15 @@ VERIFIER_TURNS = 40
 _REPRODUCES = frozenset({"debug-repro", "debug-unclear"})
 
 
+def kept_evidence(text: str, room: int = 4000) -> str:
+    """What an attempt's record keeps of its evidence: its start and its end, so a
+    resume's brief that quotes the last lines quotes the real ones."""
+    if len(text) <= room:
+        return text
+    half = (room - 3) // 2
+    return f"{text[:half]}\n…\n{text[-half:]}"
+
+
 def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, changed: Sequence[str],
                    known: Sequence[Mapping[str, str]] = (), why: Sequence[str] = ()) -> str:
     """What the verifier is given: the request in its words, the change, and why it is
@@ -1161,8 +1170,9 @@ def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, change
     if why:
         parts.append("Why this check runs: " + "; ".join(why) + ". Probe those first.")
     if kind in _REPRODUCES and base:
-        parts.append(f"This change fixes a failure: show it at the base commit {base[:12]} (a worktree of it, or "
-                     "`git stash` and back), then show it is gone on the change.")
+        parts.append(f"This change fixes a failure: show it at the base commit {base[:12]} (`git show "
+                     f"{base[:12]}:<path>`, or a temporary `git worktree add` of it outside the project that you "
+                     "remove after; never `git stash`), then show it is gone on the change.")
     where = (f"The change is in {workdir}: `git diff {base}` shows it against the base commit {base}, the state "
              "before it." if base else f"The change is in {workdir}, uncommitted: `git diff` shows it.")
     parts.append(f"{where} Files it changed: {shown}.")
@@ -1223,6 +1233,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
         blockers = [f for f in blockers if f not in carried]
     store.add_event(task_id, "verified", seq=nth, cell=vcell.label, risk=risk.data(), verdict=verdict.verdict,
                     passed=not blockers and decided, findings=list(shown)[:20], blocking=len(blockers),
+                    blockers=list(blockers)[:20],
                     carried=len(carried), cost_usd=verdict.cost_usd, summary=verdict.summary[:500],
                     round=corrections, wall_s=round(wall_s, 2), duration_s=round(verdict.duration_s, 2),
                     turns=verdict.turns)
