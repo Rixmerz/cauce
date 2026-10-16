@@ -36,12 +36,17 @@ def read(block: Mapping[str, Any]) -> tuple[dict[str, str], ...]:
             continue
         evidence = str(f.get("evidence_class") or "").lower()
         cause = str(f.get("cause") or "").lower()
+        proof = str(f.get("proof") or "")[:500]
+        if evidence == "deterministic" and not proof.strip():
+            # Shown by a command, a test or a diff means its proof is given: a claim of
+            # it without one is read from the code, and a refuter still decides it.
+            evidence = "inferential"
         out.append({
             "where": str(f.get("where") or "")[:200].strip(),
             "what": " ".join(str(f["what"]).split())[:500],
             "evidence_class": evidence if evidence in EVIDENCE else "inferential",
             "cause": cause if cause in CAUSES else "unknown",
-            "proof": str(f.get("proof") or "")[:500],
+            "proof": proof,
         })
     return tuple(out)
 

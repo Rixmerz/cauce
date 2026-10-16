@@ -22,11 +22,13 @@ from typing import Any
 from cauce import allow
 
 #: Who made the call, as the board says it. `you` is the only one a person did
-#: by hand; `settings` and `budget` are theirs too, set before the run.
+#: by hand; `settings` are theirs too, set before the run. `budget` is no cause a
+#: run records any more (cost is measured, never a brake): its words stay for the
+#: stops older versions wrote.
 WHO = {
     "you": "you",
     "settings": "your permission settings",
-    "budget": "the task's budget",
+    "budget": "a dollar budget an older cauce set",
     "environment": "the environment",
     "worker": "the worker's verdict",
     "cauce": "cauce's rules",
@@ -94,8 +96,6 @@ class Stop:
     allow: tuple[str, ...] = ()
     #: The cell a person must approve before the run goes on.
     next_cell: str | None = None
-    #: The budget the run had, for the suggestion to raise it.
-    budget_usd: float | None = None
     #: The attempt it stopped after, when one ran.
     attempt: int | None = None
     #: What the last worker said, beside cauce's reason: "the task is wrong" is
@@ -123,7 +123,7 @@ class Stop:
             out["denied"] = list(self.denied)
         if self.allow:
             out["allow"] = list(self.allow)
-        for key in ("next_cell", "budget_usd", "attempt"):
+        for key in ("next_cell", "attempt"):
             if getattr(self, key) is not None:
                 out[key] = getattr(self, key)
         if self.account:
@@ -136,12 +136,10 @@ class Stop:
 def read(data: dict[str, Any] | None) -> Stop | None:
     if not isinstance(data, dict) or not data.get("cause"):
         return None
-    known = {"cause", "by", "reason", "denied", "allow", "next_cell", "budget_usd", "attempt", "account",
-             "recovered"}
+    known = {"cause", "by", "reason", "denied", "allow", "next_cell", "attempt", "account", "recovered"}
     return Stop(str(data["cause"]), str(data.get("reason") or ""), by=str(data.get("by") or ""),
                 denied=tuple(data.get("denied") or ()), allow=tuple(data.get("allow") or ()),
-                next_cell=data.get("next_cell"),
-                budget_usd=data.get("budget_usd"), attempt=data.get("attempt"),
+                next_cell=data.get("next_cell"), attempt=data.get("attempt"),
                 account=str(data.get("account") or ""), recovered=bool(data.get("recovered")),
                 extra={k: v for k, v in data.items() if k not in known})
 
@@ -163,8 +161,6 @@ def next_step(task_id: int, stop: Stop, *, resumable: bool = True) -> str | None
         return base + "".join(f" --allow {shlex.quote(rule)}" for rule in rules)
     if stop.cause == "approval":
         return f"{base} --allow-approval"
-    if stop.cause == "budget" and stop.budget_usd:
-        return f"{base} --budget {stop.budget_usd * 2:g}"
     return base
 
 
@@ -174,7 +170,7 @@ def what_to_do(stop: Stop) -> str:
         "permission": "allow what was refused for this run, or add --keep to keep it for every task here, "
                       "then resume",
         "environment": "fix what failed to run, then resume",
-        "budget": "resume with a larger budget, or read the attempts first",
+        "budget": "an older cauce stopped it on a dollar budget, which no longer exists: resume it",
         "missing_dir": "the task's directory is gone: restore it, or queue the task again where it now lives",
         "approval": "approve the next cell by resuming with --allow-approval",
         "spec": "the task as written cannot be done: rewrite or split it as a new task",
@@ -323,7 +319,7 @@ def view(store: Any, task: dict[str, Any]) -> dict[str, Any] | None:
 def resume_args(task_id: int, shown: dict[str, Any] | None, *, keep: bool = False) -> list[str] | None:
     """The `cauce resume` a person's press runs for a stopped task, from cauce's
     own account, never from what a page or a model sends: the rules a refusal
-    suggests, an approval, a doubled budget. None when no press continues it."""
+    suggests, or an approval. None when no press continues it."""
     if not shown or not shown.get("next"):
         return None
     base = ["resume", str(task_id), "--detach"]
@@ -337,8 +333,6 @@ def resume_args(task_id: int, shown: dict[str, Any] | None, *, keep: bool = Fals
         return None
     if cause == "approval":
         return [*base, "--allow-approval"]
-    if cause == "budget" and shown.get("budget_usd"):
-        return [*base, "--budget", str(float(shown["budget_usd"]) * 2)]
     return base
 
 

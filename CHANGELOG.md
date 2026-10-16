@@ -2,6 +2,71 @@
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-16
+
+### Changed
+
+- **Cost is measured, never a brake.** A dollar cap stopped more good work than
+  it saved: a worker cut off at its cap left half a change, and the next
+  attempt started short. There is no `--budget` any more (on `cauce run`,
+  `cauce resume`, `cauce queue add` and `cauce workflow`), no
+  `--max-budget-usd` handed to a worker, and no attempt refused for the money
+  left. What every attempt, check and run cost is still recorded and shown in
+  the report, the board, `cauce stats` and the Analysis screen. Turns are the
+  one dial of room: a task's are clamped to 200, and attempts stay the ceiling
+  of a run. A task an older cauce stopped on a budget reads back as such and
+  resumes plainly; a workflow step's old `budget_usd` is dropped when the
+  definition is read.
+- **An unattended resume has a bound of its own**: twice the attempts a run
+  takes, beyond which it needs a person. An approval for Fable a person gave is
+  kept on the task, and a resume by a model never carries it.
+- **`cauce investigate` gives an estimate, not a cap**: the average cost of the
+  investigators run before (when there are any) times the number of projects,
+  in the dry run and when it starts. The init skill says so.
+- **The bundled workflows are cut where context changes hands, never by
+  role.** `feature`: build (the change with its tests) → review → refute → fix
+  → recheck. `bugfix`: repair (a failing test first, then the fix) → review →
+  refute → fix → recheck. `review-fix`: review → refute → fix → recheck. A
+  clean review ends them after two workers; the ledger steps run only for the
+  findings there are.
+- **A review step reads blind**: the change itself, never what the steps before
+  said of it. A step that needs another gets its findings as records (where,
+  what, evidence, cause, proof), not its prose.
+- **One agent first.** The orchestration guide starts from the session doing
+  the work itself, and names what earns a worker (a context to keep clean, work
+  to run beside it, another cell, an independent check). A judgment that needs
+  the conversation goes to Claude Code's native fork (`/subtask`, the Agent
+  `fork` type), never the check of the session's own work. The init skill, the
+  `surveyor` and the investigation brief cut workflows by context and fold
+  personas into roles.
+
+### Added
+
+- The independent verifier is told why it runs (the risk's reasons, to probe
+  first), reproduces a bug at the base for a debugging task, and gets its own
+  room (40 turns at most, with a timeout to match).
+- A task the check stopped for review resumes with what the check found: its
+  blocking findings seed the next round's ledger.
+- What an attempt cost is split: the worker's own cost and the independent
+  check's, and the prompt cache's reads and writes. `cauce stats` and the
+  Analysis screen show what the checks cost and how much of the input the
+  cache served, per cell and in all.
+- How long filing notes takes is timed with the run's other phases.
+
+### Fixed
+
+- **A result block that quoted a fenced snippet, or held a raw tab in a
+  string, lost the attempt its verdict.** The block's JSON is now decoded from
+  where it opens, not cut at the next fence; two openers are still no verdict.
+- A finding claimed as deterministic without its proof is read as inferential,
+  so a refuter decides it instead of the claim.
+- A reading worker is told where its answer and findings go in the result
+  block.
+- A worker no longer starts cauce work of its own: `cauce run`, `resume`,
+  `work`, `queue add`, `workflow run`, `workflow retry` and `investigate start`
+  refuse inside a worker (every reading command still answers), and a worker's
+  Claude Code runs with forks off.
+
 ## [0.17.0] - 2026-10-16
 
 ### Added

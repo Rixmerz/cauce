@@ -52,12 +52,14 @@ def test_start_queues_one_read_only_investigator_per_project_and_plugin_each_in_
     root = plugin_in(tmp_path)
     kicked = []
     started = investigate.start(store, investigate.plan(store, plugin_names=["helper"]), session_id="sess",
-                                kick=lambda cwd, key: kicked.append((cwd, key)), budget=2.5)
-    assert started["id"].startswith("inv-") and len(started["tasks"]) == 2 and started["cap_usd"] == 5.0
+                                kick=lambda cwd, key: kicked.append((cwd, key)))
+    assert started["id"].startswith("inv-") and len(started["tasks"]) == 2 and "cap_usd" not in started
+    # No earlier investigator: nothing to estimate from, and nothing caps it.
+    assert started["estimate"] == {"investigators": 2, "each_usd": None, "total_usd": None, "from": 0}
     assert kicked == [(t["cwd"], t["repo"]) for t in started["tasks"]] and kicked[1][0] == str(root)
     task = store.get_task(started["tasks"][0]["id"])
     options = json.loads(task["options"])
-    assert options == {"kind": "explore", "role": "surveyor", "start": "opus/high", "budget_usd": 2.5,
+    assert options == {"kind": "explore", "role": "surveyor", "start": "opus/high",
                        "max_turns": investigate.MAX_TURNS, "keep_learned": False, "investigation": started["id"]}
     assert task["status"] == "queued" and task["session_id"] == "sess" and task["title"].startswith("[investigate")
     # What it must cover is listed, so each line is a criterion a pass must answer.
@@ -112,14 +114,15 @@ def test_the_command(git_repo, tmp_path, store, capsys, monkeypatch):
     session_in(tmp_path, git_repo)
     assert cli.main(["investigate", "start", "--dry-run"]) == 0
     shown = json.loads(capsys.readouterr().out)
-    assert shown["projects"][0]["dir"] == str(git_repo) and shown["cap_usd"] == investigate.BUDGET_USD
+    assert shown["projects"][0]["dir"] == str(git_repo) and "cap_usd" not in shown
+    assert shown["max_turns"] == investigate.MAX_TURNS and shown["estimate"]["each_usd"] is None
     assert cli.main(["investigate", "start", "--plugin", "nope"]) == 1
     assert "no installed plugin" in capsys.readouterr().err
     assert cli.main(["investigate", "status"]) == 1
     monkeypatch.setattr(investigate, "_kick", lambda *a: True)
-    assert cli.main(["investigate", "start", "--start", "sonnet/high", "--budget", "3"]) == 0
+    assert cli.main(["investigate", "start", "--start", "sonnet/high"]) == 0
     out = capsys.readouterr().out
-    assert "1 investigator(s) queued" in out and "at most $3.00" in out
+    assert "1 investigator(s) queued" in out and "at most $" not in out and "no earlier investigator" in out
     other = tmp_path / "other"
     other.mkdir()
     session_in(tmp_path, other, "s9")
@@ -171,3 +174,15 @@ def test_an_investigator_runs_read_only_keeps_its_report_and_files_nothing(git_r
     assert store.notes(insights.repo.key(git_repo)) == []  # what it learned waits on the person
     assert Options(keep_learned=False).stored()["keep_learned"] is False
     assert roles.internal("surveyor").kinds == ("explore",)
+
+
+def test_the_cost_of_an_investigation_is_estimated_from_earlier_investigators(store):
+    for cost in (2.0, 4.0):
+        store.create_task("read it", status="done", source="cauce", cost_usd=cost,
+                          options=json.dumps({"investigation": "inv-1"}))
+    store.create_task("a person's task", status="done", source="cauce", cost_usd=50.0)
+    found = investigate.estimate(store, 3)
+    assert found == {"investigators": 3, "each_usd": 3.0, "total_usd": 9.0, "from": 2}
+    said = investigate.estimate_text(found)
+    assert "about $9.00 in all" in said and "nothing caps it" in said
+    assert investigate.estimate(None, 1)["each_usd"] is None

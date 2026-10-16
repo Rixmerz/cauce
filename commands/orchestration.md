@@ -3,18 +3,36 @@ description: Hand a request to cauce — it classifies it, picks the model and e
 argument-hint: <what you want done>
 ---
 
-You are the orchestrator. Your context stays thin: the work happens in one-shot
-workers that `cauce` launches, each with exactly the model, effort, tools and
-capabilities its task needs, and nothing of theirs comes back but a report.
+You are the main agent, and cauce is how you hand off what earns a worker:
+one-shot workers that `cauce` launches, each with exactly the model, effort,
+tools and capabilities its task needs, checked without trusting them, whose
+reports come back instead of their reading.
 
 Request: $ARGUMENTS
 
-1. **Answer it yourself when it is conversation or a quick look** — a question
-   about something already in this context, a clarification, or a read-only
-   lookup a few searches and file reads settle (where is X, does Y still exist).
-   A worker costs a setup and a report; a grep costs seconds. Everything that
-   changes files, runs a check, debugs, reviews in depth or plans goes to a
-   worker.
+1. **Do it yourself when it fits in what this session already holds** — a
+   question, a clarification, a lookup a few searches settle, or a small change
+   of a few lines in files you have read. One agent with the right context is
+   the cheapest worker there is: a hand-off costs a setup, a brief and a report,
+   and loses what you know. A worker earns its cost when:
+   - the work would fill this context with reading (a wide exploration, a
+     debugging hunt across the code, a large change);
+   - it has independent parts that can run side by side (step 2);
+   - it must be checked by someone who did not write it, or needs what cauce
+     adds: the cell its kind needs, the repository's check run on it, memory of
+     what failed, its work kept on a branch (a feature, a refactor, a fix with
+     its test);
+   - it should go on after this turn (queue it).
+
+   **A judgment that needs this conversation** — a plan from what you and the
+   person decided, a second look at your own reasoning, "what did we settle
+   about X" — and changes nothing goes to Claude Code's own fork (`/subtask`, or
+   the Agent tool's `fork` type), not to cauce: a fork inherits this
+   conversation and its cache, and only its result comes back. To make it an
+   expert, invoke the skill it needs inside the fork, so that skill's text dies
+   with the fork instead of staying in this context. Work that writes, needs a
+   check or should be remembered goes to cauce. A fork is never the check of
+   your own work: it saw your reasoning.
 
 2. **Split it when it has independent parts.** One `cauce run` per part. Parts
    that touch different files can run at the same time (each gets its own
@@ -35,10 +53,13 @@ Request: $ARGUMENTS
    a tool refuses because only the person can clear what stopped a task, tell
    the person in those words.
 
-   **A sequence of phases is a workflow, not a chain you relay.** When the
-   request is several steps where each builds on the one before (plan, build,
-   review, fix; reproduce, fix, check), run `cauce workflow list` and pick the
-   one that fits. The person may also have named a workflow. Then:
+   **Cut work where context changes hands, never by role.** The phases of one
+   task (plan, build, test; reproduce and fix) are one worker's: the one that
+   builds a feature writes its tests. What earns its own step is what must not
+   share that context: a review, which reads blind (the request and the diff),
+   and fixing what a review confirmed. That chain is a workflow, not one you
+   relay: run `cauce workflow list` and pick the one that fits (`feature`,
+   `bugfix`, `review-fix`, `dual-review`), or the one the person named. Then:
 
    ```bash
    cauce workflow run <name> "<the goal, written so a stranger could do it>"
@@ -46,7 +67,7 @@ Request: $ARGUMENTS
 
    Its steps are ordinary cauce tasks that the engine chains by itself. Each
    one starts from the commit the step before kept, and is told what the
-   earlier steps found. Do not wait on a step to start the next one, and do
+   earlier steps found (a review step excepted: it reads blind). Do not wait on a step to start the next one, and do
    not pass results along yourself: that is what the run does without you.
    You hear of the run once, when it ends or when a step waits on the person.
    `cauce workflow status <run>` shows where it is. A step that stopped is
@@ -82,7 +103,8 @@ Request: $ARGUMENTS
    of your reasoning, what you read or what you decided: say in the task what
    it needs of those. Add `--verify` whenever the repository has a command that proves the work — a
    worker's own claim of success is not evidence, and cauce runs the check
-   itself, so it needs no permission. `--budget` (default $5) bounds the task.
+   itself, so it needs no permission. The report says what the task cost;
+   nothing limits it for money: its room is its turns.
    Leave `--kind` out: cauce classifies the task. Pass it only with one of
    `explore`, `review-routine`, `review-critical`, `plan`, `docs`, `test`,
    `ui`, `refactor`, `implement`, `feature`, `debug-repro`, `debug-unclear`
@@ -133,7 +155,9 @@ Request: $ARGUMENTS
      `--allow-approval` only on a yes.
    - `replan` — the task as written cannot be done, or does not fit. Rewrite or
      split it from the report's reason, then dispatch again. Do not rerun it as is.
-   - `blocked` — a refused command, the environment or the budget stopped it.
+   - `blocked` — a refused command or the environment stopped it (an older
+     task may say a dollar budget stopped it: budgets are gone, and
+     `cauce resume <id>` continues it as it is).
      The report's `stopped by …` line says which, and the line under it is the
      command that continues it. Tell the user both, in those words. Its work
      so far is on its branch, marked unverified. When the user grants what was

@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 from cauce import capabilities as caps
-from cauce import orchestrate, roles
+from cauce import launch, orchestrate, roles
 from cauce.classify import Classification
-from cauce.escalate import Failure
+from cauce.escalate import MAX_TURNS_CEILING, Failure
 from cauce.launch import WRITE_TOOLS, WorkerResult
 from cauce.matrix import LADDERS, Cell
 from cauce.orchestrate import Options, choose_start, run
@@ -89,7 +89,7 @@ def test_a_first_try_pass_leaves_a_branch(git_repo, store):
     assert not (git_repo / "feature.py").exists()
     spec = script.specs[0]
     assert spec.launch_dir != git_repo and spec.workdir is None
-    assert spec.max_budget_usd == 5.0 and spec.disallowed_tools == ()
+    assert spec.disallowed_tools == () and "--max-budget-usd" not in launch.build_argv(spec)
     task = store.get_task(report.task_id)
     assert task["status"] == "done" and task["final_cell"] == "sonnet/medium"
     assert store.messages(report.task_id)[-1]["role"] == "worker"
@@ -112,7 +112,8 @@ def test_shallow_failures_climb_effort_and_keep_the_work(git_repo, store):
     moved = store.last_event(report.task_id, "moved")["data"]
     assert moved["seq"] == 1 and moved["from_cell"] == "sonnet/medium" and moved["to_cell"] == "sonnet/high"
     assert moved["axis"] == "effort" and moved["trigger"] == "code_bug" and moved["turns_to"] == 30
-    assert moved["because"][-1].startswith("next: sonnet/high") and moved["budget_left"] < 5
+    assert moved["because"][-1].startswith("next: sonnet/high") and moved["spent_usd"] == pytest.approx(0.1)
+    assert "budget_left" not in moved
     assert "    · next: sonnet/high (the floor for work that needs judgment)" in report.text()
     assert seen == [None, "attempt 1\n"]  # the more thorough attempt continues the work
     run("fix the parser", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
@@ -210,21 +211,27 @@ def test_fable_waits_for_approval(tmp_path, store):
     assert report.status == "needs_approval" and report.cells == ["opus/xhigh", "opus/max"]
 
 
-def test_budget_and_attempt_ceilings(git_repo, store):
-    script = Script(bad(Failure.CODE_BUG, cost=0.6), ok())
-    report = run("x", git_repo, store, Options(budget_usd=0.5), registry={}, launcher=script,
-                 classifier=kind("implement"))
-    assert report.status == "blocked" and "budget" in report.summary
+def test_cost_is_measured_never_a_brake_and_attempts_are_the_ceiling(git_repo, store):
+    # What the old $5 default would have stopped goes on: cost is shown, never a limit.
+    script = Script(bad(Failure.CODE_BUG, "missed a", cost=3.0), bad(Failure.CODE_BUG, "missed b", cost=3.0),
+                    ok(cost=0.5))
+    report = run("x", git_repo, store, Options(), registry={}, launcher=script, classifier=kind("implement"))
+    assert report.status == "done" and report.cost_usd == pytest.approx(6.5) and "cost $6.50" in report.text()
+    assert all("--max-budget-usd" not in launch.build_argv(s) for s in script.specs)
+    assert "budget_usd" not in store.last_event(report.task_id, "attempt_started")["data"]
+    assert "budget_usd" not in Options().stored()
     script = Script(bad(Failure.CODE_BUG, "a"), bad(Failure.CODE_BUG, "b"))
     report = run("y", git_repo, store, Options(max_attempts=2), registry={}, launcher=script,
                  classifier=kind("implement"))
     assert report.status == "failed" and "2 attempts" in report.summary
 
 
-def test_the_second_attempt_may_spend_only_what_is_left(git_repo, store):
-    script = Script(bad(Failure.CODE_BUG, cost=1.25), ok())
-    run("x", git_repo, store, Options(budget_usd=3), registry={}, launcher=script, classifier=kind("implement"))
-    assert script.specs[1].max_budget_usd == 1.75
+def test_turns_asked_for_never_pass_the_ceiling(git_repo, store):
+    script = Script(ok())
+    report = run("x", git_repo, store, Options(max_turns=5000), registry={}, launcher=script,
+                 classifier=kind("implement"))
+    assert script.specs[0].max_turns == MAX_TURNS_CEILING
+    assert any("5000 turns were asked for" in r for r in report.plan.reasons)
 
 
 def test_history_moves_the_next_start(git_repo, store):
@@ -1151,13 +1158,11 @@ def test_the_brief_says_which_node_is_on_path_and_which_commands_pass(git_repo, 
     assert orchestrate.how_to_run(git_repo, ()) == []
 
 
-def test_no_attempt_starts_on_a_budget_too_small_for_its_cell(git_repo, store):
-    script = Script(bad(Failure.CODE_BUG, "missed a case", cost=0.35), ok())
-    report = run("fix the cart total", git_repo, store, Options(budget_usd=0.5), registry={}, launcher=script,
+def test_a_second_attempt_starts_whatever_the_first_cost(git_repo, store):
+    script = Script(bad(Failure.CODE_BUG, "missed a case", cost=4.85), ok())
+    report = run("fix the cart total", git_repo, store, Options(), registry={}, launcher=script,
                  classifier=kind("implement"))
-    assert len(script.specs) == 1 and report.status == "blocked" and report.stop.cause == "budget"
-    assert "$0.15 left of the $0.50 budget cannot pay for an attempt at sonnet/high" in report.stop.reason
-    assert "--budget" in report.stop.reason
+    assert len(script.specs) == 2 and report.status == "done" and report.stop is None
 
 
 def test_an_index_that_failed_at_this_commit_is_not_restarted_by_each_task(git_repo, store, tmp_path, monkeypatch):

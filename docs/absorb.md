@@ -36,7 +36,7 @@ dashboard and the architecture map.
 
 | tasky feature | Why |
 |---|---|
-| Its router, worker launcher and supervisor | cauce's are stronger: escalation, budgets, turn ceilings, worktrees, enforced tools. tasky's router also probably overrode a person's chosen model (its `--model` was appended after the user's). |
+| Its router, worker launcher and supervisor | cauce's are stronger: escalation, turn ceilings, worktrees, enforced tools. tasky's router also probably overrode a person's chosen model (its `--model` was appended after the user's). |
 | Prompt capture, follow-up folding, nudges, interrupted turns | cauce already does it |
 | Fork with context | replays the whole conversation: more spend, not less |
 | The Focus Cards output style | a reply format, not routing or spend |

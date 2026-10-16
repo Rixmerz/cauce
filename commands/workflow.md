@@ -40,7 +40,7 @@ Change it one step at a time. Each change is checked before it is written:
 
 ```bash
 cauce workflow step add <name> <step> --prompt "..." [--after <step>] [--needs a,b] \
-    [--kind <kind>] [--role <role>] [--surfaces 'src/api/**,docs/**'] [--verify "<check>"] [--start <model/effort>] [--budget-usd N] [--max-turns N] \
+    [--kind <kind>] [--role <role>] [--surfaces 'src/api/**,docs/**'] [--verify "<check>"] [--start <model/effort>] [--max-turns N] \
     [--memory note:12,topic:zones,problem:7]
 cauce workflow step set <name> <step> --prompt "..." [--clear verify]
 cauce workflow step rm <name> <step>
@@ -87,8 +87,15 @@ How to write the steps:
   "<symptom>"`, and remove them again with `--clear memory`. Notes are read
   only from the project the run is in. A run whose memory cannot be read there
   does not start.
-- **No grants:** a definition cannot hold permission rules, approvals or
-  capabilities. Those are the person's flags on `run`.
+- **No grants, no caps:** a definition cannot hold permission rules,
+  approvals or capabilities (those are the person's flags on `run`), and no
+  step has a dollar limit: its room is `--max-turns`. A `budget_usd` an older
+  definition holds is read and ignored.
+- **Cut where context changes hands, never by role:** one step builds with its
+  tests (or reproduces and fixes); a review is its own step and reads blind (the
+  request and the diff, not what earlier steps said); fixing what it found goes
+  through the ledger (`refute`, `fix`, `recheck`), skipped when the review is
+  clean. A step gets the findings of the steps it waits on as records.
 - **Changing a bundled template:** it is copied to the user scope first, and
   the template itself stays as it was.
 
@@ -115,7 +122,7 @@ Running spends money, so do it only when the person asked for this work:
 
 ```bash
 cauce workflow run <name> "<value of its one input>"
-cauce workflow run <name> --input goal="..." --input area="..." [--budget N] [--allow RULE] [--allow-approval]
+cauce workflow run <name> --input goal="..." --input area="..." [--allow RULE] [--allow-approval]
 ```
 
 The run starts the repository's dispatcher. Then, without you:

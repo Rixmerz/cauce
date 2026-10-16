@@ -484,9 +484,9 @@ def test_resume_continues_a_stopped_task_with_what_it_was_refused_granted(capsys
     assert "--allow-approval" in capsys.readouterr().err
     assert cli.main(["resume", str(approval["id"]), "--allow-approval"]) == 0
     assert calls[-1][2].start.label == "fable/high" and calls[-1][2].allow_approval
-    assert cli.main(["resume", str(odd["id"]), "--verify", "true", "--budget", "2", "--no-isolate"]) == 0
-    assert calls[-1][2].isolate is False
-    assert calls[-1][3]["history"][0].failure is None and calls[-1][2].budget_usd == 2
+    assert cli.main(["resume", str(odd["id"]), "--verify", "true", "--no-isolate"]) == 0
+    assert calls[-1][2].isolate is False and calls[-1][2].verify == "true"
+    assert calls[-1][3]["history"][0].failure is None  # an old or unknown failure reads back as no verdict
     from cauce import stops
 
     store = Store.open()
@@ -806,7 +806,7 @@ def test_overview_keeps_the_repositories_asked_for(tmp_path, capsys):
 
 
 def test_a_press_elsewhere_runs_the_resume_cauce_names_and_nothing_else(tmp_path, monkeypatch, capsys):
-    """A page outside cauce sends the task id; the rules, approval or budget come from cauce's account."""
+    """A page outside cauce sends the task id; the rules or approval come from cauce's account."""
     work = tmp_path / "work"
     work.mkdir()
     monkeypatch.chdir(tmp_path)
@@ -826,6 +826,14 @@ def test_a_press_elsewhere_runs_the_resume_cauce_names_and_nothing_else(tmp_path
     assert cli.main(["resume", "999", "--pressed"]) == 1
     assert "has no resume to press" in capsys.readouterr().err
     assert len(ran) == 1
+    # A stop an older cauce wrote on a dollar budget resumes plainly: the flag no longer exists.
+    store = Store.open()
+    spent = store.create_task("z", status="blocked", source="cauce", repo="r", cwd=str(work),
+                              options=json.dumps({"budget_usd": 0.5, "verify": "true"}))
+    stops.record(store, spent["id"], stops.Stop("budget", "the $5.00 budget is spent", extra={"budget_usd": 5.0}))
+    store.close()
+    assert cli.main(["resume", str(spent["id"]), "--pressed"]) == 0
+    assert ran[-1] == (spent["id"], None, str(work))
 
 
 def test_a_dismissal_from_tanka_says_where_it_came_from(capsys):
@@ -836,3 +844,81 @@ def test_a_dismissal_from_tanka_says_where_it_came_from(capsys):
     store = Store.open()
     assert "from Tanka's page" in stops.of(store, store.get_task(t["id"])).reason
     store.close()
+
+
+@pytest.mark.parametrize("argv", [
+    ["run", "--budget", "5", "x"], ["resume", "1", "--budget", "5"], ["queue", "add", "x", "--budget", "5"],
+    ["workflow", "run", "w", "--budget", "3"], ["investigate", "start", "--budget", "6"],
+])
+def test_no_command_takes_a_budget(argv, capsys):
+    with pytest.raises(SystemExit) as exit_:
+        cli.main(argv)
+    assert exit_.value.code == 2 and "--budget" in capsys.readouterr().err
+
+
+def test_a_resume_nobody_approved_stops_after_two_runs_of_attempts_and_carries_no_approval(tmp_path, monkeypatch,
+                                                                                           capsys):
+    work = tmp_path / "work"
+    work.mkdir()
+    store = Store.open()
+    task = store.create_task("x", status="failed", source="cauce", repo="r", cwd=str(work),
+                             options=json.dumps({"allow_approval": True}))
+    for n in range(cli.UNATTENDED_ATTEMPTS):
+        store.add_attempt(task["id"], cell="sonnet/high", max_turns=30, passed=0, failure="code_bug",
+                          summary=f"try {n}", evidence="", cost_usd=1.0, input_tokens=0, output_tokens=0, turns=1,
+                          duration_s=1, changed_paths=(), capabilities=())
+    store.close()
+    assert cli.main(["resume", str(task["id"]), "--unattended"]) == 3
+    assert f"already had {cli.UNATTENDED_ATTEMPTS} attempts" in capsys.readouterr().err
+    seen = []
+    monkeypatch.setattr(cli.orchestrate, "run", lambda *a, **k: seen.append(a[3]) or orchestrate.Report(
+        task["id"], "done", None))
+    monkeypatch.setattr(orchestrate.Report, "text", lambda self: f"task #{self.task_id}: {self.status}")
+    monkeypatch.setattr(cli, "UNATTENDED_ATTEMPTS", 1000)
+    cli.main(["resume", str(task["id"]), "--unattended", "--no-report"])
+    assert seen and seen[0].allow_approval is False
+    cli.main(["resume", str(task["id"]), "--no-report"])
+    assert seen[-1].allow_approval is True
+
+
+@pytest.mark.parametrize("argv", [
+    ["run", "x"], ["resume", "1"], ["work"], ["queue", "add", "x"], ["workflow", "run", "w"],
+    ["workflow", "retry", "1", "s"], ["investigate", "start"],
+])
+def test_a_worker_never_starts_cauce_work(argv, monkeypatch, capsys):
+    monkeypatch.setenv("CAUCE_WORKER_TASK", "41")
+    assert cli.main(argv) == 2
+    assert "worker of task #41" in capsys.readouterr().err
+
+
+def test_a_worker_still_reads(monkeypatch, capsys):
+    monkeypatch.setenv("CAUCE_WORKER_TASK", "41")
+    assert cli.main(["tasks"]) == 0
+    assert cli.main(["queue", "list"]) == 0
+
+
+def test_a_task_the_check_stopped_resumes_with_what_the_check_found(tmp_path, monkeypatch, capsys):
+    work = tmp_path / "work"
+    work.mkdir()
+    store = Store.open()
+    task = store.create_task("fix it", status="blocked", source="cauce", repo="r", cwd=str(work), kind="implement")
+    store.add_attempt(task["id"], cell="sonnet/high", max_turns=30, passed=0, failure="code_bug",
+                      summary="still", evidence="The independent check found: x", cost_usd=0.1, input_tokens=0,
+                      output_tokens=0, turns=1, duration_s=1, changed_paths=(), capabilities=())
+    found = {"where": "app.py:3", "what": "drops the last item", "evidence_class": "deterministic",
+             "cause": "introduced", "proof": "python probe.py"}
+    old = {**found, "where": "old.py", "what": "always so", "cause": "pre-existing"}
+    store.add_event(task["id"], "verified", seq=1, findings=[found, old], blocking=1)
+    stops.record(store, task["id"], stops.Stop("review", "the check still finds problems"))
+    store.close()
+    seen = {}
+
+    def fake_run(text, repo_dir, store, options, **kw):
+        seen.update(kw)
+        return orchestrate.Report(kw.get("task_id"), "done", None)
+
+    monkeypatch.setattr(orchestrate, "run", fake_run)
+    monkeypatch.setattr(orchestrate.Report, "text", lambda self: "done")
+    assert cli.main(["resume", str(task["id"]), "--no-report"]) == 0
+    assert [f["what"] for f in seen["known_findings"]] == ["drops the last item"]
+    assert seen["history"][0].evidence == "The independent check found: x"

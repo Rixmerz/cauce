@@ -166,7 +166,7 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         # A cell a person chose. The task ran there because they said so, which
         # says nothing about where the router should start the next one.
         "pinned": "INTEGER NOT NULL DEFAULT 0",
-        # What a queued task is run with: budget, verify command, kind, start.
+        # What a queued task is run with: verify command, kind, start, turns.
         "options": "TEXT NOT NULL DEFAULT '{}'",
         # Set when the dispatcher, not a person, started the run: only those
         # pause their lane when they fail.
@@ -810,6 +810,14 @@ class Store:
         if not rows:
             return None
         return sum(r[0] for r in rows) / len(rows), len(rows)
+
+    def investigator_costs(self, *, limit: int = 20) -> list[float]:
+        """What the last finished investigators of `cauce investigate` cost: the
+        estimate of the next investigation's cost is made from them."""
+        rows = self._conn.execute(
+            "SELECT cost_usd FROM tasks WHERE status = 'done' AND options LIKE '%\"investigation\"%' "
+            "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [float(r[0] or 0) for r in rows]
 
     # --- habits ------------------------------------------------------------------
 

@@ -124,3 +124,26 @@ def test_the_stats_command(git_repo, tmp_path, store, capsys):
     assert cli.main(["stats", "--runs", "--csv", "--repo", str(git_repo)]) == 0
     assert capsys.readouterr().out.startswith("task,repo,kind")
     assert home().is_dir()
+
+
+def test_a_check_s_cost_and_the_cache_are_kept_apart(store):
+    task = store.create_task("checked work", status="done", source="cauce", kind="implement")
+    for kind_, data in (
+            ("planned", {"kind": "implement", "start": "sonnet/medium", "plan_s": 1.0}),
+            ("attempt_finished", {"cell": "sonnet/medium", "passed": True, "cost_usd": 0.5, "worker_cost_usd": 0.3,
+                                  "verifier_cost_usd": 0.2, "input_tokens": 10_000, "cache_read_tokens": 8_000,
+                                  "wall_s": 100}),
+            ("finished", {"status": "done", "cost_usd": 0.5, "wall_s": 120})):
+        store.add_event(task["id"], kind_, **data)
+    old = store.create_task("older work", status="done", source="cauce", kind="implement")
+    for kind_, data in (("planned", {"kind": "implement"}),
+                        ("attempt_finished", {"cell": "sonnet/medium", "passed": True, "cost_usd": 0.4,
+                                              "input_tokens": 50_000}),
+                        ("finished", {"status": "done", "cost_usd": 0.4})):
+        store.add_event(old["id"], kind_, **data)
+    report = analysis.compute(store, days=0)
+    cell = report["cells"][0]
+    # The cell's own cost leaves its check out; the cache share counts only attempts that recorded it.
+    assert cell["cost_usd"] == 0.7 and cell["verifier_cost_usd"] == 0.2 and cell["cache_read_share"] == 0.8
+    assert report["summary"]["verifier_cost_usd"] == 0.2 and report["summary"]["cache_read_share"] == 0.8
+    assert "independent checks $0.20" in analysis.text(report) and "cache read 80%" in analysis.text(report)

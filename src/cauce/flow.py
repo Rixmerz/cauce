@@ -149,9 +149,10 @@ class WorkReport:
 
 
 def queued_options(task: dict, defaults: Options) -> Options:
+    """The options a queued or resumed task runs with. Keys an older cauce stored
+    and nothing reads any more (a dollar `budget_usd`) are left where they are."""
     raw = json.loads(task.get("options") or "{}")
     return Options(
-        budget_usd=float(raw.get("budget_usd", defaults.budget_usd)),
         max_attempts=int(raw.get("max_attempts", defaults.max_attempts)),
         verify=raw.get("verify", defaults.verify),
         kind=raw.get("kind", defaults.kind),

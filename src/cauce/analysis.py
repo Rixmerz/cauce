@@ -113,6 +113,7 @@ def _start(task: Mapping[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
         "worker_s": None, "check_s": None, "verifier_s": None, "hold_s": None,
         "attempts": 0, "first_try": None, "verified": 0, "verifier_blocked": 0, "moves": [], "cells": [],
         "cost_usd": 0.0, "turns": 0, "input_tokens": 0, "output_tokens": 0, "refused": 0,
+        "cache_read_tokens": 0, "measured_input_tokens": 0, "verifier_cost_usd": 0.0,
         "session_context": None, "session_chars": 0, "brief_chars": None,
         "_worker_s": 0.0, "_check_s": 0.0, "_verifier_s": 0.0, "_timed": False,
     }
@@ -127,6 +128,10 @@ def _attempt(run: dict[str, Any], data: Mapping[str, Any]) -> None:
     run["turns"] += int(data.get("turns") or 0)
     run["input_tokens"] += int(data.get("input_tokens") or 0)
     run["output_tokens"] += int(data.get("output_tokens") or 0)
+    if "cache_read_tokens" in data:  # recorded since 0.18: older attempts say nothing of the cache
+        run["cache_read_tokens"] += int(data.get("cache_read_tokens") or 0)
+        run["measured_input_tokens"] += int(data.get("input_tokens") or 0)
+    run["verifier_cost_usd"] += _number(data.get("verifier_cost_usd")) or 0
     run["refused"] += bool(data.get("denied"))
     wall = _number(data.get("wall_s"))
     run["_timed"] = run["_timed"] or wall is not None
@@ -190,8 +195,21 @@ def _summary(found: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "cost_p50_usd": pct((r["cost_usd"] for r in found), 0.5),
         "hours": round(hours, 2), "minutes_per_pass": round(hours * 60 / len(passed), 1) if passed else None,
         "verified_rate": round(sum(r["verified"] > 0 for r in found) / len(found), 3) if found else None,
+        "verifier_cost_usd": round(sum(r["verifier_cost_usd"] for r in found), 2),
+        "cache_read_share": _share(sum(r["cache_read_tokens"] for r in found),
+                                   sum(r["measured_input_tokens"] for r in found)),
         "refused_rate": round(sum(r["refused"] > 0 for r in found) / len(found), 3) if found else None,
     }
+
+
+def _share(part: float, whole: float) -> float | None:
+    return round(part / whole, 3) if whole else None
+
+
+def _work_cost(data: Mapping[str, Any]) -> float:
+    """An attempt's own cost, without its independent check's (kept apart since 0.18)."""
+    own = _number(data.get("worker_cost_usd"))
+    return own if own is not None else (_number(data.get("cost_usd")) or 0)
 
 
 def _grouped(found: Sequence[Mapping[str, Any]], key: str) -> list[dict[str, Any]]:
@@ -203,7 +221,8 @@ def _grouped(found: Sequence[Mapping[str, Any]], key: str) -> list[dict[str, Any
 
 
 def cells(events: Sequence[Mapping[str, Any]], task_ids: set[int]) -> list[dict[str, Any]]:
-    """Every attempt by the cell it ran at: how often it passed, its time, turns and cost."""
+    """Every attempt by the cell it ran at: how often it passed, its time, turns, its own
+    cost (its independent check's apart) and how much of its input the cache served."""
     by_cell: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for e in events:
         if e["kind"] == "attempt_finished" and int(e["task_id"]) in task_ids:
@@ -214,8 +233,11 @@ def cells(events: Sequence[Mapping[str, Any]], task_ids: set[int]) -> list[dict[
             "cell": cell, "attempts": len(rows), "passed": sum(bool(d.get("passed")) for d in rows),
             "wall_p50_s": pct((_number(d.get("wall_s")) or _number(d.get("duration_s")) for d in rows), 0.5),
             "turns_p50": pct((_number(d.get("turns")) for d in rows), 0.5),
-            "cost_p50_usd": pct((_number(d.get("cost_usd")) for d in rows), 0.5),
-            "cost_usd": round(sum(_number(d.get("cost_usd")) or 0 for d in rows), 2),
+            "cost_p50_usd": pct((_work_cost(d) for d in rows), 0.5),
+            "cost_usd": round(sum(_work_cost(d) for d in rows), 2),
+            "verifier_cost_usd": round(sum(_number(d.get("verifier_cost_usd")) or 0 for d in rows), 2),
+            "cache_read_share": _share(sum(int(d.get("cache_read_tokens") or 0) for d in rows),
+                                       sum(int(d.get("input_tokens") or 0) for d in rows if "cache_read_tokens" in d)),
             "failures": dict(Counter(d.get("failure") for d in rows if not d.get("passed") and d.get("failure"))),
         })
     return sorted(out, key=lambda row: -row["attempts"])
@@ -333,7 +355,8 @@ def text(report: Mapping[str, Any]) -> str:
             f"{_rate(s['first_try_rate'])}  climbed {_rate(s['climbed_rate'])}  verified {_rate(s['verified_rate'])}",
             f"time p50 {_seconds(s['wall_p50_s'])}  p90 {_seconds(s['wall_p90_s'])}  queue p50 "
             f"{_seconds(s['queued_p50_s'])}  {s['hours']}h in all, {s['minutes_per_pass'] or '—'} min per pass",
-            f"cost {_usd(s['cost_usd'])}  per pass {_usd(s['cost_per_pass_usd'])}  p50 {_usd(s['cost_p50_usd'])}",
+            f"cost {_usd(s['cost_usd'])}  per pass {_usd(s['cost_per_pass_usd'])}  p50 {_usd(s['cost_p50_usd'])}"
+            f"  independent checks {_usd(s['verifier_cost_usd'])}  cache read {_rate(s['cache_read_share'])}",
             "",
         ]
         ph = report["phases"]

@@ -44,11 +44,17 @@ from cauce.isolate import is_artifact
 from cauce.matrix import Cell
 
 RESULT_FENCE = "cauce-result"
-_FENCE_RE = re.compile(rf"```{RESULT_FENCE}\s*\n(?P<body>.*?)\n?```", re.DOTALL | re.IGNORECASE)
+#: Where a block opens. Its JSON is decoded straight from there, not cut at the next
+#: ```: evidence that quotes a fenced snippet, or a raw tab in a string, would
+#: otherwise end or break the block and cost the attempt its verdict.
+_OPEN_RE = re.compile(rf"```{RESULT_FENCE}[ \t]*\r?\n", re.IGNORECASE)
 #: A report a reading worker was asked for, beside its result block: findings too many
 #: and too structured for `summary` and `evidence`. Kept on the task, never a verdict.
 REPORT_FENCE = "cauce-report"
+_REPORT_OPEN_RE = re.compile(rf"```{REPORT_FENCE}[ \t]*\r?\n", re.IGNORECASE)
 _REPORT_RE = re.compile(rf"```{REPORT_FENCE}\s*\n(?P<body>.*?)\n```", re.DOTALL | re.IGNORECASE)
+#: A JSON decoder that takes control characters (a raw tab) inside strings.
+_DECODER = json.JSONDecoder(strict=False)
 REPORT_CHARS = 60_000
 
 DEFAULT_MAX_TURNS = 30
@@ -162,7 +168,6 @@ class LaunchSpec:
     #: What `--model` gets, when a person pinned the cell's alias to a model id.
     model_id: str | None = None
     max_turns: int = DEFAULT_MAX_TURNS
-    max_budget_usd: float | None = None
     timeout_s: int = DEFAULT_TIMEOUT_S
     #: None leaves the built-in tool set alone; a tuple names the only ones.
     tools: tuple[str, ...] | None = None
@@ -198,8 +203,12 @@ class WorkerResult:
     evidence: str = ""
     changed_paths: tuple[str, ...] = ()
     cost_usd: float = 0.0
+    #: Every input token, the cached ones included: `cache_read_tokens` and
+    #: `cache_write_tokens` say how much of it the prompt cache served or stored.
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     turns: int = 0
     duration_s: float = 0.0
     raw: str = ""
@@ -244,8 +253,6 @@ def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path:
     ]
     if spec.cell.effort:
         argv += ["--effort", spec.cell.effort]
-    if spec.max_budget_usd is not None:
-        argv += ["--max-budget-usd", f"{spec.max_budget_usd:.2f}"]
     if spec.tools is not None:
         argv += ["--tools", ",".join(spec.tools)]
     if spec.disallowed_tools:
@@ -368,9 +375,6 @@ def parse(
         if "max_turns" in subtype:
             return WorkerResult(False, Failure.TURNS_EXHAUSTED,
                                 f"used all {spec.max_turns} turns without a verdict", raw=text, **common)
-        if "budget" in subtype:
-            return WorkerResult(False, Failure.BUDGET_EXHAUSTED,
-                                f"reached its ${spec.max_budget_usd} cap without a verdict", raw=text, **common)
         # An API error (a usage limit, an overload) arrives as `is_error` with
         # subtype "success": the reason is in the result text, never the subtype.
         why = text.strip()[:200] if subtype in ("", "success") and text.strip() else subtype or "no reason given"
@@ -505,29 +509,37 @@ def denials(envelope: Mapping[str, Any] | None) -> tuple[str, ...]:
     return tuple(found)
 
 
+def _decoded(text: str, start: int) -> Any:
+    """The JSON value that begins at `start` (after whitespace), or None."""
+    rest = text[start:]
+    try:
+        value, _ = _DECODER.raw_decode(rest, len(rest) - len(rest.lstrip()))
+    except ValueError:
+        return None
+    return value
+
+
 def report_block(text: str) -> dict[str, Any] | None:
     """The last `cauce-report` block: its JSON object, or its text when it is not one; None without one."""
-    found = _REPORT_RE.findall(text or "")
-    if not found:
+    text = text or ""
+    opened = list(_REPORT_OPEN_RE.finditer(text))
+    if not opened:
         return None
-    body = found[-1][:REPORT_CHARS]
-    try:
-        parsed = json.loads(body)
-    except ValueError:
-        return {"unparsed": body}
-    return parsed if isinstance(parsed, dict) else {"unparsed": body}
+    value = _decoded(text, opened[-1].end())
+    if isinstance(value, dict):
+        return value
+    found = _REPORT_RE.findall(text[opened[-1].start():])
+    body = (found[0] if found else text[opened[-1].end():])[:REPORT_CHARS]
+    return {"unparsed": body}
 
 
 def result_block(text: str) -> dict[str, Any] | None:
     """The one result block, or None — two verdicts are no verdict."""
-    matches = _FENCE_RE.findall(text or "")
-    if len(matches) != 1:
+    opened = list(_OPEN_RE.finditer(text or ""))
+    if len(opened) != 1:
         return None
-    try:
-        parsed = json.loads(matches[0])
-    except ValueError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+    value = _decoded(text, opened[0].end())
+    return value if isinstance(value, dict) else None
 
 
 #: Where a failure lives is worth reading even from an `inconclusive` verdict: a
@@ -566,6 +578,8 @@ def _usage(envelope: Mapping[str, Any] | None) -> dict[str, Any]:
         "input_tokens": _int(usage.get("input_tokens")) + _int(usage.get("cache_read_input_tokens"))
         + _int(usage.get("cache_creation_input_tokens")),
         "output_tokens": _int(usage.get("output_tokens")),
+        "cache_read_tokens": _int(usage.get("cache_read_input_tokens")),
+        "cache_write_tokens": _int(usage.get("cache_creation_input_tokens")),
         "turns": _int(envelope.get("num_turns")),
         "served_model": models.served(envelope),
     }
@@ -579,6 +593,9 @@ def worker_env() -> dict[str, str]:
     env = dict(os.environ)
     env["CAUCE_HOOKS_OFF"] = "1"
     env.pop("CAUCE_SESSION_ID", None)  # the worker's work is the task's, not that session's turn
+    # A fork inside a worker re-reads its whole context outside cauce's account: off,
+    # whatever the person's own sessions set.
+    env["CLAUDE_CODE_FORK_SUBAGENT"] = "0"
     return env
 
 

@@ -6,6 +6,7 @@ import pytest
 
 from cauce import cli, flow, project, workflows
 from cauce.escalate import Failure
+from cauce.launch import WorkerResult
 from cauce.orchestrate import run
 from cauce.store import Store
 
@@ -66,11 +67,16 @@ def test_a_definition_is_checked_and_completed():
     with pytest.raises(workflows.WorkflowError) as err:
         workflows.normalize({"name": "x", "inputs": ["goal"], "steps": [
             {"id": "a", "prompt": "do {other}", "kind": "nope", "allow_tools": ["Bash(*)"]},
-            {"id": "a", "prompt": "", "needs": ["z"], "start": "gpt/high", "budget_usd": -1}]})
+            {"id": "a", "prompt": "", "needs": ["z"], "start": "gpt/high", "max_turns": 999}]})
     said = str(err.value)
     for part in ("allow_tools", "flags of `cauce workflow run`", "{other}", "no kind 'nope'", "used twice",
-                 "needs a prompt", "'z'", "no cell", "budget_usd"):
+                 "needs a prompt", "'z'", "no cell", "max_turns is a whole number from 1 to 200"):
         assert part in said
+    # A step an older cauce saved with a dollar budget still loads; the key is dropped, even a bad value.
+    old = workflows.normalize({"name": "old", "inputs": ["goal"], "steps": [
+        {"id": "a", "prompt": "do {goal}", "kind": "implement", "budget_usd": 2.0},
+        {"id": "b", "prompt": "check", "kind": "review-routine", "needs": ["a"], "budget_usd": -1}]})
+    assert all("budget_usd" not in step for step in old["steps"])
     with pytest.raises(workflows.WorkflowError, match="no workflow name"):
         workflows.skeleton("Bad Name")
 
@@ -128,7 +134,7 @@ def test_make_copy_change_and_remove_workflows(git_repo):
 def test_a_run_goes_on_by_itself_each_step_on_the_work_before_it(git_repo, store: Store, kicks):
     _save(CHAIN, git_repo)
     started = workflows.start(store, "chain", git_repo, {"goal": "the export"}, session_id="s1",
-                              options={"budget_usd": 2.0})
+                              options={"allow_tools": ["Bash(make:*)"]})
     assert len(started["queued"]) == 1 and kicks
     seen: list[dict] = []
     report = flow.work(store, runner=_runner([ok("built it"), ok("no problems"), ok("polished")], seen))
@@ -148,7 +154,8 @@ def test_a_run_goes_on_by_itself_each_step_on_the_work_before_it(git_repo, store
     assert [s["state"] for s in status["steps"]] == ["done", "done", "done"]
     tasks = store.run_tasks(started["id"])
     assert all(t["session_id"] == "s1" for t in tasks)
-    assert json.loads(tasks[0]["options"])["budget_usd"] == 2.0
+    assert "budget_usd" not in json.loads(tasks[0]["options"])
+    assert json.loads(tasks[0]["options"])["allow_tools"] == ["Bash(make:*)"]
     # The session hears of the run once, at its end: not of each step it went past.
     assert [t["id"] for t in store.unreported("s1")] == [tasks[-1]["id"]]
     # A watcher sees the run, and each step's task says which run it belongs to.
@@ -238,7 +245,7 @@ def test_the_cli_makes_changes_runs_and_shows(git_repo, kicks, capsys, monkeypat
     assert cli.main(["workflow", "step", "add", "ship", "x", "--prompt", "{nope}"]) == 1
     assert "not among the inputs" in capsys.readouterr().err
 
-    assert cli.main(["workflow", "run", "ship", "the export", "--budget", "3", "--json"]) == 0
+    assert cli.main(["workflow", "run", "ship", "the export", "--json"]) == 0
     run_status = json.loads(capsys.readouterr().out)
     assert run_status["state"] == "running" and run_status["now"] == ["do"]
     assert cli.main(["workflow", "status"]) == 0
@@ -452,3 +459,34 @@ def test_a_step_role_in_the_team_is_the_one_it_runs_as(git_repo, store):
     assert dry.plan.role.name == "security-auditor"
     assert any("the workflow step runs as security-auditor" in r for r in dry.plan.reasons)
     assert Options(step_role="x").stored()["step_role"] == "x"
+
+
+# --- context boundaries --------------------------------------------------------------
+
+
+def test_a_review_step_is_blind_and_the_step_after_it_gets_its_findings_as_records(git_repo, store: Store, kicks):
+    _save(CHAIN, git_repo)
+    workflows.start(store, "chain", git_repo, {"goal": "the export"})
+    found = ({"where": "export.py:12", "what": "drops the last row", "evidence_class": "deterministic",
+              "cause": "introduced", "proof": "python probe.py"},)
+    seen: list[dict] = []
+    flow.work(store, runner=_runner([ok("built it, all green"), WorkerResult(True, None, "one problem", "read it",
+                                                                            findings=found), ok("polished")], seen))
+    _build, check, polish = seen
+    # The review reads the change, never what the build said of it.
+    assert "built it, all green" not in check["prompt"] and "git diff" in check["prompt"]
+    assert "Its findings:" in polish["prompt"] and "export.py:12: drops the last row" in polish["prompt"]
+    # A step further back is still summarized, without its findings.
+    assert "- build (task #" in polish["prompt"]
+
+
+def test_the_bundled_feature_builds_with_its_tests_and_a_clean_review_ends_it(git_repo, store: Store, kicks):
+    defn = workflows.load("feature", git_repo, "bundled")
+    assert [s["id"] for s in defn["steps"]] == ["build", "review", "refute", "fix", "recheck"]
+    assert "with the tests that prove it works" in defn["steps"][0]["prompt"]
+    started = workflows.start(store, "feature", git_repo, {"goal": "the export"})
+    seen: list[dict] = []
+    flow.work(store, runner=_runner([ok("built it"), ok("no problems")], seen))
+    # Two workers: the build and its review. The ledger steps had nothing to decide.
+    assert len(seen) == 2 and workflows.status(store, started["id"])["state"] == "done"
+    assert workflows.load("bugfix", git_repo, "bundled")["steps"][0]["kind"] == "debug-repro"

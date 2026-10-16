@@ -34,7 +34,8 @@ from cauce.store import Store, home
 
 #: Where an investigator starts: deep reading wants a strong model, and it climbs from here.
 START = "opus/high"
-BUDGET_USD = 6.0
+#: An investigator's room: its turns. No dollar cap stops it; what it costs is
+#: estimated from earlier investigators before it starts, and shown as it goes.
 MAX_TURNS = 120
 #: How much of the facts a brief carries.
 FACTS_CHARS = 60_000
@@ -95,17 +96,38 @@ def plugin_brief(plugin: Mapping[str, Any]) -> str:
         "- every skill, command and agent it ships is read in full\n"
         "- its phases and the gate between each are listed, with the exact checks, commands and thresholds\n"
         "- each workflow it describes is written as a cauce workflow definition whose prompts list measurable "
-        "criteria\n"
-        "- each persona or kind of worker it describes is written as a cauce role built on a bundled one, "
-        "carrying the plugin's skills as plugin:skill\n"
+        "criteria, cut where context changes hands, never one step per role: the worker that builds also writes "
+        "its tests, a review is a separate blind step, and a fix of what a review found goes through the ledger "
+        "(refute, fix, recheck), as the example does\n"
+        "- each persona or kind of worker it describes is folded into the role of the kind of work it does (built "
+        "on a bundled one, carrying the plugin's skills as plugin:skill) as that role's instructions and "
+        "criteria, never as a worker of its own\n"
         "- what applies only to some projects says how to tell them by the files a project holds\n\n"
         f"What cauce takes (its kinds, its bundled roles, a workflow's shape):\n\n```json\n{_facts(shape)}\n```"
     )
 
 
-def _options(investigation: str, start: str, budget: float, max_turns: int) -> dict[str, Any]:
-    return {"kind": "explore", "role": "surveyor", "start": start, "budget_usd": budget,
+def _options(investigation: str, start: str, max_turns: int) -> dict[str, Any]:
+    return {"kind": "explore", "role": "surveyor", "start": start,
             "max_turns": max_turns, "keep_learned": False, "investigation": investigation}
+
+
+def estimate(store: Store | None, count: int) -> dict[str, Any]:
+    """What `count` investigators are likely to cost, from the ones that finished
+    before: an estimate to agree on, never a cap."""
+    past = store.investigator_costs() if store is not None else []
+    if not past:
+        return {"investigators": count, "each_usd": None, "total_usd": None, "from": 0}
+    each = sum(past) / len(past)
+    return {"investigators": count, "each_usd": round(each, 2), "total_usd": round(each * count, 2),
+            "from": len(past)}
+
+
+def estimate_text(found: Mapping[str, Any]) -> str:
+    if found["each_usd"] is None:
+        return "no earlier investigator to estimate the cost from (it is shown as it goes)"
+    return (f"about ${found['total_usd']:.2f} in all, ${found['each_usd']:.2f} each as {found['from']} earlier "
+            "investigator(s) cost: an estimate, nothing caps it")
 
 
 def _kick(cwd: str, key: str | None) -> bool:
@@ -142,7 +164,7 @@ def plan(store: Store | None, *, repos: Iterable[str] = (), exclude: Iterable[st
 
 
 def start(store: Store, planned: Mapping[str, Any], *, session_id: str | None = None, start: str = START,
-          budget: float = BUDGET_USD, max_turns: int = MAX_TURNS, kick: Kick | None = None) -> dict[str, Any]:
+          max_turns: int = MAX_TURNS, kick: Kick | None = None) -> dict[str, Any]:
     """Queue one investigator per project and per plugin, each in its own lane, and start the lanes."""
     Cell.parse(start)
     if not planned["projects"] and not planned["plugins"]:
@@ -155,11 +177,11 @@ def start(store: Store, planned: Mapping[str, Any], *, session_id: str | None = 
     for cwd, key, body, what in jobs:
         task = store.create_task(body, status="queued", source="queue", author="init", repo=key, cwd=cwd,
                                  session_id=session_id, title=f"[investigate {investigation}] {what}"[:200],
-                                 options=json.dumps(_options(investigation, start, budget, max_turns)))
+                                 options=json.dumps(_options(investigation, start, max_turns)))
         queued.append({"id": task["id"], "title": task["title"], "repo": key, "cwd": cwd})
         (kick or _kick)(cwd, key)
     return {"id": investigation, "tasks": queued, "left_out": list(planned["left_out"]),
-            "cap_usd": round(budget * len(queued), 2)}
+            "estimate": estimate(store, len(queued))}
 
 
 def _of(task: Mapping[str, Any]) -> str | None:
@@ -234,12 +256,12 @@ def cmd(args: argparse.Namespace) -> int:
             shown = {"projects": [{"repo": p["repo"], "dir": p["dir"], "sessions": p["sessions"]}
                                   for p in planned["projects"]],
                      "plugins": [{"name": p["name"], "version": p["version"]} for p in planned["plugins"]],
-                     "left_out": planned["left_out"], "start": args.start,
-                     "cap_usd": round(args.budget * (len(planned["projects"]) + len(planned["plugins"])), 2)}
+                     "left_out": planned["left_out"], "start": args.start, "max_turns": args.max_turns,
+                     "estimate": estimate(store, len(planned["projects"]) + len(planned["plugins"]))}
             print(json.dumps(shown, indent=2, ensure_ascii=False))
             return 0
         started = start(store, planned, session_id=os.environ.get("CAUCE_SESSION_ID"), start=args.start,
-                        budget=args.budget, max_turns=args.max_turns)
+                        max_turns=args.max_turns)
     except (InvestigateError, ValueError) as exc:
         print(f"cauce: {exc}", file=sys.stderr)
         return 1
@@ -249,7 +271,7 @@ def cmd(args: argparse.Namespace) -> int:
         print(json.dumps(started, indent=2, ensure_ascii=False))
     else:
         print(f"{started['id']}: {len(started['tasks'])} investigator(s) queued, each in its own lane, at "
-              f"{args.start}; at most ${started['cap_usd']:.2f} in all")
+              f"{args.start}, up to {args.max_turns} turns an attempt; {estimate_text(started['estimate'])}")
         for t in started["tasks"]:
             print(f"  #{t['id']} {t['title']}")
         for left in started["left_out"]:
@@ -269,10 +291,9 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--plugin", action="append", help="an installed plugin to bring into cauce's terms (repeatable)")
     p.add_argument("--days", type=int, default=365, help="sessions of the last N days (default 365)")
     p.add_argument("--start", default=START, help=f"the cell each investigator starts at (default {START})")
-    p.add_argument("--budget", type=float, default=BUDGET_USD, help=f"dollars each may spend (default {BUDGET_USD})")
     p.add_argument("--max-turns", type=int, default=MAX_TURNS, help=f"turns per attempt (default {MAX_TURNS})")
-    p.add_argument("--dry-run", action="store_true", help="what it would read and the most it could cost; queues "
-                                                          "nothing")
+    p.add_argument("--dry-run", action="store_true", help="what it would read, where each investigator starts, "
+                                                          "its turns and an estimate of the cost; queues nothing")
     p.add_argument("--json", action="store_true")
     p = isub.add_parser("status", help="where an investigation is, and its reports (the latest by default)")
     p.add_argument("id", nargs="?")

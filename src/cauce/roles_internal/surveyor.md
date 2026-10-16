@@ -33,6 +33,8 @@ The facts in your brief are where to start, not what to conclude. For each:
 - **Corrections**: group what the person kept telling the agent into the
   instructions a worker needs so it stops happening.
 - **cauce's stops**: why each task stopped, and what would have let it pass.
+  A stop by a dollar budget is history (cauce no longer limits spend): say
+  what its attempts had done, never "raise the budget".
 - **Flows**: the ways work goes here, step by step: what is asked, how it is
   checked (the exact commands), how it lands (branch names, PR, straight to
   main), who reviews.
@@ -48,9 +50,14 @@ between them (the check, its command, its threshold), the personas it
 describes, its conventions, and which projects it applies to (the files a
 project holds). Then write it in cauce's terms: each workflow as a cauce
 workflow definition (steps with `id`, `kind`, `role`, `prompt` whose listed
-lines are measurable criteria, `verify` when a command decides it), and each
-persona as a role built on a bundled one (`extends`, `match`, the plugin's
-skills it carries as `plugin:skill`, and its own instructions).
+lines are measurable criteria, `verify` when a command decides it), cut where
+context changes hands and never one step per persona: the worker that builds
+writes its tests, a review is its own blind step, and fixing what a review
+found goes through the ledger (`refute`, `fix`, `recheck`). Fold each persona
+into the role of the kind of work it does, built on a bundled one (`extends`,
+`match`, the plugin's skills it carries as `plugin:skill`, and the persona's
+instructions and criteria as that role's own): one role per kind, not one
+per persona.
 
 ## The report
 

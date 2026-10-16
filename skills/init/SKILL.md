@@ -40,6 +40,7 @@ is written before they agree. Then:
 ```bash
 cauce survey --json                # every session of the last 180 days, by project, with its history
 cauce team insights --json         # what cauce kept of each project's tasks: kinds, pass rates, failures, checks
+cauce stats --json --days 90       # how cauce's own runs went: first-try rates by kind and cell, where the time went
 cauce roles list --json            # every role, the person's first
 cauce team list --json             # every team and the projects using it
 cauce workflow list --json         # every workflow, the person's and the bundled ones
@@ -66,8 +67,10 @@ a real choice):
   someone else's code).
 - **Plugins** whose workflow cauce should take on: the ones their sessions use
   (a company's development helper, a review process) and any they name.
-- **Cost**: show what the investigation would read and the most it can cost,
-  from a dry run, and the cell each worker starts at.
+- **Cost**: show what the investigation would read, the cell each worker
+  starts at, its turns, and the dry run's estimate of what it may cost (from
+  earlier investigators). Say it is an estimate: nothing caps it, and any
+  investigator can be cancelled.
 
 ```bash
 cauce investigate start --dry-run --exclude /path/to/scratch --plugin some-helper
@@ -91,8 +94,9 @@ explain every chain from the commits themselves, account for every unmerged
 branch, match every reported error to its fix or mark it unsolved, turn the
 corrections into worker instructions, name the flows with their exact checks,
 and back every problem, fix and fact with evidence. A plugin's investigator
-reads every skill, command and agent and writes its phases and gates as cauce
-workflow definitions and its personas as roles.
+reads every skill, command and agent, writes its phases and gates as cauce
+workflow definitions cut where context changes hands, and folds its personas
+into the roles of the kinds of work they do.
 
 While they run, read the deep facts of the largest projects yourself
 (`cauce survey --repo <dir> --deep --json`) so you can judge the reports.
@@ -101,9 +105,10 @@ ends.
 
 **Check each report before you use it.** An investigator that stopped
 (`stopped` in the status), or a report with an empty section the facts say
-should not be empty, is not done: resume it (`cauce resume <id>`), or start
-that project again with more budget (`cauce investigate start --repo <dir>
---budget 10`). Never fill a gap with a guess.
+should not be empty, is not done: resume it (`cauce resume <id>`, with
+`--max-turns 200` when it ran out of turns), or start that project again with
+more turns (`cauce investigate start --repo <dir> --max-turns 200`). Never fill
+a gap with a guess.
 
 ## 4. Find the flows and the families
 
@@ -131,7 +136,7 @@ Across all reports:
 | a family that recurs across projects | a problem with its fix (`cauce memory record`), carried by the workflow steps that would hit it (`memory: ["problem:<id>"]`) |
 | a fact about one project (a rule, a trap, a decision, a fragile file) | a note in that project, anchored to the file it is about |
 | a fix or security work stranded on an unmerged branch | told to the person; never merged by you |
-| a cauce task that stopped | what would have let it pass: a criterion, a check, a setting |
+| a cauce task that stopped | what would have let it pass: a criterion, a check, a setting (a stop by an old dollar budget is history: read what its attempts did) |
 | refused calls | `cauce allow` rules to suggest — the person runs them; you never do |
 | a flow that loses its way on vague goals | measurable criteria in its workflow's prompts |
 
@@ -230,10 +235,14 @@ cauce workflow save - --scope user <<'JSON'
   "steps": [
     {"id": "build", "kind": "ui", "role": "frontend-measured", "memory": ["topic:conventions", "problem:12"],
      "prompt": "{goal}\n\nDone when:\n- layout-inspector finds no overlapping boxes on the screens changed\n- no text is clipped or overflows at 375, 768 and 1280 px\n- every button and link is at least 44 px high\n- every control the goal names is clicked and does what it says"},
-    {"id": "review", "kind": "review-routine", "role": "strict-reviewer",
-     "prompt": "Review, without changing any file, the change for: {goal}\n\nList each real problem with its file and line, measured or shown by a probe; say plainly when there is none."},
-    {"id": "fix", "kind": "implement", "role": "frontend-measured",
-     "prompt": "Fix every problem the review below found in the change for: {goal}\n\nIf it found none, stop."}
+    {"id": "review", "kind": "review-routine", "role": "strict-reviewer", "needs": ["build"],
+     "prompt": "Review, without changing any file, the change for: {goal}\n\nReport each real problem in `findings` with its file and line, measured or shown by a probe (its `proof`); say plainly when there is none."},
+    {"id": "refute", "kind": "review-routine", "ledger": "refute", "needs": ["review"],
+     "prompt": "Decide, without changing any file, the findings on the change for: {goal}"},
+    {"id": "fix", "kind": "ui", "role": "frontend-measured", "ledger": "fix", "needs": ["refute"],
+     "prompt": "Fix the confirmed findings below, in the change for: {goal}"},
+    {"id": "recheck", "kind": "review-routine", "ledger": "recheck", "needs": ["fix"],
+     "prompt": "Check, without changing any file, the fix just made in the change for: {goal}"}
   ]
 }
 JSON
@@ -243,8 +252,14 @@ cauce workflow show ui-measured
 
 What makes a workflow fit:
 
-- **Its steps are the flow's own**, in their order, with the team's roles; a
-  plugin's phases and gates when it defines the flow.
+- **Its steps are cut where context changes hands**, never one per role: the
+  worker that builds also writes its tests (a plan, a build and a test step
+  each starting from a summary of the last is the split that costs most and
+  loses most); a review is its own step and reads blind, the request and the
+  diff; a fix of what it found goes through the ledger (`refute`, `fix`,
+  `recheck`), which costs nothing when the review is clean. A plugin's phases
+  and gates, when it defines the flow, become criteria and checks of those
+  steps, not more steps.
 - **Criteria are measurable.** The listed lines of a prompt become criteria
   `S1..Sn` that every pass must answer and the independent check verifies.
   "That it looks good" sends a check round after round: name counts, sizes, a

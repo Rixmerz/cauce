@@ -18,7 +18,7 @@ remembers what failed — across every repository on the machine.
 |---|---|
 | **Routes every task** | Classifies the request, picks a model × effort cell, runs a one-shot worker with only the tools and MCP servers that task needs, and climbs on evidence: shallow work gets more effort, a wrong approach gets another model. |
 | **Checks without trusting the worker** | A pass needs evidence; changed files come from git; risky changes get an independent read-only verifier that measures what it reports and never reads the worker's summary. |
-| **Says why it stopped** | Every task that stops says who made the call (you, your permission settings, the budget, the environment, cauce's rules) and the command that continues it. |
+| **Says why it stopped** | Every task that stops says who made the call (you, your permission settings, the environment, cauce's rules) and the command that continues it. Cost is measured and shown on every attempt, cell and task, and never stops work: turns are what bound an attempt. |
 | **Remembers** | Problems and the fixes that did or did not work, across every repository; each project's notes, by topic and anchored to code. |
 | **Keeps the thread** | The scribe reads every turn of a session from its transcript, with no model: work the session sends gets the person's own words it needs, notes are filed every few turns, and `/cauce:relay` hands the thread to a fresh session instead of a compaction's summary. |
 | **Chains work** | Workflows: plan → build → review → fix, advanced by the engine, each step on the commit the one before kept. Dual review with a refuter: reviewers never vote. |
@@ -248,6 +248,15 @@ cauce's. `cauce route` says what finished tasks of the same kind
 cost on average before a run is paid for. Dollars are API rates on the token
 counts; on a subscription they measure how much of the plan work used.
 
+Cost is measured and shown, never a limit. No task stops, skips a cell or gets
+a shorter attempt for money: an attempt is bounded by its turns (at most 200,
+however many are asked for) and the time they earn, a run by its attempts, and
+a resume nobody approved (a model's) is refused after two runs' worth of
+attempts. Each attempt keeps its own cost apart from its independent check's,
+and how much of its input the prompt cache served, so `cauce stats` shows where
+the money goes. A task an older cauce stopped on a dollar budget still says so,
+and `cauce resume <id>` continues it.
+
 ### Where the time goes
 
 Every run records its phases on its events: how long it waited in its lane,
@@ -351,8 +360,18 @@ Claude Code.)
 
 ## Use
 
-In a session: `/orchestration <what you want done>`. The session stays thin
-and dispatches; the work happens in workers.
+In a session: `/orchestration <what you want done>`. The session is the main
+agent and does what fits in what it already holds (a question, a lookup, a
+small change in files it read); cauce takes what earns a worker: work that
+would fill its context with reading, independent parts that run side by side,
+work that must be checked by someone who did not write it or needs a ladder,
+memory and a kept branch, and work that should go on after the turn. A
+judgment that needs the conversation and changes nothing goes to Claude Code's
+own fork (`/subtask`), which inherits the conversation and its cache; the
+expertise it needs is a skill invoked inside the fork, so its text never stays
+in the main context. This follows what Anthropic measured: several agents cost
+3–10× the tokens of one, and pay off for polluted context, parallel work and
+independent verification, not for splitting work by role.
 
 From a shell:
 
@@ -400,8 +419,8 @@ failed or must be replanned leaves nothing. The commit reads as the change
 (`Round the cart total once`, the line the worker proposes, else the task's
 title), with what it does under it and the task in trailers
 (`Cauce-Task: #12`, and `Cauce-Verified: no (blocked)` while unverified), so a
-merged branch reads in your history like any other. Whatever stopped it — a refusal, the
-budget, the environment, the approval gate, a cancel from the UI or
+merged branch reads in your history like any other. Whatever stopped it — a refusal,
+the environment, the approval gate, a cancel from the UI or
 `cauce cancel`, a process that died — the report, `cauce show <id>`, the board
 and the session that asked for it say which, and give the command that goes on. The worktree gets the checkout's
 ignored `node_modules` / `.venv` and your `.claude/settings.local.json` as
@@ -506,13 +525,19 @@ everything above works without it.
 
 ### Workflows
 
-Some work is a sequence of phases, each building on the one before: plan,
-build, review, fix. A **workflow** is that sequence, saved once and run as
-often as it comes back. Each step is an ordinary cauce task with its own cell,
+Some work is a chain of tasks that must not share one context: a change, a
+review of it that reads blind, and a fix of what the review confirmed. A
+**workflow** is that chain, saved once and run as often as it comes back. It
+is cut where context changes hands, never by role: the phases of one task
+(plan, build, test; reproduce and fix) are one worker's, because a planner, a
+builder and a tester each starting from a summary of the last spend more on the
+hand-offs than on the work. Each step is an ordinary cauce task with its own cell,
 check, escalation and stops. The engine chains the steps, not a session. When
 a step passes, cauce queues the steps that waited on it. A writing step starts
 its worktree from the commit the step before it kept, and every step's brief
-says what the earlier steps found. The session that started a run hears of it
+says what the earlier steps found, with the findings of the steps it waits on
+as records. A review step is the exception: it reads blind, the request and
+the diff, as the independent verifier does. The session that started a run hears of it
 once, at its end or when a step waits on the person. A watcher sees where the
 run is, step by step.
 
@@ -533,12 +558,16 @@ Definitions are JSON files:
 
 - `project`: `.cauce/workflows/<name>.json`, shared through the repository.
 - `user`: in the cauce home.
-- `bundled`: the templates `feature`, `bugfix` and `review-fix`.
+- `bundled`: the templates `feature` (build with its tests → blind review →
+  refute → fix → recheck), `bugfix` (reproduce and fix in one worker, then the
+  same review chain), `review-fix` and `dual-review`. The ledger steps are
+  skipped when the review found nothing, so a clean change costs two workers.
 
 A definition holds steps (`id`, `prompt` with `{input}` names, `needs`,
-`kind`, `verify`, `start`, `budget_usd`, `max_turns`, `memory`) and never a
-permission rule, an approval or a capability. Those are the person's flags on
-`run`.
+`kind`, `verify`, `start`, `max_turns`, `memory`) and never a permission rule,
+an approval, a capability or a dollar limit. Rules and approvals are the
+person's flags on `run`; a `budget_usd` an older definition holds is read and
+ignored.
 
 A workflow in the user scope is global: one definition that several projects
 reuse, each run's state kept with its own project. A run never changes under
@@ -586,8 +615,8 @@ fields: `cauce overview --json --repo DIR` keeps the repositories it may see,
 `cauce events --after N --kind finished --repo DIR --json` the endings since,
 each with its task's title, repository and session. A button a person presses
 there resumes a stopped task with `cauce resume <id> --pressed`: cauce reads the
-rules, approval or budget from its own account of the stop, as the UI's button
-does, and refuses anything else passed with it.
+rules or approval from its own account of the stop, as the UI's button does,
+and refuses anything else passed with it.
 
 ### The UI
 
@@ -602,7 +631,7 @@ repository's cards at once.
   task runs beside the others or waits and why, *Done* by day. Narrow it to one
   session. Cancel a task, reopen a lane, start a lane's dispatcher. Every card
   that stopped says who made the call (you, your permission settings, the
-  budget, the environment, the worker's verdict, cauce's rules), the reason,
+  environment, the worker's verdict, cauce's rules), the reason,
   what was refused, and the command that continues it, ready to copy.
 - **Sessions** — every Claude Code session cauce saw in the project, with the
   command that resumes it. Open one to review it: its own task list as Claude

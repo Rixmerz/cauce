@@ -27,6 +27,7 @@ from cauce import (
     stops,
     usage,
 )
+from cauce import findings as findings_mod
 from cauce.classify import classify
 from cauce.escalate import Attempt, Failure
 from cauce.matrix import KINDS, LADDERS, Cell
@@ -127,7 +128,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(str(exc), file=sys.stderr)
             return 2
     options = orchestrate.Options(
-        budget_usd=args.budget,
         max_attempts=args.max_attempts,
         allow_approval=args.allow_approval,
         isolate=not args.no_isolate,
@@ -167,9 +167,9 @@ RESUMABLE = ("blocked", "needs_approval", "failed", "cancelled", "interrupted", 
 def _resume_pressed(args: argparse.Namespace) -> int:
     """A person's press on a page that is not cauce's own UI: the same resume the
     UI's button runs, read from cauce's account of the stop (`stops.resume_args`).
-    The caller names the task and nothing else: no rule, approval or budget."""
+    The caller names the task and nothing else: no rule or approval."""
     if args.allow or args.allow_approval or args.unattended or args.keep or any(
-            v is not None for v in (args.budget, args.verify, args.start, args.max_turns)):
+            v is not None for v in (args.verify, args.start, args.max_turns)):
         print("--pressed takes the resume from cauce's account of the stop: give it the task id alone",
               file=sys.stderr)
         return 2
@@ -236,8 +236,11 @@ def cmd_resume(args: argparse.Namespace) -> int:
         options.kind = options.kind or task["kind"]
         options.allow_tools = tuple(dict.fromkeys([*options.allow_tools, *(args.allow or ())]))
         options.verify = args.verify or options.verify
-        options.budget_usd = args.budget or options.budget_usd
-        options.allow_approval = options.allow_approval or args.allow_approval
+        # An approval is a person's, for the run they approved: a resume nobody
+        # approved (`--unattended`, a model's) never uses one an earlier run had,
+        # and leaves it stored for the person's own next resume.
+        inherited = options.allow_approval
+        options.allow_approval = args.allow_approval or (inherited and not args.unattended)
         options.isolate = options.isolate and not args.no_isolate
         if args.max_turns or outgrew:
             # A task that outgrew its turns is not wrong: it goes on with more.
@@ -255,11 +258,19 @@ def cmd_resume(args: argparse.Namespace) -> int:
         history = [Attempt(Cell.parse(a["cell"]), int(a["max_turns"] or 0), bool(a["passed"]),
                            _failure_of(a["failure"]), a["summary"] or "", tuple(denied.get(a["seq"], ())),
                            allow=tuple(granted.get(a["seq"], ())),
-                           changed=tuple(json.loads(a["changed_paths"] or "[]")))
+                           changed=tuple(json.loads(a["changed_paths"] or "[]")),
+                           evidence=(a["evidence"] or "")[-1500:])
                    for a in attempts]
-        store.update_task(args.id, options=json.dumps(options.stored()), dispatched=0, cancel_requested=0)
+        # A task the independent check stopped resumes with what it found: its first
+        # check says for each whether it is fixed, instead of starting blind.
+        stop = stops.of(store, task)
+        checked = store.last_event(args.id, "verified") if stop is not None and stop.cause == "review" else None
+        known = findings_mod.blocking(findings_mod.read({"findings": checked["data"].get("findings") or []})
+                                      ) if checked else []
+        kept = options.stored() | ({"allow_approval": True} if inherited else {})
+        store.update_task(args.id, options=json.dumps(kept), dispatched=0, cancel_requested=0)
         report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=args.id, history=history,
-                                 progress=_say)
+                                 progress=_say, known_findings=known)
         if not args.no_report:
             # Its report is printed to whoever ran it; a detached resume's is not,
             # and reaches the session as an ending instead.
@@ -271,6 +282,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
     return 0 if report.status == "done" else 1
 
 
+#: The attempts after which a resume nobody approved is refused: two runs' worth.
+UNATTENDED_ATTEMPTS = 2 * orchestrate.Options().max_attempts
+
+
 def _needs_a_person(store: Store, task: dict, args: argparse.Namespace) -> str | None:
     """Why a resume nobody approved would only stop again, or None. A model may
     continue work; it may not grant what a person must: a refused command, or a
@@ -280,6 +295,12 @@ def _needs_a_person(store: Store, task: dict, args: argparse.Namespace) -> str |
     from cauce import grants
 
     stop = stops.of(store, task)
+    tried = len(store.attempts(task["id"]))
+    if tried >= UNATTENDED_ATTEMPTS:
+        # No dollar cap stops work any more: a model resuming a task that keeps
+        # failing is stopped by the attempts it already had.
+        return (f"task #{task['id']} already had {tried} attempts: only the person resumes it now "
+                f"(`cauce resume {task['id']}`), after reading what they found (`cauce show {task['id']}`)")
     if task["status"] == "needs_approval" and not args.allow_approval:
         return (f"task #{task['id']} waits for a cell that needs the person's approval: they resume it "
                 f"(`cauce resume {task['id']} --allow-approval`)")
@@ -300,14 +321,13 @@ def _detach(args: argparse.Namespace) -> int:
     from cauce import dispatch
 
     argv = [sys.executable, "-m", "cauce", "resume", str(args.id), "--no-report"]
-    for flag, value in (("--verify", args.verify), ("--budget", args.budget), ("--start", args.start),
-                        ("--max-turns", args.max_turns)):
+    for flag, value in (("--verify", args.verify), ("--start", args.start), ("--max-turns", args.max_turns)):
         if value is not None:
             argv += [flag, str(value)]
     for rule in args.allow or ():
         argv += ["--allow", rule]
     argv += [flag for flag, on in (("--allow-approval", args.allow_approval), ("--no-isolate", args.no_isolate),
-                                   ("--no-model", args.no_model)) if on]
+                                   ("--no-model", args.no_model), ("--unattended", args.unattended)) if on]
     log = home() / "work" / f"resume-{args.id}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "a") as out:
@@ -865,7 +885,7 @@ def cmd_queue(args: argparse.Namespace) -> int:
     try:
         if args.queue_command == "add":
             where = Path(args.repo or os.getcwd()).resolve()
-            options = {k: v for k, v in {"budget_usd": args.budget, "verify": args.verify, "kind": args.kind,
+            options = {k: v for k, v in {"verify": args.verify, "kind": args.kind,
                                          "start": args.start, "allow_tools": args.allow,
                                          "surfaces": list(_surfaces(args.surface)) or None,
                                          "carry": args.carry or None,
@@ -1470,7 +1490,6 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("text", help="the task; - reads it from stdin")
         p.add_argument("--repo", help="the repository the work is in (default: the current directory)")
         p.add_argument("--launch-dir", help="start the worker here, and let it work in the repository")
-        p.add_argument("--budget", type=float, default=5.0, help="dollars this task may spend (default 5)")
         p.add_argument("--max-attempts", type=int, default=6)
         p.add_argument("--max-turns", type=int,
                        help="turns per attempt (default: 30; a feature, 60); raised once, then again while "
@@ -1508,7 +1527,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", type=int)
     p.add_argument("--allow", action="append", metavar="RULE", help=ALLOW_HELP)
     p.add_argument("--verify", help="command whose exit code decides a claimed pass (default: the task's own)")
-    p.add_argument("--budget", type=float, help="dollars this run may spend (default: the task's own)")
     p.add_argument("--start", help="the cell to resume at (default: where it stopped)", type=_cell)
     p.add_argument("--allow-approval", action="store_true", help="allow cells that need approval (Fable)")
     p.add_argument("--no-isolate", action="store_true",
@@ -1551,7 +1569,6 @@ def build_parser() -> argparse.ArgumentParser:
     p = qsub.add_parser("add", help="queue a task for this repository's lane")
     p.add_argument("text")
     p.add_argument("--repo")
-    p.add_argument("--budget", type=float)
     p.add_argument("--verify")
     p.add_argument("--kind", type=_kind, metavar="KIND")
     p.add_argument("--start", type=_cell)
@@ -1872,7 +1889,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _starts_work(args: argparse.Namespace) -> bool:
+    """The commands that start cauce work: a worker runs none of them."""
+    command = getattr(args, "command", None)
+    return command in ("run", "resume", "work") or (command, getattr(args, f"{command}_command", None)) in {
+        ("queue", "add"), ("workflow", "run"), ("workflow", "retry"), ("investigate", "start")}
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if os.environ.get("CAUCE_WORKER_TASK") and _starts_work(args):
+        # A worker is one attempt of one task: work it starts would run outside its
+        # task's checks, its turns and its account. What is left goes in its result.
+        print(f"cauce: this is a worker of task #{os.environ['CAUCE_WORKER_TASK']}: it does not start cauce work. "
+              "Say what is left in your result block instead.", file=sys.stderr)
+        return 2
     return int(args.func(args))
 

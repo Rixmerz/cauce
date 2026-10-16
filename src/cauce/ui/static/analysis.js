@@ -105,7 +105,7 @@ export async function renderAnalysis(ctx) {
       h("div", { class: "stat" }, h("b", {}, s.runs ? pct(s.pass_rate) : "—"), h("span", {}, `${s.passed} of ${s.runs} runs passed (${s.tasks} tasks)`)),
       h("div", { class: "stat" }, h("b", {}, pct(s.first_try_rate)), h("span", {}, "passed at the first attempt")),
       h("div", { class: "stat" }, h("b", {}, secs(s.wall_p50_s)), h("span", {}, `median run · p90 ${secs(s.wall_p90_s)}`)),
-      h("div", { class: "stat" }, h("b", {}, money(s.cost_per_pass_usd)), h("span", {}, `per pass · ${usd(s.cost_usd)} in all`)),
+      h("div", { class: "stat" }, h("b", {}, money(s.cost_per_pass_usd)), h("span", {}, `per pass · ${usd(s.cost_usd)} in all · checks ${usd(s.verifier_cost_usd)}`)),
       h("div", { class: "stat" }, h("b", {}, s.minutes_per_pass === null ? "—" : `${s.minutes_per_pass}m`), h("span", {}, `of runs per pass · ${s.hours}h in all`)),
       h("div", { class: "stat" }, h("b", {}, secs(s.queued_p50_s)), h("span", {}, "median wait in the queue"))),
     h("h2", { class: "section" }, "Where the time went"),
@@ -120,9 +120,10 @@ export async function renderAnalysis(ctx) {
         num(c.attempts_avg), num(secs(c.wall_p50_s)), num(money(c.cost_per_pass_usd)))))
       : h("div", { class: "empty" }, "No run a session sent has been briefed yet."),
     h("h2", { class: "section" }, "By cell"),
-    r.cells.length ? h("table", {}, head("cell", ["attempts"], ["passed"], ["p50 time"], ["p50 turns"], ["p50 cost"], ["cost"], "failures"),
+    r.cells.length ? h("table", {}, head("cell", ["attempts"], ["passed"], ["p50 time"], ["p50 turns"], ["p50 cost"], ["cost"], ["checks"], ["cache read"], "failures"),
       r.cells.map((c) => h("tr", {}, h("td", {}, cellChip(c.cell)), num(c.attempts), rate(c.attempts ? c.passed / c.attempts : null),
         num(secs(c.wall_p50_s)), num(c.turns_p50), num(money(c.cost_p50_usd)), num(usd(c.cost_usd)),
+        num(usd(c.verifier_cost_usd)), num(pct(c.cache_read_share)),
         h("td", {}, Object.entries(c.failures).map(([f, n]) => `${f} ×${n}`).join(", ") || "—"))))
       : h("div", { class: "empty" }, "No attempt in this period."),
     h("div", { class: "split" },
