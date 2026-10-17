@@ -193,17 +193,18 @@ def same_as(store: Store, project: str, topic: str, fact: str) -> int | None:
 
 def merge_same(store: Store, project: str) -> int:
     """Retire the copies of one fact under one topic (two repositories that joined a
-    workspace each kept it): the oldest stays, the others point at it. How many went."""
+    workspace each kept it): a current copy stays before one to review, the older
+    before the newer, and takes the others' anchors and links. How many went."""
     kept: dict[tuple[str, str], int] = {}
     gone = 0
-    for note in sorted(store.notes(project, states=LIVE, limit=100_000), key=lambda n: n["id"]):
+    order = sorted(store.notes(project, states=LIVE, limit=100_000), key=lambda n: (n["state"] != "current", n["id"]))
+    for note in order:
         same = (note["topic"], fold(" ".join(note["text"].split())))
         if same not in kept:
             kept[same] = note["id"]
             continue
-        store.update_note(note["id"], state="replaced", replaced_by=kept[same],
-                          state_reason=f"the same fact as note #{kept[same]}, kept by another repository of the "
-                                       "workspace")
+        store.merge_note(note["id"], kept[same],
+                         f"the same fact as note #{kept[same]}, kept by another repository of the workspace")
         gone += 1
     return gone
 
@@ -242,54 +243,80 @@ def _blobs(top: Path, commit: str, paths: Sequence[str]) -> dict[str, str]:
     return found
 
 
+def _where(repo_dir: Path | None) -> tuple[bool, list[tuple[str, Path]]]:
+    """Where note paths given from `repo_dir` live. In a checkout (or a worktree of
+    one) they are its own paths, kept with its name in a workspace in front; in a
+    workspace's folder they already carry the member's name, one checkout each."""
+    top = repo.toplevel(repo_dir) if repo_dir is not None else None
+    if top is not None:
+        return True, [(workspaces.prefix(top), top)]
+    return False, workspaces.checkouts_of(repo_dir)
+
+
+def _placed(inside: bool, places: Sequence[tuple[str, Path]], path: str) -> tuple[str, Path | None, str]:
+    """A path as the notes keep it, the checkout it is in, and its path there."""
+    if inside:
+        pre, top = places[0]
+        return pre + path, top, path
+    for pre, top in places:
+        if path.startswith(pre):
+            return path, top, path[len(pre):]
+    return path, None, path
+
+
 def anchor(store: Store, note_id: int, repo_dir: Path, paths: Iterable[str] = (),
            symbols: Iterable[tuple[str, str]] = (), *, commit: str | None = None) -> int:
-    """Tie a note to files (relative to the checkout's top) and to livespec
-    symbols, as (qualified name, path). Each anchor keeps the file's content
-    at `commit` (default HEAD), which is what `review` compares against. Outside
-    a checkout the anchor still names the file, for recall, and is never reviewed."""
+    """Tie a note to files (relative to the checkout's top, or to a workspace's
+    folder) and to livespec symbols, as (qualified name, path). Each anchor keeps
+    the file's content at `commit` (default HEAD), which is what `review` compares
+    against. Outside a checkout the anchor still names the file, for recall, and
+    is never reviewed. In a workspace a member's file is named with the member in
+    front (`api/…`): two members' files of the same name are two files."""
     wanted = [(p.strip().lstrip("./"), None) for p in paths if p and p.strip()]
     wanted += [(path, symbol) for symbol, path in symbols if path]
     if not wanted:
         return 0
-    top = repo.toplevel(repo_dir)
-    sha = None
-    blobs: dict[str, str] = {}
-    if top is not None:
-        sha = commit or _git(top, "rev-parse", "HEAD").stdout.strip() or None
-        if sha:
-            blobs = _blobs(top, sha, sorted({p for p, _ in wanted}))
-    # In a workspace, a member's file is named with the member in front (`api/…`):
-    # two members' files of the same name are two files of the one project.
-    pre = workspaces.prefix(top)
-    made = 0
-    for path, symbol in dict.fromkeys(wanted):
-        store.add_anchor(note_id, pre + path, symbol=symbol, commit_sha=sha if path in blobs else None,
-                         blob=blobs.get(path))
-        made += 1
-    return made
+    inside, places = _where(repo_dir)
+    rows = [(*_placed(inside, places, path), symbol) for path, symbol in dict.fromkeys(wanted)]
+    seen: dict[Path, tuple[str | None, dict[str, str]]] = {}
+    for _, top, _, _ in rows:
+        if top is not None and top not in seen:
+            sha = (commit if inside else None) or _git(top, "rev-parse", "HEAD").stdout.strip() or None
+            files = sorted({file for _, t, file, _ in rows if t == top})
+            seen[top] = (sha, _blobs(top, sha, files) if sha else {})
+    for kept, top, file, symbol in rows:
+        sha, blobs = seen.get(top, (None, {})) if top is not None else (None, {})
+        store.add_anchor(note_id, kept, symbol=symbol, commit_sha=sha if file in blobs else None,
+                         blob=blobs.get(file))
+    return len(rows)
 
 
 def review(store: Store, project: str, repo_dir: Path) -> list[tuple[int, str]]:
     """Mark `review` every current note whose anchored file changed since the note
     was written. A change only counts once it is in this checkout's history: an
     anchor on a branch not merged yet is left alone, and one whose content
-    reached HEAD another way (a squash merge) moves to HEAD. Returns (note, why)."""
-    top = repo.toplevel(repo_dir)
-    if top is None:
-        return []
-    # In a workspace, only this member's anchors are this checkout's to review.
-    pre = workspaces.prefix(top)
-    anchors = [{**a, "file": a["path"][len(pre):]} for a in store.project_anchors(project)
-               if a["commit_sha"] and a["blob"] and a["path"].startswith(pre)]
+    reached HEAD another way (a squash merge) moves to HEAD. In a workspace a
+    member reviews only its own anchors, and its folder reviews each member's
+    in that member. Returns (note, why)."""
+    _, places = _where(repo_dir)
+    every = [a for a in store.project_anchors(project) if a["commit_sha"] and a["blob"]] if places else []
+    flagged: dict[int, str] = {}
+    for pre, top in places:
+        _review_in(store, top, [{**a, "file": a["path"][len(pre):]} for a in every if a["path"].startswith(pre)],
+                   flagged)
+    for note_id, why in flagged.items():
+        store.update_note(note_id, state="review", state_reason=why)
+    return list(flagged.items())
+
+
+def _review_in(store: Store, top: Path, anchors: Sequence[Mapping[str, Any]], flagged: dict[int, str]) -> None:
     if not anchors:
-        return []
+        return
     head = _git(top, "rev-parse", "HEAD").stdout.strip()
     if not head:
-        return []
+        return
     now = _blobs(top, head, sorted({a["file"] for a in anchors}))
     ancestors: dict[str, bool] = {}
-    flagged: dict[int, str] = {}
     for a in anchors:
         current = now.get(a["file"])
         if current == a["blob"]:
@@ -304,25 +331,25 @@ def review(store: Store, project: str, repo_dir: Path) -> list[tuple[int, str]]:
         what = f"`{a['symbol']}` in {a['path']}" if a["symbol"] else a["path"]
         flagged.setdefault(a["note_id"], f"{what} {'changed' if current else 'was deleted'} "
                                          f"since this note was written ({sha[:7]} → {head[:7]})")
-    for note_id, why in flagged.items():
-        store.update_note(note_id, state="review", state_reason=why)
-    return list(flagged.items())
 
 
 def confirm(store: Store, note_id: int, repo_dir: Path | None) -> dict | None:
-    """A person checked a note: it is current again, anchored to the code as it is now."""
+    """A person checked a note: it is current again, anchored to the code as it is now.
+    An anchor no checkout here holds is left as it was."""
     note = store.get_note(note_id)
     if note is None:
         return None
     if repo_dir is not None:
-        top = repo.toplevel(repo_dir)
-        head = _git(top, "rev-parse", "HEAD").stdout.strip() if top else ""
-        pre = workspaces.prefix(top)
-        anchors = [a for a in store.note_anchors([note_id]) if a["path"].startswith(pre)]
-        blobs = _blobs(top, head, sorted({a["path"][len(pre):] for a in anchors})) if top and head else {}
-        for a in anchors:
+        _, places = _where(repo_dir)
+        heads: dict[Path, str] = {}
+        for a in store.note_anchors([note_id]):
+            pre, top = next(((p, t) for p, t in places if a["path"].startswith(p)), ("", None))
+            if top is None:
+                continue
+            head = heads.setdefault(top, _git(top, "rev-parse", "HEAD").stdout.strip())
             file = a["path"][len(pre):]
-            store.update_anchor(a["id"], commit_sha=head if file in blobs else None, blob=blobs.get(file))
+            blob = _blobs(top, head, [file]).get(file) if head else None
+            store.update_anchor(a["id"], commit_sha=head if blob else None, blob=blob)
     return store.update_note(note_id, state="current", state_reason=None)
 
 

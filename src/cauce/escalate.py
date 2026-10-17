@@ -153,7 +153,8 @@ def repeated_answer(attempts: Sequence[Attempt]) -> bool:
 
 def _repeated_pair(attempts: Sequence[Attempt]) -> tuple[int, int] | None:
     """The 1-based numbers of the two failures that said the same thing."""
-    failed = [(i, a) for i, a in enumerate(attempts, 1) if not a.passed]
+    # A try the network dropped under said nothing about the work.
+    failed = [(i, a) for i, a in enumerate(attempts, 1) if not a.passed and not a.network]
     if len(failed) < 2:
         return None
     (i, a), (j, b) = failed[-2], failed[-1]

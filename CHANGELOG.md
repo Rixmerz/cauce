@@ -10,12 +10,16 @@
   API and the front end that shares its spec was tracked twice: two sets of
   notes (the same ones written twice), two boards, two lanes. `cauce workspace
   add <folder> --with <repo> --with <repo>` makes the folder that holds them
-  (made when missing; a repository elsewhere is linked in) one project: every
+  (made when missing; a repository elsewhere is linked in; with no `--with`,
+  the repositories right inside it) one project, its folder holding only its
+  own repositories: every
   repository in it, and every worker's worktree of one, answers to the folder
   for its notes, tasks, lanes, sessions, team and kept rules, and a task that
   spans them runs in the folder, which holds every checkout in it (a linked
-  one included). What each repository kept moves to the folder, and a fact two
-  of them kept is merged into one note. A note about a file names its
+  one included). What each repository kept there moves to the folder (a clone
+  elsewhere keeps its own, its notes copied), with the session names a person
+  wrote, and a fact two of them kept is merged into one note with both one's
+  anchors and links; a repository keeps its own project-scope workflows. A note about a file names its
   repository in front (`api/src/cart.ts`), so two files of the same name stay
   two, and a repository reviews only its own anchors. Declared in the cauce
   home, never in a repository. `cauce workspace list` and `rm` (new work is
@@ -25,17 +29,21 @@
 - **`cauce workflow run --dry-run`** checks the inputs and the memory, shows
   each step with the check it would run, and queues nothing.
 - **`cauce workflow run --verify`**: the check of every step that writes and
-  names none of its own (a reading step never gets it).
+  names none of its own (a reading step never gets it; a step with no kind
+  gets it once it is classified into one that writes).
 
 ### Changed
 
 - **A network that drops is waited for, not handed to the person.** A task
-  whose worker lost the network (`ENOTFOUND`, a connection error, an
-  overload of the API), or whose check could not reach it, was blocked like a
-  refused command. Now the same cell tries again after 30s, 90s and 270s, from
-  the work it kept, and those tries count toward no attempt ceiling; only a
-  network that stays down stops it, as `network` (by the network, its work
-  kept, resumed unattended once it is back).
+  whose session lost the API (`ENOTFOUND`, a connection error, an overload),
+  whose worker found a name that does not resolve, or whose check's package
+  manager or git could not reach the network, was blocked like a refused
+  command. Now the same cell tries again after 30s, 90s and 270s, from the
+  work it kept; those tries count toward no attempt ceiling (an unattended
+  resume's included), and the waits are their own phase in `cauce stats`.
+  Only a network that stays down stops it, as `network` (by the network, its
+  work kept, resumed unattended once it is back). A local server that is not
+  up, or a test that logs an unresolved name, is not the network.
 - **A workflow's first start is the one that runs.** `cauce workflow list`
   shows each workflow's inputs and memory; text given without a name fills the
   one input not named with `--input`, and an error for several names them all
@@ -51,7 +59,8 @@
   (`--full` shows them whole).
 - **The servers notice only when it applies.** A task that mentions a dev
   server, and whose check needs none (lint, tests, a build), is no longer told
-  to start one; when it is, the notice names the words that set it off.
+  to start one; one that tells the worker to start its servers still is. The
+  notice names the words that set it off.
 
 ## [0.18.0] - 2026-10-16
 

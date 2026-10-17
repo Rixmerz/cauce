@@ -105,7 +105,8 @@ def _step_line(step: dict[str, Any]) -> str:
 def _run_line(run: dict[str, Any]) -> str:
     """One run on one line: the step it is at, its attempt, its last commit, its files."""
     steps = run["steps"]
-    at = next((s for s in steps if s["state"] in ("running", "queued")), None) or next(
+    at = next((s for s in steps if s["id"] in run["waiting"]), None) or next(
+        (s for s in steps if s["state"] in ("running", "queued")), None) or next(
         (s for s in steps if s["state"] not in ("done", "pending")), None) or next(
         (s for s in reversed(steps) if s["state"] == "done"), steps[-1] if steps else None)
     head = f"#{run['id']} {run['name']} — {run['state']} · ${run['cost_usd']:.2f}"
@@ -329,8 +330,10 @@ def _run(args: argparse.Namespace) -> int:
             for step in ready["defn"]["steps"]:
                 after = f" after {', '.join(step['needs'])}" if step["needs"] else ""
                 check = workflows.step_check(step, options)
+                later = not check and not step.get("kind") and options.get("verify") and not step.get("verify")
                 print(f"  · {step['id']} ({step.get('kind') or 'classified when it runs'}){after}"
-                      + (f", checked by `{check}`" if check else ""))
+                      + (f", checked by `{check}`" if check else "")
+                      + (f", checked by `{options['verify']}` if it writes" if later else ""))
             for gap in ready["gaps"]:
                 print(f"  note: {gap}")
             return 0
@@ -370,6 +373,7 @@ def _status(args: argparse.Namespace) -> int:
         return 0
     if not found:
         print("no workflow run here; `cauce workflow list` shows what can run")
+        return 0
     if args.run is None and not args.full:
         for run in found:
             print(_run_line(run))

@@ -251,10 +251,14 @@ cauce workspace list
 cauce workspace rm ~/work/shop          # new work is each repository's again; what was kept stays
 ```
 
-A repository already in the folder needs no `--with`; one elsewhere is linked
-in under its own name. What each repository kept before (notes, tasks, the
-rules kept with `cauce allow`, its team) moves to the folder, and a fact both
-kept is merged into one note. A note about a file names the repository in front
+Without `--with`, the workspace is the repositories right inside the folder;
+with it, exactly the ones named, each one elsewhere linked in under its own
+name. The folder holds only its own repositories (every one under it belongs
+to it), so one that holds others is refused: name them all, or make a new
+folder. What each repository kept before (notes, tasks, the rules kept with
+`cauce allow`, its team, the session names you wrote) moves to the folder, and
+a fact both kept is merged into one note; a clone of the same repository
+elsewhere keeps its own history, and its notes are copied, not taken. A note about a file names the repository in front
 (`api/src/cart.ts`), so two files of the same name stay two. Workspaces are kept
 in your cauce home, never in a repository. A task that reaches a sibling
 repository with `--add-dir` while they are tracked apart says so, with the

@@ -359,3 +359,7 @@ def test_a_network_that_dropped_is_named_wherever_it_shows(tmp_path):
     limited = json.dumps({"is_error": True, "subtype": "success", "result": "Claude AI usage limit reached"})
     assert parse(proc(limited), spec(tmp_path)).network == ""
     assert launch.network_trouble("expected ECONNRESET to be retried") == ""
+    # A worker's evidence is a command's output: a local server that is not up is no network.
+    local = '{"verdict": "fail", "failure": "environment", "summary": "the e2e check could not reach the app", ' \
+            '"evidence": "TypeError: fetch failed (connect ECONNREFUSED 127.0.0.1:3000)"}'
+    assert parse(proc(json.dumps({"result": f"```cauce-result\n{local}\n```"})), spec(tmp_path)).network == ""

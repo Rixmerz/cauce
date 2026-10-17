@@ -429,10 +429,29 @@ def parse(
                                 evidence, raw=text, verdict=verdict, **common)
         return WorkerResult(True, None, summary, evidence, raw=text, verdict=verdict, **common)
     failure = _refused(_failure(block.get("failure"), verdict), denied)
-    # The worker found the network down (npm could not reach its registry): the
-    # environment of a moment, not a wall to fix by hand.
-    dropped = network_trouble(summary, evidence, flaky=True) if failure is Failure.ENVIRONMENT else ""
+    # The worker found the network down (a name that does not resolve): the
+    # environment of a moment, not a wall to fix by hand. Its evidence is a
+    # command's output, so the words a local server says when it is not up
+    # (`fetch failed`, a connection error) are not read as the network.
+    dropped = network_trouble(summary, evidence) if failure is Failure.ENVIRONMENT else ""
     return WorkerResult(False, failure, summary, evidence, raw=text, verdict=verdict, network=dropped, **common)
+
+
+#: A check that could not reach the network itself: its package manager or git
+#: says so on a line of its own. A log line a test prints is not this.
+CHECK_OFFLINE = re.compile(
+    r"^(?:npm (?:ERR!|error) (?:code (?:ENOTFOUND|EAI_AGAIN|ENETUNREACH)|network)\b.*|"
+    r"(?:ERR_PNPM_\w+|error An unexpected error occurred).*\b(?:ENOTFOUND|EAI_AGAIN|getaddrinfo)\b.*|"
+    r"fatal: unable to access .*(?:Could not resolve host|Failed to connect).*|"
+    r"(?:WARNING: Retrying|ERROR: Could not install|ERROR: No matching distribution).*"
+    r"(?:NewConnectionError|Temporary failure in name resolution|Name or service not known).*)$",
+    re.MULTILINE)
+
+
+def check_offline(output: str) -> str:
+    """The line where a check says it could not reach the network, or ""."""
+    found = CHECK_OFFLINE.search(output or "")
+    return found.group(0).strip()[:120] if found else ""
 
 
 def network_trouble(*texts: str, flaky: bool = False) -> str:

@@ -62,7 +62,10 @@ def declared(env: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
         found = json.loads(path.read_text(encoding="utf-8")).get("workspaces") or []
     except (OSError, ValueError, AttributeError):
         found = []
-    found = [w for w in found if isinstance(w, dict) and isinstance(w.get("folder"), str)]
+    found = [{**w, "members": [m for m in w.get("members") or () if isinstance(m, dict)
+                               and isinstance(m.get("path"), str) and isinstance(m.get("name"), str)]}
+             for w in found if isinstance(w, dict) and isinstance(w.get("folder"), str)
+             and isinstance(w.get("members") or [], list)]
     _cache[str(path)] = (stamp, found)
     return found
 
@@ -98,13 +101,22 @@ def of(directory: str | Path | None, env: Mapping[str, str] | None = None) -> Pa
 
 
 def member(top: str | Path | None, env: Mapping[str, str] | None = None) -> dict[str, Any] | None:
-    """The member whose checkout `top` is, with the workspace it is in; None outside one."""
-    if not top:
+    """The member whose checkout `top` is (a worktree of it included), with the
+    workspace it is in; None outside one."""
+    if not top or not declared(env):
         return None
     here = Path(top).resolve()
+    tops = [here]
+    if (here / ".git").is_file():
+        # A worktree (Claude Code's, `git worktree add`): it is its checkout's.
+        from cauce import repo
+
+        common = repo._git(here, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        if common and Path(common).name == ".git":
+            tops.append(Path(common).parent.resolve())
     for w in declared(env):
         for m in w.get("members") or ():
-            if m.get("path") and Path(m["path"]) == here:
+            if Path(m["path"]) in tops:
                 return {**m, "folder": w["folder"]}
     return None
 
@@ -113,6 +125,22 @@ def prefix(top: str | Path | None, env: Mapping[str, str] | None = None) -> str:
     """What a member's file paths carry in front in the workspace's notes (`api/`); "" outside one."""
     found = member(top, env)
     return f"{found['name']}/" if found else ""
+
+
+def checkouts_of(directory: str | Path | None, env: Mapping[str, str] | None = None) -> list[tuple[str, Path]]:
+    """Where a directory's note paths live: (what they carry in front, the checkout's
+    top). A checkout gives itself, named as its workspace names it; a workspace's
+    folder gives each of its members; anything else, nothing."""
+    from cauce import repo
+
+    if not directory:
+        return []
+    top = repo.toplevel(Path(directory))
+    if top is not None:
+        return [(prefix(top, env), top)]
+    here = Path(directory).resolve()
+    entry = next((w for w in declared(env) if Path(w["folder"]) == here), None)
+    return [(f"{m['name']}/", Path(m["path"])) for m in (entry or {}).get("members") or ()]
 
 
 def _checkouts(folder: Path) -> list[tuple[str, Path]]:
@@ -126,47 +154,72 @@ def _checkouts(folder: Path) -> list[tuple[str, Path]]:
     return out
 
 
+def _in_checkout(where: Path) -> bool:
+    """`where`, or the nearest folder above it that exists, lies in a git checkout."""
+    from cauce import repo
+
+    probe = where
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    return repo.toplevel(probe) is not None
+
+
 def add(folder: str | Path, repos: Iterable[str | Path] = (), env: Mapping[str, str] | None = None
         ) -> dict[str, Any]:
-    """Declare `folder` a workspace of the checkouts in it and of `repos`, each one
-    outside it linked in under its own name (the folder is made when it is not
-    there). Adding to a workspace that exists adds its new members."""
+    """Declare `folder` a workspace of `repos` (each one outside it linked in under
+    its own name), or of the checkouts right inside it when none is named; the
+    folder is made when it is not there. A workspace's folder holds only its own
+    repositories: every one under it belongs to it. Adding to a workspace that
+    exists adds its new members. Everything is checked before anything is made."""
     from cauce import repo
 
     where = Path(folder).expanduser().resolve()
     if where == where.parent or where == Path.home().resolve():
         raise WorkspaceError(f"{where} cannot be a workspace: the home directory and / are never a project")
-    if (where / ".git").exists():
-        raise WorkspaceError(f"{where} is itself a checkout: a workspace is a folder that holds checkouts")
+    if _in_checkout(where):
+        raise WorkspaceError(f"{where} is in a git checkout: a workspace is a folder that holds checkouts, "
+                             "never one inside a checkout")
+    current = next((w for w in declared(env) if Path(w["folder"]) == where), None)
+    members = {m["path"]: m["name"] for m in (current or {}).get("members") or ()}
+    inside = {str(top): name for name, top in _checkouts(where)}
     links: list[tuple[Path, Path]] = []
-    for given in repos:
-        top = repo.toplevel(Path(given).expanduser())
-        if top is None:
+    named = list(dict.fromkeys(str(t.resolve()) for t in (repo.toplevel(Path(r).expanduser()) or Path(r)
+                                                            for r in repos)))
+    for given in named:
+        top = Path(given)
+        if repo.toplevel(top) is None:
             raise WorkspaceError(f"{given} is not in a git checkout")
-        top = top.resolve()
+        if given in members:
+            continue
         if _within(top, where):
+            members[given] = top.relative_to(where).as_posix()
+            continue
+        if given in inside:
+            members[given] = inside[given]
             continue
         link = where / top.name
-        if link.exists() or link.is_symlink():
-            if link.resolve() != top:
-                raise WorkspaceError(f"{link} is already there and is not {top}: rename one of them")
-            continue
+        if link.exists() or link.is_symlink() or any(link == planned for planned, _ in links):
+            raise WorkspaceError(f"{link} is already there, or named twice: rename one of the repositories")
         links.append((link, top))
-    # Everything is checked before anything is made: a refused workspace leaves no link behind.
-    members = [{"name": name, "path": str(top)} for name, top in _checkouts(where)]
-    members += [{"name": link.name, "path": str(top)} for link, top in links]
+        members[given] = top.name
+    if not named and not current:
+        members = {path: name for path, name in inside.items()}
+    others = sorted(name for path, name in inside.items() if path not in members)
+    if others:
+        raise WorkspaceError(f"{where} also holds {', '.join(others)}: a workspace's folder holds only its own "
+                             "repositories (name them all with --with, or make a new folder for these)")
     if len(members) < MIN_MEMBERS:
-        raise WorkspaceError(f"{where} holds {len(members)} repository(ies): a workspace holds {MIN_MEMBERS} or more "
-                             "(name them with --with, or put them in the folder)")
+        raise WorkspaceError(f"{where} would hold {len(members)} repository(ies): a workspace holds {MIN_MEMBERS} "
+                             "or more (name them with --with, or put them in the folder)")
     found = [w for w in declared(env) if Path(w["folder"]) != where]
     for w in found:
-        taken = {m["path"] for m in w.get("members") or ()} & {m["path"] for m in members}
+        taken = {m["path"] for m in w.get("members") or ()} & set(members)
         if taken or _within(where, Path(w["folder"])) or _within(Path(w["folder"]), where):
             raise WorkspaceError(f"{where} overlaps the workspace {w['folder']}: a repository is in one workspace")
     where.mkdir(parents=True, exist_ok=True)
     for link, top in links:
         link.symlink_to(top, target_is_directory=True)
-    entry = {"folder": str(where), "members": members}
+    entry = {"folder": str(where), "members": [{"name": name, "path": path} for path, name in members.items()]}
     _write([*found, entry], env)
     return entry
 

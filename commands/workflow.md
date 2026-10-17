@@ -131,9 +131,11 @@ cauce workflow run <name> --input goal="..." --input area="..." [--verify "<chec
 ```
 
 `--verify` is the check of every step that writes and names none of its own;
-a reading step never gets it. A memory topic a step names that holds no note
-yet in this project is said when the run starts, and the step goes without
-it; add one with `cauce note --topic <topic> "..."` when the person has it.
+a reading step never gets it, and a step with no kind gets it once it is
+classified into one that writes. A memory topic a step names that holds no
+note yet in this project is said when the run starts, with the command that
+fills it, and the step goes without it; run that command when the person has
+the fact.
 
 The run starts the repository's dispatcher. Then, without you:
 

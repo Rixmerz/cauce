@@ -82,8 +82,10 @@ def bundled_dir() -> Path:
 
 
 def dirs(cwd: str | Path | None) -> dict[str, Path | None]:
-    """Each scope's folder. A directory outside an enrolled project has no project scope."""
-    folder = project.find(cwd) if cwd else None
+    """Each scope's folder. A directory outside an enrolled project has no project scope.
+    A repository in a workspace keeps its own project-scope workflows when it has them."""
+    mine = project.own(cwd) if cwd else None
+    folder = mine if mine is not None and (mine / "workflows").is_dir() else (project.find(cwd) if cwd else None)
     return {"project": folder / "workflows" if folder else None, "user": home() / "workflows",
             "bundled": bundled_dir()}
 
@@ -298,13 +300,32 @@ def memory_problems(store: Store, project_key: str | None, refs: list[str]) -> l
     return out
 
 
-def memory_gaps(store: Store, project_key: str | None, refs: list[str]) -> list[str]:
-    """The topics a step names that hold no note in this project yet: the step
-    starts without them, and the person is told before it does."""
+def _topic(store: Store, project_key: str | None, value: str) -> str:
+    """A memory topic as the notes file it: an alias (`style`) is its topic (`conventions`)."""
     from cauce import notes as notes_mod
 
-    return [value for kind, _, value in (ref.partition(":") for ref in refs)
-            if kind == "topic" and not store.notes(project_key or "", topics=[value], states=notes_mod.LIVE, limit=1)]
+    try:
+        return notes_mod.resolve_topic(store, project_key or "", value)
+    except ValueError:
+        return value
+
+
+def memory_gaps(store: Store, project_key: str | None, refs: list[str]) -> list[str]:
+    """What to say of each topic a step names that holds no note in this project yet:
+    the step starts without it, and the person is told how to fill it before it does."""
+    from cauce import notes as notes_mod
+
+    known = notes_mod.topics(store, project_key or "")
+    out = []
+    for kind, _, value in (ref.partition(":") for ref in refs):
+        topic = _topic(store, project_key, value) if kind == "topic" else ""
+        if not topic or store.notes(project_key or "", topics=[topic], states=notes_mod.LIVE, limit=1):
+            continue
+        how = (f"`cauce note --topic {topic} \"…\"` adds one" if topic in known else
+               f"this project has no such topic: `cauce notes topic add {topic} \"<what it holds>\"`, then "
+               f"`cauce note --topic {topic} \"…\"`")
+        out.append(f"topic {value!r} holds no note in this project yet; the step starts without it ({how})")
+    return out
 
 
 def memory_text(store: Store, project_key: str | None, refs: list[str]) -> str:
@@ -325,7 +346,8 @@ def memory_text(store: Store, project_key: str | None, refs: list[str]) -> str:
             else:
                 lines.append("- " + notes_mod.line(note, text_chars=MEMORY_CHARS))
         elif kind == "topic":
-            found = store.notes(project_key or "", topics=[value], states=notes_mod.LIVE, limit=20)
+            found = store.notes(project_key or "", topics=[_topic(store, project_key, value)], states=notes_mod.LIVE,
+                                limit=20)
             lines += [f"- {notes_mod.line(n, text_chars=MEMORY_CHARS)}" for n in found] or [
                 f"- topic {value}: no live note now"]
         else:
@@ -592,9 +614,7 @@ def prepare(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] 
         problems.append("its memory cannot be read here: " + "; ".join(unreadable))
     if problems:
         raise WorkflowError("; ".join(problems))
-    gaps = [f"step {s['id']!r}: topic {topic!r} holds no note in this project yet; the step starts without it "
-            f"(`cauce note --topic {topic} \"…\"` adds one)"
-            for s in defn["steps"] for topic in memory_gaps(store, key, s.get("memory") or [])]
+    gaps = [f"step {s['id']!r}: {gap}" for s in defn["steps"] for gap in memory_gaps(store, key, s.get("memory") or [])]
     return {"defn": defn, "where": where, "given": given, "key": key, "gaps": gaps}
 
 
@@ -703,6 +723,10 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
                  f"`git diff {options['origin'][:12]}` shows it.")
     opts = {k: v for k, v in {
         "kind": step.get("kind"), "verify": step_check(step, options), "start": step.get("start"),
+        # A step with no kind is classified when it runs: the run's check goes with it, for
+        # orchestrate to apply if it turns out to write.
+        "run_verify": options.get("verify") if not step.get("kind") and not step.get("verify")
+        and step.get("ledger") in (None, "fix") else None,
         "max_turns": step.get("max_turns"),
         "allow_tools": options.get("allow_tools") or None, "allow_approval": options.get("allow_approval") or None,
         "base": base, "step_role": step.get("role"), "surfaces": step.get("surfaces"),
@@ -893,10 +917,12 @@ def progress(store: Store, run: Mapping[str, Any], task: Mapping[str, Any]) -> d
     if task["status"] == "running":
         out["phase"] = phase.of(task["id"], out.get("attempt"))
         tree = home() / "worktrees" / f"task-{task['id']}"
-        if tree.is_dir():
+        data = started["data"] if started else {}
+        if tree.is_dir() and data.get("base"):
+            # The worktree against the base its run started from, its linked dependencies aside.
             with contextlib.suppress(isolate.IsolationError, OSError):
-                ws = isolate.Workspace(Path(run["cwd"]), tree, isolate.branch_for(task["id"]),
-                                       isolate.head(tree, "HEAD"))
+                ws = isolate.Workspace(Path(run["cwd"]), tree, isolate.branch_for(task["id"]), data["base"],
+                                       links=tuple(data.get("links") or ()))
                 out["files"] = list(isolate.changed(ws))
         return out
     finished = (store.last_event(task["id"], "finished") or {}).get("data") or {}

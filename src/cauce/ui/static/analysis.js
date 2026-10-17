@@ -11,6 +11,7 @@ const PHASES = [
   ["worker_s", "worker", "the workers' own time"],
   ["check_s", "check", "cauce running --verify"],
   ["verifier_s", "verifier", "the independent check"],
+  ["wait_s", "wait", "waiting for a network that dropped"],
   ["other_s", "other", "the rest of the run: recording, committing, notes"],
 ];
 const PERIOD_KEY = "cauce.analysis.days";

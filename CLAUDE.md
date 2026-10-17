@@ -125,11 +125,15 @@ yields the default kind, not a guess.
   environment failure on an attempt that changed files is not work that never
   ran: it blocks at once too, its work kept. A timeout after the work changed
   files is out of turns, not the environment: more turns, and an attempt's
-  time grows with its turns (`launch.timeout_for`). A network that dropped
-  (`launch.NETWORK_DOWN`; for a session's own call also `NETWORK_FLAKY`, never
-  read in a check's output) is neither: the same cell again after each of
-  `escalate.NETWORK_WAITS`, from the work it kept, a try that counts toward no
-  attempt ceiling; one that stays down stops the task as `network`, its work
+  time grows with its turns (`launch.timeout_for`). A network that dropped is
+  neither: read from a session's own failed call (`launch.NETWORK_DOWN` and
+  `NETWORK_FLAKY`), from a worker that named the environment (`NETWORK_DOWN`
+  only: its evidence is a command's output), or from cauce's check only on a
+  line where the check itself could not reach it (`launch.CHECK_OFFLINE`),
+  never a word a test logs. The same cell goes again after each of
+  `escalate.NETWORK_WAITS`, from the work it kept; such a try counts toward no
+  attempt ceiling (nor `cli.UNATTENDED_ATTEMPTS`) and is no answer for a
+  repeated pair; one that stays down stops the task as `network`, its work
   kept.
 - Out of turns is room, never a bug: a finding of the independent check in
   work whose worker ran out of turns before its own check earns the same cell
@@ -149,8 +153,9 @@ yields the default kind, not a guess.
   warning is not such a line. Dead ends reach a brief only on a strict match.
 - A request that opens with a verb of change is never read as a read-only
   kind unless a tag or `--kind` says so.
-- The plan says a task needs servers only when its check talks to one (or it
-  has no check), and names the words that set it off: a mention is no need.
+- The plan says a task needs servers when it tells the worker to start them,
+  or mentions one and its check talks to one (or it has no check), and names
+  the words that set it off: a mention is no need.
 - Work that stopped for a person (blocked, needs approval) is kept on its
   branch, unverified, and so is work that outgrew its turns (a `replan` for
   turns resumes with more); only `failed`, a `replan` for a wrong task and
@@ -304,17 +309,25 @@ yields the default kind, not a guess.
   The home directory and `/` are never a project, a dotfiles checkout at home
   included. The one exception is a workspace the person declared.
 - A workspace (`cauce workspace add`) is a folder of two or more repositories
-  that is one project: `repo.key` and `project.find` answer with the folder for
-  each of them and for their worktrees, so notes, tasks, lanes, sessions, the
-  team and the rules kept with `cauce allow` are the folder's. It lives in the
-  person's cauce home, never in a repository; a repository outside the folder
-  is linked in, and nothing is made before everything is checked. Making one
-  moves what its repositories kept (`Store.rekey`) and merges a fact two of them
-  kept; it waits while one of them has work queued or running. A member's file
-  is named with the member in front in the notes (`api/src/x.py`), and a
-  member reviews only its own anchors. A task in the folder holds every
-  checkout in it, a linked one included. cauce offers a workspace (a task that
-  reaches a sibling with `--add-dir`) and never makes one for the person.
+  that is one project: `repo.key` answers with the folder for each of them and
+  their worktrees, and `project.find` for each of them, so notes, tasks, lanes,
+  sessions, the team and the rules kept with `cauce allow` are the folder's (a
+  repository keeps its own project-scope workflows). It lives in the person's
+  cauce home, never in a repository, and never inside a checkout. Its folder
+  holds only its own repositories, since every one under it belongs to it: the
+  ones named, linked in when elsewhere, or with none named the ones right
+  inside it. Nothing is made before everything is checked. Making one moves
+  what each repository kept where it was done in that checkout (`Store.rekey`;
+  a clone elsewhere with the same key keeps its own, and its notes are copied,
+  not moved), merges a fact two of them kept (a current copy over one to
+  review, with both one's anchors and links), and waits while one of them has
+  work queued or running. A member's file is named with the member in front in
+  the notes (`api/src/x.py`); a member and its worktrees review only its own
+  anchors, and the folder each member's in that member. A task in the folder
+  holds every checkout in it, a linked one included. cauce offers a workspace
+  (a task that reaches a sibling with `--add-dir`: their own folder only when
+  it holds exactly them, else a new one beside them) and never makes one for
+  the person.
 - `.cauce/sessions.json` belongs to the person as much as to Haiku: a `name`
   that differs from `haiku_name` is theirs, and nothing in cauce overwrites it.
 - The UI shows one project at a time and takes no task: work is asked for in
@@ -456,7 +469,8 @@ yields the default kind, not a guess.
   says so. A team left with no role serves as the bundled one, and says so.
 - The analysis is read, never written, and never by a model. A run's phases
   are kept on its events as it runs (`plan_s`, `queued_s`, `since_start_s`,
-  each attempt's `wall_s`, `check_s`, `verifier_s`, the run's `wall_s`); a phase
+  each attempt's `wall_s`, `check_s`, `verifier_s`, the waits for a network
+  `wait_s`, the run's `wall_s`); a phase
   a run never measured is left out of the breakdown, never guessed. The session
   thread comparison is observed, never presented as a trial.
 - Insights and the survey are read, never written, and never by a model: one

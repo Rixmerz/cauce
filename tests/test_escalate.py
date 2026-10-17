@@ -245,3 +245,11 @@ def test_a_network_that_dropped_earns_the_same_cell_after_a_wait_and_stops_only_
     again = [*attempts[:-1], fail("sonnet/high", Failure.CODE_BUG), dropped("sonnet/xhigh", changed=())]
     d = decide(IMPLEMENT, again)
     assert d.move is Move.RETRY and d.wait_s == NETWORK_WAITS[0] and "starts it again" in d.because[2]
+
+
+def test_a_network_try_between_two_answers_does_not_hide_that_they_repeat():
+    same = "the total ignores the discount"
+    pair = [fail("sonnet/medium", Failure.CODE_BUG, same), fail("sonnet/high", Failure.CODE_BUG, same)]
+    assert decide(IMPLEMENT, pair).move is Move.NEXT_MODEL
+    between = [pair[0], dropped("sonnet/high", changed=()), pair[1]]
+    assert decide(IMPLEMENT, between).move is Move.NEXT_MODEL

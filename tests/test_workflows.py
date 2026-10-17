@@ -582,9 +582,57 @@ def test_a_running_step_says_its_attempt_and_the_files_it_touched_so_far(git_rep
     from cauce import isolate
     from cauce.store import home
 
+    from .conftest import git
+
     task = store.create_task("build it", status="running", source="queue", cwd=str(git_repo))
-    store.add_event(task["id"], "attempt_started", seq=2, cell="sonnet/high")
     ws = isolate.prepare(git_repo, task["id"], home())
+    store.add_event(task["id"], "attempt_started", seq=2, cell="sonnet/high", base=ws.base, links=list(ws.links))
+    # What the worker committed counts as much as what it has not yet.
     (ws.path / "export.py").write_text("print('rows')\n")
+    git(ws.path, "add", "export.py")
+    git(ws.path, "commit", "-qm", "export")
+    (ws.path / "more.py").write_text("x = 1\n")
     found = workflows.progress(store, {"cwd": str(git_repo)}, store.get_task(task["id"]))
-    assert found["attempt"] == 2 and found["files"] == ["export.py"] and "phase" in found
+    assert found["attempt"] == 2 and found["files"] == ["export.py", "more.py"] and "phase" in found
+
+
+def test_the_run_check_reaches_a_step_with_no_kind_once_it_is_known_to_write(git_repo, store: Store):
+    from cauce.orchestrate import Options
+
+    # A step classified into a writing kind runs the run's check, and a red one is no pass.
+    red = run("add the export", git_repo, store, Options(run_verify="exit 1", max_attempts=1), registry={},
+              launcher=_worker([ok("built it")], []), classifier=kind("implement"), adapters=[])
+    assert red.status == "failed" and "`exit 1` exited 1" in store.attempts(red.task_id)[0]["summary"]
+    # One classified into a reading kind never gets it.
+    read = run("explain the export", git_repo, store, Options(run_verify="exit 1"), registry={},
+               launcher=_worker([ok("it works so")], []), classifier=kind("explore"), adapters=[])
+    assert read.status == "done"
+
+
+def test_a_kindless_step_carries_the_run_check_and_the_dry_run_says_so(git_repo, store: Store, kicks, capsys,
+                                                                       monkeypatch):
+    monkeypatch.chdir(git_repo)
+    _save({"name": "plain", "inputs": ["goal"], "steps": [{"id": "do", "prompt": "{goal}",
+                                                           "memory": ["topic:style", "topic:contracts"]}]}, git_repo)
+    assert cli.main(["workflow", "run", "plain", "the export", "--verify", "npm test", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "checked by `npm test` if it writes" in out
+    # An alias reads as its topic; a topic the project lacks is added before a note can fill it.
+    assert "topic 'style' holds no note" in out and "`cauce note --topic conventions" in out
+    assert "cauce notes topic add contracts" in out
+    assert cli.main(["workflow", "run", "plain", "the export", "--verify", "npm test"]) == 0
+    (task,) = store.run_tasks(store.list_runs()[0]["id"])
+    assert json.loads(task["options"])["run_verify"] == "npm test"
+    capsys.readouterr()
+    assert cli.main(["workflow", "status", "--repo", str(git_repo / "nowhere")]) == 0
+    assert capsys.readouterr().out.splitlines() == ["no workflow run here; `cauce workflow list` shows what can run"]
+
+
+def test_the_line_of_a_run_names_the_step_that_waits_on_the_person():
+    from cauce import workflow_cli
+
+    line = workflow_cli._run_line({"id": 7, "name": "dual", "state": "waits on you", "cost_usd": 1.0,
+                                   "waiting": ["a"], "steps": [
+                                       {"id": "a", "state": "failed", "task": 10},
+                                       {"id": "b", "state": "running", "task": 11, "attempt": 1}]})
+    assert "step a (1/2): failed #10" in line

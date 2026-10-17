@@ -303,7 +303,9 @@ def _needs_a_person(store: Store, task: dict, args: argparse.Namespace) -> str |
 
     stop = stops.of(store, task)
     attempts = store.attempts(task["id"])
-    tried = len(attempts)
+    # A try the network dropped under is no attempt at the work (its `moved` event says so).
+    dropped = sum(1 for e in store.events_of(task["id"], "moved") if (e["data"] or {}).get("network"))
+    tried = len(attempts) - dropped
     if tried >= UNATTENDED_ATTEMPTS:
         # No dollar cap stops work any more: a model resuming a task that keeps
         # failing is stopped by the attempts it already had.
@@ -1187,27 +1189,34 @@ def cmd_workspace(args: argparse.Namespace) -> int:
             return 2
         new = entry["folder"]
         moved = {"notes": 0, "tasks": 0}
+        merged_rules = False
         used = teams.assignments()
         picked = set()
         for m in entry["members"]:
             old = joining.get(m["path"]) or repo.own_key(Path(m["path"]))
             if old and old != new:
-                for k, n in store.rekey(old, new, prefix=f"{m['name']}/").items():
+                for k, n in store.rekey(old, new, prefix=f"{m['name']}/", inside=m["path"]).items():
                     moved[k] += n
                 kept_rules = grants.granted(old)
                 if kept_rules:
                     grants.grant(new, kept_rules)
+                    merged_rules = True
                 if used.get(old):
                     picked.add(used[old])
         merged = notes.merge_same(store, new)
     finally:
         store.close()
     with contextlib.suppress(OSError, project.NotAProject):
-        project.enroll(new)
+        folder_state = project.enroll(new)
+        for m in entry["members"]:
+            # The session names a person wrote in a repository stay theirs in the folder.
+            if (mine := Path(m["path"]) / project.FOLDER).is_dir() and mine != folder_state:
+                project.take_names(mine, folder_state)
     print(f"workspace {new}: " + ", ".join(f"{m['name']} ({m['path']})" for m in entry["members"]))
     print(f"  one project now: {moved['notes']} note(s) and {moved['tasks']} task(s) moved to it"
           + (f", {merged} repeated note(s) merged" if merged else "")
-          + "; work that spans the repositories runs in the folder")
+          + "; work that spans the repositories runs in the folder"
+          + ("; the rules each kept with `cauce allow` now hold for all of them" if merged_rules else ""))
     if new not in used and len(picked) == 1:
         teams.use(new, picked.pop())
     elif new not in used and picked:

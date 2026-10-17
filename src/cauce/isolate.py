@@ -277,7 +277,9 @@ def is_artifact(path: str) -> bool:
 
 def changed(ws: Workspace) -> tuple[str, ...]:
     """What the task changed against its base, from git: committed or not."""
-    status = _git(ws.path, "status", "--porcelain", "-uall", "-z", strip=False)
+    # A status that never takes the index lock: a watcher's read must not fail the
+    # worker's own `git add`, nor cauce's commit at the end of the run.
+    status = _git(ws.path, "--no-optional-locks", "status", "--porcelain", "-uall", "-z", strip=False)
     paths = {e[3:] for e in status.split("\0") if len(e) > 3}
     paths |= set(_git(ws.path, "diff", "--name-only", ws.base, "HEAD").splitlines())
     return tuple(sorted(p for p in paths if p and not _linked(ws, p) and not is_artifact(p)))

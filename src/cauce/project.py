@@ -70,6 +70,17 @@ def _workspace(cwd: str | Path) -> Path | None:
     return workspaces.of(cwd)
 
 
+def own(cwd: str | Path | None) -> Path | None:
+    """The `.cauce/` of the checkout `cwd` is in (or of `cwd` outside one), whatever
+    workspace holds it: where its own project-scope workflows live."""
+    if not cwd:
+        return None
+    for d in _scope(cwd):
+        if (d / FOLDER).is_dir():
+            return d / FOLDER
+    return None
+
+
 def find(cwd: str | Path | None) -> Path | None:
     """The `.cauce/` folder a session in `cwd` belongs to: in `cwd` itself, or in a
     parent up to and including the top of its git checkout. Never above it, but
@@ -140,6 +151,23 @@ def _locked(folder: Path) -> Iterator[None]:
             yield
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def take_names(source: Path, folder: Path) -> int:
+    """Bring the session names kept in `source` (a repository's `.cauce/` that joined
+    a workspace) into `folder`: an entry `folder` already has stays. How many came."""
+    taken = names(source)
+    if not taken:
+        return 0
+    with _locked(folder):
+        current = names(folder)
+        new = {k: v for k, v in taken.items() if k not in current}
+        if new:
+            tmp = folder / f"{NAMES}.tmp"
+            tmp.write_text(json.dumps({**current, **new}, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+                           encoding="utf-8")
+            tmp.replace(folder / NAMES)
+    return len(new)
 
 
 def set_haiku_name(folder: Path, session_id: str, name: str, prompts: int, stamp: str) -> bool:

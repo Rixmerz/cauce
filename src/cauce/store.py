@@ -946,29 +946,76 @@ class Store:
             f"SELECT id FROM tasks WHERE repo IN ({marks}) AND status IN ('queued', 'running')",  # noqa: S608
             list(repos))]
 
-    def rekey(self, old: str, new: str, prefix: str = "") -> dict[str, int]:
-        """Move a project's memory and history to another key, in one transaction (a
-        repository joining a workspace): its notes, their anchors named with `prefix`
-        in front, its topics, tasks, workflow runs, sessions and usage. Problems and
-        fixes are global and stay as they are. How many notes and tasks moved."""
+    def rekey(self, old: str, new: str, prefix: str = "", inside: str | None = None) -> dict[str, int]:
+        """Move a repository's memory and history to another key, in one transaction
+        (a repository joining a workspace). Its tasks, workflow runs, sessions and
+        their usage move where they ran in `inside` (its checkout); a clone elsewhere
+        with the same key keeps its own. Its notes move, their anchors named with
+        `prefix` in front, and its topics with them; while such a clone remains,
+        the notes are copied instead, so neither loses them. Problems and fixes are
+        global and stay as they are. How many notes and tasks moved."""
+        where, args = ("", []) if inside is None else (" AND (cwd = ? OR cwd LIKE ?)",
+                                                       [inside, inside.rstrip("/") + "/%"])
         with self.immediate():
-            notes = [int(r[0]) for r in self._conn.execute("SELECT id FROM notes WHERE project = ?", (old,))]
-            self._conn.execute("UPDATE notes SET project = ? WHERE project = ?", (new, old))
-            self._conn.execute("UPDATE memory_fts SET repo = ? WHERE kind = 'note' AND repo = ?", (new, old))
-            if prefix:
+            tasks = self._conn.execute(f"UPDATE tasks SET repo = ? WHERE repo = ?{where}",  # noqa: S608
+                                       [new, old, *args]).rowcount
+            for table in ("workflow_runs", "sessions"):
+                self._conn.execute(f"UPDATE {table} SET repo = ? WHERE repo = ?{where}",  # noqa: S608
+                                   [new, old, *args])
+            self._conn.execute("UPDATE usage SET repo = ? WHERE repo = ? AND (session_id IN (SELECT id FROM sessions "
+                               "WHERE repo = ?) OR task_id IN (SELECT id FROM tasks WHERE repo = ?))",
+                               (new, old, new, new))
+            # Work left under the key that ran somewhere else: another clone of the repository.
+            clone = self._conn.execute("SELECT 1 FROM tasks WHERE repo = ? AND cwd != '' UNION SELECT 1 FROM sessions "
+                                       "WHERE repo = ? AND cwd != '' LIMIT 1", (old, old)).fetchone() is not None
+            notes = [int(r[0]) for r in self._conn.execute("SELECT id FROM notes WHERE project = ? ORDER BY id",
+                                                           (old,))]
+            moved = self._copy_notes(notes, new, prefix) if clone else notes
+            if not clone:
+                self._conn.execute("UPDATE notes SET project = ? WHERE project = ?", (new, old))
+                self._conn.execute("UPDATE memory_fts SET repo = ? WHERE kind = 'note' AND repo = ?", (new, old))
                 for start in range(0, len(notes), 500):
                     chunk = notes[start:start + 500]
-                    self._conn.execute(
-                        f"UPDATE note_anchors SET path = ? || path WHERE note_id IN ({','.join('?' * len(chunk))}) "  # noqa: S608
-                        "AND substr(path, 1, ?) != ?", [prefix, *chunk, len(prefix), prefix])
+                    self._conn.execute(f"UPDATE note_anchors SET path = ? || path "  # noqa: S608
+                                       f"WHERE note_id IN ({','.join('?' * len(chunk))})", [prefix, *chunk])
             self._conn.execute("INSERT OR IGNORE INTO note_topics (project, name, description, created_at) "
                                "SELECT ?, name, description, created_at FROM note_topics WHERE project = ?", (new, old))
-            self._conn.execute("DELETE FROM note_topics WHERE project = ?", (old,))
-            tasks = self._conn.execute("UPDATE tasks SET repo = ? WHERE repo = ?", (new, old)).rowcount
-            for table in ("workflow_runs", "sessions", "usage"):
-                self._conn.execute(f"UPDATE {table} SET repo = ? WHERE repo = ?", (new, old))  # noqa: S608
-            self._conn.execute("DELETE FROM lanes WHERE repo = ?", (old,))
-        return {"notes": len(notes), "tasks": tasks}
+            if not clone:
+                self._conn.execute("DELETE FROM note_topics WHERE project = ?", (old,))
+                self._conn.execute("DELETE FROM lanes WHERE repo = ?", (old,))
+        return {"notes": len(moved), "tasks": tasks}
+
+    def _copy_notes(self, ids: list[int], project: str, prefix: str) -> list[int]:
+        """Copies of these notes under `project`: their anchors (named with `prefix`
+        in front) and the links between them come along. The new ids."""
+        made: dict[int, int] = {}
+        for note_id in ids:
+            n = self.get_note(note_id)
+            if n is None:
+                continue
+            made[note_id] = self.add_note(project, n["topic"], n["title"], n["text"], author=n["author"],
+                                          filed_by=n["filed_by"], source=n["source"], task_id=n["task_id"],
+                                          session_id=n["session_id"], proposed_topic=n["proposed_topic"])
+            if n["state"] != "current":
+                self._conn.execute("UPDATE notes SET state = ?, state_reason = ? WHERE id = ?",
+                                   (n["state"], n["state_reason"], made[note_id]))
+            for a in self.note_anchors([note_id]):
+                self.add_anchor(made[note_id], prefix + a["path"], symbol=a["symbol"], commit_sha=a["commit_sha"],
+                                blob=a["blob"])
+        for edge in self.note_links(list(made)):
+            if edge["from_id"] in made and edge["to_id"] in made:
+                self._conn.execute("INSERT OR IGNORE INTO note_links (from_id, to_id, kind, created_at) VALUES "
+                                   "(?, ?, ?, ?)", (made[edge["from_id"]], made[edge["to_id"]], edge["kind"], now()))
+        return list(made.values())
+
+    def merge_note(self, dup: int, kept: int, why: str) -> None:
+        """Retire `dup` for `kept`, the same fact: its anchors and links go to `kept`."""
+        self._conn.execute("UPDATE note_anchors SET note_id = ? WHERE note_id = ? AND path NOT IN "
+                           "(SELECT path FROM note_anchors WHERE note_id = ?)", (kept, dup, kept))
+        for column, other in (("from_id", "to_id"), ("to_id", "from_id")):
+            self._conn.execute(f"UPDATE OR IGNORE note_links SET {column} = ? WHERE {column} = ? "  # noqa: S608
+                               f"AND {other} != ?", (kept, dup, kept))
+        self.update_note(dup, state="replaced", replaced_by=kept, state_reason=why)
 
     def hand_over(self, old: str, new: str) -> int:
         """A relay: the work one session sent that is still open, waits on the

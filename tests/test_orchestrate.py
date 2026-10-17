@@ -1014,6 +1014,9 @@ def test_servers_named_by_a_port_that_answers_need_no_warning():
     assert orchestrate._unmet("the app runs with npm run dev", {}, verify=checks) == []
     said = orchestrate._unmet("the app runs with npm run dev", {}, verify="npx playwright test")
     assert len(said) == 1 and "mentions 'npm run dev'" in said[0]
+    # A task that tells the worker to start its servers needs them, whatever its check says.
+    assert orchestrate._unmet("Start both dev servers, then fix the 500 /api/cart returns", {}, verify="npm test")
+    assert orchestrate._unmet("the app runs with npm run dev", {}, verify="pytest tests/e2e_api")
 
 
 @pytest.mark.parametrize("text", ["TASK: Final browser validation (READ-ONLY)", "Valida el flujo, solo lectura",
@@ -1203,6 +1206,8 @@ def test_a_network_drop_waits_and_goes_on_from_the_work_it_kept(git_repo, store,
     assert report.status == "done" and len(script.specs) == 2
     # The same cell again, after the first wait, and the second try sees what the first one wrote.
     assert script.specs[1].cell == script.specs[0].cell and sum(slept) == 30
+    # The wait is a phase of its own, never "the rest of the run".
+    assert "wait_s" in store.last_event(report.task_id, "finished")["data"]
     moved = store.last_event(report.task_id, "moved")["data"]
     assert moved["move"] == "retry" and moved["wait_s"] == 30 and moved["network"] == "Connection error"
 
@@ -1226,6 +1231,11 @@ def test_a_check_that_lost_the_network_is_no_bug_in_the_work(tmp_path):
     from cauce import orchestrate
 
     lost = orchestrate._verified(ok(), "echo 'npm ERR! code ENOTFOUND registry.npmjs.org'; exit 1", tmp_path)
-    assert lost.failure is Failure.ENVIRONMENT and lost.network == "ENOTFOUND" and "lost the network" in lost.summary
+    assert lost.failure is Failure.ENVIRONMENT and lost.network.startswith("npm ERR! code ENOTFOUND")
+    assert "lost the network" in lost.summary
     red = orchestrate._verified(ok(), "echo '1 failed'; exit 1", tmp_path)
     assert red.failure is Failure.CODE_BUG and red.network == ""
+    # A test that logs a name that does not resolve, beside a real failure, is the work's failure.
+    logged = orchestrate._verified(ok(), "echo 'console.error getaddrinfo ENOTFOUND api.invalid'; "
+                                         "echo 'FAIL src/cart.test.ts Expected 10.8 Received 10'; exit 1", tmp_path)
+    assert logged.failure is Failure.CODE_BUG and logged.network == ""
