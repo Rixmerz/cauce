@@ -74,19 +74,59 @@ def _print_definition(defn: dict[str, Any]) -> None:
             print(f"      + memory: {', '.join(step['memory'])}")
 
 
-def _print_run(run: dict[str, Any]) -> None:
-    mark = {"done": "✓", "running": "▶", "queued": "…", "pending": "·"}
+MARK = {"done": "✓", "running": "▶", "queued": "…", "pending": "·"}
+
+
+def _files(found: list[str]) -> str:
+    if not found:
+        return ""
+    shown = ", ".join(found[:3]) + (f" +{len(found) - 3}" if len(found) > 3 else "")
+    return f"{len(found)} file(s): {shown}"
+
+
+def _step_line(step: dict[str, Any]) -> str:
+    """One step's progress: its state, task and attempt, what it is doing, its commit, its files."""
+    parts = [step["state"] + (f" #{step['task']}" if step.get("task") else "")]
+    if step.get("attempt"):
+        parts.append(f"attempt {step['attempt']}" + (f" at {step['cell']}" if step.get("cell") else ""))
+    elif step.get("cell"):
+        parts.append(f"at {step['cell']}")
+    if step.get("tries", 1) > 1:
+        parts.append(f"try {step['tries']}")
+    if step.get("phase"):
+        parts.append(step["phase"])
+    if step.get("commit"):
+        parts.append(step["commit"][:72])
+    if step.get("files"):
+        parts.append(_files(step["files"]))
+    return " · ".join(parts)
+
+
+def _run_line(run: dict[str, Any]) -> str:
+    """One run on one line: the step it is at, its attempt, its last commit, its files."""
+    steps = run["steps"]
+    at = next((s for s in steps if s["id"] in run["waiting"]), None) or next(
+        (s for s in steps if s["state"] in ("running", "queued")), None) or next(
+        (s for s in steps if s["state"] not in ("done", "pending")), None) or next(
+        (s for s in reversed(steps) if s["state"] == "done"), steps[-1] if steps else None)
+    head = f"#{run['id']} {run['name']} — {run['state']} · ${run['cost_usd']:.2f}"
+    if at is None:
+        return head
+    n = steps.index(at) + 1
+    last = next((s.get("commit") for s in reversed(steps) if s.get("commit")), None)
+    rest = [f"step {at['id']} ({n}/{len(steps)}): {_step_line(at)}"]
+    if last and last != at.get("commit"):
+        rest.append(f"last commit {last[:60]}")
+    return head + " · " + " · ".join(rest)
+
+
+def _print_run(run: dict[str, Any], *, full: bool = False) -> None:
     print(f"run #{run['id']} {run['name']} — {run['state']} · ${run['cost_usd']:.2f} · {run['cwd']}")
-    if run["inputs"]:
-        print("  " + "; ".join(f"{k}: {v}" for k, v in run["inputs"].items()))
+    for name, value in run["inputs"].items():
+        # An input is often a whole brief: one line of it, unless asked for in full.
+        print(f"  {name}: {value if full else _clip(value)}")
     for step in run["steps"]:
-        sign = mark.get(step["state"], "!")
-        task = f" #{step['task']}" if step.get("task") else ""
-        cell = f" at {step['cell']}" if step.get("cell") else ""
-        tries = f", try {step['tries']}" if step.get("tries", 1) > 1 else ""
-        print(f"  {sign} {step['id']:<14} {step['state']}{task}{cell}{tries}")
-    if run["now"]:
-        print(f"  now: {', '.join(run['now'])}")
+        print(f"  {MARK.get(step['state'], '!')} {step['id']:<14} {_step_line(step)}")
     if run["waiting"]:
         print(f"  waits on you: {', '.join(run['waiting'])} — `cauce show <task>`, then `cauce resume <task>` "
               f"or `cauce workflow retry {run['id']} <step>`")
@@ -106,6 +146,12 @@ def cmd_workflow(args: argparse.Namespace) -> int:
                 hidden = " (hidden by a nearer one)" if w["shadowed"] else ""
                 body = w.get("error") or f"{' → '.join(w['steps'])} — {w.get('description') or ''}"
                 print(f"{w['name']:<18} {w['scope']:<8} {body}{hidden}")
+                if not w.get("error"):
+                    # What a run asks for, so the first try is the one that starts it.
+                    needs = [f"inputs: {', '.join(w['inputs'])}" if w["inputs"] else "no input"]
+                    if w.get("memory"):
+                        needs.append(f"memory: {', '.join(w['memory'])}")
+                    print(f"{'':<27} {' · '.join(needs)}")
             return 0
         if what == "show":
             defn = workflows.load(args.name, _cwd(args), args.scope)
@@ -241,33 +287,70 @@ def _edit_in_editor(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run(args: argparse.Namespace) -> int:
-    where = _cwd(args)
+def _inputs(args: argparse.Namespace, where: Path) -> dict[str, str]:
+    """The run's inputs: `--input name=value`, and the text given without a name
+    for the one input left (`-` reads stdin)."""
     inputs = dict(kv.split("=", 1) for kv in args.input or () if "=" in kv)
     bad = [kv for kv in args.input or () if "=" not in kv]
     if bad:
         raise workflows.WorkflowError(f"--input takes name=value, not {bad[0]!r}")
     if args.text is not None:
         defn = workflows.load(args.name, where, args.scope)
-        if len(defn["inputs"]) != 1:
-            raise workflows.WorkflowError(f"{args.name} takes {defn['inputs'] or 'no input'}: use --input name=value")
-        inputs[defn["inputs"][0]] = sys.stdin.read() if args.text == "-" else args.text
-    options = {k: v for k, v in {"allow_tools": args.allow,
-                                 "allow_approval": args.allow_approval or None}.items() if v is not None}
-    with contextlib.suppress(OSError, project.NotAProject):
-        project.enroll(where)
+        left = [i for i in defn["inputs"] if i not in inputs]
+        if len(left) != 1:
+            takes = f"takes {', '.join(defn['inputs'])}" if defn["inputs"] else "takes no input"
+            raise workflows.WorkflowError(f"{args.name} {takes}: name each one, `{workflows.example(defn)}`")
+        inputs[left[0]] = sys.stdin.read() if args.text == "-" else args.text
+    return inputs
+
+
+def _clip(text: str, chars: int = 100) -> str:
+    one = " ".join(str(text).split())
+    return one if len(one) <= chars else one[:chars - 1] + "…"
+
+
+def _run(args: argparse.Namespace) -> int:
+    where = _cwd(args)
+    inputs = _inputs(args, where)
+    options = {k: v for k, v in {"allow_tools": args.allow, "allow_approval": args.allow_approval or None,
+                                 "verify": args.verify}.items() if v is not None}
     store = Store.open()
     try:
+        if args.dry_run:
+            ready = workflows.prepare(store, args.name, where, inputs, scope=args.scope)
+            if args.json:
+                print(json.dumps({"name": ready["defn"]["name"], "inputs": ready["given"], "gaps": ready["gaps"],
+                                  "steps": [{"id": s["id"], "kind": s.get("kind"), "needs": s["needs"],
+                                             "verify": workflows.step_check(s, options)}
+                                            for s in ready["defn"]["steps"]]}, ensure_ascii=False))
+                return 0
+            print(f"{ready['defn']['name']} would run here ({where}); nothing is queued:")
+            for name, value in ready["given"].items():
+                print(f"  {name}: {_clip(value)}")
+            for step in ready["defn"]["steps"]:
+                after = f" after {', '.join(step['needs'])}" if step["needs"] else ""
+                check = workflows.step_check(step, options)
+                later = not check and not step.get("kind") and options.get("verify") and not step.get("verify")
+                print(f"  · {step['id']} ({step.get('kind') or 'classified when it runs'}){after}"
+                      + (f", checked by `{check}`" if check else "")
+                      + (f", checked by `{options['verify']}` if it writes" if later else ""))
+            for gap in ready["gaps"]:
+                print(f"  note: {gap}")
+            return 0
+        with contextlib.suppress(OSError, project.NotAProject):
+            project.enroll(where)
         run = workflows.start(store, args.name, where, inputs, scope=args.scope, options=options,
                               session_id=os.environ.get("CAUCE_SESSION_ID"))
         shown = workflows.status(store, run["id"])
     finally:
         store.close()
     if args.json:
-        print(json.dumps(shown, ensure_ascii=False, default=str))
+        print(json.dumps({**shown, "gaps": run["gaps"]}, ensure_ascii=False, default=str))
     else:
         print(f"started run #{run['id']} of {run['name']} ({run['scope']}): "
               f"{', '.join(shown['now']) or 'nothing'} queued; each next step starts when the one before passes.")
+        for gap in run["gaps"]:
+            print(f"note: {gap}")
         print(f"where it is: `cauce workflow status {run['id']}`")
     return 0
 
@@ -276,12 +359,13 @@ def _status(args: argparse.Namespace) -> int:
     store = Store.open()
     try:
         if args.run is not None:
-            found = [workflows.status(store, args.run)]
+            found = [workflows.status(store, args.run, detail=True)]
         else:
             from cauce import repo
 
             keys = None if args.all else {repo.key(_cwd(args))}
-            found = workflows.runs(store, repos=keys, limit=args.limit)
+            found = [workflows.status(store, r["id"], detail=True)
+                     for r in store.list_runs(repos=keys, limit=args.limit)]
     finally:
         store.close()
     if args.json:
@@ -289,10 +373,16 @@ def _status(args: argparse.Namespace) -> int:
         return 0
     if not found:
         print("no workflow run here; `cauce workflow list` shows what can run")
+        return 0
+    if args.run is None and not args.full:
+        for run in found:
+            print(_run_line(run))
+        print("one run in full: `cauce workflow status <run>`")
+        return 0
     for n, run in enumerate(found):
         if n:
             print()
-        _print_run(run)
+        _print_run(run, full=args.full)
     return 0
 
 
@@ -377,17 +467,24 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--now", action="store_true", help=NOW_HELP)
     p.add_argument("--json", action="store_true")
     scoped(p)
-    p = wsub.add_parser("run", help="start a run here: its first steps are queued and the rest follow by themselves")
+    p = wsub.add_parser("run", help="start a run here: its first steps are queued and the rest follow by themselves",
+                        description="`cauce workflow list` shows what each workflow takes; --dry-run checks it all "
+                                    "first and queues nothing.")
     p.add_argument("name")
-    p.add_argument("text", nargs="?", help="the value of its one input (- reads stdin)")
-    p.add_argument("--input", action="append", metavar="NAME=VALUE")
+    p.add_argument("text", nargs="?", help="the value of the one input not given with --input (- reads stdin)")
+    p.add_argument("--input", action="append", metavar="NAME=VALUE", help="one input by name (repeatable)")
+    p.add_argument("--verify", metavar="CMD", help="the check for every step that writes and names none of its own")
     p.add_argument("--allow", action="append", metavar="RULE", help="a permission rule every step's workers get")
     p.add_argument("--allow-approval", action="store_true", help="steps may reach cells that need approval (Fable)")
+    p.add_argument("--dry-run", action="store_true", help="check the inputs and the memory, show the steps; queue "
+                                                          "nothing")
     p.add_argument("--json", action="store_true")
     scoped(p)
-    p = wsub.add_parser("status", help="where runs are: each step's state and task (this repository; --all)")
+    p = wsub.add_parser("status", help="where runs are: a line per run (this project; --all), or one run step "
+                                       "by step")
     p.add_argument("run", type=int, nargs="?")
     p.add_argument("--all", action="store_true")
+    p.add_argument("--full", action="store_true", help="every run step by step, its inputs whole")
     p.add_argument("--limit", type=int, default=10)
     p.add_argument("--repo")
     p.add_argument("--json", action="store_true")

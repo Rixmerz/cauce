@@ -80,6 +80,9 @@ CONTINUES = frozenset({Move.RETRY, Move.MORE_EFFORT, Move.NEXT_MODEL, Move.MORE_
 AXIS = {Move.RETRY: "retry", Move.MORE_EFFORT: "effort", Move.NEXT_MODEL: "model", Move.MORE_TURNS: "turns"}
 
 MAX_ENV_RETRIES = 1
+#: Tries after the network dropped, and the wait before each: a network comes
+#: back, and the same cell, waited for, goes on from the work it kept.
+NETWORK_WAITS = (30, 90, 270)
 MAX_TURNS_CEILING = 200
 
 
@@ -102,6 +105,8 @@ class Attempt:
     transient: bool = False
     #: The problems it reported, as records: two cells that place the same ones agree.
     findings: tuple[dict[str, str], ...] = ()
+    #: What says the network dropped under it (see `WorkerResult.network`).
+    network: str = ""
 
 
 @dataclass(frozen=True)
@@ -115,6 +120,8 @@ class Decision:
     because: tuple[str, ...] = ()
     #: Cells of the ladder the move went past, each with why.
     skipped: tuple[str, ...] = ()
+    #: Seconds to wait before the next attempt (a network that dropped).
+    wait_s: int = 0
 
     @property
     def continues(self) -> bool:
@@ -123,6 +130,16 @@ class Decision:
     @property
     def axis(self) -> str:
         return AXIS.get(self.move, "stop")
+
+
+def network_streak(attempts: Sequence[Attempt]) -> int:
+    """How many attempts in a row, the last ones, the network dropped under."""
+    n = 0
+    for a in reversed(attempts):
+        if a.passed or not a.network:
+            break
+        n += 1
+    return n
 
 
 def repeated_answer(attempts: Sequence[Attempt]) -> bool:
@@ -136,7 +153,8 @@ def repeated_answer(attempts: Sequence[Attempt]) -> bool:
 
 def _repeated_pair(attempts: Sequence[Attempt]) -> tuple[int, int] | None:
     """The 1-based numbers of the two failures that said the same thing."""
-    failed = [(i, a) for i, a in enumerate(attempts, 1) if not a.passed]
+    # A try the network dropped under said nothing about the work.
+    failed = [(i, a) for i, a in enumerate(attempts, 1) if not a.passed and not a.network]
     if len(failed) < 2:
         return None
     (i, a), (j, b) = failed[-2], failed[-1]
@@ -224,6 +242,25 @@ def decide(
                                  "a refusal is a setting: a retry, or a stronger model, gets the same refusal",
                                  *([f"the rules that let it through, one per program: {', '.join(last.allow)}"]
                                    if last.allow else [])))
+
+    if failure is Failure.ENVIRONMENT and last.network:
+        # The network dropped under the work: no fault of the work, the cell or the
+        # environment a person keeps, and it comes back. The same cell, after a wait,
+        # goes on from what the worktree holds; only a network that stays down stops it.
+        dropped = network_streak(attempts)
+        kept = (f"it changed {len(last.changed)} file(s) first: they stay in the worktree and the next try goes "
+                "on from them" if last.changed else "nothing was changed: the next try starts it again")
+        if dropped <= len(NETWORK_WAITS):
+            wait = NETWORK_WAITS[dropped - 1]
+            return Decision(Move.RETRY, last.cell, last.max_turns,
+                            f"the network dropped ({last.network}); the same cell again in {wait}s",
+                            because=(seen, f"the network failed under it ({last.network}): a network comes back, "
+                                           "and no stronger cell is faster without one", kept,
+                                     f"try {dropped} of {len(NETWORK_WAITS)} after a drop, in {wait}s"),
+                            wait_s=wait)
+        return Decision(Move.BLOCKED, reason=f"the network stayed down ({last.network}) through {dropped} tries; "
+                                             "resume it once it is back",
+                        because=(seen, f"it dropped {dropped} times in a row, waited for each time", kept))
 
     if failure is Failure.ENVIRONMENT:
         retries = sum(1 for a in attempts if a.failure is Failure.ENVIRONMENT)

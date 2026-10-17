@@ -134,6 +134,14 @@ Request: $ARGUMENTS
    uncommitted changes. When the task builds on uncommitted work, or you will
    go on in this checkout right after, add `--no-isolate`; a resume keeps it.
 
+   Work that spans two or more repositories (an API and its front end) is one
+   project when the folder that holds them is a workspace: one memory, one
+   board, and a task that spans both runs in the folder. When a report says
+   `this task spans N repositories` and they are tracked apart, offer the
+   person the command it gives (`cauce workspace add <folder> --with …`); run
+   it only on their yes, since it moves what each repository kept to the
+   folder. `cauce workspace list` shows the ones they have.
+
    A worker that runs out of turns is checked with `--verify` by cauce itself,
    so a large change still gets its tests run; give one whenever a command can
    tell whether the work is done.
@@ -157,7 +165,10 @@ Request: $ARGUMENTS
      split it from the report's reason, then dispatch again. Do not rerun it as is.
    - `blocked` — a refused command or the environment stopped it (an older
      task may say a dollar budget stopped it: budgets are gone, and
-     `cauce resume <id> --unattended` continues it as it is).
+     `cauce resume <id> --unattended` continues it as it is). `stopped by the
+     network` is a drop that outlasted cauce's own waits (30s, 90s, 270s):
+     its work is kept, nothing is wrong with it; resume it yourself with
+     `--unattended` once the network answers.
      The report's `stopped by …` line says which, and the line under it is the
      command that continues it. Tell the user both, in those words. Its work
      so far is on its branch, marked unverified. When the user grants what was

@@ -75,6 +75,11 @@ def branch_for(task_id: int) -> str:
     return f"cauce/task-{task_id}"
 
 
+def last_commit(repo_dir: Path, branch: str) -> str | None:
+    """`<sha> <subject>` of a branch's newest commit, or None when it is gone."""
+    return _git(repo_dir, "log", "-1", "--format=%h %s", f"refs/heads/{branch}", "--", check=False) or None
+
+
 def kept(repo_dir: Path, task_id: int) -> bool:
     """Whether the task's branch exists: work it kept, verified or not."""
     return bool(_git(repo_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_for(task_id)}", check=False))
@@ -272,7 +277,9 @@ def is_artifact(path: str) -> bool:
 
 def changed(ws: Workspace) -> tuple[str, ...]:
     """What the task changed against its base, from git: committed or not."""
-    status = _git(ws.path, "status", "--porcelain", "-uall", "-z", strip=False)
+    # A status that never takes the index lock: a watcher's read must not fail the
+    # worker's own `git add`, nor cauce's commit at the end of the run.
+    status = _git(ws.path, "--no-optional-locks", "status", "--porcelain", "-uall", "-z", strip=False)
     paths = {e[3:] for e in status.split("\0") if len(e) > 3}
     paths |= set(_git(ws.path, "diff", "--name-only", ws.base, "HEAD").splitlines())
     return tuple(sorted(p for p in paths if p and not _linked(ws, p) and not is_artifact(p)))

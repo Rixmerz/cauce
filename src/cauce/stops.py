@@ -30,6 +30,7 @@ WHO = {
     "settings": "your permission settings",
     "budget": "a dollar budget an older cauce set",
     "environment": "the environment",
+    "network": "the network",
     "worker": "the worker's verdict",
     "cauce": "cauce's rules",
     "outside": "a signal from outside cauce",
@@ -40,6 +41,7 @@ WHO = {
 CAUSES = {
     "permission": ("blocked", "settings"),
     "environment": ("blocked", "environment"),
+    "network": ("blocked", "network"),
     "budget": ("blocked", "budget"),
     "missing_dir": ("blocked", "environment"),
     "approval": ("needs_approval", "cauce"),
@@ -170,6 +172,8 @@ def what_to_do(stop: Stop) -> str:
         "permission": "allow what was refused for this run, or add --keep to keep it for every task here, "
                       "then resume",
         "environment": "fix what failed to run, then resume",
+        "network": "the network dropped and stayed down through cauce's waits; its work is kept: resume it once "
+                   "the network is back",
         "budget": "an older cauce stopped it on a dollar budget, which no longer exists: resume it",
         "missing_dir": "the task's directory is gone: restore it, or queue the task again where it now lives",
         "approval": "approve the next cell by resuming with --allow-approval",
