@@ -86,6 +86,8 @@ KEEPS_WORK = frozenset({"done", "blocked", "needs_approval"})
 MIN_REPO_SAMPLES = 3
 MIN_GLOBAL_SAMPLES = 5
 VERIFY_TIMEOUT_S = 900
+#: How many changed paths a task's `finished` event lists; `changed_n` counts them all.
+CHANGED_KEPT = 500
 
 Launcher = Callable[[launch.LaunchSpec], launch.WorkerResult]
 
@@ -935,7 +937,8 @@ def run(
         timing["notes_s"] = time.monotonic() - mark
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
-                        changed=report.changed[:50], stop=report.stop.data() if report.stop else None,
+                        changed=report.changed[:CHANGED_KEPT], changed_n=len(report.changed),
+                        stop=report.stop.data() if report.stop else None,
                         risk=the_plan.risk.data(),
                         findings=list(attempts[-1].findings)[:30] if status == "done" and attempts else [],
                         wall_s=round(time.monotonic() - clock, 2), attempts=len(attempts),

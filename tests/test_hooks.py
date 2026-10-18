@@ -326,6 +326,31 @@ def test_an_old_ending_is_not_brought_back(store: Store):
     assert store.unreported("s") == []
 
 
+def _died(store: Store, task_id: int) -> None:
+    store.add_event(task_id, "finished", status="interrupted", reason="no sign of life",
+                    stop=stops.Stop("died", "no sign of life").data())
+
+
+def test_a_resumed_task_is_told_with_its_last_ending_never_an_earlier_one(store: Store):
+    # Task died twice, then a resume ran to a pass: the notice is the pass's.
+    t = store.create_task("add the portal", status="interrupted", source="cauce", session_id="s")
+    _died(store, t["id"])
+    _died(store, t["id"])
+    store.update_task(t["id"], status="running")
+    store.update_task(t["id"], status="done", final_cell="sonnet/xhigh")
+    # Between the status and the `finished` event the run files its notes: the
+    # only ending on record is a death, and "done" must not be told with it.
+    assert store.unreported("s") == []
+    assert hooks.endings(store, "s") == (None, [])
+    changed = [f"src/f{i}.ts" for i in range(106)]
+    store.add_event(t["id"], "finished", status="done", final_cell="sonnet/xhigh", branch="cauce/task-1",
+                    changed=changed[:50], changed_n=106)
+    notice = hooks.endings(store, "s", claim="stop")[0]
+    assert "passed at sonnet/xhigh; branch cauce/task-1: show `git diff HEAD...cauce/task-1`" in notice
+    assert "changed nothing" not in notice and "and 98 more" in notice
+    assert store.unreported("s") == []
+
+
 def handback(store, agent, prompt_id, transcript=None):
     text = f'<agent-message from="{agent}">\n  [Subagent hand-back] The text below is the final report.\n  Done.'
     event = {"session_id": "s", "prompt": text, "prompt_id": prompt_id}

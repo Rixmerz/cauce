@@ -204,7 +204,7 @@ def status(store: Store, investigation: str | None = None) -> dict[str, Any]:
     out = []
     for t in tasks:
         report = store.last_event(t["id"], "report")
-        ended = store.last_event(t["id"], "finished")
+        ended = store.final_event(t["id"])
         stop = ((ended or {}).get("data") or {}).get("stop") or {}
         out.append({"id": t["id"], "title": t["title"], "repo": t["repo"], "status": t["status"],
                     "cost_usd": round(float(t.get("cost_usd") or 0), 2), "stopped": stop.get("reason"),

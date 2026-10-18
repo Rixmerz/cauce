@@ -798,6 +798,20 @@ class Store:
             "SELECT * FROM events WHERE task_id = ? AND kind = ? ORDER BY id DESC LIMIT 1", (task_id, kind)).fetchone()
         return {**dict(row), "data": json.loads(row["data"])} if row else None
 
+    def final_event(self, task_id: int, status: str | None = None) -> dict | None:
+        """The `finished` event that ended the task as it stands: the last one whose
+        status is the task's own. A task resumed after dying has an ending per try,
+        and between its status and its final event (the run files its notes there)
+        the latest one on record is an earlier death's, which says nothing of the
+        work that passed. None while no ending matches."""
+        if status is None:
+            row = self._conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            status = row["status"] if row else None
+        row = self._conn.execute(
+            "SELECT * FROM events WHERE task_id = ? AND kind = 'finished' AND json_extract(data, '$.status') = ? "
+            "ORDER BY id DESC LIMIT 1", (task_id, status)).fetchone()
+        return {**dict(row), "data": json.loads(row["data"])} if row else None
+
     def last_event_id(self) -> int:
         return int(self._conn.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()[0])
 
@@ -899,11 +913,13 @@ class Store:
 
     def unreported(self, session_id: str, *, hours: int = 24, limit: int = 10) -> list[dict]:
         """Work a session sent that has ended since the session last heard of it:
-        its latest `finished` event is newer than its latest `reported` one. Only
-        endings of the last `hours`, so a first look does not bring back old work."""
+        its final `finished` event (`final_event`: the one of its current status) is
+        newer than its latest `reported` one. Only endings of the last `hours`, so a
+        first look does not bring back old work."""
         rows = self._conn.execute(
             "SELECT t.*, f.id AS finished_id, f.data AS finished_data FROM tasks t "
-            "JOIN events f ON f.id = (SELECT MAX(id) FROM events WHERE task_id = t.id AND kind = 'finished') "
+            "JOIN events f ON f.id = (SELECT MAX(id) FROM events WHERE task_id = t.id AND kind = 'finished' "
+            "AND json_extract(data, '$.status') = t.status) "
             "WHERE t.session_id = ? AND t.source IN ('cauce', 'queue') AND t.status NOT IN ('queued', 'running') "
             "AND f.ts >= ? AND f.id > COALESCE((SELECT MAX(id) FROM events WHERE task_id = t.id "
             "AND kind = 'reported'), 0) ORDER BY f.id LIMIT ?",

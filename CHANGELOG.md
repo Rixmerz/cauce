@@ -37,6 +37,23 @@
   task is wrong, so running out of rungs is not a failure (`Move.REVIEW`,
   `Decision.because` says so). A `failed` whose attempts never passed a check
   still drops its work.
+- **A task resumed after its worker died is reported by its last ending.**
+  The notice a session got for a task that died twice and then passed after
+  `cauce resume` could say "it changed nothing" with no branch: while the run
+  filed its notes, the latest `finished` event on record was an earlier death's.
+  The endings, the board, the workflow status and the stop account now read
+  the task's final ending (`Store.final_event`: the last `finished` whose
+  status is the task's own), and a task with none yet is not reported until
+  it has one.
+- **One count of a task's changed files.** The `finished` event kept only the
+  first 50 paths, so `cauce workflow status` said "50 file(s)" where the
+  report and `git diff --stat` said 106. The event now keeps up to 500 paths
+  and the whole count (`changed_n`), and the endings notice, the report and
+  the workflow status all read it.
+- **A kept commit's subject no longer ends in "…".** A long worker line or task
+  title was cut with an ellipsis. It is now cut at the last whole word that
+  fits (not on a dangling "and", "to", "of"…), and the full text goes first
+  in the commit body.
 - **A resume after its worker died continues where it was.** A run whose
   process died mid-attempt (a machine restart, a killed session) left its
   worktree registered with the attempt's uncommitted work, and `cauce resume`

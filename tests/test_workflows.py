@@ -636,3 +636,22 @@ def test_the_line_of_a_run_names_the_step_that_waits_on_the_person():
                                        {"id": "a", "state": "failed", "task": 10},
                                        {"id": "b", "state": "running", "task": 11, "attempt": 1}]})
     assert "step a (1/2): failed #10" in line
+
+
+def test_a_resumed_step_counts_the_files_of_its_final_ending_not_an_attempts(git_repo, store: Store):
+    from cauce import workflow_cli
+
+    task = store.create_task("build it", status="interrupted", source="queue", cwd=str(git_repo))
+    for _ in range(2):
+        store.add_event(task["id"], "finished", status="interrupted", reason="no sign of life",
+                        stop={"cause": "died", "reason": "no sign of life"})
+    store.update_task(task["id"], status="done")
+    files = [f"src/f{i}.ts" for i in range(106)]
+    # The run kept the head of the list; the count is the whole of it.
+    store.add_event(task["id"], "finished", status="done", branch="cauce/task-1", changed=files[:100], changed_n=106)
+    found = workflows.progress(store, {"cwd": str(git_repo)}, store.get_task(task["id"]))
+    assert found["files_n"] == 106 and len(found["files"]) == 100
+    assert "106 file(s): src/f0.ts, src/f1.ts, src/f2.ts +103" in workflow_cli._step_line(
+        {"state": "done", "task": task["id"], **found})
+    # Without the count (an older ending) the list is the count.
+    assert "3 file(s)" in workflow_cli._step_line({"state": "done", "files": ["a", "b", "c"]})

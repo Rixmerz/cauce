@@ -764,12 +764,12 @@ def step_check(step: Mapping[str, Any], options: Mapping[str, Any]) -> str | Non
 
 
 def _findings_of(store: Store, task: Mapping[str, Any] | None) -> list[dict]:
-    finished = store.last_event(task["id"], "finished") if task and task.get("status") == "done" else None
+    finished = store.final_event(task["id"]) if task and task.get("status") == "done" else None
     return list((finished or {}).get("data", {}).get("findings") or [])
 
 
 def _decided(store: Store, task: Mapping[str, Any] | None) -> dict:
-    finished = store.last_event(task["id"], "finished") if task and task.get("status") == "done" else None
+    finished = store.final_event(task["id"]) if task and task.get("status") == "done" else None
     return dict((finished or {}).get("data", {}).get("ledger") or {})
 
 
@@ -806,7 +806,7 @@ def _ledger(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step:
             spec = json.loads(fix.get("options") or "{}").get("ledger") or {} if fix else {}
             mine = [known[i] for i in spec.get("ids", []) if i in known] if fix and fix["status"] == "done" else []
             round_, held = int(spec.get("round") or 1), list(spec.get("held") or held)
-            finished = store.last_event(fix["id"], "finished") if fix else None
+            finished = store.final_event(fix["id"]) if fix else None
             branch = (finished or {}).get("data", {}).get("branch")
             start = spec.get("base") or options.get("origin")
             if branch and start and run["cwd"] and Path(run["cwd"]).is_dir():
@@ -843,7 +843,7 @@ def _base(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step_id
     past it. None: the checkout's HEAD."""
     for sid in reversed(_before(defn, step_id)):
         task = latest.get(sid)
-        finished = store.last_event(task["id"], "finished") if task else None
+        finished = store.final_event(task["id"]) if task else None
         branch = (finished or {}).get("data", {}).get("branch")
         if branch and run["cwd"] and Path(run["cwd"]).is_dir():
             try:
@@ -920,8 +920,9 @@ def progress(store: Store, run: Mapping[str, Any], task: Mapping[str, Any]) -> d
         if files is not None:
             out["files"] = list(files)
         return out
-    finished = (store.last_event(task["id"], "finished") or {}).get("data") or {}
+    finished = (store.final_event(task["id"]) or {}).get("data") or {}
     out["files"] = list(finished.get("changed") or [])
+    out["files_n"] = finished.get("changed_n") or len(out["files"])
     branch = finished.get("branch")
     if branch and run["cwd"] and Path(run["cwd"]).is_dir():
         with contextlib.suppress(isolate.IsolationError, OSError):
@@ -944,7 +945,7 @@ def status(store: Store, run_id: int, *, detail: bool = False) -> dict[str, Any]
         state = "pending" if task is None else task["status"]
         entry: dict[str, Any] = {"id": step["id"], "title": step["title"], "needs": step["needs"], "state": state}
         if task:
-            finished = store.last_event(task["id"], "finished")
+            finished = store.final_event(task["id"])
             entry.update(task=task["id"], cell=task.get("final_cell") or task.get("current_cell"),
                          cost_usd=round(task.get("cost_usd") or 0, 2), result=task.get("result"),
                          branch=(finished or {}).get("data", {}).get("branch") if state == "done" else None,

@@ -144,12 +144,37 @@ def test_a_commit_message_reads_as_the_change_with_the_task_in_its_trailers():
     assert subject == "Use the brand palette in the admin theme" and body == "theme.css now reads tokens"
     assert trailers.splitlines() == ["Cauce-Task: #1144", "Cauce-Verified: no (blocked)"]
     done = isolate.message(7, title="x " * 60, summary="")
-    assert done.split("\n\n")[0].endswith("…") and len(done.split("\n\n")[0]) <= isolate.SUBJECT_CHARS
+    assert not done.split("\n\n")[0].endswith("…") and len(done.split("\n\n")[0]) <= isolate.SUBJECT_CHARS
     assert done.split("\n\n")[-1] == "Cauce-Task: #7"
     assert isolate.message(8, title="", subject="key sk-abcdefghijklmnop").startswith("key [secret]")
     assert isolate.message(9, title="").startswith("Work of cauce task #9")
     long = isolate.message(10, title="t", subject="word " * 30, summary="s " * 600)
-    assert len(long.splitlines()[0]) <= isolate.SUBJECT_CHARS and long.split("\n\n")[1].endswith("…")
+    assert len(long.splitlines()[0]) <= isolate.SUBJECT_CHARS and long.split("\n\n")[-2].endswith("…")
+
+
+def test_a_commit_subject_never_ends_in_an_ellipsis_and_the_whole_text_goes_in_the_body():
+    long = "Add client role and portal, Render deploys linked to tickets and the audit trail of every change"
+    for given in ({"title": long}, {"title": "t", "subject": long}):
+        parts = isolate.message(46, summary="the work", **given).split("\n\n")
+        subject = parts[0]
+        assert len(subject) <= isolate.SUBJECT_CHARS and not subject.endswith(("…", "...", ",", " "))
+        assert long.startswith(subject) and subject.endswith("linked to tickets")
+        assert " ".join(parts[1].split()) == long and parts[2] == "the work"
+    # A line that fits is the worker's, as proposed, and adds nothing to the body.
+    fits = isolate.message(47, title=long, subject="Add the client portal", summary="")
+    assert fits.split("\n\n") == ["Add the client portal", "Cauce-Task: #47"]
+    # No space to cut at: the limit is the cut, still no ellipsis.
+    assert len(isolate.message(48, title="", subject="x" * 200).splitlines()[0]) == isolate.SUBJECT_CHARS
+
+
+def test_a_cut_subject_ends_on_neither_a_dangling_word_nor_an_open_parenthesis():
+    ends_on_its = "Refactor the orchestrator so that every attempt of a task reads its final ending from the store"
+    assert isolate._subject_of(ends_on_its) == "Refactor the orchestrator so that every attempt of a task reads"
+    open_paren = "Fix the thing (see the other thing, and the other, and then some more words) because yes yes"
+    assert isolate._subject_of(open_paren) == "Fix the thing"
+    # Only dangling words: the whole-word cut stands rather than collapsing to the first word.
+    only_dangling = isolate._subject_of("A " * 50)
+    assert only_dangling == " ".join(["A"] * 36) and len(only_dangling) <= isolate.SUBJECT_CHARS
 
 
 def test_work_kept_unverified_under_the_old_subject_is_still_read_as_such(git_repo, tmp_path):

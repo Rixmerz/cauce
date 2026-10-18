@@ -362,6 +362,37 @@ def _unverified(message: str) -> bool:
     return UNVERIFIED in message or UNVERIFIED_BEFORE in message.split("\n", 1)[0]
 
 
+#: Words a cut subject must not end on: the thought they open is the part that was cut.
+_DANGLING = frozenset({
+    "a", "an", "the", "this", "that", "these", "those", "its", "his", "her", "their", "our", "your", "my",
+    "each", "every", "all", "any", "no", "not", "and", "or", "but", "so", "if", "when", "while", "because",
+    "which", "where", "than", "then", "as", "at", "by", "for", "from", "in", "into", "of", "on", "to", "with",
+    "via", "per", "after", "before", "over", "under", "about", "between", "through", "during", "until", "upon",
+    "is", "are", "was", "were", "be", "been", "will", "would", "should", "can", "could"})
+
+
+def _subject_of(text: str) -> str:
+    """A commit subject from one line: itself when it fits, else cut at the last
+    whole word within `SUBJECT_CHARS`, before a word that opens a clause the cut
+    left out and before a parenthesis it left open. Never an ellipsis: git
+    history is read as sentences."""
+    if len(text) <= SUBJECT_CHARS:
+        return text
+    cut = text[:SUBJECT_CHARS]
+    if text[SUBJECT_CHARS] != " ":
+        cut = cut.rpartition(" ")[0] or cut  # no space to cut at: the limit is the cut
+    words = cut.split()
+    while True:
+        while words and words[-1].lower().strip(",;:") in _DANGLING:
+            words.pop()
+        kept = " ".join(words)
+        if kept.count("(") <= kept.count(")"):
+            break
+        words = kept.rpartition("(")[0].split()
+    # Nothing but dangling words or an open clause: the whole-word cut is the subject.
+    return kept.rstrip(" ,;:-–—(") or cut
+
+
 def message(task_id: int, *, title: str, subject: str = "", summary: str = "", status: str = "done") -> str:
     """The commit message of a task's work, as a project's history reads it: the
     change in one line (the worker's, else the task's title), what it does, and
@@ -369,13 +400,14 @@ def message(task_id: int, *, title: str, subject: str = "", summary: str = "", s
     import textwrap
 
     from cauce.notes import _SECRET
-    from cauce.text import title_of
 
-    line = " ".join((subject or "").split()) or title_of(" ".join((title or "").split()), SUBJECT_CHARS)
-    line = _SECRET.sub("[secret]", line) or f"Work of cauce task #{task_id}"
-    if len(line) > SUBJECT_CHARS:
-        line = line[:SUBJECT_CHARS - 1].rsplit(" ", 1)[0] + "…"
+    whole = _SECRET.sub("[secret]", " ".join((subject or "").split()) or " ".join((title or "").split()))
+    whole = whole or f"Work of cauce task #{task_id}"
+    line = _subject_of(whole)
     parts = [line]
+    # A subject that had to be cut is given whole first in the body: the history keeps what was asked.
+    if line != whole:
+        parts.append(textwrap.fill(whole, 72))
     body = _SECRET.sub("[secret]", " ".join((summary or "").split()))
     if body:
         body = body if len(body) <= BODY_CHARS else body[:BODY_CHARS - 1].rsplit(" ", 1)[0] + "…"

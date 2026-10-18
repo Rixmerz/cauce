@@ -465,6 +465,7 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
     for t in ended:
         data = t["finished_data"]
         changed = data.get("changed") or []
+        total = data.get("changed_n") or len(changed)
         lines.append(f"#{t['id']} [{t['status']}] {t['title']}")
         if t["status"] == "done":
             branch = data.get("branch")
@@ -475,7 +476,7 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
                 lines.append(f"  the worker says: {str(t['result'])[:800]}")
             if changed:
                 lines.append("  changed: " + ", ".join(changed[:8])
-                             + (f" and {len(changed) - 8} more" if len(changed) > 8 else ""))
+                             + (f" and {total - 8} more" if total > 8 else ""))
             continue
         stop = stops.view(store, t)
         if stop:
@@ -483,7 +484,7 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
             if stop.get("account"):
                 lines.append(f"  the worker found: {stop['account'][:800]}")
         if changed:
-            shown = ", ".join(changed[:5]) + (f" and {len(changed) - 5} more" if len(changed) > 5 else "")
+            shown = ", ".join(changed[:5]) + (f" and {total - 5} more" if total > 5 else "")
             lines.append(f"  changed so far: {shown}")
         if stop:
             lines.append(f"  next: {stop['todo']}" + (f": {stop['next']}" if stop["next"] else ""))

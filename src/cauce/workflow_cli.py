@@ -77,11 +77,13 @@ def _print_definition(defn: dict[str, Any]) -> None:
 MARK = {"done": "✓", "running": "▶", "queued": "…", "pending": "·"}
 
 
-def _files(found: list[str]) -> str:
-    if not found:
+def _files(found: list[str], total: int | None = None) -> str:
+    """The count is the task's final ending's (`total`); `found` may list only the head of them."""
+    total = total or len(found)
+    if not total:
         return ""
-    shown = ", ".join(found[:3]) + (f" +{len(found) - 3}" if len(found) > 3 else "")
-    return f"{len(found)} file(s): {shown}"
+    shown = ", ".join(found[:3]) + (f" +{total - 3}" if total > 3 else "")
+    return f"{total} file(s): {shown}"
 
 
 def _step_line(step: dict[str, Any]) -> str:
@@ -98,7 +100,7 @@ def _step_line(step: dict[str, Any]) -> str:
     if step.get("commit"):
         parts.append(step["commit"][:72])
     if step.get("files"):
-        parts.append(_files(step["files"]))
+        parts.append(_files(step["files"], step.get("files_n")))
     return " · ".join(parts)
 
 

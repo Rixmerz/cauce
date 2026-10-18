@@ -282,7 +282,7 @@ def of(store: Any, task: dict[str, Any]) -> Stop | None:
     status = task["status"]
     if status in ("queued", "running", "done"):
         return None
-    finished = store.last_event(task["id"], "finished")
+    finished = store.final_event(task["id"])
     if task.get("source") == "hook" and status in ("interrupted", "failed"):
         # A session's turn that ended without its answer: no work of cauce's
         # stopped, and there is nothing to resume.

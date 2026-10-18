@@ -1239,3 +1239,16 @@ def test_a_check_that_lost_the_network_is_no_bug_in_the_work(tmp_path):
     logged = orchestrate._verified(ok(), "echo 'console.error getaddrinfo ENOTFOUND api.invalid'; "
                                          "echo 'FAIL src/cart.test.ts Expected 10.8 Received 10'; exit 1", tmp_path)
     assert logged.failure is Failure.CODE_BUG and logged.network == ""
+
+
+def test_a_task_that_changed_many_files_counts_them_all_on_its_ending(git_repo, store):
+    def launcher(spec):
+        for i in range(106):
+            (spec.target_dir / f"f{i}.py").write_text("x\n")
+        return ok("built it")
+
+    report = run("add the portal", git_repo, store, registry={}, launcher=launcher, classifier=kind("implement"))
+    finished = store.last_event(report.task_id, "finished")["data"]
+    assert len(report.changed) == 106 and finished["changed_n"] == 106
+    assert finished["changed"] == report.changed
+    assert git(git_repo, "diff", "--name-only", "main", finished["branch"]).count("\n") + 1 == 106

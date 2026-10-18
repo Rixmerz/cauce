@@ -115,7 +115,7 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
             item["worker"] = worker_of(store, t, steps) if item.get("flow") else None
             running.append(item)
         elif t["status"] == "done":
-            finished = store.last_event(t["id"], "finished")
+            finished = store.final_event(t["id"])
             branch = finished["data"].get("branch") if finished else None
             item["branch"] = branch
             done.append(item)
@@ -252,7 +252,7 @@ def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:
         a["capabilities"] = json.loads(a["capabilities"] or "[]")
         a["denied"] = refused.get(a["seq"], [])
         a["climb"] = climb
-    finished = store.last_event(task_id, "finished")
+    finished = store.final_event(task_id)
     children = store.children(task_id)
     turns = usage.cost_by(store, "task_id", [task_id, *(c["id"] for c in children)])
     return {
@@ -291,7 +291,7 @@ def task_diff(store: Store, task_id: int) -> dict[str, Any] | None:
     task = store.get_task(task_id)
     if task is None:
         return None
-    finished = store.last_event(task_id, "finished")
+    finished = store.final_event(task_id)
     branch = (finished["data"].get("branch") if finished else None) or f"cauce/task-{task_id}"
     where = task.get("cwd")
     if not where or not Path(where).is_dir():
