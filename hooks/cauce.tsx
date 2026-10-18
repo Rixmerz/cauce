@@ -41,9 +41,13 @@ const RESUME = 'mcp__cauce__resume'
 const OVERVIEW = 'mcp__cauce__overview'
 /** The tools that only read the project's notes and board, every session's
  * work, or keep a note in cauce's own store: asking the person for each is a
- * prompt that protects nothing. `queue` and `resume` spend money, and stay the
- * person's call. */
+ * prompt that protects nothing. */
 const QUIET = [RECALL, TASKS, NOTE, OVERVIEW]
+/** The tools that start work and spend money: the person's call, unless they
+ * delegated it to the orchestrator (`cauce config delegate`, on by default).
+ * `resume` runs `--unattended` either way, so what only a person may clear is
+ * still refused. */
+const DELEGATED = [QUEUE, RESUME]
 
 /** A plugin tool's arguments, as the model gave them: loose until read. */
 function input(e: object): Record<string, unknown> {
@@ -192,6 +196,14 @@ async function poll($: EngineInterface, wakes: boolean): Promise<void> {
   } finally {
     polling = false
   }
+}
+
+/** Whether the person delegated the asks for `queue` and `resume`: read at each
+ * check, so turning it off holds at once. A cauce that cannot say leaves the ask
+ * with the person. */
+async function delegated($: EngineInterface): Promise<boolean> {
+  const ran = await cauce($, ['config', 'delegate'], { timeoutMs: 10_000 })
+  return ran.ok && ran.out === 'true'
 }
 
 /** Work started and not awaited (a refresh after a call) never fails the hook that started it. */
@@ -428,6 +440,15 @@ export const register: Register = (on, options) => {
       const verdict = await next(e)
       return verdict.decision === 'ask'
         ? { decision: 'allow', reason: "cauce: reads this project's notes and board, or keeps a note" }
+        : verdict
+    })
+  }
+  for (const tool of DELEGATED) {
+    on('tool.check', { tool }, async ($, e, next) => {
+      const verdict = await next(e)
+      return verdict.decision === 'ask' && await delegated($)
+        ? { decision: 'allow', reason: 'cauce: the person delegated starting cauce work to the orchestrator '
+            + '(`cauce config delegate off` puts it back to them)' }
         : verdict
     })
   }

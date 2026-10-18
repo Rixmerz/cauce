@@ -55,6 +55,10 @@ DEFAULTS: dict[str, Any] = {
     # `suggest` shows the person the line at a good moment, `auto` has the mod submit
     # it (only on a Claude Code build seen to run it), `off` leaves it alone.
     "compact": "suggest",
+    # The mod turns Claude Code's `ask` for `queue` and `resume` into an allow: the
+    # person delegated starting cauce work to the session. A deny stays a deny, and a
+    # resume still runs `--unattended`. Off: each call is the person's.
+    "delegate": True,
 }
 
 #: Settings that take one of a few words rather than on or off.

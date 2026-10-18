@@ -67,7 +67,9 @@ function runCard(run, ctx) {
     run.waiting.length ? h("div", { class: "asks" },
       `waits on you at ${run.waiting.join(", ")}: open the step for why; go on with cauce resume <task> `
       + `or cauce workflow retry ${run.id} <step> in a session`) : null,
-    run.branch ? h("div", { class: "meta" }, "work so far on ", h("code", {}, run.branch)) : null);
+    run.branch ? h("div", { class: "meta" }, "work so far on ", h("code", {}, run.branch)) : null,
+    // How far a step's work is behind the branch the run started from: said, never merged.
+    run.steps.filter((st) => st.behind).map((st) => h("div", { class: "meta" }, `${st.id}: ${st.behind}`)));
 }
 
 function definitions(list) {

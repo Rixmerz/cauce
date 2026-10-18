@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+### Added
+
+- **More turns continue the same session.** A `more_turns` move on the same
+  cell resumes the worker's own Claude Code session (`claude -p --resume`) in
+  its worktree with a short continuation prompt, so its context and prompt
+  cache carry over instead of a cold start that re-reads the code and the
+  brief; it is told the output that failed its attempt (cauce's own check
+  after it stopped), which its context does not hold. The session id is read from the attempt's JSON and kept on the
+  attempt (`attempts.session_id`); a session is kept only in a worktree. When
+  it cannot be continued it starts fresh and says why; any other move starts
+  fresh. Where a task's turns start may be raised by history: when recent
+  tasks of its kind here ran out at the kind's turns and passed with more, it
+  starts at the median they needed, and the plan says so.
+- **`delegate` setting** (`cauce config delegate on|off`, a plugin option, on
+  by default): the mod turns Claude Code's `ask` for `queue` and `resume` into
+  an allow, so the orchestrator hands out work without waiting on the person.
+  A deny stays a deny, and a resume still runs `--unattended`.
+- **A check that covers less than CI is said.** The plan reads the jobs of
+  `.github/workflows/*.yml` (commands, services, env the code reads) and names
+  the ones `--verify` leaves out, in one warning and on the report. A job is
+  covered only when the check runs every command of it that checks the work
+  (each one a line chains with `&&` or `;`; installs and the shell's
+  bookkeeping aside); the warning names the ones left out.
+- **A workflow step says how far it is behind its base.** When a step starts
+  and when the run ends (done, or stopped at a step), its work is compared with the branch the run started
+  from: commits it moved and files both changed, in `cauce workflow status`,
+  the ending notice and the board. Nothing is merged.
+
+### Fixed
+
+- A task whose check runs Playwright, or whose project's tests drive a
+  headless browser, is no longer warned that workers have no browser.
+- Resuming a task that reopens a paused lane starts its dispatcher at once,
+  so queued work that may run beside it starts now.
+- Risk reasons read words in context: "checkout" in git's sense and `payment`
+  as one event name among others no longer raise a change to money.
+  "Parallel" still always counts as concurrency: reading it away dropped real
+  concurrency requests to medium and skipped the verifier.
+
 ## [0.20.0] - 2026-10-18
 
 ### Added

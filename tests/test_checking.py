@@ -148,6 +148,74 @@ def test_risk_starts_from_the_request_and_only_rises_with_the_change():
                                                                                              cheap=False)
 
 
+def _areas(text: str) -> set[str]:
+    return {r.split(" (")[0].removeprefix("the request is about ") for r in risk.of_request(text, "implement").reasons}
+
+
+@pytest.mark.parametrize("text", [
+    "Run `git checkout -b fix/totals` first, then fix the rounding",
+    "Work in the checkout, not in a worktree, and fix the parser",
+    "This checkout has uncommitted work: commit it before you start",
+    "Read the notes from /home/user/checkout/app before you change the parser",
+    "Keep the checkout path in the brief and fix the parser",
+    "A run in the worktree checkout of the parser fails: fix it",
+])
+def test_checkout_in_git_s_sense_is_no_money(text):
+    assert "money" not in _areas(text)
+
+
+@pytest.mark.parametrize("text", [
+    "Fix rounding of the checkout total",
+    "Add a checkout to the store",
+    "The checkout fails when the cart is empty",
+    "Implement checkout with saved cards",
+    "Move the checkout page to the new layout",
+])
+def test_checkout_in_a_shop_s_sense_is_money(text):
+    assert "money" in _areas(text)
+
+
+def test_parallel_about_tasks_is_no_concurrency_and_about_code_is():
+    assert "concurrency" in _areas("Take S1 and S2; other tasks running in parallel take the other numbers")
+    assert "concurrency" in _areas("Two agents work in parallel on this repository: touch only src/ui")
+    assert "concurrency" in _areas("Upload the images in parallel instead of one by one")
+    assert "concurrency" in _areas("Run the tasks in parallel with asyncio.gather")
+    # "parallel" is never read away: a missed concurrency request skips the verifier
+    assert "concurrency" in _areas("Run the Celery tasks in parallel")
+    assert "concurrency" in _areas("Make the dispatcher run queued tasks in parallel instead of one by one")
+    assert "concurrency" in _areas("Process uploads in parallel")
+    assert "concurrency" in _areas("Let multiple workers run jobs in parallel")
+    assert "concurrency" in _areas("Make several workers run in parallel instead of one")
+    # a count of tasks is coordination only when the line gives this one its share
+    assert "concurrency" in _areas("Let three tasks run in parallel")
+    assert "concurrency" in _areas("Several tasks running in parallel corrupt the queue; fix it")
+    assert "concurrency" in _areas("Make many steps run in parallel instead of in sequence")
+    assert "concurrency" in _areas("Support multiple tasks running in parallel on the same checkout")
+    assert "concurrency" in _areas("Let up to 4 agents run in parallel per lane")
+    for request in ("Let two agents work in parallel on the same repo, but only one may write",
+                    "Three tasks running in parallel take the same row; fix it",
+                    "Make several steps run in parallel so you can finish faster",
+                    "Make 2 sessions run in parallel and keep only one writer",
+                    "Make other tasks run in parallel with this one"):
+        assert risk.of_request(request, "implement").tier == "high", request
+    assert "concurrency" in _areas("Three tasks run in parallel here: take S2 and leave the rest")
+
+
+def test_payment_as_an_event_name_is_no_money_unless_the_change_touches_payment_code():
+    named = "A ticket blocks until its event: `client_approval`, `payment`, `access`, `dependency` or `window`"
+    assert "money" not in _areas(named)
+    assert "money" not in _areas("Block events are client_approval, payment, access: add the window one")
+    assert "money" not in _areas("Unblock the ticket when the `payment` event arrives")
+    # unquoted, it may well be a processor's: still money
+    assert "money" in _areas("Handle the payment event from the processor")
+    assert "money" in _areas("Retry the payment when the card is declined")
+    assert "money" in _areas("Store each payment with its currency")
+    r = risk.of_change(risk.of_request(named, "implement"), ["lib/server/payments.ts", "tests/payments_test.ts"])
+    assert r.tier == "high" and any(x.startswith("it changed money (lib/server/payments.ts)") for x in r.reasons)
+    r = risk.of_change(risk.of_request(named, "implement"), ["lib/schema.ts", "tests/schema_test.ts"])
+    assert not any("money" in x for x in r.reasons)
+
+
 # --- the independent check --------------------------------------------------------------
 
 
@@ -782,3 +850,8 @@ def test_a_problem_in_work_that_ran_out_of_turns_gets_more_turns_not_a_stronger_
     assert attempts[0]["failure"] == "turns_exhausted" and "run out of turns" in attempts[0]["summary"]
     # A turn ceiling is no dead end: only the fix that worked is remembered.
     assert [f["outcome"] for f in store.recent_problems()[0]["fixes"]] == ["worked"]
+
+
+def test_a_spanish_event_name_among_others_is_no_money():
+    assert "money" not in _areas("Eventos de bloqueo: `aprobación_cliente`, `pago`, `acceso`")
+    assert "money" in _areas("Corrige el pago duplicado del anticipo")

@@ -759,3 +759,96 @@ def test_a_resumed_step_counts_the_files_of_its_final_ending_not_an_attempts(git
         {"state": "done", "task": task["id"], **found})
     # Without the count (an older ending) the list is the count.
     assert "3 file(s)" in workflow_cli._step_line({"state": "done", "files": ["a", "b", "c"]})
+
+
+TWO = {"name": "two", "inputs": ["goal"], "steps": [
+    {"id": "build", "prompt": "Build {goal}", "kind": "implement"},
+    {"id": "polish", "prompt": "Polish {goal}", "kind": "implement"},
+]}
+
+
+def test_a_step_says_how_far_its_branch_is_behind_the_base_and_nothing_is_merged(git_repo, store: Store, kicks,
+                                                                                 capsys, monkeypatch):
+    from cauce import hooks
+    from cauce.ui import api
+
+    from .conftest import git
+
+    base = git(git_repo, "symbolic-ref", "--short", "HEAD")
+    _save(TWO, git_repo)
+    started = workflows.start(store, "two", git_repo, {"goal": "the export"}, session_id="s1")
+    moved = []
+
+    def launch(spec):
+        (spec.target_dir / "shared.txt").write_text(f"step {len(moved) + 1}\n")
+        if not moved:
+            # While the build runs, the person commits on the base: one file both change, one only they do.
+            (git_repo / "shared.txt").write_text("theirs\n")
+            (git_repo / "theirs.txt").write_text("theirs\n")
+            git(git_repo, "add", "-A")
+            git(git_repo, "commit", "-q", "-m", "the person's own change")
+            moved.append(git(git_repo, "rev-parse", "HEAD"))
+        return ok("did it")
+
+    def runner(text, where, store, options, **kw):
+        return run(text, where, store, options, registry={}, launcher=launch, classifier=kind("implement"),
+                   adapters=[], **kw)
+
+    report = flow.work(store, runner=runner)
+    assert [r.status for r in report.ran] == ["done", "done"]
+    said = f"behind {base} by 1 commit; both changed: shared.txt; a merge will conflict-check them"
+    build, polish = store.run_tasks(started["id"])
+    # the polish step started from the build, after the base moved
+    at_start = store.events_of(polish["id"], "behind_base")[0]["data"]
+    assert at_start["when"] == "start" and at_start["commits"] == 1 and at_start["both"] == ["shared.txt"]
+    # the run's end compares each kept branch with the base as it is then
+    assert {e["data"]["when"] for e in store.events_of(build["id"], "behind_base")} == {"start", "end"}
+    status = workflows.status(store, started["id"], detail=True)
+    assert [s.get("behind") for s in status["steps"]] == [said, said]
+    # the board reads what was kept, the ending notice says it, and so does `cauce workflow status`
+    board = api.workflows_view(store, started["repo"])["runs"][0]
+    assert [s.get("behind") for s in board["steps"]] == [said, said]
+    notice, _ = hooks.endings(store, "s1")
+    assert f"step polish (#{polish['id']}): {said}" in notice
+    monkeypatch.chdir(git_repo)
+    assert cli.main(["workflow", "status", str(started["id"])]) == 0
+    assert said in capsys.readouterr().out
+    # nothing was merged or rebased: the base is where the person left it
+    assert git(git_repo, "rev-parse", base) == moved[0]
+
+
+def test_a_run_that_stops_at_a_step_measures_its_branches_at_its_end(git_repo, store: Store, kicks):
+    from .conftest import git
+
+    _save(TWO, git_repo)
+    started = workflows.start(store, "two", git_repo, {"goal": "the export"}, session_id="s1")
+    results = [ok("built"), bad(Failure.ENVIRONMENT, "the database is down")]
+
+    def launch(spec):
+        (spec.target_dir / "shared.txt").write_text(f"step {3 - len(results)}\n")
+        if len(results) == 1:
+            # While the polish runs, the person commits on the base.
+            (git_repo / "theirs.txt").write_text("theirs\n")
+            git(git_repo, "add", "-A")
+            git(git_repo, "commit", "-q", "-m", "the person's own change")
+        return results.pop(0)
+
+    def runner(text, where, store, options, **kw):
+        return run(text, where, store, options, registry={}, launcher=launch, classifier=kind("implement"),
+                   adapters=[], **kw)
+
+    report = flow.work(store, runner=runner)
+    assert [r.status for r in report.ran] == ["done", "blocked"]
+    build, polish = store.run_tasks(started["id"])
+    # the run ended at the polish step: each kept branch is measured then, not only when every step passed
+    for step in (build, polish):
+        ends = [e["data"] for e in store.events_of(step["id"], "behind_base") if e["data"]["when"] == "end"]
+        assert ends and ends[-1]["commits"] == 1, step["id"]
+
+
+def test_a_step_on_a_base_that_did_not_move_says_nothing(git_repo, store: Store, kicks):
+    _save(TWO, git_repo)
+    started = workflows.start(store, "two", git_repo, {"goal": "the export"}, session_id="s1")
+    flow.work(store, runner=_runner([ok("built"), ok("polished")], []))
+    status = workflows.status(store, started["id"], detail=True)
+    assert [s.get("behind") for s in status["steps"]] == [None, None]

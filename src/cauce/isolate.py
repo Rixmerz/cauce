@@ -434,6 +434,37 @@ def head(repo_dir: Path, ref: str) -> str:
     return _git(repo_dir, "rev-parse", ref)
 
 
+def current_branch(repo_dir: Path) -> str | None:
+    """The branch checked out in `repo_dir`; None when HEAD is detached or git cannot say."""
+    return _git(repo_dir, "symbolic-ref", "--quiet", "--short", "HEAD", check=False) or None
+
+
+def behind(repo_dir: Path, tip: str, base: str) -> dict[str, Any] | None:
+    """How far `tip` is behind the branch `base` as it is now: the commits `base` gained
+    since they parted, and the files both changed since. Read only: nothing is merged or
+    rebased. None when git cannot say (the branch is gone, no commit in common)."""
+    now = _git(repo_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{base}^{{commit}}", check=False)
+    fork = _git(repo_dir, "merge-base", tip, now, check=False) if now else ""
+    count = _git(repo_dir, "rev-list", "--count", f"{fork}..{now}", check=False) if fork else ""
+    if not count.isdigit():
+        return None
+    ours = set(_git(repo_dir, "diff", "--name-only", fork, tip, "--", check=False).splitlines())
+    theirs = set(_git(repo_dir, "diff", "--name-only", fork, now, "--", check=False).splitlines())
+    return {"base": base, "commits": int(count), "both": sorted(ours & theirs)}
+
+
+def behind_text(found: Mapping[str, Any]) -> str | None:
+    """`behind main by 2 commits; both changed: a, b; ...`, or None when the base did not move."""
+    if not found.get("commits"):
+        return None
+    n, both = int(found["commits"]), list(found.get("both") or ())
+    text = f"behind {found['base']} by {n} commit{'' if n == 1 else 's'}"
+    if both:
+        text += ("; both changed: " + ", ".join(both[:8]) + (f" and {len(both) - 8} more" if len(both) > 8 else "")
+                 + "; a merge will conflict-check them")
+    return text
+
+
 def landed(repo_dir: Path, branch: str, paths: Sequence[str] = ()) -> bool:
     """Whether a kept branch needs no review any more: it is gone, it is in HEAD's
     history, or (a squash merge) HEAD holds what it changed, file for file."""

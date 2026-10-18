@@ -584,7 +584,10 @@ everything above works without it.
 - **Tools the model calls by name**: `recall`, `note`, `queue`, `tasks`,
   `resume` and `overview` (as `mcp__cauce__<name>`). There is no `cauce` on
   PATH to find, no permission rule per command, and the reading tools
-  (`recall`, `tasks`, `note`, `overview`) never ask. A value cauce does not take (a kind, a topic, a malformed
+  (`recall`, `tasks`, `note`, `overview`) never ask. Nor do `queue` and
+  `resume` while you delegate them to the session (`cauce config delegate`,
+  on by default; `off` puts each call back to you); a rule that denies them
+  still does. A value cauce does not take (a kind, a topic, a malformed
   link) is answered with what it takes, never refused as invalid parameters.
   `queue` returns at once: the ending comes back on its own. `resume`
   continues work in the background, and refuses what only a person may clear:

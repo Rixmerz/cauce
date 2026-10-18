@@ -176,6 +176,15 @@ def instructions(spec: LaunchSpec) -> str:
     return RESULT_INSTRUCTIONS + ("\n\n" + JUDGING_INSTRUCTIONS if spec.judging else "")
 
 
+#: What a session given more turns is told: its brief, its context and its prompt
+#: cache are its own already, so only the contract is said again.
+CONTINUE_PROMPT = ("You ran out of turns before you finished. Continue from where you are: your work so far is in "
+                   "this directory, and the task is the one you were given. Check it before you answer.")
+#: The CLI's words when a session it was asked to resume is not there to resume.
+_NO_SESSION = re.compile(r"no conversation found|session[^\n]{0,60}(?:not found|does not exist|could not be "
+                         r"(?:found|loaded|resumed))|invalid session", re.IGNORECASE)
+
+
 Runner = Callable[..., subprocess.CompletedProcess]
 
 
@@ -217,6 +226,12 @@ class LaunchSpec:
     verdicts: tuple[str, ...] = ()
     verdict_words: tuple[str, ...] = ()
     persist_session: bool = False
+    #: The worker session this attempt continues (`--resume`), told to go on:
+    #: an attempt given more turns on the same cell, in the same directory. "" starts fresh.
+    resume_session: str = ""
+    #: What that session is told beside `CONTINUE_PROMPT`: the output that failed its
+    #: attempt (cauce's own check after it stopped), which its context does not hold.
+    resume_note: str = ""
     #: Extra environment for the worker: which task and attempt it is, so its
     #: tool calls are recorded against them.
     env: Mapping[str, str] = field(default_factory=dict)
@@ -273,6 +288,12 @@ class WorkerResult:
     #: What says the network dropped under it (`ENOTFOUND`, a connection error):
     #: the same cell again after a wait, its work kept, never a block at once.
     network: str = ""
+    #: The Claude Code session the attempt ran in, from the CLI's JSON; "" when it gave none.
+    session_id: str = ""
+    #: It continued an earlier attempt's session instead of starting from its brief.
+    resumed: bool = False
+    #: Why a session it was asked to continue started fresh instead; "" when it did not.
+    fresh: str = ""
 
 
 def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path: Path | None = None,
@@ -303,6 +324,8 @@ def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path:
         argv += ["--append-system-prompt-file", str(prompt_path)]
     elif spec.append_system_prompt:
         argv += ["--append-system-prompt", spec.append_system_prompt]
+    if spec.resume_session:
+        argv += ["--resume", spec.resume_session]
     if not spec.persist_session:
         argv.append("--no-session-persistence")
     return argv
@@ -335,7 +358,8 @@ def run(
     try:
         proc = runner(
             argv,
-            input=spec.prompt + "\n\n" + instructions(spec),
+            input=(("\n\n".join(p for p in (CONTINUE_PROMPT, spec.resume_note) if p) if spec.resume_session
+                    else spec.prompt) + "\n\n" + instructions(spec)),
             cwd=str(spec.launch_dir),
             capture_output=True,
             text=True,
@@ -369,9 +393,15 @@ def run(
         # the account): the attempt runs again, as it would have before.
         return run(dataclasses.replace(spec, permission_mode=grants.FALLBACK_MODE), runner=runner,
                    claude_bin=claude_bin)
+    if spec.resume_session and not _json(proc.stdout) and (refused := _NO_SESSION.search(proc.stderr or "")):
+        # The session is not there to continue: the attempt starts from its brief, as before, and says why.
+        line = next((x.strip() for x in (proc.stderr or "").splitlines() if refused.group(0) in x), refused.group(0))
+        fresh = run(dataclasses.replace(spec, resume_session=""), runner=runner, claude_bin=claude_bin)
+        return dataclasses.replace(
+            fresh, fresh=f"the CLI could not resume session {spec.resume_session}: {line[:200]}")
     changed = changed_paths(before, tracked_state(spec.target_dir), spec.target_dir)
     return dataclasses.replace(parse(proc, spec, changed, duration_s=time.monotonic() - started),
-                               permission_mode=spec.permission_mode)
+                               permission_mode=spec.permission_mode, resumed=bool(spec.resume_session))
 
 
 def _mode_refused(proc: subprocess.CompletedProcess, spec: LaunchSpec) -> bool:
@@ -397,8 +427,9 @@ def parse(
     usage = _usage(envelope)
     envelope, overcome = _overcome(envelope, changed, spec.target_dir)
     denied = denials(envelope)
+    session = envelope.get("session_id") if envelope else None
     common = dict(changed_paths=changed, duration_s=duration_s, denied=denied, allow=allow_rules(envelope),
-                  overcome=overcome, **usage)
+                  overcome=overcome, session_id=session if isinstance(session, str) else "", **usage)
     if envelope is None:
         detail = (proc.stderr or "").strip()[:300]
         return WorkerResult(False, Failure.ENVIRONMENT,

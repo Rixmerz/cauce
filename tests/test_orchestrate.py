@@ -800,6 +800,62 @@ def test_a_run_says_its_task_number_warnings_and_attempts_as_they_happen(git_rep
     assert not any("ladder" in line for line in lines)
 
 
+@pytest.mark.parametrize(("files", "verify", "driven"), [
+    ({}, "npx playwright test", "its check runs playwright (`npx playwright test`)"),
+    ({"deno.json": {"tasks": {"e2e": "npx playwright test"}}}, "deno task e2e", "its check runs playwright"),
+    ({"package.json": {"devDependencies": {"playwright-core": "1.56.1"}}}, None,
+     "the project's own tests drive a headless browser (playwright-core in package.json)"),
+    ({"package.json": {"scripts": {"e2e": "playwright test"}}}, "npm test",
+     "the project's own tests drive a headless browser (its e2e script runs playwright)"),
+])
+def test_a_task_whose_check_drives_the_browser_is_not_warned_it_needs_one(git_repo, store, files, verify, driven):
+    for name, content in files.items():
+        (git_repo / name).write_text(json.dumps(content))
+    the_plan = orchestrate.plan("check the checkout page in the browser and fix the total", git_repo, store,
+                                Options(verify=verify, use_model_classifier=False), {}, adapters=())
+    assert not any("needs a browser" in r for r in the_plan.reasons)
+    said = [r for r in the_plan.reasons if r.startswith("the browser this task needs")]
+    assert len(said) == 1 and driven in said[0] and orchestrate.warnings(the_plan.reasons) == []
+
+
+def test_a_task_with_neither_a_browser_check_nor_browser_tests_is_still_warned(git_repo, store):
+    (git_repo / "package.json").write_text(json.dumps({"scripts": {"test": "vitest", "e2e": "vitest e2e"}}))
+    the_plan = orchestrate.plan("check the checkout page in the browser and fix the total", git_repo, store,
+                                Options(verify="npm test", use_model_classifier=False), {}, adapters=())
+    said = orchestrate.warnings(the_plan.reasons)
+    assert len(said) == 1 and said[0].startswith("this task needs a browser and workers have none")
+
+
+def test_a_check_that_covers_less_than_ci_is_said_in_the_plan_and_on_the_report(git_repo, store, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    (git_repo / ".github" / "workflows").mkdir(parents=True)
+    (git_repo / ".github" / "workflows" / "ci.yml").write_text(
+        "jobs:\n  db:\n    services:\n      postgres:\n        image: postgres:16\n    steps:\n"
+        "      - run: npm ci\n      - run: npm test\n        env:\n          DATABASE_URL: postgres://localhost/t\n")
+    (git_repo / "db.js").write_text("const url = process.env.DATABASE_URL\n")
+    git(git_repo, "add", "-A")
+    git(git_repo, "commit", "-q", "-m", "ci")
+    lines = []
+    report = run("fix the total", git_repo, store, Options(verify="true"), registry={}, launcher=Script(ok()),
+                 classifier=kind("implement"), progress=lines.append)
+    note = "CI also runs: db (`npm test`, a postgres service, DATABASE_URL), which this check does not"
+    assert note in report.plan.reasons and note in report.text()
+    assert f"cauce: #{report.task_id} warning: {note}" in lines
+    assert store.last_event(report.task_id, "planned")["data"]["warnings"] == [note]
+    # a check that runs it with what it sets covers it; a task without a check is not compared
+    covered = orchestrate.plan("fix the total", git_repo, store, Options(
+        verify="DATABASE_URL=postgres://localhost/t npm test", use_model_classifier=False), {}, adapters=())
+    unchecked = orchestrate.plan("fix the total", git_repo, store, Options(use_model_classifier=False), {},
+                                 adapters=())
+    assert not any("CI" in r for r in [*covered.reasons, *unchecked.reasons])
+    # a workflow that cannot be read is said once, and is no warning
+    (git_repo / ".github" / "workflows" / "odd.yml").write_text("jobs:\n  a: b\n c: d\n")
+    odd = orchestrate.plan("fix the total", git_repo, store, Options(verify="npm test", use_model_classifier=False),
+                           {}, adapters=())
+    assert [r for r in odd.reasons if r.startswith("CI:")] == [
+        "CI: .github/workflows/odd.yml could not be read; it is left out of what this check is compared with"]
+
+
 def test_a_dry_run_and_a_run_without_a_listener_say_nothing(git_repo, store, capsys):
     run("check it in the browser", git_repo, store, Options(dry_run=True), registry={},
         classifier=kind("implement"), progress=lambda line: pytest.fail(line))
@@ -886,6 +942,107 @@ def test_a_feature_starts_with_more_turns_and_a_pin_still_wins(git_repo, store):
                  classifier=kind("feature"))
     assert pinned.specs[0].max_turns == 45
     assert not any("starts with 60 turns" in r for r in report.plan.reasons)
+
+
+def test_more_turns_continue_the_worker_s_own_session_in_its_worktree(git_repo, store):
+    out = WorkerResult(False, Failure.TURNS_EXHAUSTED, "used all 30 turns", cost_usd=0.1, session_id="sess-1")
+    lines = []
+    script = Script(out, ok(), write="half.py")
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+                 progress=lines.append)
+    assert report.status == "done" and report.moves[0].startswith("more_turns")
+    first, second = script.specs
+    assert first.persist_session and first.resume_session == ""
+    assert second.resume_session == "sess-1" and second.max_turns == 60 and second.cell == first.cell
+    assert second.launch_dir == first.launch_dir
+    assert store.attempts(report.task_id)[0]["session_id"] == "sess-1"
+    started = [e["data"] for e in store.events(task_id=report.task_id) if e["kind"] == "attempt_started"]
+    assert "resumed" not in started[0] and started[1]["resumed"] == "sess-1"
+    assert f"cauce: #{report.task_id} attempt 2 continues attempt 1's session (sess-1)" in lines
+
+
+def test_a_continued_session_is_told_the_check_that_failed_after_it_ran_out(git_repo, store):
+    out = WorkerResult(False, Failure.TURNS_EXHAUSTED, "used all 30 turns", cost_usd=0.1, session_id="sess-1")
+    script = Script(out, ok(), write="half.py")
+    check = "grep -q 'attempt 2' half.py || (echo 'AssertionError: total is 3'; false)"
+    run("fix the export", git_repo, store, Options(verify=check), registry={}, launcher=script,
+        classifier=kind("implement"))
+    first, second = script.specs
+    assert second.resume_session == "sess-1"
+    # the red check cauce ran after the worker stopped is in the brief a fresh start gets, and in the continuation
+    assert "AssertionError: total is 3" in second.resume_note and "AssertionError: total is 3" in second.prompt
+    assert first.resume_note == ""
+
+
+def test_more_turns_without_a_session_start_fresh_and_say_why(git_repo, store):
+    out = WorkerResult(False, Failure.TURNS_EXHAUSTED, "ran past its time", cost_usd=0.1)
+    lines = []
+    script = Script(out, ok(), write="half.py")
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+                 progress=lines.append)
+    assert script.specs[1].resume_session == "" and report.status == "done"
+    started = [e["data"] for e in store.events(task_id=report.task_id) if e["kind"] == "attempt_started"]
+    assert started[1]["fresh"] == "attempt 1 kept no session to continue"
+    assert f"cauce: #{report.task_id} attempt 2 starts fresh: attempt 1 kept no session to continue" in lines
+
+
+def test_a_move_to_another_cell_never_inherits_the_session(git_repo, store):
+    shallow = WorkerResult(False, Failure.CODE_BUG, "2 tests fail", cost_usd=0.1, session_id="sess-1")
+    script = Script(shallow, ok())
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert report.moves[0].startswith("more_effort") and script.specs[1].resume_session == ""
+    assert script.specs[1].cell != script.specs[0].cell
+    started = [e["data"] for e in store.events(task_id=report.task_id) if e["kind"] == "attempt_started"]
+    assert "fresh" not in started[1] and "resumed" not in started[1]
+
+
+def test_a_run_in_the_person_s_checkout_keeps_no_session(tmp_path, store):
+    folder = tmp_path / "plain"
+    folder.mkdir()
+    script = Script(ok())
+    run("fix the export", folder, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert not script.specs[0].persist_session
+
+
+def _ran(store, key, kind_name, *attempts):
+    task = store.create_task(f"{kind_name} work", status="done", source="cauce", repo=key, kind=kind_name)
+    for turns, failure in attempts:
+        store.add_attempt(task["id"], cell="sonnet/high", max_turns=turns, passed=int(failure is None),
+                          failure=failure)
+
+
+def test_history_of_tasks_that_outgrew_their_turns_raises_where_turns_start(git_repo, store):
+    from cauce import repo as repos
+
+    key = repos.key(git_repo)
+    _ran(store, key, "implement", (30, None))
+    _ran(store, key, "implement", (30, "turns_exhausted"), (60, None))
+    _ran(store, key, "implement", (30, "turns_exhausted"), (120, None))
+    _ran(store, key, "implement", (30, "turns_exhausted"), (60, None))
+    _ran(store, key, "refactor", (30, "turns_exhausted"), (60, None))  # another kind: not this one's
+    script = Script(ok())
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert script.specs[0].max_turns == 60
+    assert "starts with 60 turns: 3 of the last 4 implement tasks here needed more than 30" in report.plan.reasons
+    # an explicit --max-turns wins, and history never lowers the kind's own
+    pinned = Script(ok())
+    run("fix the import", git_repo, store, Options(max_turns=30), registry={}, launcher=pinned,
+        classifier=kind("implement"))
+    assert pinned.specs[0].max_turns == 30
+    feature = Script(ok())
+    report = run("add the export", git_repo, store, registry={}, launcher=feature, classifier=kind("feature"))
+    assert feature.specs[0].max_turns == 60 and not any("needed more than" in r for r in report.plan.reasons)
+
+
+def test_one_task_that_needed_more_turns_is_no_history(git_repo, store):
+    from cauce import repo as repos
+
+    key = repos.key(git_repo)
+    _ran(store, key, "implement", (30, "turns_exhausted"), (60, None))
+    _ran(store, key, "implement", (30, None))
+    script = Script(ok())
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert script.specs[0].max_turns == 30 and not any("needed more than" in r for r in report.plan.reasons)
 
 
 def test_a_dead_end_that_shares_only_a_word_or_two_stays_out_of_the_brief(git_repo, store):

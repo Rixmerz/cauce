@@ -97,6 +97,12 @@
         "off"
       ],
       "default": "suggest"
+    },
+    "delegate": {
+      "type": "boolean",
+      "title": "Let the session start cauce work without asking",
+      "description": "With Claude Code's mods: when Claude Code would ask you before the session queues or resumes a cauce task, the mod lets it through, so the orchestrator hands out work without waiting on you. A rule or a setting that denies it still denies it, an organization's limits still hold, and a resume the session starts still refuses what only you may clear (a Fable approval, a permission rule, keeping one). Off: you approve each queue and resume.",
+      "default": true
     }
   },
   "types": "./types/index.d.ts"

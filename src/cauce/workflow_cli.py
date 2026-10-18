@@ -103,6 +103,8 @@ def _step_line(step: dict[str, Any]) -> str:
         parts.append(step["commit"][:72])
     if step.get("files"):
         parts.append(_files(step["files"], step.get("files_n")))
+    if step.get("behind"):
+        parts.append(step["behind"])
     return " · ".join(parts)
 
 

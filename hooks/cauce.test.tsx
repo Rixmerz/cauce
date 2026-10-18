@@ -244,14 +244,15 @@ test('resume refuses an id that is no id, before running anything', async ($, on
 test('the reading tools are not put to the person; queue, resume and a deny are left as they are', async ($, on) => {
   let base: 'ask' | 'deny' | 'allow' = 'ask'
   on('tool.check', () => ({ decision: base, reason: 'the engine' }))
-  await started($, on, {})
+  const { seen } = await started($, on, { 'config delegate': { exitCode: 0, stdout: 'false' } })
   const verdict = (name: string) => $.tool.check({ tool: `mcp__cauce__${name}`, input: {} })
   for (const name of ['recall', 'tasks', 'note', 'overview']) {
     expect((await verdict(name)).decision).toBe('allow')
   }
-  // queue and resume spend money: the person's rules and mode decide them
+  // with `delegate off`, queue and resume spend money on the person's own call
   expect((await verdict('queue')).decision).toBe('ask')
   expect((await verdict('resume')).decision).toBe('ask')
+  expect(seen.argv.filter(a => a[0] === 'config')).toEqual([['config', 'delegate'], ['config', 'delegate']])
   // another tool, even one named like ours, is never touched
   expect((await $.tool.check({ tool: 'mcp__other__recall', input: {} })).decision).toBe('ask')
   expect((await $.tool.check({ tool: 'Bash', input: { command: 'cauce recall x' } })).decision).toBe('ask')
@@ -259,6 +260,34 @@ test('the reading tools are not put to the person; queue, resume and a deny are 
   base = 'deny'
   for (const name of ['recall', 'tasks', 'note', 'overview']) {
     expect((await verdict(name)).decision).toBe('deny')
+  }
+})
+
+test('with delegate on, an ask for queue and resume is the orchestrator\'s, and a deny stays a deny', async ($, on) => {
+  let base: 'ask' | 'deny' | 'allow' = 'ask'
+  on('tool.check', () => ({ decision: base, reason: 'the engine' }))
+  const { seen } = await started($, on, {
+    'config delegate': { exitCode: 0, stdout: 'true' },
+    resume: { exitCode: 0, stdout: 'resuming #12 in the background' },
+  })
+  const verdict = (name: string) => $.tool.check({ tool: `mcp__cauce__${name}`, input: {} })
+  for (const name of ['queue', 'resume', 'overview']) {
+    expect((await verdict(name)).decision).toBe('allow')
+  }
+  expect((await verdict('queue')).reason).toContain('the person delegated')
+  // an organization's ceiling or a rule that denies still decides
+  base = 'deny'
+  for (const name of ['queue', 'resume']) expect((await verdict(name)).decision).toBe('deny')
+  // a resume it lets through still runs unattended, with no rule or approval the model asked for
+  await call($, 'resume', { id: 12, allow: ['Bash(*)'], allow_approval: true, keep: true })
+  expect(seen.argv.find(a => a[0] === 'resume')).toEqual(['resume', '12', '--unattended', '--detach'])
+})
+
+test('a delegate cauce cannot read leaves the ask with the person', async ($, on) => {
+  on('tool.check', () => ({ decision: 'ask', reason: 'the engine' }))
+  await started($, on, { 'config delegate': { exitCode: 1, stdout: '', stderr: 'boom' } })
+  for (const name of ['queue', 'resume']) {
+    expect((await $.tool.check({ tool: `mcp__cauce__${name}`, input: {} })).decision).toBe('ask')
   }
 })
 

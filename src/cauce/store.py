@@ -183,6 +183,8 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
     "attempts": {
         # The model the CLI says served the attempt, not the alias it was asked for.
         "served_model": "TEXT",
+        # The worker's Claude Code session, kept in its worktree: more turns continue it.
+        "session_id": "TEXT",
     },
     "problems": {
         "first_seen": "TEXT",
@@ -531,6 +533,19 @@ class Store:
             params,
         ).fetchall()
         return [r[0] for r in rows]
+
+    def turn_history(self, kind: str, *, repo: str, limit: int = 10) -> list[list[tuple[int, bool, str | None]]]:
+        """The attempts of the last tasks of this kind here that passed, newest task first:
+        `(max_turns, passed, failure)` each, in the order they ran."""
+        rows = self._conn.execute(
+            "SELECT a.task_id, a.max_turns, a.passed, a.failure FROM attempts a WHERE a.task_id IN ("
+            "SELECT t.id FROM tasks t WHERE t.kind = ? AND t.repo = ? AND t.status = 'done' "
+            "AND EXISTS (SELECT 1 FROM attempts x WHERE x.task_id = t.id) ORDER BY t.id DESC LIMIT ?) "
+            "ORDER BY a.task_id DESC, a.seq", (kind, repo, limit)).fetchall()
+        runs: dict[int, list[tuple[int, bool, str | None]]] = {}
+        for task_id, turns, passed, failure in rows:
+            runs.setdefault(task_id, []).append((int(turns), bool(passed), failure))
+        return list(runs.values())
 
     # --- the queue and its lanes ---------------------------------------------
 

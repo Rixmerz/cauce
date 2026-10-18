@@ -20,6 +20,7 @@ import os
 import re
 import shlex
 import socket
+import statistics
 import subprocess
 import sys
 import time
@@ -31,6 +32,7 @@ from pathlib import Path
 from cauce import allow as allow_rules
 from cauce import capabilities as caps
 from cauce import (
+    ci,
     config,
     dispatch,
     grants,
@@ -85,6 +87,9 @@ KEEPS_WORK = frozenset({"done", "blocked", "needs_approval"})
 #: How many finished tasks of a kind it takes before history moves the start.
 MIN_REPO_SAMPLES = 3
 MIN_GLOBAL_SAMPLES = 5
+#: How many recent tasks of a kind here that outgrew their turns raise where the next one's start,
+#: and how many recent tasks are looked at.
+MIN_TURN_SAMPLES, TURN_HISTORY = 2, 10
 VERIFY_TIMEOUT_S = 900
 #: How many changed paths a task's `finished` event lists; `changed_n` counts them all.
 CHANGED_KEPT = 500
@@ -176,6 +181,8 @@ class Plan:
     role_why: str = ""
     #: How much the change can hurt, from the request; attempts may raise it.
     risk: risk_mod.Risk = field(default_factory=risk_mod.Risk)
+    #: The turns the first attempt starts with when history raised them; None: the kind's own.
+    turns: int | None = None
 
 
 @dataclass
@@ -397,13 +404,21 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
             if ladder[raised] != start:
                 start = ladder[raised]
                 reasons.append(f"one rung up for what the code index found ({start.label})")
+    turns = None
+    if not options.max_turns and (key := repo.key(repo_dir)):
+        raised_turns = turns_from_history(store.turn_history(kind, repo=key, limit=TURN_HISTORY), kind)
+        if raised_turns:
+            turns, why = raised_turns
+            reasons.append(why)
     habits.load_events(store)
     learned = habits.recipes(store, kind, repo=repo.key(repo_dir))
     if learned:
         context.append("Steps that came before passing attempts on this kind of task here: "
                        + "; ".join(learned) + ". Use them unless the task says otherwise.")
-    neighbour_notes += _unmet(text, registry, served=bool(options.services),
-                              verify=options.verify or options.run_verify)
+    check = options.verify or options.run_verify
+    neighbour_notes += _unmet(text, registry, served=bool(options.services), verify=check, where=repo_dir)
+    if check and kind not in READ_ONLY_KINDS:
+        neighbour_notes += _beside_ci(repo_dir, check, options.services)
     if spans := _spans(repo_dir, options.add_dirs):
         neighbour_notes.append(spans)
     for lag in models.lagging(store):
@@ -440,12 +455,32 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     names = tuple(dict.fromkeys([*selected.names, *(a.name for a, _ in active)]))
     return Plan(kind, classification, ladder, start, reasons + neighbour_notes, names,
                 tuple(context), tuple(statuses), tuple(active), tuple(known), role, team, why,
-                risk_mod.of_request(text, kind))
+                risk_mod.of_request(text, kind), turns)
+
+
+def turns_from_history(runs: Sequence[Sequence[tuple[int, bool, str | None]]], kind: str) -> tuple[int, str] | None:
+    """The turns a task of `kind` starts with when the recent ones here outgrew the kind's
+    own and passed with more (each run its attempts' `(max_turns, passed, failure)`): the
+    median of what those passes needed, capped. Only ever above the kind's own; None
+    when fewer than `MIN_TURN_SAMPLES` needed more."""
+    own = turns_for(kind)
+    needed = []
+    for attempts in runs:
+        passes = [turns for turns, passed, _ in attempts if passed]
+        if passes and passes[-1] > own and any(
+                failure == Failure.TURNS_EXHAUSTED.value and turns <= own for turns, _, failure in attempts):
+            needed.append(passes[-1])
+    if len(needed) < MIN_TURN_SAMPLES:
+        return None
+    turns = min(int(statistics.median_low(needed)), MAX_TURNS_CEILING)
+    return turns, (f"starts with {turns} turns: {len(needed)} of the last {len(runs)} {kind} tasks here "
+                   f"needed more than {own}")
 
 
 #: How the plan's reasons a person should hear before the work starts begin: what
 #: the task needs and workers lack, and what stopped workers here before.
-WARNINGS = ("this task needs", "this task mentions", "this task spans", "workers here were refused before", "task #")
+WARNINGS = ("this task needs", "this task mentions", "this task spans", "workers here were refused before", "task #",
+            "CI also runs")
 
 
 def warnings(reasons: Sequence[str]) -> list[str]:
@@ -578,7 +613,7 @@ def run(
     if options.max_turns and options.max_turns > MAX_TURNS_CEILING:
         the_plan.reasons.append(f"{options.max_turns} turns were asked for; an attempt gets at most "
                                 f"{MAX_TURNS_CEILING}: work bigger than that is split")
-    if not options.max_turns and turns_for(the_plan.kind) != DEFAULT_TURNS:
+    if not options.max_turns and the_plan.turns is None and turns_for(the_plan.kind) != DEFAULT_TURNS:
         the_plan.reasons.append(f"{the_plan.kind} work starts with {turns_for(the_plan.kind)} turns: "
                                 f"at {DEFAULT_TURNS} its attempts ran out")
     warned = warnings(the_plan.reasons)
@@ -618,6 +653,11 @@ def run(
                 context += _fill_worktree(store, task["id"], workspace, text, options.carry, say)
         except (isolate.IsolationError, OSError) as exc:  # git failed, or git or the disk is not there
             no_worktree = " ".join(str(exc).split())
+    if workspace is not None and task.get("workflow_run"):
+        # How far the base branch moved past the work this step starts from: said, never merged.
+        drift = isolate.behind_text(workflows.drift(store, task, workspace.base, "start") or {})
+        if drift:
+            say(f"cauce: #{task['id']} starts {drift}")
     workdir = workspace.path if workspace else repo_dir
     context += how_to_run(workdir, (*options.allow_tools, *grants.granted(key)))
     # The thread of the session that sent it, as the scribe kept it: the worker
@@ -649,12 +689,16 @@ def run(
     base_commit = workspace.base if workspace else _head(repo_dir)
     # Turns are the one room dial, and they have one ceiling: a number asked for from
     # outside (a resume, a model's tool call) never raises it.
-    cell, turns = the_plan.start, min(options.max_turns or turns_for(the_plan.kind), MAX_TURNS_CEILING)
+    cell, turns = the_plan.start, min(options.max_turns or the_plan.turns or turns_for(the_plan.kind),
+                                      MAX_TURNS_CEILING)
     attempts: list[Attempt] = []
     changed: set[str] = set()
     decision: Decision | None = None
     # What the brief says of work set aside when a new model started from the base.
     aside: list[str] = []
+    # The last attempt's session, when it was kept, and what ran it: more turns on the
+    # same cell continue it.
+    session: tuple[str, str] | None = None
     # The commit's subject: the last line a worker proposed for the change.
     subject = ""
     # In the checkout itself, one run at a time: the work and its check share the
@@ -711,6 +755,8 @@ def run(
                                the_plan, repo_dir, workdir)
             # Numbered as the store numbers it: a resumed task's attempts go on from its last.
             nth = len(store.attempts(task["id"])) + 1
+            resume, fresh = _continues(decision, session, f"{models.pinned(cell.model) or cell.model} {cell.label}",
+                                       nth - 1)
             spec = launch.LaunchSpec(
                 model_id=models.pinned(cell.model),
                 permission_mode=grants.mode_for(cell.model),
@@ -742,6 +788,11 @@ def run(
                 judging=not writes or declared_read_only or deciding is not None,
                 verdicts=tuple(deciding.get("ids") or ()) if deciding else (),
                 verdict_words=ledger_mod.WORDS.get(deciding["role"], ()) if deciding else (),
+                # Kept only in a worktree, where its directory is the task's: a session in the
+                # person's checkout would be one of theirs.
+                persist_session=workspace is not None,
+                resume_session=resume,
+                resume_note=failed_output([*history, *attempts][-1]) if resume else "",
             )
             store.update_task(task["id"], current_cell=cell.label)
             say(f"cauce: #{task['id']} attempt {nth} at {cell.label}")
@@ -751,9 +802,18 @@ def run(
                             max_turns=turns, capabilities=list(selection.names),
                             since_start_s=round(time.monotonic() - clock, 2), brief_chars=len(spec.prompt),
                             **({"role": the_plan.role.name, "team": the_plan.team,
-                                "skills": list(briefing.skills)} if briefing else {}))
+                                "skills": list(briefing.skills)} if briefing else {}),
+                            **({"resumed": resume} if resume else {}), **({"fresh": fresh} if fresh else {}))
+            if resume:
+                say(f"cauce: #{task['id']} attempt {nth} continues attempt {nth - 1}'s session ({resume})")
+            elif fresh:
+                say(f"cauce: #{task['id']} attempt {nth} starts fresh: {fresh}")
             mark = time.monotonic()
             result = launcher(spec)
+            if result.fresh:
+                say(f"cauce: #{task['id']} attempt {nth} started fresh: {result.fresh}")
+            session = ((result.session_id if spec.persist_session else ""),
+                       f"{spec.model_id or cell.model} {cell.label}")
             worker_s = time.monotonic() - mark
             # Out of turns (or time) before its own check: whatever the check finds next,
             # the work had no room to finish, and room is what the next attempt gets.
@@ -811,13 +871,14 @@ def run(
                 input_tokens=result.input_tokens, output_tokens=result.output_tokens, turns=result.turns,
                 duration_s=result.duration_s, changed_paths=result.changed_paths,
                 served_model=result.served_model or None,
-                capabilities=selection.names,
+                capabilities=selection.names, session_id=session[0] or None,
             )
             store.add_event(task["id"], "attempt_finished", seq=seq, cell=cell.label, passed=result.passed,
                             failure=result.failure.value if result.failure else None, cost_usd=result.cost_usd,
                             turns=result.turns, summary=result.summary[:500], denied=list(result.denied),
                             allow=list(result.allow), served_model=result.served_model,
                             permission_mode=result.permission_mode,
+                            **({"fresh": result.fresh} if result.fresh else {}),
                             changed=list(result.changed_paths)[:50],
                             wall_s=round(worker_s, 2), duration_s=round(result.duration_s, 2),
                             check_s=round(check_s, 2), verifier_s=round(verifier_s, 2),
@@ -1038,16 +1099,21 @@ def _all_listening(text: str) -> bool:
 
 
 def _unmet(text: str, registry: Mapping[str, caps.Capability], *, served: bool = False,
-           verify: str | None = None) -> list[str]:
+           verify: str | None = None, where: Path | None = None) -> list[str]:
     """What a task asks for that a one-shot worker does not have, said before any
-    money is spent: a worker has no browser unless a capability gives it one,
-    and a server it starts ends with it. A task whose check needs no server (lint,
+    money is spent: a worker has no browser unless a capability gives it one, or
+    its check or the project's own tests drive a headless one (`ci.browser`), and
+    a server it starts ends with it. A task whose check needs no server (lint,
     tests, a build) is not told to start one for a word in its text."""
     notes = []
     if _BROWSER.search(text) and not any(k in name.lower() for name in registry for k in _BROWSER_CAPS):
-        notes.append("this task needs a browser and workers have none: register a browser MCP server in "
-                     "your cauce capabilities.json (`cauce capabilities --example` has one) and allow its tools "
-                     "(--allow 'mcp__browser'), or check the pages yourself")
+        driven = ci.browser(where, verify) if where is not None else None
+        if driven:
+            notes.append(f"the browser this task needs is driven headless: {driven}")
+        else:
+            notes.append("this task needs a browser and workers have none: register a browser MCP server in "
+                         "your cauce capabilities.json (`cauce capabilities --example` has one) and allow its "
+                         "tools (--allow 'mcp__browser'), or check the pages yourself")
     mention = _SERVER.search(text)
     asked = bool(mention and _START_SERVERS.search(text))
     if mention and not served and not _all_listening(text) and (asked or not verify or _CHECK_SERVES.search(verify)):
@@ -1055,6 +1121,33 @@ def _unmet(text: str, registry: Mapping[str, caps.Capability], *, served: bool =
                      "--service 'npm run dev@4200' (cauce starts each before the work and stops it after), or "
                      "start them yourself before dispatching; a server a worker starts stops when it finishes")
     return notes
+
+
+def _beside_ci(repo_dir: Path, check: str, services: Sequence[str]) -> list[str]:
+    """The jobs of the repository's CI the task's check leaves out, in one note (a warning:
+    a pass here is not CI's), and the workflow files that could not be read, said once.
+    Never a verdict and never a blocker."""
+    note, unreadable = ci.left_out(repo_dir, check, services)
+    lines = [note] if note else []
+    if unreadable:
+        lines.append(f"CI: {', '.join(unreadable)} could not be read; it is left out of what this check is "
+                     "compared with")
+    return lines
+
+
+def _continues(decision: Decision | None, session: tuple[str, str] | None, runs_as: str,
+               before: int) -> tuple[str, str]:
+    """The session an attempt continues, and, when more turns were due one and it starts
+    fresh, why. Only more turns on the same cell continue one: any other move is a new
+    bet, and a new cell must not inherit the old one's context."""
+    if decision is None or decision.move is not Move.MORE_TURNS or session is None:
+        return "", ""
+    kept, ran_as = session
+    if not kept:
+        return "", f"attempt {before} kept no session to continue"
+    if ran_as != runs_as:
+        return "", f"attempt {before} ran as {ran_as}, this one as {runs_as}"
+    return kept, ""
 
 
 def _spans(repo_dir: Path, add_dirs: Sequence[str]) -> str | None:
@@ -1462,11 +1555,18 @@ def brief(
             lines.append(f"  attempt {i} [{a.cell.label}, {a.failure or 'no verdict'}] {a.summary[:300]}")
             if a.denied:
                 lines.append(f"    refused: {', '.join(a.denied[:5])}")
-        last = attempts[-1]
-        if not last.passed and last.evidence.strip():
-            lines.append("  The output that failed the last attempt, last lines:\n" + last.evidence.strip()[-1500:])
+        if failed := failed_output(attempts[-1]):
+            lines.append("  " + failed)
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
+
+
+def failed_output(last: Attempt) -> str:
+    """The output that failed an attempt, for the next one: a fresh brief and a session
+    that continues alike, since a red check is evidence for whatever comes next."""
+    if last.passed or not last.evidence.strip():
+        return ""
+    return "The output that failed the last attempt, last lines:\n" + last.evidence.strip()[-1500:]
 
 
 def _equip(selection: caps.Selection, the_plan: Plan, repo_dir: Path, workdir: Path) -> caps.Selection:

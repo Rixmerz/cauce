@@ -33,7 +33,8 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `engram`, `engram_write`, all on/off), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word), copied from plugin options by SessionStart |
+| `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
 | `src/cauce/habits.py` | mining sequences per repository (and the ones several repositories share), recipes for the brief, and approval-gated habit hooks |
@@ -138,6 +139,13 @@ yields the default kind, not a guess.
 - Out of turns is room, never a bug: a finding of the independent check in
   work whose worker ran out of turns before its own check earns the same cell
   more turns, never more effort or another model, and is no dead end.
+  More turns on the same cell continue the worker's own session
+  (`claude -p --resume`, its id read from the attempt's JSON and kept on the
+  attempt) in the same worktree, told only to go on under the same result
+  contract and given the output that failed its attempt; a session is kept only in a worktree, never in a person's
+  checkout. When it cannot be continued (no id, the CLI refuses it, a
+  different model or cell) the attempt starts fresh and says why. Any other
+  move starts fresh: a new cell never inherits the old one's context.
 - Cost is measured and shown, never a brake: every attempt keeps what it cost
   (its own and its independent check's apart, and how much of its input the
   cache served), and the report, the board, `cauce spend` and `cauce stats`
@@ -155,7 +163,16 @@ yields the default kind, not a guess.
   kind unless a tag or `--kind` says so.
 - The plan says a task needs servers when it tells the worker to start them,
   or mentions one and its check talks to one (or it has no check), and names
-  the words that set it off: a mention is no need.
+  the words that set it off: a mention is no need. A task that mentions a
+  browser is told workers have none unless a capability gives one, its check
+  runs one (Playwright through the scripts it names), or the project's own
+  tests drive a headless one (a Playwright dependency, an `e2e` script that
+  runs it): then the plan says the check drives it.
+- A check that covers less than the repository's CI is said, never a verdict
+  and never a blocker: the plan reads each job of `.github/workflows/*.yml`
+  (its `run:` commands, the services and the env the code reads) and names in
+  one warning the jobs `--verify` leaves out, on the report too. A workflow
+  file the line reader cannot read is skipped and said once.
 - Work that stopped for a person (blocked, needs approval) is kept on its
   branch, unverified, and so is work that outgrew its turns (a `replan` for
   turns resumes with more); only `failed`, a `replan` for a wrong task and
@@ -201,7 +218,10 @@ yields the default kind, not a guess.
   leaves a row without a verdict is `inconclusive`. Open rows earn one more
   round, up to `ledger.ROUNDS`; then the run stops as `review`.
 - A risk tier is only raised, never lowered; a change that cannot be read is
-  high. A high change, or a medium one a cheap cell made, is checked by the
+  high. Its reasons are true: a word is read in its sense ("checkout" in git's,
+  `payment` as one name among others is no money until the change touches that
+  code); "parallel" is never read away, since a missed concurrency request skips
+  the verifier and an extra one only costs a check. A high change, or a medium one a cheap cell made, is checked by the
   independent verifier before it passes: another cell, read-only, given the
   request verbatim and the diff, never the worker's summary; it runs at high
   effort on the work's model (never Haiku), and keeps only the neighbours that
@@ -229,7 +249,12 @@ yields the default kind, not a guess.
 - A move explains itself: `Decision.because` is the evidence chain (what the
   attempt ended with, the rule, where it goes) and `skipped` the rungs passed
   over. A new branch in `decide` gives both; the `moved` event keeps them.
-- History may raise where a task starts, never lower it below its ladder.
+- History may raise where a task starts, never lower it below its ladder,
+  and so may it the turns it starts with: when at least
+  `orchestrate.MIN_TURN_SAMPLES` recent tasks of its kind here ran out at the
+  kind's turns and passed with more, it starts at the median those passes
+  needed (capped at `escalate.MAX_TURNS_CEILING`), and the plan says so. An
+  explicit `--max-turns` wins.
 - Fable needs a person: `#fable` or `--allow-approval`. An approval is the
   person's for the run they approved: a resume nobody approved (`--unattended`)
   never uses one an earlier run stored, nor starts on a cell that needs one (a
@@ -349,7 +374,8 @@ yields the default kind, not a guess.
   a session. Claude Code's own task files are read, never written.
 - A lane pauses only on a task the dispatcher started, and never on one a
   person cancelled or on an investigator's; it opens again by itself when that task leaves the board
-  (dismissed, superseded, or resumed to a pass), and the queue starts again; a person's own `cauce run` never blocks the queue. A GET in the UI never starts work or
+  (dismissed, superseded, or resumed to a pass), and the queue starts again. A resume that reopens it, or `cauce lanes
+  --unpause`, starts its dispatcher at once (under the one-dispatcher lock), not at the resumed task's end; a person's own `cauce run` never blocks the queue. A GET in the UI never starts work or
   sweeps — housekeeping runs in hooks, the dispatcher and the server thread.
 - Color in the UI carries meaning and never alone: a state, a kind's family
   and a model's depth each have one tone (`util.js`: `statusBadge`,
@@ -407,8 +433,12 @@ yields the default kind, not a guess.
   through `cauce resume <id> --pressed`, does, and its rules are read
   from cauce's account of the stop (`stops.resume_args`), never from the
   request; `--pressed` refuses any rule or approval passed with it. The board lives in the web UI only; the mod draws no copy of it. Tool schemas carry no `enum`: the handler
-  reads a value and says what cauce takes. Only the reading tools (`recall`,
-  `tasks`, `note`) turn an `ask` into an allow; a deny stays a deny. Without the mod, everything still works through
+  reads a value and says what cauce takes. The reading tools (`recall`,
+  `tasks`, `note`, `overview`) turn an `ask` into an allow; `queue` and
+  `resume` do only while the person delegates them (`cauce config delegate`,
+  on by default, read at each check; a cauce that cannot say leaves the ask
+  with the person). A deny stays a deny, an organization's ceiling still caps
+  it, and a delegated `resume` still runs `--unattended`. Without the mod, everything still works through
   the classic hooks.
 - A watcher reads, never claims: `overview` and `events` take nothing from a
   session, and an ending is delivered only to the session that sent the work.
@@ -426,6 +456,11 @@ yields the default kind, not a guess.
   at its end or when a step waits on the person — and steps the engine went
   past are marked reported. A step that stops stops the run there; it goes on
   by a resume to a pass or `cauce workflow retry`.
+- A workflow step says how far its work is behind the branch its run started
+  from, as that branch is now (`isolate.behind`): the commits it moved and the
+  files both changed, kept as a `behind_base` event when the step starts and
+  when the run ends, and shown in `cauce workflow status`, the ending notice
+  and the board. It is said, never acted on: nothing is merged or rebased.
 - A workflow definition grants nothing and caps nothing: no rule, no
   approval, no capability, no dollar limit; rules, approvals and a run's check
   (`--verify`, for every step that writes and names none) are the person's

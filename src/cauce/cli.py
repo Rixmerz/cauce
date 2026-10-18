@@ -281,8 +281,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
         kept = (options.stored() | {k: prior[k] for k in ("investigation",) if k in prior}
                 | ({"allow_approval": True} if inherited else {}))
         store.update_task(args.id, options=json.dumps(kept), dispatched=0, cancel_requested=0)
-        # It runs again: a lane paused on its stopping no longer waits on anyone.
-        store.release_lane(task["repo"], args.id)
+        # It runs again: a lane paused on its stopping no longer waits on anyone, and
+        # the queue behind it starts now, beside it where it may, not at its end.
+        if store.release_lane(task["repo"], args.id):
+            _go_on(store, task["repo"])
         try:
             report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=args.id,
                                      history=history, progress=_say, known_findings=known)

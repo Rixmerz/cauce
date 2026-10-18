@@ -363,3 +363,54 @@ def test_a_network_that_dropped_is_named_wherever_it_shows(tmp_path):
     local = '{"verdict": "fail", "failure": "environment", "summary": "the e2e check could not reach the app", ' \
             '"evidence": "TypeError: fetch failed (connect ECONNREFUSED 127.0.0.1:3000)"}'
     assert parse(proc(json.dumps({"result": f"```cauce-result\n{local}\n```"})), spec(tmp_path)).network == ""
+
+
+# --- more turns continue the worker's own session ---------------------------------------
+
+
+def test_a_resume_continues_the_session_with_a_short_prompt_and_keeps_the_contract(tmp_path):
+    s = spec(tmp_path, resume_session="sess-1", persist_session=True)
+    argv = build_argv(s)
+    assert argv[argv.index("--resume") + 1] == "sess-1" and "--no-session-persistence" not in argv
+    seen = []
+
+    def runner(argv, **kw):
+        seen.append((argv, kw["input"]))
+        return proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed"), session_id="sess-1"))
+
+    out = launch.run(s, runner=runner)
+    assert out.passed and out.session_id == "sess-1" and out.resumed and out.fresh == ""
+    said = seen[0][1]
+    assert said.startswith("You ran out of turns") and "do it" not in said and launch.RESULT_FENCE in said
+    # a fresh attempt is given its brief and keeps no session unless asked to
+    fresh = build_argv(spec(tmp_path))
+    assert "--resume" not in fresh and "--no-session-persistence" in fresh
+
+
+def test_a_resume_is_told_the_output_that_failed_its_attempt(tmp_path):
+    seen = []
+
+    def runner(argv, **kw):
+        seen.append(kw["input"])
+        return proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed"), session_id="sess-1"))
+
+    note = "The output that failed the last attempt, last lines:\nFAIL total is 3"
+    launch.run(spec(tmp_path, resume_session="sess-1", persist_session=True, resume_note=note), runner=runner)
+    said = seen[0]
+    assert said.startswith(launch.CONTINUE_PROMPT) and note in said and launch.RESULT_FENCE in said
+    assert said.index(note) < said.index(launch.RESULT_FENCE) and "do it" not in said
+
+
+def test_a_session_the_cli_cannot_resume_starts_fresh_and_says_why(tmp_path):
+    seen = []
+
+    def runner(argv, **kw):
+        seen.append(("--resume" in argv, kw["input"]))
+        if "--resume" in argv:
+            return proc("", 1, "No conversation found with session ID: sess-1")
+        return proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed"), session_id="sess-2"))
+
+    out = launch.run(spec(tmp_path, resume_session="sess-1", persist_session=True), runner=runner)
+    assert [r for r, _ in seen] == [True, False] and seen[1][1].startswith("do it")
+    assert out.passed and not out.resumed and out.session_id == "sess-2"
+    assert out.fresh.startswith("the CLI could not resume session sess-1: No conversation found")

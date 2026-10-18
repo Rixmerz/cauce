@@ -630,6 +630,9 @@ def start(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] | 
         # Where the run started: every step's brief can say what the run changed since.
         with contextlib.suppress(isolate.IsolationError):
             options = {**dict(options or {}), "origin": isolate.head(where, "HEAD")}
+        # The branch it started from: each step is compared with it as it moves on.
+        if branch := isolate.current_branch(where):
+            options = {**dict(options or {}), "origin_branch": branch}
     run = store.create_run(name=defn["name"], scope=defn["scope"], source=defn["path"],
                            definition=json.dumps(_stored(defn), ensure_ascii=False),
                            inputs=json.dumps(given, ensure_ascii=False), options=json.dumps(dict(options or {})),
@@ -853,6 +856,37 @@ def _base(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step_id
     return None
 
 
+def drift(store: Store, task: Mapping[str, Any], tip: str, when: str) -> dict[str, Any] | None:
+    """How far a step's work (`tip`: the commit it starts from, or its branch) is behind
+    the branch its run started from, as that branch is now, kept as a `behind_base`
+    event (`when`: start or end). Said, never acted on: nothing is merged or rebased."""
+    run = store.get_run(int(task["workflow_run"])) if task.get("workflow_run") else None
+    base = json.loads(run["options"] or "{}").get("origin_branch") if run else None
+    if not base or not run or not run["cwd"] or not Path(run["cwd"]).is_dir():
+        return None
+    found = isolate.behind(Path(run["cwd"]), tip, base)
+    if found is not None:
+        store.add_event(task["id"], "behind_base", when=when, **found)
+    return found
+
+
+def _behind(store: Store, run: Mapping[str, Any], task: Mapping[str, Any], finished: Mapping[str, Any] | None,
+            *, live: bool) -> str | None:
+    """A step's distance from its run's base branch: read from git now (`live`), else as last kept."""
+    base = json.loads(run["options"] or "{}").get("origin_branch")
+    if not base:
+        return None
+    if live and run["cwd"] and Path(run["cwd"]).is_dir():
+        branch = ((finished or {}).get("data") or {}).get("branch")
+        started = store.last_event(task["id"], "attempt_started")
+        tip = f"refs/heads/{branch}" if branch else ((started or {}).get("data") or {}).get("base")
+        found = isolate.behind(Path(run["cwd"]), tip, base) if tip else None
+        if found is not None:
+            return isolate.behind_text(found)
+    kept = store.last_event(task["id"], "behind_base")
+    return isolate.behind_text(kept["data"]) if kept else None
+
+
 def advance(store: Store, task: Mapping[str, Any] | None, env: Mapping[str, str] | None = None,
             kick: Kick | None = None) -> list[int]:
     """After a step's run ended: when it passed, queue what waited on it and
@@ -861,7 +895,11 @@ def advance(store: Store, task: Mapping[str, Any] | None, env: Mapping[str, str]
     if not task or not task.get("workflow_run"):
         return []
     run = store.get_run(int(task["workflow_run"]))
-    if run is None or run["status"] != "active" or task["status"] != "done":
+    if run is None or run["status"] != "active":
+        return []
+    if task["status"] != "done":
+        # A step that stops stops the run there: the run ends now, as far as its branches go.
+        _drift_at_end(store, run)
         return []
     # Two steps a third waits on may pass at the same moment: one of them queues it.
     with store.immediate():
@@ -878,12 +916,21 @@ def advance(store: Store, task: Mapping[str, Any] | None, env: Mapping[str, str]
             len(_latest(store, run["id"])) == len(_definition(run)["steps"]):
         # The run is over: its definition is free, and a change that waited for it applies.
         store.update_run(run["id"], status="done")
+        _drift_at_end(store, run)
         promote(run["source"], store)
     else:
         # A step that passed while a sibling still runs: the engine went past it, and the session is not told.
         store.add_event(task["id"], "reported", via="workflow")
         store.update_run(run["id"])
     return queued
+
+
+def _drift_at_end(store: Store, run: Mapping[str, Any]) -> None:
+    """At a run's end, done or stopped at a step: each kept branch against the base as it is then."""
+    for step in _latest(store, run["id"]).values():
+        branch = ((store.final_event(step["id"]) or {}).get("data") or {}).get("branch")
+        if branch:
+            drift(store, step, f"refs/heads/{branch}", "end")
 
 
 def _next_round(store: Store, run: Mapping[str, Any], task: Mapping[str, Any]) -> list[int]:
@@ -951,6 +998,8 @@ def status(store: Store, run_id: int, *, detail: bool = False) -> dict[str, Any]
                          branch=(finished or {}).get("data", {}).get("branch") if state == "done" else None,
                          tries=sum(1 for t in store.run_tasks(run_id) if t["workflow_step"] == step["id"]),
                          waits=dispatch.waiting(store, task))
+            if behind := _behind(store, run, task, finished, live=detail):
+                entry["behind"] = behind
             if detail:
                 entry.update(progress(store, run, task))
         steps.append(entry)
