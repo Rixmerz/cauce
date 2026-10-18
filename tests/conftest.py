@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from cauce import workflows
 from cauce.store import Store
 
 
@@ -46,6 +47,14 @@ def store(_isolated_home: Path) -> Store:
     s = Store(_isolated_home / "cauce.db")
     yield s
     s.close()
+
+
+@pytest.fixture
+def kicks(monkeypatch):
+    """No real dispatcher: each start the engine asks for is recorded."""
+    seen: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(workflows, "_kick", lambda cwd, key: seen.append((cwd, key)))
+    return seen
 
 
 def git(cwd: Path, *args: str) -> str:

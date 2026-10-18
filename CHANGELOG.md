@@ -4,6 +4,30 @@
 
 ### Added
 
+- **More effort continues the same model's session.** A `more_effort` move
+  whose next cell has the same model resumes the last attempt's Claude Code
+  session as a fork at the new effort (`claude -p --resume <id> --fork-session
+  --effort <new>`), in the same worktree, with a short prompt that says what
+  failed (the check's failing output, or the independent check's blockers in a
+  correction round) and to look deeper, and the result contract. Measured
+  here, five of six such moves passed, and each second attempt repeated
+  nearly the whole first one from a cold start. Another model, a replan, a
+  retry of a launch that broke and a resume a person starts still start
+  fresh. When the session cannot be continued (no id, the CLI refuses it, the
+  worktree was reset) it starts fresh and the `moved` event says why; it says
+  `continued` and the session it forked from otherwise, and `cauce stats`
+  compares continued and fresh attempts by pass, turns and cost.
+- **Work queued after other work.** `cauce run … --after <task>`, `cauce queue
+  add … --after <task>` and `cauce workflow run … --after <run>` queue work
+  held behind that task or run: the dispatcher never starts it, and `cauce
+  queue`, `cauce tasks`, `cauce show`, `cauce workflow status` and the board
+  say "waits for #N to pass". When that work passes, the engine releases it
+  where it advances a workflow, onto the branch it kept (a run's last step's),
+  or the base when that branch is merged; its plan says which, and nothing is
+  merged or rebased. Work that stops short releases nothing: what waits stays
+  held and says how it stopped ("waits for #17, which stopped as review")
+  until a resume of it passes; `cauce dismiss` or a cancel takes it off the
+  queue. A missing task or run, or one that failed, is refused when queued.
 - **More turns continue the same session.** A `more_turns` move on the same
   cell resumes the worker's own Claude Code session (`claude -p --resume`) in
   its worktree with a short continuation prompt, so its context and prompt
@@ -32,6 +56,8 @@
 
 ### Fixed
 
+- The independent check after an attempt that continued a session ran in the
+  worker's session instead of its own; it never inherits one now.
 - A task whose check runs Playwright, or whose project's tests drive a
   headless browser, is no longer warned that workers have no browser.
 - Resuming a task that reopens a paused lane starts its dispatcher at once,

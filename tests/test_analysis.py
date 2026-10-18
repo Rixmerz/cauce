@@ -149,3 +149,29 @@ def test_a_check_s_cost_and_the_cache_are_kept_apart(store):
     assert cell["cost_usd"] == 0.6 and cell["verifier_cost_usd"] == 0.3 and cell["cache_read_share"] == 0.8
     assert report["summary"]["verifier_cost_usd"] == 0.3 and report["summary"]["cache_read_share"] == 0.8
     assert "independent checks $0.30" in analysis.text(report) and "cache read 80%" in analysis.text(report)
+
+
+def test_attempts_that_went_on_in_a_session_are_compared_with_fresh_ones(git_repo, store):
+    shallow = WorkerResult(False, Failure.CODE_BUG, "missed it", cost_usd=0.4, turns=40, session_id="sess-1")
+    run("fix the invoice rounding", git_repo, store, registry={}, classifier=kind("implement"),
+        launcher=Script(shallow, WorkerResult(True, None, "fixed", "1 passed", cost_usd=0.1, turns=8)))
+    run("fix the cart total", git_repo, store, registry={}, classifier=kind("implement"),
+        launcher=Script(bad(Failure.CODE_BUG, "missed it", cost=0.4), ok(cost=0.5)))
+    old = store.create_task("before sessions were kept", status="done", source="cauce", kind="implement")
+    for kind_, data in (("planned", {"kind": "implement"}),
+                        ("attempt_finished", {"seq": 1, "cell": "sonnet/medium", "passed": False, "cost_usd": 0.3}),
+                        ("moved", {"move": "more_turns"}),
+                        ("attempt_started", {"seq": 2, "resumed": "sess-9"}),
+                        ("attempt_finished", {"seq": 2, "cell": "sonnet/medium", "passed": True, "cost_usd": 0.2}),
+                        ("finished", {"status": "done", "cost_usd": 0.5})):
+        store.add_event(old["id"], kind_, **data)
+    report = analysis.compute(store, days=0)
+    rows = {(r["move"], r["continued"]): r for r in report["continuations"]}
+    assert set(rows) == {("more_effort", True), ("more_effort", False), ("more_turns", True)}
+    went_on, fresh = rows[("more_effort", True)], rows[("more_effort", False)]
+    assert (went_on["attempts"], went_on["passed"], went_on["turns_p50"], went_on["cost_usd"]) == (1, 1, 8, 0.1)
+    assert (fresh["attempts"], fresh["cost_usd"]) == (1, 0.5)
+    # first attempts follow no move, and are no part of it
+    assert sum(r["attempts"] for r in report["continuations"]) == 3
+    said = analysis.text(report)
+    assert "after more effort or more turns" in said and "more_effort  continued attempts    1" in said

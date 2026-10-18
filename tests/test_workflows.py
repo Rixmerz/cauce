@@ -13,14 +13,6 @@ from cauce.store import Store
 from .test_orchestrate import bad, kind, ok
 
 
-@pytest.fixture
-def kicks(monkeypatch):
-    """No real dispatcher: each start the engine asks for is recorded."""
-    seen: list[tuple[str, str | None]] = []
-    monkeypatch.setattr(workflows, "_kick", lambda cwd, key: seen.append((cwd, key)))
-    return seen
-
-
 def _worker(results, seen):
     """A launcher that writes one file per writing attempt and records what each attempt saw."""
     results = list(results)

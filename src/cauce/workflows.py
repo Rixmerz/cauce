@@ -35,7 +35,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from cauce import dispatch, isolate, ledger, project, repo, surfaces
+from cauce import after, dispatch, isolate, ledger, project, repo, surfaces
 from cauce import findings as findings_mod
 from cauce.escalate import MAX_TURNS_CEILING
 from cauce.matrix import KINDS, READ_ONLY_KINDS, Cell
@@ -620,9 +620,11 @@ def prepare(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] 
 
 def start(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] | None = None, *,
           scope: str | None = None, session_id: str | None = None, options: Mapping[str, Any] | None = None,
-          kick: Kick | None = None) -> dict[str, Any]:
+          kick: Kick | None = None, after_run: int | None = None) -> dict[str, Any]:
     """A run of a saved workflow in a directory: its first steps queued, the dispatcher started.
-    `options` are the person's (`allow_tools`, `allow_approval`, `verify`)."""
+    `options` are the person's (`allow_tools`, `allow_approval`, `verify`). `after_run`
+    holds its first steps behind that run until it passes (`cauce.after`), checked first."""
+    held = after.target(store, run_id=after_run) if after_run is not None else None
     promote(locate(name, cwd, scope)[1], store)
     ready = prepare(store, name, cwd, inputs, scope=scope)
     defn, where, given, key = ready["defn"], ready["where"], ready["given"], ready["key"]
@@ -633,11 +635,17 @@ def start(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] | 
         # The branch it started from: each step is compared with it as it moves on.
         if branch := isolate.current_branch(where):
             options = {**dict(options or {}), "origin_branch": branch}
+    if held is not None:
+        options = {**dict(options or {}), after.KEY: held}
     run = store.create_run(name=defn["name"], scope=defn["scope"], source=defn["path"],
                            definition=json.dumps(_stored(defn), ensure_ascii=False),
                            inputs=json.dumps(given, ensure_ascii=False), options=json.dumps(dict(options or {})),
                            repo=key, cwd=str(where), session_id=session_id)
     queued = _queue_ready(store, run)
+    if held is not None:
+        # Queued after a run that passed already: it starts now, on what that run kept.
+        for task_id in queued:
+            after.settle(store, store.get_task(task_id))
     (kick or _kick)(str(where), key)
     return {**run, "queued": queued, "gaps": ready["gaps"]}
 
@@ -721,7 +729,7 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         if attached:
             body += "\n\n" + attached
     base = _base(store, run, defn, step["id"], latest)
-    if base and options.get("origin"):
+    if base and options.get("origin") and base != options["origin"]:
         body += ("\n\nEverything this workflow changed so far is in this checkout: "
                  f"`git diff {options['origin'][:12]}` shows it.")
     opts = {k: v for k, v in {
@@ -733,7 +741,9 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         "max_turns": step.get("max_turns"),
         "allow_tools": options.get("allow_tools") or None, "allow_approval": options.get("allow_approval") or None,
         "base": base, "step_role": step.get("role"), "surfaces": step.get("surfaces"),
-        "ledger": held}.items() if v is not None}
+        "ledger": held,
+        # A run queued after other work: its steps wait for that work to pass, as it does.
+        after.KEY: options.get(after.KEY)}.items() if v is not None}
     empty = held is not None and not held["ids"]
     task = store.create_task(body, status="done" if empty else "queued", source="queue", author="workflow",
                              repo=run["repo"], cwd=run["cwd"], session_id=run["session_id"],
@@ -843,7 +853,8 @@ def _base(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step_id
           latest: Mapping[str, dict]) -> str | None:
     """The commit a step starts from: the tip the nearest step before it kept,
     read when it passed. A reading step keeps no branch, so the search goes on
-    past it. None: the checkout's HEAD."""
+    past it; with none before it, the commit a run queued after other work was
+    released onto (`cauce.after`). None: the checkout's HEAD."""
     for sid in reversed(_before(defn, step_id)):
         task = latest.get(sid)
         finished = store.final_event(task["id"]) if task else None
@@ -853,7 +864,7 @@ def _base(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step_id
                 return isolate.head(Path(run["cwd"]), branch)
             except isolate.IsolationError:
                 continue
-    return None
+    return json.loads(run.get("options") or "{}").get("base")
 
 
 def drift(store: Store, task: Mapping[str, Any], tip: str, when: str) -> dict[str, Any] | None:
@@ -889,14 +900,19 @@ def _behind(store: Store, run: Mapping[str, Any], task: Mapping[str, Any], finis
 
 def advance(store: Store, task: Mapping[str, Any] | None, env: Mapping[str, str] | None = None,
             kick: Kick | None = None) -> list[int]:
-    """After a step's run ended: when it passed, queue what waited on it and
-    start the dispatcher. The session that started the run is told at its end,
-    or when a step waits on the person, never of each step the engine went past."""
-    if not task or not task.get("workflow_run"):
+    """After a task's run ended: when it passed, release the work queued after it
+    (`cauce.after`) and, for a step, queue what waited on it; then start the
+    dispatcher. A run whose last step passed releases the work queued after the
+    run. The session that started the run is told at its end, or when a step waits
+    on the person, never of each step the engine went past. The ids queued or released."""
+    if not task:
         return []
+    released = _release(store, kick, task=task)
+    if not task.get("workflow_run"):
+        return released
     run = store.get_run(int(task["workflow_run"]))
     if run is None or run["status"] != "active":
-        return []
+        return released
     if task["status"] != "done":
         # A step that stops stops the run there: the run ends now, as far as its branches go.
         _drift_at_end(store, run)
@@ -914,15 +930,26 @@ def advance(store: Store, task: Mapping[str, Any] | None, env: Mapping[str, str]
         store.update_run(run["id"])
     elif all(t["status"] == "done" for t in _latest(store, run["id"]).values()) and \
             len(_latest(store, run["id"])) == len(_definition(run)["steps"]):
-        # The run is over: its definition is free, and a change that waited for it applies.
+        # The run is over: its definition is free, a change that waited for it applies,
+        # and the work queued after it starts on what its last step kept.
         store.update_run(run["id"], status="done")
         _drift_at_end(store, run)
         promote(run["source"], store)
+        released += _release(store, kick, run=store.get_run(run["id"]))
     else:
         # A step that passed while a sibling still runs: the engine went past it, and the session is not told.
         store.add_event(task["id"], "reported", via="workflow")
         store.update_run(run["id"])
-    return queued
+    return [*queued, *released]
+
+
+def _release(store: Store, kick: Kick | None, *, task: Mapping[str, Any] | None = None,
+             run: Mapping[str, Any] | None = None) -> list[int]:
+    """The work queued after a task or a run that passed, released, and each of its lanes started."""
+    freed = after.release(store, task=task, run=run)
+    for t in freed:
+        (kick or _kick)(t["cwd"], t["repo"])
+    return [t["id"] for t in freed]
 
 
 def _drift_at_end(store: Store, run: Mapping[str, Any]) -> None:
@@ -1004,12 +1031,17 @@ def status(store: Store, run_id: int, *, detail: bool = False) -> dict[str, Any]
                 entry.update(progress(store, run, task))
         steps.append(entry)
     states = {s["state"] for s in steps}
+    # Queued after other work (`cauce.after`): every step that is open waits for that work to pass.
+    holding = [s for s in steps if s["state"] in ("queued", "running")]
+    holding = holding if holding and all(after.held(latest[s["id"]]) for s in holding) else []
     if run["status"] == "cancelled":
         state = "cancelled"
     elif run["status"] == "done" or states == {"done"}:
         state = "done"
     elif states & NEEDS_YOU or (states & STOPPED and not states & {"queued", "running"}):
         state = "waits on you"
+    elif holding:
+        state = "queued"
     elif states & {"queued", "running"}:
         state = "running"
     else:
@@ -1022,7 +1054,7 @@ def status(store: Store, run_id: int, *, detail: bool = False) -> dict[str, Any]
             "waiting": [s["id"] for s in steps if s["state"] in NEEDS_YOU | STOPPED],
             "branch": branch, "cost_usd": round(sum(s.get("cost_usd") or 0 for s in steps), 2),
             "created_at": run["created_at"], "updated_at": run["updated_at"], "reason": run["reason"],
-            "steps": steps}
+            "waits": holding[0]["waits"] if holding else None, "steps": steps}
 
 
 def runs(store: Store, *, repos: set[str] | None = None, limit: int = 20) -> list[dict[str, Any]]:

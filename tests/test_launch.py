@@ -414,3 +414,42 @@ def test_a_session_the_cli_cannot_resume_starts_fresh_and_says_why(tmp_path):
     assert [r for r, _ in seen] == [True, False] and seen[1][1].startswith("do it")
     assert out.passed and not out.resumed and out.session_id == "sess-2"
     assert out.fresh.startswith("the CLI could not resume session sess-1: No conversation found")
+
+
+def test_more_effort_forks_the_session_at_its_new_effort_and_is_told_to_look_deeper(tmp_path):
+    note = "The independent check found:\n- [introduced, deterministic] app.py:3: drops the last item"
+    s = spec(tmp_path, resume_session="sess-1", persist_session=True, fork_session=True,
+             resume_prompt=launch.DEEPER_PROMPT, resume_note=note, cell=Cell("sonnet", "xhigh"))
+    argv = build_argv(s)
+    assert argv[argv.index("--resume") + 1] == "sess-1" and "--fork-session" in argv
+    assert argv[argv.index("--effort") + 1] == "xhigh"
+    seen = []
+
+    def runner(argv, **kw):
+        seen.append((argv, kw["input"]))
+        if "--resume" in argv:
+            return proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed"), session_id="fork-1"))
+        return proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed"), session_id="fresh-1"))
+
+    out = launch.run(s, runner=runner)
+    said = seen[0][1]
+    assert said.startswith(launch.DEEPER_PROMPT) and note in said and launch.RESULT_FENCE in said
+    assert "do it" not in said and out.resumed and out.session_id == "fork-1"
+    # without --fork-session a resume continues the session itself (more turns)
+    assert "--fork-session" not in build_argv(spec(tmp_path, resume_session="sess-1", persist_session=True))
+    assert "--fork-session" not in build_argv(spec(tmp_path, fork_session=True))  # nothing to fork
+
+
+def test_a_fork_the_cli_cannot_resume_starts_fresh_and_says_why(tmp_path):
+    seen = []
+
+    def runner(argv, **kw):
+        seen.append("--fork-session" in argv)
+        if "--resume" in argv:
+            return proc("", 1, "No conversation found with session ID: sess-1")
+        return proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed"), session_id="sess-2"))
+
+    out = launch.run(spec(tmp_path, resume_session="sess-1", persist_session=True, fork_session=True,
+                          resume_prompt=launch.DEEPER_PROMPT), runner=runner)
+    assert seen == [True, False] and not out.resumed and out.session_id == "sess-2"
+    assert out.fresh.startswith("the CLI could not resume session sess-1: No conversation found")

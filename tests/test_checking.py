@@ -262,6 +262,21 @@ def test_a_risky_pass_is_checked_and_its_findings_earn_one_correction(git_repo, 
     assert first["worker_cost_usd"] == pytest.approx(0.1) and first["verifier_cost_usd"] == pytest.approx(0.05)
 
 
+def test_a_correction_continues_the_worker_s_session_with_the_blockers_and_the_check_never_does(
+        git_repo, store, verifier_on):
+    worked = WorkerResult(True, None, "done", "1 passed", cost_usd=0.1, session_id="sess-1")
+    script = Script(worked, check("fail", [BUG]), passing("fixed"), check("pass"), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert report.status == "done" and report.moves[0].startswith("more_effort to sonnet/high")
+    _, verifier, again, recheck = script.specs
+    assert again.resume_session == "sess-1" and again.fork_session and again.resume_prompt == launch.DEEPER_PROMPT
+    assert "app.py:3: drops the last item" in again.resume_note and "independent check" in again.resume_note
+    # the check reads the request and the diff in a session of its own, never the worker's
+    assert verifier.resume_session == recheck.resume_session == "" and not recheck.fork_session
+    assert not verifier.persist_session and not recheck.persist_session
+    assert "fix the cart total" in recheck.prompt
+
+
 def test_progress_earns_the_next_round_and_what_is_left_at_the_cap_goes_to_a_person(git_repo, store, verifier_on):
     """The palette that never passed: each round fixed what the one before found, and the
     check showed something new. Fixing every earlier problem is progress, and earns a round

@@ -19,7 +19,7 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Any
 
-from cauce import allow
+from cauce import after, allow
 
 #: Who made the call, as the board says it. `you` is the only one a person did
 #: by hand; `settings` are theirs too, set before the run. `budget` is no cause a
@@ -239,8 +239,9 @@ def record(store: Any, task_id: int, stop: Stop, *, result: bool = True, **field
 def dismiss(store: Any, task: dict[str, Any], *, via: str) -> Stop | None:
     """Take a task that waits on a person off the board, on their word. Its result
     and attempts stay; the account says what it had stopped on. None when the
-    task waits on no one."""
-    if task["status"] not in DISMISSABLE:
+    task waits on no one. Work queued after other work (`after`) waits on it, and is
+    dismissed off the queue."""
+    if task["status"] not in DISMISSABLE and not after.held(task):
         return None
     before = of(store, task)
     stop = Stop("dismissed", f"you dismissed it {DISMISS_VIA.get(via, via)}", by="you",
@@ -311,7 +312,7 @@ def view(store: Any, task: dict[str, Any]) -> dict[str, Any] | None:
     if stop is None:
         return None
     resumable = task.get("source") == "cauce" and bool(task.get("cwd"))
-    todo = what_to_do(stop) if resumable or stop.status != "cancelled" else (
+    todo = what_to_do(stop) if resumable or stop.status not in ("cancelled", "dismissed") else (
         "it never ran: queue it again if you still want it")
     rules = list(stop.allow or allow.from_refusals(stop.denied)) if stop.cause == "permission" else []
     keep = ("cauce allow " + " ".join(shlex.quote(r) for r in rules)) if rules else None

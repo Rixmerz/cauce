@@ -11,11 +11,11 @@ from cauce.ui import api
 
 from .test_orchestrate import ok
 from .test_ui import call, token, ui  # noqa: F401  (the ui fixture)
-from .test_workflows import CHAIN, _runner, _save, kicks  # noqa: F401  (the kicks fixture)
+from .test_workflows import CHAIN, _runner, _save
 
 
 @pytest.fixture
-def mapped(git_repo, store: Store, kicks):  # noqa: F811
+def mapped(git_repo, store: Store, kicks):
     """A project with notes, a link, an anchor, a problem with fixes, a finished run and a decision."""
     project.enroll(git_repo)
     key = repo.key(git_repo.resolve())

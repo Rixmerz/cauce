@@ -954,7 +954,10 @@ def test_more_turns_continue_the_worker_s_own_session_in_its_worktree(git_repo, 
     first, second = script.specs
     assert first.persist_session and first.resume_session == ""
     assert second.resume_session == "sess-1" and second.max_turns == 60 and second.cell == first.cell
-    assert second.launch_dir == first.launch_dir
+    assert second.launch_dir == first.launch_dir and not second.fork_session
+    assert second.resume_prompt == launch.CONTINUE_PROMPT
+    moved = store.last_event(report.task_id, "moved")["data"]
+    assert moved["continued"] is True and moved["resumed"] == "sess-1" and "forked_from" not in moved
     assert store.attempts(report.task_id)[0]["session_id"] == "sess-1"
     started = [e["data"] for e in store.events(task_id=report.task_id) if e["kind"] == "attempt_started"]
     assert "resumed" not in started[0] and started[1]["resumed"] == "sess-1"
@@ -986,14 +989,101 @@ def test_more_turns_without_a_session_start_fresh_and_say_why(git_repo, store):
     assert f"cauce: #{report.task_id} attempt 2 starts fresh: attempt 1 kept no session to continue" in lines
 
 
-def test_a_move_to_another_cell_never_inherits_the_session(git_repo, store):
+def test_more_effort_on_the_same_model_continues_its_session_as_a_fork(git_repo, store):
+    shallow = WorkerResult(False, Failure.CODE_BUG, "2 tests fail", evidence="FAIL test_total: 3 != 4",
+                           cost_usd=0.1, session_id="sess-1")
+    lines = []
+    script = Script(shallow, WorkerResult(True, None, "fixed", "1 passed", cost_usd=0.1, session_id="sess-2"),
+                    write="half.py")
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+                 progress=lines.append)
+    assert report.status == "done" and report.moves[0].startswith("more_effort to sonnet/high")
+    first, second = script.specs
+    assert not first.fork_session and first.resume_session == ""
+    assert second.resume_session == "sess-1" and second.fork_session and second.cell == Cell("sonnet", "high")
+    assert second.launch_dir == first.launch_dir and second.max_turns == first.max_turns
+    assert second.resume_prompt == launch.DEEPER_PROMPT and "FAIL test_total: 3 != 4" in second.resume_note
+    argv = launch.build_argv(second)
+    assert argv[argv.index("--resume") + 1] == "sess-1" and "--fork-session" in argv
+    assert argv[argv.index("--effort") + 1] == "high"
+    # the move says it continued, and from which session; the attempt says what it did
+    moved = store.last_event(report.task_id, "moved")["data"]
+    assert moved["continued"] is True and moved["forked_from"] == "sess-1" and "fresh" not in moved
+    finished = [e["data"] for e in store.events_of(report.task_id, "attempt_finished")]
+    assert [f["continued"] for f in finished] == [False, True]
+    assert [a["session_id"] for a in store.attempts(report.task_id)] == ["sess-1", "sess-2"]
+    assert f"cauce: #{report.task_id} attempt 2 continues attempt 1's session (sess-1) at sonnet/high" in lines
+
+
+def test_a_fork_the_cli_refuses_starts_fresh_and_says_so(git_repo, store):
     shallow = WorkerResult(False, Failure.CODE_BUG, "2 tests fail", cost_usd=0.1, session_id="sess-1")
-    script = Script(shallow, ok())
+    refused = WorkerResult(True, None, "fixed", "1 passed", cost_usd=0.1, session_id="sess-2",
+                           fresh="the CLI could not resume session sess-1: No conversation found")
+    lines = []
+    script = Script(shallow, refused, write="half.py")
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+                 progress=lines.append)
+    assert report.status == "done" and script.specs[1].resume_session == "sess-1"
+    finished = [e["data"] for e in store.events_of(report.task_id, "attempt_finished")]
+    assert [f["continued"] for f in finished] == [False, False]
+    assert finished[1]["fresh"] == "the CLI could not resume session sess-1: No conversation found"
+    assert (f"cauce: #{report.task_id} attempt 2 started fresh: the CLI could not resume session sess-1: "
+            "No conversation found") in lines
+
+
+def test_a_move_to_another_model_or_a_retry_never_inherits_the_session(git_repo, store):
+    wrong = WorkerResult(False, Failure.APPROACH, "rewrote the wrong module", cost_usd=0.1, session_id="sess-1")
+    broke = WorkerResult(False, Failure.ENVIRONMENT, "no JSON", transient=True, session_id="sess-2")
+    script = Script(wrong, broke, ok(), write="wrong.py")
     report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
-    assert report.moves[0].startswith("more_effort") and script.specs[1].resume_session == ""
-    assert script.specs[1].cell != script.specs[0].cell
-    started = [e["data"] for e in store.events(task_id=report.task_id) if e["kind"] == "attempt_started"]
-    assert "fresh" not in started[1] and "resumed" not in started[1]
+    assert [m.split(" ")[0] for m in report.moves] == ["next_model", "retry"]
+    assert [s.resume_session for s in script.specs] == ["", "", ""] and not any(s.fork_session for s in script.specs)
+    # a new model starts from the base, with the work set aside named in its brief
+    assert "reset to the base commit" in script.specs[1].prompt
+    moved = [e["data"] for e in store.events_of(report.task_id, "moved")]
+    assert [m["continued"] for m in moved] == [False, False] and not any("fresh" in m for m in moved)
+
+
+def test_more_effort_without_a_session_starts_fresh_and_the_move_says_why(git_repo, store):
+    lines = []
+    script = Script(bad(Failure.CODE_BUG, "2 tests fail"), ok())
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+                 progress=lines.append)
+    assert script.specs[1].resume_session == "" and report.status == "done"
+    moved = store.last_event(report.task_id, "moved")["data"]
+    assert moved["continued"] is False and moved["fresh"] == "attempt 1 kept no session to continue"
+    assert f"cauce: #{report.task_id} attempt 2 starts fresh: attempt 1 kept no session to continue" in lines
+
+
+def test_a_resume_a_person_starts_starts_fresh_whatever_its_last_attempt_kept(git_repo, store):
+    from cauce.escalate import Attempt
+
+    shallow = WorkerResult(False, Failure.CODE_BUG, "2 tests fail", cost_usd=0.1, session_id="sess-1")
+    first = run("fix the export", git_repo, store, Options(max_attempts=1), registry={}, launcher=Script(shallow),
+                classifier=kind("implement"))
+    assert first.status == "failed" and store.attempts(first.task_id)[0]["session_id"] == "sess-1"
+    script = Script(ok())
+    run("fix the export", git_repo, store, Options(start=Cell("sonnet", "high")), registry={}, launcher=script,
+        classifier=kind("implement"), task_id=first.task_id,
+        history=[Attempt(Cell("sonnet", "medium"), 30, False, Failure.CODE_BUG, "2 tests fail")])
+    assert script.specs[0].resume_session == "" and not script.specs[0].fork_session
+
+
+def test_a_session_is_continued_only_where_the_cell_and_the_model_still_match_it(monkeypatch):
+    from cauce import models
+    from cauce.escalate import Decision, Move
+    from cauce.orchestrate import WorkerSession, _continues
+
+    high, medium = Cell("sonnet", "high"), Cell("sonnet", "medium")
+    kept = WorkerSession("sess-1", "sonnet", medium, 1)
+    effort, turns = Decision(Move.MORE_EFFORT, high, 30), Decision(Move.MORE_TURNS, medium, 60)
+    assert _continues(effort, kept) == ("sess-1", "") and _continues(turns, kept) == ("sess-1", "")
+    assert _continues(Decision(Move.MORE_TURNS, high, 60), kept) == (
+        "", "attempt 1 ran at sonnet/medium, this one at sonnet/high")
+    for move in (Move.NEXT_MODEL, Move.RETRY, Move.REPLAN):
+        assert _continues(Decision(move, Cell("opus", "high"), 30), kept) == ("", "")
+    models.pin("sonnet", "claude-sonnet-5-5")  # pinned since: another model runs it
+    assert _continues(effort, kept) == ("", "attempt 1 ran on sonnet, this one runs on claude-sonnet-5-5")
 
 
 def test_a_run_in_the_person_s_checkout_keeps_no_session(tmp_path, store):

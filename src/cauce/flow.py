@@ -35,7 +35,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
-from cauce import classify, config, dispatch, isolate, stops, surfaces
+from cauce import after, classify, config, dispatch, isolate, stops, surfaces
 from cauce.matrix import READ_ONLY_KINDS, Cell
 from cauce.orchestrate import Options, Report, declares_read_only
 from cauce.store import Store, home
@@ -276,7 +276,8 @@ def runnable(store: Store, repo: str | None, *, parallel: bool, decide: Decide) 
     """What may start now. Per open lane: the first task when nothing runs; after
     that, tasks that will not write, and tasks judged independent of the writing
     work running and queued ahead, up to `MAX_PARALLEL` at once. A task not
-    judged yet is judged here, once."""
+    judged yet is judged here, once. Work held behind other work (`after`) is
+    never picked, and nothing waits behind it."""
     picked = []
     for lane in store.lanes():
         if lane["paused"] or not lane["queued"] or (repo is not None and lane["repo"] != repo):
@@ -292,6 +293,8 @@ def runnable(store: Store, repo: str | None, *, parallel: bool, decide: Decide) 
                 read = True
 
         for task in store.queued_in(lane["repo"]):
+            if after.held(task):
+                continue  # it waits for other work to pass, not for a place in the lane
             if len(running) + mine >= MAX_PARALLEL:
                 break
             if running or mine:
@@ -416,6 +419,7 @@ def work(
         if not out:
             report.stopped_because = (
                 f"started {max_tasks} tasks, the unattended limit; run again to continue" if started >= max_tasks
-                else "nothing runnable is queued (empty, every lane paused, or waiting on work in flight)")
+                else "nothing runnable is queued (empty, every lane paused, waiting on work in flight, or held "
+                     "until other work passes)")
             return report
         pause()

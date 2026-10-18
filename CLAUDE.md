@@ -41,6 +41,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/usage.py` | tokens per model from session transcripts and their subagents' (counted to the delegation that started each), spend by model and cell, and what a task's or a session's own turns cost |
 | `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, the stale sweep |
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
+| `src/cauce/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
 | `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away |
 | `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
@@ -118,7 +119,8 @@ yields the default kind, not a guess.
 
 - Effort and model are different dials. Shallow work climbs effort; a wrong
   approach or a repeated answer changes model. Do not collapse them into one
-  ladder walk.
+  ladder walk. More effort on the same model keeps the approach, and so the
+  session (below); another model never inherits it.
 - A retry is for a launch that broke (a timeout before any change, no JSON,
   an errored session); it is never an escalation. An environment the worker
   named, or a check cauce could not run, blocks at once. A refused
@@ -143,9 +145,20 @@ yields the default kind, not a guess.
   (`claude -p --resume`, its id read from the attempt's JSON and kept on the
   attempt) in the same worktree, told only to go on under the same result
   contract and given the output that failed its attempt; a session is kept only in a worktree, never in a person's
-  checkout. When it cannot be continued (no id, the CLI refuses it, a
-  different model or cell) the attempt starts fresh and says why. Any other
-  move starts fresh: a new cell never inherits the old one's context.
+  checkout. More effort on the same model continues a fork of it
+  (`--resume <id> --fork-session --effort <new>`, the session it came from
+  kept as it was), in the same worktree, told to look deeper and given what
+  failed: the check's failing output, or the independent check's blockers in
+  a correction round (`orchestrate.continuation_note`). When it cannot be
+  continued (no id, the CLI refuses it, the worktree was reset, a different
+  model, or for more turns a different cell) the attempt starts fresh and
+  says why. The `moved` event says what the next attempt does (`continued`,
+  with `forked_from` or `resumed`, else `fresh` with why) and its
+  `attempt_finished` what it did, so `cauce stats` compares continued and
+  fresh attempts. Any other move starts fresh: a new model never inherits the
+  old one's approach (it starts from the base, the work set aside), and a
+  retry, a replan and a resume a person starts are fresh. The independent
+  check never runs in a worker's session.
 - Cost is measured and shown, never a brake: every attempt keeps what it cost
   (its own and its independent check's apart, and how much of its input the
   cache served), and the report, the board, `cauce spend` and `cauce stats`
@@ -452,7 +465,19 @@ yields the default kind, not a guess.
   runs at the end of every run (`orchestrate.run`), queues what waited on a
   step that passed, inside one write transaction, and starts the dispatcher;
   advancing never fails the run that ended, and an error is a
-  `workflow_error` event. The session that started a run hears of it once —
+  `workflow_error` event. Work queued after other work (`cauce run|queue add
+  … --after <task>`, `cauce workflow run … --after <run>`) is held in its
+  options (`after.KEY`): the dispatcher never starts it, and every view that
+  says why work waits says "waits for #N to pass" (`dispatch.waiting`). A
+  task or run that does not exist, or whose work was dropped (failed,
+  cancelled, found wrong), is refused when queued. `advance` releases it when
+  that work passes (a run, when its last step does), in one write
+  transaction, onto the branch it kept (a run's last step's), or the base when
+  that branch is merged into it; its plan says which, and nothing is merged or
+  rebased. Work that stops short releases nothing: what waits stays held and
+  says how it stopped, until a resume of it passes; `cauce dismiss` or a
+  cancel takes held work off the queue, each with its `stops.Stop`. A chain
+  is released one link at a time. The session that started a run hears of it once —
   at its end or when a step waits on the person — and steps the engine went
   past are marked reported. A step that stops stops the run there; it goes on
   by a resume to a pass or `cauce workflow retry`.

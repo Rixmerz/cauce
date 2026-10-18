@@ -260,6 +260,42 @@ def cells(events: Sequence[Mapping[str, Any]], task_ids: set[int]) -> list[dict[
     return sorted(out, key=lambda row: -row["attempts"])
 
 
+#: The moves whose next attempt may go on in the last one's session.
+CONTINUING_MOVES = ("more_effort", "more_turns")
+
+
+def continuations(events: Sequence[Mapping[str, Any]], task_ids: set[int]) -> list[dict[str, Any]]:
+    """The attempts after more effort or more turns, by whether they went on in the attempt
+    before's session or started fresh: how often each passed, its turns and its own cost.
+    An attempt says it went on (`continued`, or `resumed` on its start, as cauce first kept
+    it); one that says neither started fresh, as every one did before sessions were kept."""
+    last_move: dict[int, str | None] = {}
+    resumed: set[tuple[int, Any]] = set()
+    checks: dict[int, float] = defaultdict(float)
+    groups: dict[tuple[str, bool], list[tuple[Mapping[str, Any], float]]] = defaultdict(list)
+    for e in events:
+        task, data = int(e["task_id"]), e["data"] or {}
+        if task not in task_ids:
+            continue
+        if e["kind"] in ("planned", "moved"):
+            last_move[task] = data.get("move")  # a new run's first attempt follows no move
+        elif e["kind"] == "attempt_started" and data.get("resumed"):
+            resumed.add((task, data.get("seq")))
+        elif e["kind"] == "verified":
+            checks[task] += _number(data.get("cost_usd")) or 0
+        elif e["kind"] == "attempt_finished":
+            own = _split(data, checks.pop(task, 0.0))[0]
+            move = last_move.pop(task, None)
+            if move in CONTINUING_MOVES:
+                went_on = data["continued"] if "continued" in data else (task, data.get("seq")) in resumed
+                groups[(str(move), bool(went_on))].append((data, own))
+    return [{"move": move, "continued": went_on, "attempts": len(rows),
+             "passed": sum(bool(d.get("passed")) for d, _ in rows),
+             "turns_p50": pct((_number(d.get("turns")) for d, _ in rows), 0.5),
+             "cost_p50_usd": pct((own for _, own in rows), 0.5), "cost_usd": round(sum(own for _, own in rows), 2)}
+            for (move, went_on), rows in sorted(groups.items(), key=lambda kv: (kv[0][0], not kv[0][1]))]
+
+
 def context(found: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Runs a session sent, with the session's thread in their brief and without:
     the evidence on whether the scribe's context helps (observed, not a trial)."""
@@ -355,6 +391,7 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "by_source": _grouped(found, "source"),
         "by_workflow": _grouped([r for r in found if r["workflow"]], "workflow"),
         "cells": cells(events, {r["task"] for r in found}), "context": context(found),
+        "continuations": continuations(events, {r["task"] for r in found}),
         "stops": dict(stops.most_common()), "moves": dict(moves.most_common()),
         "turns": {k: v for k, v in turn_rows.items() if k != "by_day"},
         "daily": daily(found, turn_rows["by_day"]),
@@ -425,6 +462,13 @@ def text(report: Mapping[str, Any]) -> str:
             for row in report["context"]:
                 lines.append(f"  {row['group']:<26} runs {row['runs']:>4}  pass {_rate(row['pass_rate']):>4}  first "
                              f"{_rate(row['first_try_rate']):>4}  attempts {row['attempts_avg']}")
+        if report.get("continuations"):
+            lines += ["", "after more effort or more turns, the attempt went on in the last one's session or "
+                          "started fresh:"]
+            for row in report["continuations"]:
+                lines.append(f"  {row['move']:<12} {'continued' if row['continued'] else 'fresh':<9} attempts "
+                             f"{row['attempts']:>4}  passed {row['passed']:>4}  turns p50 {row['turns_p50'] or '—'}"
+                             f"  cost p50 {_usd(row['cost_p50_usd'])}")
         if report["stops"]:
             lines += ["", "stopped by: " + ", ".join(f"{k} {v}" for k, v in report["stops"].items())]
     t = report["turns"]["turns"]

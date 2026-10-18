@@ -29,9 +29,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cauce import allow as allow_rules
-from cauce import capabilities as caps
 from cauce import (
+    after,
     ci,
     config,
     dispatch,
@@ -50,6 +49,8 @@ from cauce import (
     teams,
     workflows,
 )
+from cauce import allow as allow_rules
+from cauce import capabilities as caps
 from cauce import criteria as criteria_mod
 from cauce import findings as findings_mod
 from cauce import ledger as ledger_mod
@@ -183,6 +184,17 @@ class Plan:
     risk: risk_mod.Risk = field(default_factory=risk_mod.Risk)
     #: The turns the first attempt starts with when history raised them; None: the kind's own.
     turns: int | None = None
+
+
+@dataclass(frozen=True)
+class WorkerSession:
+    """The last attempt's Claude Code session, as the next attempt may continue it."""
+    #: The session id; "" when none was kept (not in a worktree, or the CLI gave none).
+    id: str
+    #: What ran it: the model id a person pinned, else the alias.
+    model: str
+    cell: Cell
+    attempt: int
 
 
 @dataclass
@@ -606,6 +618,10 @@ def run(
     # Said as it happens: a run in a background shell is otherwise silent until
     # its report, and silence reads as a run that never started.
     say(f"cauce: task #{task['id']} started: {the_plan.kind}, at {the_plan.start.label}")
+    if task_id is not None and not store.last_event(task["id"], "planned") and (
+            released := after.released_line(store, task["id"])):
+        # Queued after other work that passed: where it starts, said once, as it starts.
+        the_plan.reasons.append(released)
     if task_id is None:
         for twin in _twins(store, task, repo_dir):
             the_plan.reasons.append(f"task #{twin} asked the same and keeps its work on {isolate.branch_for(twin)}: "
@@ -696,9 +712,11 @@ def run(
     decision: Decision | None = None
     # What the brief says of work set aside when a new model started from the base.
     aside: list[str] = []
-    # The last attempt's session, when it was kept, and what ran it: more turns on the
-    # same cell continue it.
-    session: tuple[str, str] | None = None
+    # The last attempt's session, and what ran it: more turns on the same cell continue
+    # it, more effort on the same model continues a fork of it.
+    session: WorkerSession | None = None
+    # The session the next attempt continues, or why one due starts fresh: decided with the move.
+    resume, fresh = "", ""
     # The commit's subject: the last line a worker proposed for the change.
     subject = ""
     # In the checkout itself, one run at a time: the work and its check share the
@@ -755,8 +773,7 @@ def run(
                                the_plan, repo_dir, workdir)
             # Numbered as the store numbers it: a resumed task's attempts go on from its last.
             nth = len(store.attempts(task["id"])) + 1
-            resume, fresh = _continues(decision, session, f"{models.pinned(cell.model) or cell.model} {cell.label}",
-                                       nth - 1)
+            fork = bool(resume) and decision is not None and decision.move is Move.MORE_EFFORT
             spec = launch.LaunchSpec(
                 model_id=models.pinned(cell.model),
                 permission_mode=grants.mode_for(cell.model),
@@ -792,7 +809,9 @@ def run(
                 # person's checkout would be one of theirs.
                 persist_session=workspace is not None,
                 resume_session=resume,
-                resume_note=failed_output([*history, *attempts][-1]) if resume else "",
+                fork_session=fork,
+                resume_prompt=launch.DEEPER_PROMPT if fork else launch.CONTINUE_PROMPT,
+                resume_note=continuation_note([*history, *attempts][-1]) if resume else "",
             )
             store.update_task(task["id"], current_cell=cell.label)
             say(f"cauce: #{task['id']} attempt {nth} at {cell.label}")
@@ -805,15 +824,16 @@ def run(
                                 "skills": list(briefing.skills)} if briefing else {}),
                             **({"resumed": resume} if resume else {}), **({"fresh": fresh} if fresh else {}))
             if resume:
-                say(f"cauce: #{task['id']} attempt {nth} continues attempt {nth - 1}'s session ({resume})")
+                say(f"cauce: #{task['id']} attempt {nth} continues attempt {nth - 1}'s session ({resume})"
+                    + (f" at {cell.label}" if fork else ""))
             elif fresh:
                 say(f"cauce: #{task['id']} attempt {nth} starts fresh: {fresh}")
             mark = time.monotonic()
             result = launcher(spec)
             if result.fresh:
                 say(f"cauce: #{task['id']} attempt {nth} started fresh: {result.fresh}")
-            session = ((result.session_id if spec.persist_session else ""),
-                       f"{spec.model_id or cell.model} {cell.label}")
+            session = WorkerSession(result.session_id if spec.persist_session else "", spec.model_id or cell.model,
+                                    cell, nth)
             worker_s = time.monotonic() - mark
             # Out of turns (or time) before its own check: whatever the check finds next,
             # the work had no room to finish, and room is what the next attempt gets.
@@ -871,13 +891,15 @@ def run(
                 input_tokens=result.input_tokens, output_tokens=result.output_tokens, turns=result.turns,
                 duration_s=result.duration_s, changed_paths=result.changed_paths,
                 served_model=result.served_model or None,
-                capabilities=selection.names, session_id=session[0] or None,
+                capabilities=selection.names, session_id=session.id or None,
             )
             store.add_event(task["id"], "attempt_finished", seq=seq, cell=cell.label, passed=result.passed,
                             failure=result.failure.value if result.failure else None, cost_usd=result.cost_usd,
                             turns=result.turns, summary=result.summary[:500], denied=list(result.denied),
                             allow=list(result.allow), served_model=result.served_model,
                             permission_mode=result.permission_mode,
+                            # Whether it went on in an earlier attempt's session; `fresh` says why one due did not.
+                            continued=bool(spec.resume_session) and not result.fresh,
                             **({"fresh": result.fresh} if result.fresh else {}),
                             changed=list(result.changed_paths)[:50],
                             wall_s=round(worker_s, 2), duration_s=round(result.duration_s, 2),
@@ -914,6 +936,7 @@ def run(
                 _remember(store, task, key, attempt, "failed", result)
             reading = not writes or (declared_read_only and not any(a.changed for a in attempts))
             decision = decide(the_plan.ladder, attempts, allow_approval=options.allow_approval, reading=reading)
+            resume, fresh = _continues(decision, session)
             store.set_move(task["id"], seq, decision.move.value, decision.reason)
             to = decision.cell.label if decision.cell and decision.continues else None
             report.moves.append(f"{decision.move.value}" + (f" to {to}" if to else "") + f": {decision.reason}")
@@ -925,6 +948,7 @@ def run(
                             because=list(decision.because), skipped=list(decision.skipped),
                             turns_from=turns, turns_to=decision.max_turns if decision.continues else None,
                             spent_usd=round(report.cost_usd, 4),
+                            **(_continuation(decision, resume, fresh) if decision.continues else {}),
                             **({"wait_s": decision.wait_s, "network": attempt.network} if attempt.network else {}))
             if not decision.continues:
                 # The worker's own account goes with the reason: "the task is
@@ -1023,14 +1047,13 @@ def run(
                         **{k: round(v, 2) for k, v in timing.items()},
                         **({"ledger": settled.data()} if settled else {}))
         store.add_message(task["id"], "worker", report.text())
-        if task.get("workflow_run"):
-            # The next step starts here, from the engine: no session relays it.
-            # Advancing never fails the run that just ended, and never silently.
-            try:
-                workflows.advance(store, store.get_task(task["id"]), os.environ)
-            except Exception as exc:
-                store.add_event(task["id"], "workflow_error", error=str(exc)[:300])
-                say(f"cauce: #{task['id']} could not start the next workflow step: {exc}")
+        # The next step, and the work queued after this one, start here, from the engine:
+        # no session relays them. Advancing never fails the run that just ended, and never silently.
+        try:
+            workflows.advance(store, store.get_task(task["id"]), os.environ)
+        except Exception as exc:
+            store.add_event(task["id"], "workflow_error", error=str(exc)[:300])
+            say(f"cauce: #{task['id']} could not start the work that waits on it: {exc}")
     return report
 
 
@@ -1135,19 +1158,35 @@ def _beside_ci(repo_dir: Path, check: str, services: Sequence[str]) -> list[str]
     return lines
 
 
-def _continues(decision: Decision | None, session: tuple[str, str] | None, runs_as: str,
-               before: int) -> tuple[str, str]:
-    """The session an attempt continues, and, when more turns were due one and it starts
-    fresh, why. Only more turns on the same cell continue one: any other move is a new
-    bet, and a new cell must not inherit the old one's context."""
-    if decision is None or decision.move is not Move.MORE_TURNS or session is None:
+def _continues(decision: Decision, session: WorkerSession | None) -> tuple[str, str]:
+    """The session the next attempt continues, and, when one was due and it starts fresh,
+    why. More turns on the same cell continue it; more effort on the same model continues
+    a fork of it at the new effort, since the approach stood and the depth was missing.
+    Any other move is a new bet: a new model must not inherit the old one's approach, and
+    a retry is for a launch that broke. A worktree is reset to the base only for another
+    model (and undone outside its surfaces only as a wrong approach), so the model tells it."""
+    if session is None or decision.move not in (Move.MORE_TURNS, Move.MORE_EFFORT) or decision.cell is None:
         return "", ""
-    kept, ran_as = session
-    if not kept:
+    before, model = session.attempt, models.pinned(decision.cell.model) or decision.cell.model
+    if not session.id:
         return "", f"attempt {before} kept no session to continue"
-    if ran_as != runs_as:
-        return "", f"attempt {before} ran as {ran_as}, this one as {runs_as}"
-    return kept, ""
+    if session.model != model:
+        return "", f"attempt {before} ran on {session.model}, this one runs on {model}"
+    if decision.move is Move.MORE_TURNS and session.cell != decision.cell:
+        return "", f"attempt {before} ran at {session.cell.label}, this one at {decision.cell.label}"
+    return session.id, ""
+
+
+def _continuation(decision: Decision, resume: str, fresh: str) -> dict[str, object]:
+    """What a `moved` event says of the next attempt's session: continued or not, the
+    session it goes on in (a fork for more effort), and why one due starts fresh. The
+    attempt's own `attempt_finished` says whether it did (`fresh`: the CLI refused it)."""
+    out: dict[str, object] = {"continued": bool(resume)}
+    if resume:
+        out["forked_from" if decision.move is Move.MORE_EFFORT else "resumed"] = resume
+    if fresh:
+        out["fresh"] = fresh
+    return out
 
 
 def _spans(repo_dir: Path, add_dirs: Sequence[str]) -> str | None:
@@ -1441,6 +1480,8 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     check = dataclasses.replace(
         spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values()), risk.reasons),
         cell=vcell, max_turns=min(spec.max_turns, VERIFIER_TURNS),
+        # Its own session, never the worker's: it reads the request and the diff, not the work's account.
+        resume_session="", fork_session=False, resume_note="", persist_session=False,
         timeout_s=launch.timeout_for(min(spec.max_turns, VERIFIER_TURNS)),
         model_id=models.pinned(vcell.model), permission_mode=grants.mode_for(vcell.model),
         disallowed_tools=tuple(dict.fromkeys([*spec.disallowed_tools, *launch.WRITE_TOOLS])),
@@ -1559,6 +1600,16 @@ def brief(
             lines.append("  " + failed)
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
+
+
+def continuation_note(last: Attempt) -> str:
+    """What a continued session is told failed its attempt, which its context does not
+    hold: the independent check's blockers in a correction round (its work passed its
+    own check), else the output that failed it."""
+    if last.blockers:
+        return ("The independent check, which reads only the request and the diff, found these problems in your "
+                "work after it passed its own check:\n" + findings_mod.text(last.blockers)[:3000])
+    return failed_output(last)
 
 
 def failed_output(last: Attempt) -> str:

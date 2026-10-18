@@ -180,6 +180,12 @@ def instructions(spec: LaunchSpec) -> str:
 #: cache are its own already, so only the contract is said again.
 CONTINUE_PROMPT = ("You ran out of turns before you finished. Continue from where you are: your work so far is in "
                    "this directory, and the task is the one you were given. Check it before you answer.")
+#: What a session given more effort on the same model is told: its approach stands
+#: and its context is its own; what it lacked was depth, and what failed is said below.
+DEEPER_PROMPT = ("Your last answer to this task did not pass; what failed it is below. Your work so far is in this "
+                 "directory and the task is the one you were given. You now think at a higher effort: look deeper "
+                 "than before, find why it failed and what else the same cause breaks, fix it, and check it "
+                 "before you answer.")
 #: The CLI's words when a session it was asked to resume is not there to resume.
 _NO_SESSION = re.compile(r"no conversation found|session[^\n]{0,60}(?:not found|does not exist|could not be "
                          r"(?:found|loaded|resumed))|invalid session", re.IGNORECASE)
@@ -229,9 +235,14 @@ class LaunchSpec:
     #: The worker session this attempt continues (`--resume`), told to go on:
     #: an attempt given more turns on the same cell, in the same directory. "" starts fresh.
     resume_session: str = ""
-    #: What that session is told beside `CONTINUE_PROMPT`: the output that failed its
-    #: attempt (cauce's own check after it stopped), which its context does not hold.
+    #: What that session is told first: `CONTINUE_PROMPT` for more turns, `DEEPER_PROMPT` for more effort.
+    resume_prompt: str = CONTINUE_PROMPT
+    #: What it is told beside that: the output that failed its attempt (cauce's own
+    #: check after it stopped), or the independent check's blockers, which its context does not hold.
     resume_note: str = ""
+    #: The continued session is a fork (`--fork-session`), the one it came from kept as it was:
+    #: more effort on the same model, at the new effort the cell gives.
+    fork_session: bool = False
     #: Extra environment for the worker: which task and attempt it is, so its
     #: tool calls are recorded against them.
     env: Mapping[str, str] = field(default_factory=dict)
@@ -325,7 +336,7 @@ def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path:
     elif spec.append_system_prompt:
         argv += ["--append-system-prompt", spec.append_system_prompt]
     if spec.resume_session:
-        argv += ["--resume", spec.resume_session]
+        argv += ["--resume", spec.resume_session, *(["--fork-session"] if spec.fork_session else [])]
     if not spec.persist_session:
         argv.append("--no-session-persistence")
     return argv
@@ -358,7 +369,7 @@ def run(
     try:
         proc = runner(
             argv,
-            input=(("\n\n".join(p for p in (CONTINUE_PROMPT, spec.resume_note) if p) if spec.resume_session
+            input=(("\n\n".join(p for p in (spec.resume_prompt, spec.resume_note) if p) if spec.resume_session
                     else spec.prompt) + "\n\n" + instructions(spec)),
             cwd=str(spec.launch_dir),
             capture_output=True,

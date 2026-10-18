@@ -84,12 +84,12 @@ docs             haiku/medium → haiku/high → sonnet/medium
 
 | The evidence says | Move |
 |---|---|
-| shallow: a bug left, a case missed, no verification | **more effort**, same model |
+| shallow: a bug left, a case missed, no verification | **more effort**, same model, in a fork of its own session |
 | wrong approach, or two cells gave the same answer | **next model**, worktree reset |
 | timeout, missing tool | **retry** once at the same cell |
 | the network dropped (`ENOTFOUND`, a connection error) | **retry** at the same cell after 30s, 90s, 270s, from the work it kept; `network` stop only if it stays down |
 | a command the permission settings refused | **blocked** at once — a stronger model gets the same refusal |
-| hit its turn ceiling | `--verify` run by cauce; **more turns**, again while the work keeps moving (cap 200), then split |
+| hit its turn ceiling | `--verify` run by cauce; **more turns** in its own session, again while the work keeps moving (cap 200), then split |
 | the task contradicts itself or its check | **replan** — no model fixes a wrong task |
 
 A worker's claim of success is not evidence: a pass needs verbatim output, and
@@ -548,6 +548,12 @@ A `++` or a `cauce queue add` also starts the repository's dispatcher
 (`autowork`, on by default), so queued work runs at once in workers, never in
 the session's context; `cauce work` starts it by hand. One dispatcher runs per
 repository, and each task it starts is its own `cauce run` process.
+
+Work that builds on other work waits for it: `cauce queue add "<task>"
+--after <task>` (or `cauce run … --after`, or `cauce workflow run … --after
+<run>`) holds it until that work passes, then starts it on the branch that work
+kept, or on the base once that branch is merged. Until then every view says
+"waits for #N to pass", or how that work stopped; `cauce dismiss` drops it.
 
 Whether a task waits is **Haiku's call** (`parallel`, on by default). The first
 task of an idle repository starts. One queued behind running work starts beside

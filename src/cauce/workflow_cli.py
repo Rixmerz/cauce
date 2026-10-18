@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from cauce import project, workflows
+from cauce import after, project, workflows
 from cauce.store import Store
 
 NOW_HELP = ("write the change at once even while runs use the workflow (they go on with the copy they started "
@@ -323,6 +323,8 @@ def _run(args: argparse.Namespace) -> int:
     store = Store.open()
     try:
         if args.dry_run:
+            if args.after is not None:
+                after.target(store, run_id=args.after)  # the run it would wait for is checked too
             ready = workflows.prepare(store, args.name, where, inputs, scope=args.scope)
             if args.json:
                 print(json.dumps({"name": ready["defn"]["name"], "inputs": ready["given"], "gaps": ready["gaps"],
@@ -334,10 +336,10 @@ def _run(args: argparse.Namespace) -> int:
             for name, value in ready["given"].items():
                 print(f"  {name}: {_clip(value)}")
             for step in ready["defn"]["steps"]:
-                after = f" after {', '.join(step['needs'])}" if step["needs"] else ""
+                needs = f" after {', '.join(step['needs'])}" if step["needs"] else ""
                 check = workflows.step_check(step, options)
                 later = not check and not step.get("kind") and options.get("verify") and not step.get("verify")
-                print(f"  · {step['id']} ({step.get('kind') or 'classified when it runs'}){after}"
+                print(f"  · {step['id']} ({step.get('kind') or 'classified when it runs'}){needs}"
                       + (f", checked by `{check}`" if check else "")
                       + (f", checked by `{options['verify']}` if it writes" if later else ""))
             for gap in ready["gaps"]:
@@ -346,7 +348,7 @@ def _run(args: argparse.Namespace) -> int:
         with contextlib.suppress(OSError, project.NotAProject):
             project.enroll(where)
         run = workflows.start(store, args.name, where, inputs, scope=args.scope, options=options,
-                              session_id=os.environ.get("CAUCE_SESSION_ID"))
+                              session_id=os.environ.get("CAUCE_SESSION_ID"), after_run=args.after)
         shown = workflows.status(store, run["id"])
         unseen = None
         try:
@@ -361,6 +363,8 @@ def _run(args: argparse.Namespace) -> int:
     else:
         print(f"started run #{run['id']} of {run['name']} ({run['scope']}): "
               f"{', '.join(shown['now']) or 'nothing'} queued; each next step starts when the one before passes.")
+        if shown.get("waits"):
+            print(f"it {shown['waits']}")
         for gap in run["gaps"]:
             print(f"note: {gap}")
         if unseen:
@@ -508,6 +512,9 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--allow-approval", action="store_true", help="steps may reach cells that need approval (Fable)")
     p.add_argument("--dry-run", action="store_true", help="check the inputs and the memory, show the steps; queue "
                                                           "nothing")
+    p.add_argument("--after", type=int, metavar="RUN",
+                   help="queue its first steps held until workflow run RUN passes, then start them on the commit its "
+                        "last step kept (on the base when that is merged); nothing is merged or rebased")
     p.add_argument("--json", action="store_true")
     scoped(p)
     p = wsub.add_parser("status", help="where runs are: a line per run (this project; --all), or one run step "
