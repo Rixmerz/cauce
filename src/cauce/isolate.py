@@ -85,6 +85,17 @@ def kept(repo_dir: Path, task_id: int) -> bool:
     return bool(_git(repo_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_for(task_id)}", check=False))
 
 
+def _attached(top: Path, path: Path, branch: str) -> bool:
+    """Whether `path` is already a worktree of `top` on `branch`."""
+    listing = _git(top, "worktree", "list", "--porcelain", check=False) or ""
+    for block in listing.split("\n\n"):
+        lines = block.splitlines()
+        here = f"worktree {path}" in lines or f"worktree {path.resolve()}" in lines
+        if here and f"branch refs/heads/{branch}" in lines:
+            return True
+    return False
+
+
 def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None) -> Workspace:
     """The task's worktree, on its own branch: from HEAD, or from `base` (a
     commit a workflow step builds on) when it names one that exists."""
@@ -96,7 +107,11 @@ def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None
     path = root / "worktrees" / f"task-{task_id}"
     path.parent.mkdir(parents=True, exist_ok=True)
     _git(top, "worktree", "prune", check=False)  # a run that died left its entry behind
-    if kept(top, task_id):
+    if _attached(top, path, branch):
+        # A run whose process died left its worktree, uncommitted work and all:
+        # the resume continues in it instead of failing to add it again.
+        base = _git(top, "merge-base", head, branch)
+    elif kept(top, task_id):
         # A resumed task continues from the work it kept.
         _git(top, "worktree", "add", str(path), branch)
         base = _git(top, "merge-base", head, branch)

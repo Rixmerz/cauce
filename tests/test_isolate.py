@@ -159,3 +159,12 @@ def test_work_kept_unverified_under_the_old_subject_is_still_read_as_such(git_re
     again = isolate.prepare(git_repo, 14, tmp_path / "home")
     isolate.finish(again, keep=True, message=isolate.message(14, title="half"))
     assert git(git_repo, "log", "-1", "--format=%s", "cauce/task-14") == "half"  # it passed since: said so
+
+
+def test_a_resume_after_its_process_died_continues_in_the_worktree_it_left(git_repo, tmp_path):
+    ws = isolate.prepare(git_repo, 15, tmp_path / "home")
+    (ws.path / "half.py").write_text("x = 1\n")  # the process dies here: no finish
+    again = isolate.prepare(git_repo, 15, tmp_path / "home")
+    assert again.path == ws.path and again.branch == "cauce/task-15"
+    assert (again.path / "half.py").read_text() == "x = 1\n"
+    assert again.base == git(git_repo, "rev-parse", "HEAD").strip()
