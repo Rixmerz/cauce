@@ -231,7 +231,7 @@ def _scribe(event: Mapping[str, Any], root: Path, env: Mapping[str, str]) -> Non
         if state is not None and scribe.notes_due(state) and keep_notes(event, root, env):
             scribe.notes_started(root, state)
     except Exception:  # the turn's endings still go out
-        _note_error(root, "Stop (scribe)")
+        note_error(root, "Stop (scribe)")
 
 
 def _relay(store: Store, root: Path, session_id: str, cwd: str, transcript: str | None) -> str | None:
@@ -614,11 +614,12 @@ def main(event_name: str, stdin: TextIO, stdout: TextIO, env: Mapping[str, str])
         if answer:
             stdout.write(json.dumps(answer))
     except Exception:  # the contract: a hook never takes the session down
-        _note_error(root, event_name)
+        note_error(root, event_name)
     return 0
 
 
-def _note_error(root: Path, event_name: str) -> None:
+def note_error(root: Path, event_name: str) -> None:
+    """Append the exception being handled to the error log the next SessionStart reports."""
     try:
         root.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(UTC).isoformat(timespec="seconds")

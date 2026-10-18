@@ -26,7 +26,7 @@ from pathlib import Path
 
 from cauce import config
 from cauce.classify import ask_haiku
-from cauce.store import home
+from cauce.store import Store, home
 
 #: How much of each task the model reads. Enough to see what it touches.
 BODY_CHARS = 600
@@ -163,3 +163,15 @@ def start(repo_dir: Path, root: Path, scope: str, *, popen: Callable[..., object
         return True
     except OSError:
         return False
+
+
+def start_lane(store: Store, root: Path, key: str | None) -> bool:
+    """Start the dispatcher of a lane that has queued work, unless one holds it: the
+    first queued task says where, by its directory. False when nothing is queued with a
+    directory to start in, or a dispatcher already runs. A restart leaves queued work
+    with no `cauce work` to run it; this is how a person's unpause or a resume starts one."""
+    queued = store.queued_in(key or None)
+    where = Path(queued[0]["cwd"]) if queued and queued[0]["cwd"] else None
+    if where is None or not where.is_dir():
+        return False
+    return start(where, root, key or "*")

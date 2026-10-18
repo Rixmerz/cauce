@@ -425,22 +425,14 @@ class Handler(BaseHTTPRequestHandler):
             repo_key = str(data.get("repo") or "")
             store.unpause_lane(repo_key)
             # Unpausing is the person saying "go on": the lane's dispatcher resumes.
-            started = config.enabled("autowork", os.environ) and self._start_lane(store, repo_key)
+            started = config.enabled("autowork", os.environ) and dispatch.start_lane(store, self.server.root, repo_key)
             return self._json(HTTPStatus.OK, {"unpaused": repo_key, "started": bool(started)})
         if path == "/api/work":
             # Intent only: a detached `cauce work` does the work, not this thread.
-            if not self._start_lane(store, str(data.get("repo") or "")):
+            if not dispatch.start_lane(store, self.server.root, str(data.get("repo") or "")):
                 return self._error(HTTPStatus.CONFLICT, "nothing to start: no directory for that lane, or it runs")
             return self._json(HTTPStatus.ACCEPTED, {"started": True})
         return self._error(HTTPStatus.NOT_FOUND, "not found")
-
-
-    def _start_lane(self, store: Store, repo_key: str) -> bool:
-        queued = store.queued_in(repo_key or None)
-        where = Path(queued[0]["cwd"]) if queued and queued[0]["cwd"] else None
-        if where is None or not where.is_dir():
-            return False
-        return dispatch.start(where, self.server.root, repo_key or "*")
 
 
 def resume(args: list[str], cwd: str | None) -> subprocess.CompletedProcess:

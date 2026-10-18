@@ -572,6 +572,9 @@ def run(
                     queued_s=queued_s)
 
     workspace = None
+    # Why the task's worktree could not be made, in one line. It stops the task before its first
+    # attempt, resumable, instead of leaving it `running` under a process that is about to exit.
+    no_worktree: str | None = None
     writes = the_plan.kind not in READ_ONLY_KINDS
     declared_read_only = the_plan.kind not in _BUILDS and bool(
         _READ_ONLY.search(task.get("body") or task.get("title") or ""))
@@ -583,16 +586,19 @@ def run(
     # A reading step of a workflow reads the work of the steps before it: it gets
     # their commit too, in a worktree its tools cannot write to.
     if options.isolate and (writes or options.base) and repo.toplevel(repo_dir) is not None:
-        resumed = isolate.kept(repo_dir, task["id"])
-        workspace = isolate.prepare(repo_dir, task["id"], home(), base=options.base)
-        if resumed:
-            context.append("This task was stopped before and is resumed: what its earlier attempts wrote is "
-                           "already here. Check it, and finish it rather than starting over.")
-        if workspace.links:
-            context.append("Linked from the person's checkout and shared with it: "
-                           + ", ".join(workspace.links) + ". Use them; do not delete or reinstall them.")
-        if not resumed:
-            context += _fill_worktree(store, task["id"], workspace, text, options.carry, say)
+        try:
+            resumed = isolate.kept(repo_dir, task["id"])
+            workspace = isolate.prepare(repo_dir, task["id"], home(), base=options.base)
+            if resumed:
+                context.append("This task was stopped before and is resumed: what its earlier attempts wrote is "
+                               "already here. Check it, and finish it rather than starting over.")
+            if workspace.links:
+                context.append("Linked from the person's checkout and shared with it: "
+                               + ", ".join(workspace.links) + ". Use them; do not delete or reinstall them.")
+            if not resumed:
+                context += _fill_worktree(store, task["id"], workspace, text, options.carry, say)
+        except (isolate.IsolationError, OSError) as exc:  # git failed, or git or the disk is not there
+            no_worktree = " ".join(str(exc).split())
     workdir = workspace.path if workspace else repo_dir
     context += how_to_run(workdir, (*options.allow_tools, *grants.granted(key)))
     # The thread of the session that sent it, as the scribe kept it: the worker
@@ -634,7 +640,8 @@ def run(
     subject = ""
     # In the checkout itself, one run at a time: the work and its check share the
     # person's files. A run in a worktree has its own.
-    in_place = workspace is None and ((writes and not declared_read_only) or bool(options.verify))
+    in_place = no_worktree is None and workspace is None and (
+        (writes and not declared_read_only) or bool(options.verify))
     held = contextlib.ExitStack()
     timing = {"hold_s": 0.0, "services_s": 0.0, "worker_s": 0.0, "check_s": 0.0, "verifier_s": 0.0, "wait_s": 0.0}
     try:
@@ -645,8 +652,11 @@ def run(
                     home(), place, task["id"], waiting=lambda who: _waits(store, task["id"], who, say),
                     check=lambda: _check_cancel(store, task["id"])))
         timing["hold_s"] = time.monotonic() - mark
-        ready = True
-        if options.services:
+        ready = no_worktree is None
+        if not ready:
+            report.stop = stops.Stop("environment", f"its worktree could not be made: {no_worktree}"[:500])
+            report.status, report.summary = "blocked", report.stop.reason
+        elif options.services:
             mark = time.monotonic()
             try:
                 up = held.enter_context(services_mod.running(

@@ -291,3 +291,26 @@ def test_an_ending_that_paused_its_lane_says_what_waits(store):
     text, _ = hooks.endings(store, "s")
     assert "its lane is paused on it: 1 queued task(s) wait" in text
     assert "cauce lanes --unpause r" in text
+
+
+def test_a_worktree_that_cannot_be_made_stops_the_task_resumable_instead_of_leaving_it_running(git_repo, store,
+                                                                                               monkeypatch):
+    """After a restart, `isolate.prepare` raised before the first attempt and the task stayed
+    `running` with the pid of a process that was gone: nothing but the sweep freed it."""
+    from cauce import isolate
+
+    def refuse(*args, **kwargs):
+        raise isolate.IsolationError("git worktree add -b cauce/task-1 /w HEAD failed: fatal: '/w' is a missing "
+                                     "but already registered worktree;\nuse 'add -f' to override")
+
+    monkeypatch.setattr(isolate, "prepare", refuse)
+    script = Script()
+    report = run("fix it", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    task = store.get_task(report.task_id)
+    assert not script.specs and report.status == "blocked"
+    assert task["status"] == "blocked" and task["pid"] is None
+    stop = store.last_event(report.task_id, "finished")["data"]["stop"]
+    assert stop["cause"] == "environment" and "\n" not in stop["reason"]
+    assert "already registered worktree; use 'add -f' to override" in stop["reason"]
+    assert stops.next_step(report.task_id, stops.read(stop)) == f"cauce resume {report.task_id}"
+    assert f"cauce resume {report.task_id}" in report.text()

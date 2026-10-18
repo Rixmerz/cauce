@@ -9,6 +9,26 @@
   worktree registered with the attempt's uncommitted work, and `cauce resume`
   failed on it with `already exists`. The resume now continues in that
   worktree, keeping what the dead attempt wrote.
+- **A resume that cannot start no longer strands its task.** `cauce resume`
+  whose worktree could not be made (`IsolationError` from `isolate.prepare`)
+  raised before the first attempt and left the task `running` under the pid of
+  the process that had just exited, so every later resume refused it and only
+  the stale sweep freed it. An error before the first attempt now stops the
+  task as `environment` with the error's one-line cause, resumable, and a
+  resume of a `running` task whose process is gone sweeps it first instead of
+  refusing. A failure of cauce itself under a resume reaches the person as one
+  line (the cause and the command that continues it) with a non-zero exit; the
+  traceback goes to the log the hooks already report at the next session.
+- **After a restart, queued work starts again.** Neither `cauce lanes
+  --unpause` nor the end of a `cauce resume` started a dispatcher, so a task
+  queued behind a stopped one stayed `queued` until a person ran `cauce work`
+  by hand. Both now start the repository's dispatcher when work waits in its
+  lane and none holds its lock (with `autowork` on, like the web board's
+  unpause).
+- **A lane paused on a task opens when that task is resumed.** A lane paused
+  by "task #N stopped with no sign of life" stayed paused after #N was resumed
+  and running again. A resume that starts the task now reopens a lane paused
+  only on it; a pause on another task stays.
 
 ## [0.19.0] - 2026-10-16
 

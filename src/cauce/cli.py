@@ -200,6 +200,11 @@ def cmd_resume(args: argparse.Namespace) -> int:
         if task is None or task["source"] != "cauce" or not task["cwd"]:
             print(f"no task #{args.id} that cauce ran", file=sys.stderr)
             return 1
+        if task["status"] == "running" and not flow.alive(task["pid"]):
+            # A restart (or a crash) left it running under a process that is gone: the sweep
+            # records what it would have, and the resume goes on from there.
+            flow.sweep(store)
+            task = store.get_task(args.id)
         # A dismissed task resumes as what it was before: a dismissal hides a
         # task, it never makes one that was found wrong resumable.
         was, hidden = task["status"], None
@@ -276,8 +281,16 @@ def cmd_resume(args: argparse.Namespace) -> int:
         kept = (options.stored() | {k: prior[k] for k in ("investigation",) if k in prior}
                 | ({"allow_approval": True} if inherited else {}))
         store.update_task(args.id, options=json.dumps(kept), dispatched=0, cancel_requested=0)
-        report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=args.id, history=history,
-                                 progress=_say, known_findings=known)
+        # It runs again: a lane paused on its stopping no longer waits on anyone.
+        store.release_lane(task["repo"], args.id)
+        try:
+            report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=args.id,
+                                     history=history, progress=_say, known_findings=known)
+        except Exception as exc:  # cauce failed under the task, not the task: say so and keep the traceback
+            return _could_not_run(args.id, exc)
+        finally:
+            # Work queued behind it has no dispatcher after a restart: its end starts one.
+            _go_on(store, task["repo"])
         if not args.no_report:
             # Its report is printed to whoever ran it; a detached resume's is not,
             # and reaches the session as an ending instead.
@@ -287,6 +300,23 @@ def cmd_resume(args: argparse.Namespace) -> int:
         store.close()
     print(report.text())
     return 0 if report.status == "done" else 1
+
+
+def _go_on(store: Store, key: str | None) -> bool:
+    """Start the repository's dispatcher when work waits in its lane and `autowork` is on:
+    a machine that restarted has queued tasks and no `cauce work` to run them."""
+    return config.enabled("autowork", os.environ) and dispatch.start_lane(store, home(), key)
+
+
+def _could_not_run(task_id: int, exc: Exception) -> int:
+    """cauce failed under a task: one line with the cause and the command that continues
+    it, the traceback in the log the hooks report from, and a non-zero exit. Called from
+    the `except` that caught `exc`."""
+    hooks.note_error(home(), f"resume #{task_id}")
+    cause = " ".join(f"{type(exc).__name__}: {exc}".split())[:300]
+    print(f"cauce: task #{task_id} could not run: {cause}; `cauce resume {task_id}` continues it "
+          f"(traceback in {home() / hooks.ERROR_LOG})", file=sys.stderr)
+    return 1
 
 
 #: The attempts after which a resume nobody approved is refused: two runs' worth.
@@ -945,7 +975,7 @@ def cmd_lanes(args: argparse.Namespace) -> int:
         if args.unpause is not None:
             key = repo.key(Path(args.unpause).resolve()) if Path(args.unpause).is_dir() else args.unpause
             store.unpause_lane(key)
-            print(f"unpaused {key}")
+            print(f"unpaused {key}" + (", started its dispatcher" if _go_on(store, key) else ""))
             return 0
         for lane in store.lanes():
             state = f"paused: {lane['reason']}" if lane["paused"] else "open"
