@@ -303,7 +303,9 @@ def _needs_a_person(store: Store, task: dict, args: argparse.Namespace) -> str |
 
     stop = stops.of(store, task)
     attempts = store.attempts(task["id"])
-    tried = len(attempts)
+    # A try the network dropped under is no attempt at the work (its `moved` event says so).
+    dropped = sum(1 for e in store.events_of(task["id"], "moved") if (e["data"] or {}).get("network"))
+    tried = len(attempts) - dropped
     if tried >= UNATTENDED_ATTEMPTS:
         # No dollar cap stops work any more: a model resuming a task that keeps
         # failing is stopped by the attempts it already had.
@@ -1149,6 +1151,80 @@ def cmd_note(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_workspace(args: argparse.Namespace) -> int:
+    """A folder of repositories that is one project: declare it, list them, forget one."""
+    from cauce import grants, notes, teams, workspaces
+
+    if args.workspace_command == "list":
+        found = workspaces.declared()
+        if args.json:
+            print(json.dumps(found, ensure_ascii=False))
+            return 0
+        for w in found:
+            print(f"{w['folder']}: " + ", ".join(f"{m['name']} ({m['path']})" for m in w["members"]))
+        if not found:
+            print("no workspace: `cauce workspace add <folder> --with <repo> --with <repo>` makes one")
+        return 0
+    if args.workspace_command == "rm":
+        if not workspaces.remove(args.folder):
+            print(f"cauce: no workspace at {Path(args.folder).expanduser().resolve()}", file=sys.stderr)
+            return 1
+        print("forgotten: its repositories are projects of their own again for new work; what the workspace "
+              "kept (notes, tasks) stays under the folder")
+        return 0
+    folder = Path(args.folder).expanduser().resolve()
+    tops = [t for t in (repo.toplevel(Path(r).expanduser()) for r in args.with_ or ()) if t is not None]
+    inside = [c for c in sorted(folder.iterdir()) if (c / ".git").exists()] if folder.is_dir() else []
+    joining = {str(t.resolve()): repo.own_key(t) for t in [*tops, *inside]}
+    store = Store.open()
+    try:
+        if busy := store.busy([k for k in joining.values() if k]):
+            print(f"cauce: task(s) {', '.join(f'#{i}' for i in busy)} of these repositories are queued or running: "
+                  "let them end (or cancel them), then make the workspace", file=sys.stderr)
+            return 1
+        try:
+            entry = workspaces.add(folder, args.with_ or ())
+        except workspaces.WorkspaceError as exc:
+            print(f"cauce: {exc}", file=sys.stderr)
+            return 2
+        new = entry["folder"]
+        moved = {"notes": 0, "tasks": 0}
+        merged_rules = False
+        used = teams.assignments()
+        picked = set()
+        for m in entry["members"]:
+            old = joining.get(m["path"]) or repo.own_key(Path(m["path"]))
+            if old and old != new:
+                for k, n in store.rekey(old, new, prefix=f"{m['name']}/", inside=m["path"]).items():
+                    moved[k] += n
+                kept_rules = grants.granted(old)
+                if kept_rules:
+                    grants.grant(new, kept_rules)
+                    merged_rules = True
+                if used.get(old):
+                    picked.add(used[old])
+        merged = notes.merge_same(store, new)
+    finally:
+        store.close()
+    with contextlib.suppress(OSError, project.NotAProject):
+        folder_state = project.enroll(new)
+        for m in entry["members"]:
+            # The session names a person wrote in a repository stay theirs in the folder.
+            if (mine := Path(m["path"]) / project.FOLDER).is_dir() and mine != folder_state:
+                project.take_names(mine, folder_state)
+    print(f"workspace {new}: " + ", ".join(f"{m['name']} ({m['path']})" for m in entry["members"]))
+    print(f"  one project now: {moved['notes']} note(s) and {moved['tasks']} task(s) moved to it"
+          + (f", {merged} repeated note(s) merged" if merged else "")
+          + "; work that spans the repositories runs in the folder"
+          + ("; the rules each kept with `cauce allow` now hold for all of them" if merged_rules else ""))
+    if new not in used and len(picked) == 1:
+        teams.use(new, picked.pop())
+    elif new not in used and picked:
+        print(f"  its repositories used the teams {', '.join(sorted(picked))}: `cauce team use <name> --repo {new}` "
+              "picks the folder's")
+    return 0
+
+
 def cmd_recall(args: argparse.Namespace) -> int:
     """The notes a question needs: by topic, by the code it is about, one link away."""
     from cauce import notes
@@ -1163,7 +1239,12 @@ def cmd_recall(args: argparse.Namespace) -> int:
             print(f"cauce: {exc}", file=sys.stderr)
             return 2
         states = notes.STATES if args.all_states else notes.LIVE
-        found = notes.recall(store, key, _text(args.text or ""), in_topics=in_topics, paths=args.path or [],
+        # A file of a workspace's member is named with the member in front, as its anchors are.
+        from cauce import workspaces
+
+        pre = workspaces.prefix(repo.toplevel(where))
+        found = notes.recall(store, key, _text(args.text or ""), in_topics=in_topics,
+                             paths=[pre + p.removeprefix("./") for p in args.path or []],
                              limit=args.limit, hops=args.hops, states=states)
     finally:
         store.close()
@@ -1738,6 +1819,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_note)
 
+    p = sub.add_parser("workspace", help="a folder of repositories that is one project: one memory, one board",
+                       description="Work that spans two or more repositories is tracked in the folder that holds "
+                                   "them: its notes, tasks and board are the folder's. Kept in your cauce home.")
+    wsub = p.add_subparsers(dest="workspace_command", required=True)
+    q = wsub.add_parser("add", help="make a folder a workspace of the repositories in it, and of --with ones "
+                                    "(linked in); made when it is not there")
+    q.add_argument("folder")
+    q.add_argument("--with", dest="with_", action="append", metavar="REPO", help="a repository to link in "
+                                                                                 "(repeatable)")
+    q = wsub.add_parser("list", help="every workspace and its repositories")
+    q.add_argument("--json", action="store_true")
+    q = wsub.add_parser("rm", help="forget a workspace: new work in its repositories is theirs again")
+    q.add_argument("folder")
+    p.set_defaults(func=cmd_workspace)
+
     p = sub.add_parser("recall", help="what this project's notes say: by topic, by file, one link away")
     p.add_argument("text", nargs="?", help="the question; empty for the latest notes")
     p.add_argument("--topic", action="append", help="only this topic (repeatable)")
@@ -1912,8 +2008,59 @@ def _starts_work(args: argparse.Namespace) -> bool:
         ("queue", "add"), ("workflow", "run"), ("workflow", "retry"), ("investigate", "start")}
 
 
+def _subparser(parser: argparse.ArgumentParser, args: argparse.Namespace) -> argparse.ArgumentParser:
+    """The parser of the command the arguments reached (`cauce workflow run` is three deep)."""
+    found = parser
+    while True:
+        action = next((a for a in found._actions if isinstance(a, argparse._SubParsersAction)), None)
+        name = getattr(args, action.dest, None) if action is not None else None
+        if action is None or name not in action.choices:
+            return found
+        found = action.choices[name]
+
+
+def _parsers(parser: argparse.ArgumentParser) -> list[argparse.ArgumentParser]:
+    out = [parser]
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for child in dict.fromkeys(action.choices.values()):
+                out += _parsers(child)
+    return out
+
+
+def _unknown(sub: argparse.ArgumentParser, top: argparse.ArgumentParser, extra: list[str]) -> str:
+    """What was given that this command does not take, and what was likely meant:
+    the near flag of its own, the commands that take the flag, how its inputs go."""
+    import difflib
+
+    mine = [o for a in sub._actions for o in a.option_strings]
+    hints = []
+    for flag in dict.fromkeys(x.split("=", 1)[0] for x in extra if x.startswith("-")):
+        near = difflib.get_close_matches(flag, mine, n=1, cutoff=0.7)
+        if near:
+            hints.append(f"{flag}: did you mean {near[0]}?")
+            continue
+        elsewhere = [p.prog for p in _parsers(top) if p is not sub and flag in
+                     (o for a in p._actions for o in a.option_strings)]
+        if elsewhere:
+            hints.append(f"{flag} is taken by {', '.join(elsewhere[:3])}, not by `{sub.prog}`")
+    # A word right after an unknown flag is taken as its value, not as one too many.
+    words = [x for n, x in enumerate(extra) if not x.startswith("-")
+             and not (n and extra[n - 1].startswith("-") and "=" not in extra[n - 1])]
+    if words and "--input" in mine:
+        hints.append("inputs go by name: --input name=value (`cauce workflow list` shows what each workflow takes)")
+    elif words:
+        hints.append("more words than it takes: quote a text that has spaces")
+    return (f"unrecognized arguments: {' '.join(extra)}" + "".join(f"\n  {h}" for h in hints)
+            + f"\n  `{sub.prog} --help` lists what it takes")
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args, extra = parser.parse_known_args(argv)
+    if extra:
+        sub = _subparser(parser, args)
+        sub.error(_unknown(sub, parser, extra))
     if os.environ.get("CAUCE_WORKER_TASK") and _starts_work(args):
         # A worker is one attempt of one task: work it starts would run outside its
         # task's checks, its turns and its account. What is left goes in its result.

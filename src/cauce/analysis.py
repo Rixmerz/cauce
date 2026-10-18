@@ -29,7 +29,7 @@ from cauce import usage
 from cauce.store import Store
 
 #: The phases of a run, in the order they happen.
-PHASES = ("queued_s", "plan_s", "setup_s", "worker_s", "check_s", "verifier_s", "other_s")
+PHASES = ("queued_s", "plan_s", "setup_s", "worker_s", "check_s", "verifier_s", "wait_s", "other_s")
 #: The columns of a run, as `cauce stats --runs` writes them.
 RUN_COLUMNS = ("task", "repo", "kind", "source", "workflow", "step", "status", "stop", "start_cell", "final_cell",
                "started_at", "ended_at", "wall_s", *PHASES[:-1], "attempts", "first_try", "verified",
@@ -111,7 +111,7 @@ def _start(task: Mapping[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
         "start_cell": data.get("start"), "final_cell": None, "status": None, "stop": None,
         "started_at": event["ts"], "ended_at": None, "wall_s": None,
         "queued_s": _number(data.get("queued_s")), "plan_s": _number(data.get("plan_s")), "setup_s": None,
-        "worker_s": None, "check_s": None, "verifier_s": None, "hold_s": None,
+        "worker_s": None, "check_s": None, "verifier_s": None, "wait_s": None, "hold_s": None,
         "attempts": 0, "first_try": None, "verified": 0, "verifier_blocked": 0, "moves": [], "cells": [],
         "cost_usd": 0.0, "turns": 0, "input_tokens": 0, "output_tokens": 0, "refused": 0,
         "cache_read_tokens": 0, "measured_input_tokens": 0, "verifier_cost_usd": 0.0,
@@ -150,7 +150,7 @@ def _end(run: dict[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
     run["wall_s"] = _number(data.get("wall_s")) or _between(run["started_at"], run["ended_at"])
     # The run's own account of its cost wins: it holds the classification and the checks.
     run["cost_usd"] = round(_number(data.get("cost_usd")) or run["cost_usd"], 4)
-    for phase in ("worker_s", "check_s", "verifier_s", "hold_s"):
+    for phase in ("worker_s", "check_s", "verifier_s", "wait_s", "hold_s"):
         run[phase] = _number(data.get(phase))
     # A run from before the phases were timed: what its attempts measured, the CLI's
     # own duration for the work, and nothing for what was never measured.

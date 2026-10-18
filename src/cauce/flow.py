@@ -172,6 +172,7 @@ def queued_options(task: dict, defaults: Options) -> Options:
         carry=bool(raw.get("carry", defaults.carry)),
         add_dirs=tuple(raw.get("add_dirs") or defaults.add_dirs),
         services=tuple(raw.get("services") or defaults.services),
+        run_verify=raw.get("run_verify") or defaults.run_verify,
     )
 
 

@@ -119,12 +119,23 @@ with `--force`.
 
 ## Run one
 
-Running spends money, so do it only when the person asked for this work:
+Running spends money, so do it only when the person asked for this work.
+`cauce workflow list` shows what each workflow takes (its inputs, its memory);
+check a run first with `--dry-run`, which queues nothing and says what is
+missing, so the first real start is the one that runs:
 
 ```bash
-cauce workflow run <name> "<value of its one input>"
-cauce workflow run <name> --input goal="..." --input area="..." [--allow RULE] [--allow-approval]
+cauce workflow run <name> --input goal="..." --input check="..." --dry-run
+cauce workflow run <name> "<value of the one input not named>"
+cauce workflow run <name> --input goal="..." --input area="..." [--verify "<check>"] [--allow RULE] [--allow-approval]
 ```
+
+`--verify` is the check of every step that writes and names none of its own;
+a reading step never gets it, and a step with no kind gets it once it is
+classified into one that writes. A memory topic a step names that holds no
+note yet in this project is said when the run starts, with the command that
+fills it, and the step goes without it; run that command when the person has
+the fact.
 
 The run starts the repository's dispatcher. Then, without you:
 
@@ -136,11 +147,14 @@ The run starts the repository's dispatcher. Then, without you:
 ## Watch one
 
 ```bash
-cauce workflow status [<run>] [--all] [--json]
+cauce workflow status [--all]           # one line per run: the step it is at, its attempt, last commit, files
+cauce workflow status <run> [--full]    # each step: state, task, attempt, phase, commit, files
 ```
 
-It shows each step's state, its task and cell, the steps running now, the
-steps waiting on the person, and the branch that holds the work so far.
+The inputs show on one line (`--full` shows them whole). One run shows each
+step's state, its task and attempt, what a running worker is doing, the commit
+a done step kept and the files it touched, the steps waiting on the person,
+and the branch that holds the work so far.
 `cauce overview` lists the runs of every project. `cauce show <task>` shows
 one step in depth.
 

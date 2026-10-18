@@ -132,6 +132,9 @@ class Options:
     #: Servers the task needs up, `command@port`, started and stopped by cauce
     #: around the run (`cauce.services`): the person's flag, never a file's.
     services: tuple[str, ...] = ()
+    #: A workflow run's check, for a step classified when it runs: it becomes the
+    #: step's `verify` only when the step turns out to write.
+    run_verify: str | None = None
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -141,7 +144,8 @@ class Options:
                   "allow_approval": self.allow_approval, "allow_tools": list(self.allow_tools),
                   "livespec": self.livespec, "no_isolate": not self.isolate, "role": self.role,
                   "step_role": self.step_role, "surfaces": list(self.surfaces),
-                  "ledger": self.ledger, "add_dirs": list(self.add_dirs), "services": list(self.services)}
+                  "ledger": self.ledger, "add_dirs": list(self.add_dirs), "services": list(self.services),
+                  "run_verify": self.run_verify}
         kept = {k: v for k, v in values.items() if v not in (None, [], False)}
         if not self.keep_learned:
             kept["keep_learned"] = False  # a task whose findings wait on a person's word
@@ -395,7 +399,10 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     if learned:
         context.append("Steps that came before passing attempts on this kind of task here: "
                        + "; ".join(learned) + ". Use them unless the task says otherwise.")
-    neighbour_notes += _unmet(text, registry, served=bool(options.services))
+    neighbour_notes += _unmet(text, registry, served=bool(options.services),
+                              verify=options.verify or options.run_verify)
+    if spans := _spans(repo_dir, options.add_dirs):
+        neighbour_notes.append(spans)
     for lag in models.lagging(store):
         neighbour_notes.append(f"workers last ran {lag['workers']} for `{lag['alias']}` while your sessions use "
                                f"{lag['sessions']}: the installed Claude Code's alias is older. Pin it with "
@@ -554,7 +561,8 @@ def run(
         the_plan.reasons.append(f"{the_plan.kind} work starts with {turns_for(the_plan.kind)} turns: "
                                 f"at {DEFAULT_TURNS} its attempts ran out")
     for reason in the_plan.reasons:
-        if reason.startswith(("this task needs", "workers here were refused before", "task #")):
+        if reason.startswith(("this task needs", "this task mentions", "this task spans",
+                              "workers here were refused before", "task #")):
             say(f"cauce: #{task['id']} warning: {reason}")
     store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label,
                     role=the_plan.role.name if the_plan.role else None, team=the_plan.team,
@@ -567,6 +575,10 @@ def run(
     writes = the_plan.kind not in READ_ONLY_KINDS
     declared_read_only = the_plan.kind not in _BUILDS and bool(
         _READ_ONLY.search(task.get("body") or task.get("title") or ""))
+    if not options.verify and options.run_verify and writes and not declared_read_only:
+        # A workflow step with no kind of its own was classified into one that writes:
+        # the run's check is its check.
+        options = dataclasses.replace(options, verify=options.run_verify)
     context = list(the_plan.context)
     # A reading step of a workflow reads the work of the steps before it: it gets
     # their commit too, in a worktree its tools cannot write to.
@@ -624,7 +636,7 @@ def run(
     # person's files. A run in a worktree has its own.
     in_place = workspace is None and ((writes and not declared_read_only) or bool(options.verify))
     held = contextlib.ExitStack()
-    timing = {"hold_s": 0.0, "services_s": 0.0, "worker_s": 0.0, "check_s": 0.0, "verifier_s": 0.0}
+    timing = {"hold_s": 0.0, "services_s": 0.0, "worker_s": 0.0, "check_s": 0.0, "verifier_s": 0.0, "wait_s": 0.0}
     try:
         mark = time.monotonic()
         if in_place:
@@ -650,7 +662,9 @@ def run(
                 context.append("Servers up for this task, started and stopped by cauce (do not start or stop them "
                                "yourself): " + "; ".join(up))
         while ready:
-            if len(attempts) >= options.max_attempts:
+            # A try after the network dropped is no attempt at the work: it does not
+            # count toward the ceiling, and its own streak is bounded in `decide`.
+            if sum(not a.network for a in attempts) >= options.max_attempts:
                 report.stop = stops.Stop("attempts", f"{options.max_attempts} attempts without a pass",
                                          attempt=len(attempts))
                 report.status, report.summary = "failed", report.stop.reason
@@ -695,6 +709,7 @@ def run(
             store.update_task(task["id"], current_cell=cell.label)
             say(f"cauce: #{task['id']} attempt {nth} at {cell.label}")
             store.add_event(task["id"], "attempt_started", seq=nth, cell=cell.label,
+                            **({"base": workspace.base, "links": list(workspace.links)} if workspace else {}),
                             model=spec.model_id or cell.model,
                             max_turns=turns, capabilities=list(selection.names),
                             since_start_s=round(time.monotonic() - clock, 2), brief_chars=len(spec.prompt),
@@ -776,7 +791,7 @@ def run(
                             **({"refused_but_written": list(result.overcome)} if result.overcome else {}))
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
-                              transient=result.transient, findings=result.findings)
+                              transient=result.transient, findings=result.findings, network=result.network)
             attempts.append(attempt)
             subject = result.commit or subject
             if result.report is not None:
@@ -809,7 +824,8 @@ def run(
                             trigger=(result.failure or Failure.INCONCLUSIVE).value,
                             because=list(decision.because), skipped=list(decision.skipped),
                             turns_from=turns, turns_to=decision.max_turns if decision.continues else None,
-                            spent_usd=round(report.cost_usd, 4))
+                            spent_usd=round(report.cost_usd, 4),
+                            **({"wait_s": decision.wait_s, "network": attempt.network} if attempt.network else {}))
             if not decision.continues:
                 # The worker's own account goes with the reason: "the task is
                 # wrong" is only actionable next to what it found wrong.
@@ -831,6 +847,11 @@ def run(
                                  f": attempt {seq}'s changes ({cell.label}) are not in it. They are kept: "
                                  f"`git diff {workspace.base[:12]} {ref}` shows them. Take what is right from them, "
                                  "not their approach.")
+            if decision.wait_s:
+                mark = time.monotonic()
+                _pause(store, task["id"], decision.wait_s, say,
+                       f"the network dropped ({attempt.network}); trying {decision.cell.label} again")
+                timing["wait_s"] += time.monotonic() - mark
             cell, turns = decision.cell, decision.max_turns
     except Cancelled:
         report.stop = _cancelled(store, task["id"], len(attempts) or None)
@@ -916,6 +937,12 @@ _BROWSER = re.compile(r"\b(browser|navegador|navigate|navega\w*|abr[ie]\w* (?:el
 _SERVER = re.compile(r"(\bdev servers?\b|\blevanta\w*\b|\bstart (?:both |the )?(?:dev )?servers?\b|"
                      r"\bng serve\b|\bnpm (?:run )?(?:start|dev)\b|localhost:\d+)", re.IGNORECASE)
 _BROWSER_CAPS = ("browser", "playwright", "chrome", "puppeteer", "rastro")
+#: A task that tells the worker to start its servers: it needs them, whatever its check.
+_START_SERVERS = re.compile(r"(\blevanta\w*\b|\bstart (?:both |the |all )?(?:dev )?servers?\b)", re.IGNORECASE)
+#: A check that talks to a running server: only then does a task's mention of one
+#: say the check needs it. Lint, unit tests and a build do not.
+_CHECK_SERVES = re.compile(r"(localhost|127\.0\.0\.1|https?://|\be2e|playwright|cypress|puppeteer|\bcurl\b|"
+                           r"\bwget\b|lighthouse|wait-on|start-server-and-test)", re.IGNORECASE)
 
 
 #: A task that says in its own words it must change nothing: a validation whose
@@ -952,20 +979,55 @@ def _all_listening(text: str) -> bool:
     return bool(ports) and all(_listening(p) for p in ports)
 
 
-def _unmet(text: str, registry: Mapping[str, caps.Capability], *, served: bool = False) -> list[str]:
+def _unmet(text: str, registry: Mapping[str, caps.Capability], *, served: bool = False,
+           verify: str | None = None) -> list[str]:
     """What a task asks for that a one-shot worker does not have, said before any
     money is spent: a worker has no browser unless a capability gives it one,
-    and a server it starts ends with it."""
+    and a server it starts ends with it. A task whose check needs no server (lint,
+    tests, a build) is not told to start one for a word in its text."""
     notes = []
     if _BROWSER.search(text) and not any(k in name.lower() for name in registry for k in _BROWSER_CAPS):
         notes.append("this task needs a browser and workers have none: register a browser MCP server in "
                      "your cauce capabilities.json (`cauce capabilities --example` has one) and allow its tools "
                      "(--allow 'mcp__browser'), or check the pages yourself")
-    if _SERVER.search(text) and not served and not _all_listening(text):
-        notes.append("this task needs running servers: pass them with --service 'npm run dev@4200' (cauce starts "
-                     "each before the work and stops it after), or start them yourself before dispatching; a "
-                     "server a worker starts stops when it finishes")
+    mention = _SERVER.search(text)
+    asked = bool(mention and _START_SERVERS.search(text))
+    if mention and not served and not _all_listening(text) and (asked or not verify or _CHECK_SERVES.search(verify)):
+        notes.append(f"this task mentions {mention.group(0)!r}: if its work needs running servers, pass them with "
+                     "--service 'npm run dev@4200' (cauce starts each before the work and stops it after), or "
+                     "start them yourself before dispatching; a server a worker starts stops when it finishes")
     return notes
+
+
+def _spans(repo_dir: Path, add_dirs: Sequence[str]) -> str | None:
+    """A task that reaches a sibling repository (`--add-dir`) outside the workspace
+    of its own: said once, with the command that makes them one project. Never done
+    for the person: a workspace moves what each repository kept."""
+    from cauce import workspaces
+
+    own = repo.toplevel(repo_dir)
+    tops = [t for t in (repo.toplevel(Path(d).expanduser()) for d in add_dirs) if t is not None and t != own]
+    if own is None or not tops:
+        return None
+    folder = workspaces.of(own)
+    apart = [t for t in tops if folder is None or workspaces.of(t) != folder]
+    if not apart:
+        return None
+    named = [own, *apart] if folder is None else apart
+    if folder is None:
+        # Their own folder when it holds exactly these; else a new one beside them, that
+        # links them in: a workspace's folder holds only its own repositories.
+        parent = own.parent
+        try:
+            held = {c.resolve() for c in parent.iterdir() if (c / ".git").exists()}
+        except OSError:
+            held = set()
+        whole = held == {t.resolve() for t in named} and parent != Path.home().resolve()
+        folder = parent if whole else parent / "-".join(t.name for t in named)
+    flags = " ".join(f"--with {shlex.quote(str(t))}" for t in named)
+    return (f"this task spans {len(apart) + 1} repositories ({', '.join(t.name for t in [own, *apart])}): tracked "
+            f"apart, each keeps its own notes and board; `cauce workspace add {shlex.quote(str(folder))} {flags}` "
+            "makes them one project, tracked in that folder")
 
 
 def _refused_here(store: Store, key: str | None, granted: Sequence[str], mode: str) -> list[tuple[str, int]]:
@@ -990,7 +1052,9 @@ def _refused_here(store: Store, key: str | None, granted: Sequence[str], mode: s
 def _cause(decision: Decision, attempt: Attempt) -> str:
     """What ended the run, from the move and the failure that led to it."""
     if decision.move is Move.BLOCKED:
-        return "permission" if attempt.failure is Failure.PERMISSION or attempt.denied else "environment"
+        if attempt.failure is Failure.PERMISSION or attempt.denied:
+            return "permission"
+        return "network" if attempt.network else "environment"
     if decision.move is Move.NEEDS_APPROVAL:
         return "approval"
     if decision.move is Move.CONVERGED:
@@ -1005,6 +1069,23 @@ def _cause(decision: Decision, attempt: Attempt) -> str:
 def _check_cancel(store: Store, task_id: int) -> None:
     if store.cancel_requested(task_id):
         raise Cancelled
+
+
+#: What waits between tries; a test replaces it.
+_sleep = time.sleep
+
+
+def _pause(store: Store, task_id: int, seconds: int, say: Callable[[str], None], why: str) -> None:
+    """Wait before the next try, said once, and stop at once for a cancel: a wait
+    that says nothing reads as a run that hung."""
+    say(f"cauce: #{task_id} {why} in {seconds}s")
+    store.add_event(task_id, "waiting", reason=why, seconds=seconds)
+    left = float(seconds)
+    while left > 0:
+        _check_cancel(store, task_id)
+        _sleep(min(left, 2.0))
+        left -= 2.0
+    _check_cancel(store, task_id)
 
 
 def _waits(store: Store, task_id: int, who: str, say: Callable[[str], None]) -> None:
@@ -1393,6 +1474,13 @@ def _verified(result: launch.WorkerResult, command: str, workdir: Path) -> launc
         return dataclasses.replace(
             result, passed=False, failure=Failure.ENVIRONMENT, evidence=output,
             summary=f"claimed a pass, but `{command}` could not run here ({why}): {result.summary}",
+        )
+    if dropped := launch.check_offline(output):
+        # The check could not reach the network (an install, a fetch): its exit says
+        # nothing about the work, and the same check, waited for, may well pass.
+        return dataclasses.replace(
+            result, passed=False, failure=Failure.ENVIRONMENT, evidence=output, network=dropped,
+            summary=f"claimed a pass, but `{command}` lost the network ({dropped}): {result.summary}",
         )
     return dataclasses.replace(
         result, passed=False, failure=Failure.CODE_BUG, evidence=output,

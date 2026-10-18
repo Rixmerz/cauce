@@ -979,3 +979,19 @@ def test_a_dismissed_review_resumes_with_the_blockers_the_check_recorded(tmp_pat
     # An investigator stays one when it is resumed.
     assert json.loads(store.get_task(task["id"])["options"])["investigation"] == "inv-1"
     store.close()
+
+
+def test_tries_the_network_dropped_under_are_no_attempts_for_an_unattended_resume(git_repo, monkeypatch):
+    monkeypatch.setattr(orchestrate, "run", lambda *a, **kw: orchestrate.Report(kw["task_id"], "done", None))
+    monkeypatch.setattr(orchestrate.Report, "text", lambda self: "ok")
+    store = Store.open()
+    task = store.create_task("sync it", status="running", source="cauce", repo="r", cwd=str(git_repo))
+    for seq in range(1, cli.UNATTENDED_ATTEMPTS + 1):
+        store.add_attempt(task["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="environment",
+                          summary="dropped", evidence="", cost_usd=0.0, input_tokens=0, output_tokens=0, turns=1,
+                          duration_s=1, changed_paths=(), capabilities=())
+        if seq > 2:
+            store.add_event(task["id"], "moved", seq=seq, move="retry", network="Connection error")
+    stops.record(store, task["id"], stops.Stop("network", "the network stayed down"))
+    store.close()
+    assert cli.main(["resume", str(task["id"]), "--unattended"]) == 0
