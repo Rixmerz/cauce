@@ -443,6 +443,24 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
                 risk_mod.of_request(text, kind))
 
 
+#: How the plan's reasons a person should hear before the work starts begin: what
+#: the task needs and workers lack, and what stopped workers here before.
+WARNINGS = ("this task needs", "this task mentions", "this task spans", "workers here were refused before", "task #")
+
+
+def warnings(reasons: Sequence[str]) -> list[str]:
+    return [r for r in reasons if r.startswith(WARNINGS)]
+
+
+def foresee(text: str, repo_dir: Path, store: Store, options: Options) -> list[str]:
+    """What a task's plan will warn of when it starts, said before it does: a dry
+    plan, classified by rules alone and with no neighbour asked, since a neighbour's
+    notes warn of nothing."""
+    dry = dataclasses.replace(options, dry_run=True, use_model_classifier=False)
+    registry = caps.load_all(home() / "capabilities.json")
+    return warnings(plan(text, repo_dir.resolve(), store, dry, registry, adapters=()).reasons)
+
+
 def _team(options: Options, key: str | None, catalog: roles.Catalog) -> tuple[str, list[roles.Role], list[str]]:
     """The roles a task here may run as: the one a person named, or the project's team."""
     lines: list[str] = []
@@ -563,11 +581,10 @@ def run(
     if not options.max_turns and turns_for(the_plan.kind) != DEFAULT_TURNS:
         the_plan.reasons.append(f"{the_plan.kind} work starts with {turns_for(the_plan.kind)} turns: "
                                 f"at {DEFAULT_TURNS} its attempts ran out")
-    for reason in the_plan.reasons:
-        if reason.startswith(("this task needs", "this task mentions", "this task spans",
-                              "workers here were refused before", "task #")):
-            say(f"cauce: #{task['id']} warning: {reason}")
-    store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label,
+    warned = warnings(the_plan.reasons)
+    for reason in warned:
+        say(f"cauce: #{task['id']} warning: {reason}")
+    store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label, warnings=warned,
                     role=the_plan.role.name if the_plan.role else None, team=the_plan.team,
                     risk=the_plan.risk.data(),
                     ladder=[x.label for x in the_plan.ladder], reasons=the_plan.reasons,

@@ -145,8 +145,9 @@ export async function openTask(id, quiet = false) {
     stopSection(d.stop),
     h("div", { class: "section" }, h("h2", {}, "Task"), h("div", { class: "text" }, t.body)),
     t.parallel_reason ? h("div", { class: "section" }, h("h2", {}, "Dispatch"),
-      h("div", {}, t.parallel ? "May run beside the work going in this repository: " : "Waits for the work ahead of it: ",
-        t.parallel_reason)) : null,
+      h("div", {}, t.waits ? `${t.waits[0].toUpperCase()}${t.waits.slice(1)}` : t.parallel
+        ? `May run beside the work going in this repository: ${t.parallel_reason}`
+        : `Waits for the work ahead of it: ${t.parallel_reason}`)) : null,
     d.plan ? h("div", { class: "section" }, h("h2", {}, "Plan"),
       d.risk ? h("div", { class: "meta" }, h("span", { class: `badge risk r-${d.risk.tier}` },
         `risk ${d.risk.tier}`), (d.risk.reasons || []).join("; ")) : null,

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -208,6 +209,14 @@ def with_changes(store: Store, task: dict) -> dict:
     return task if files is None else {**task, "changed": list(files)}
 
 
+def _behind(decision: dispatch.Decision, ahead: list[dict]) -> int | None:
+    """The task a held-back one waits for: the one its reason names, else the first ahead of it."""
+    if decision.parallel or not ahead:
+        return None
+    ids = [t["id"] for t in ahead]
+    return next((int(n) for n in re.findall(r"#(\d+)", decision.reason) if int(n) in ids), ids[0])
+
+
 def runnable(store: Store, repo: str | None, *, parallel: bool, decide: Decide) -> list[dict]:
     """What may start now. Per open lane: the first task when nothing runs; after
     that, only tasks judged independent of everything running and queued ahead,
@@ -229,8 +238,12 @@ def runnable(store: Store, repo: str | None, *, parallel: bool, decide: Decide) 
                         # Git is read only when a task is to be judged, and once a pass.
                         ahead[:len(running)] = [with_changes(store, t) for t in running]
                         read = True
-                    decision = by_surfaces(task, ahead) or decide(task, ahead)
+                    settled = by_surfaces(task, ahead)
+                    decision = settled or decide(task, ahead)
                     store.set_parallel(task["id"], decision.parallel, decision.reason)
+                    store.add_event(task["id"], "dispatch_decided", parallel=decision.parallel,
+                                    reason=decision.reason, behind=_behind(decision, ahead),
+                                    ahead=[t["id"] for t in ahead], by="surfaces" if settled else "haiku")
                     if decision.cost_usd:
                         store.update_task(task["id"], cost_usd=(task["cost_usd"] or 0) + decision.cost_usd)
                     task = {**task, "parallel": int(decision.parallel)}

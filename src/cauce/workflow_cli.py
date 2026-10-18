@@ -97,6 +97,8 @@ def _step_line(step: dict[str, Any]) -> str:
         parts.append(f"try {step['tries']}")
     if step.get("phase"):
         parts.append(step["phase"])
+    if step.get("waits"):
+        parts.append(step["waits"])
     if step.get("commit"):
         parts.append(step["commit"][:72])
     if step.get("files"):
@@ -344,17 +346,41 @@ def _run(args: argparse.Namespace) -> int:
         run = workflows.start(store, args.name, where, inputs, scope=args.scope, options=options,
                               session_id=os.environ.get("CAUCE_SESSION_ID"))
         shown = workflows.status(store, run["id"])
+        unseen = None
+        try:
+            warned = _first_warnings(store, run["queued"])
+        except Exception as exc:  # the run is queued: a plan that cannot be foreseen never undoes its start
+            warned, unseen = [], f"{type(exc).__name__}: {exc}"
     finally:
         store.close()
     if args.json:
-        print(json.dumps({**shown, "gaps": run["gaps"]}, ensure_ascii=False, default=str))
+        print(json.dumps({**shown, "gaps": run["gaps"], "warnings": warned,
+                          **({"warnings_error": unseen} if unseen else {})}, ensure_ascii=False, default=str))
     else:
         print(f"started run #{run['id']} of {run['name']} ({run['scope']}): "
               f"{', '.join(shown['now']) or 'nothing'} queued; each next step starts when the one before passes.")
         for gap in run["gaps"]:
             print(f"note: {gap}")
+        if unseen:
+            print(f"note: the warnings of the first steps could not be foreseen ({unseen})")
+        for warning in warned:
+            print(f"warning: step {warning['step']} (#{warning['task']}): {warning['warning']}")
         print(f"where it is: `cauce workflow status {run['id']}`")
     return 0
+
+
+def _first_warnings(store: Store, queued: list[int]) -> list[dict[str, Any]]:
+    """What the plans of the steps a run starts with will warn of, said now: the
+    run's caller is gone by the time a step starts and its `planned` event holds them."""
+    from cauce import flow, orchestrate
+
+    out = []
+    for task_id in queued:
+        task = store.get_task(task_id)
+        options = flow.queued_options(task, orchestrate.Options())
+        out += [{"step": task["workflow_step"], "task": task_id, "warning": warning}
+                for warning in orchestrate.foresee(task["body"], Path(task["cwd"]), store, options)]
+    return out
 
 
 def _status(args: argparse.Namespace) -> int:

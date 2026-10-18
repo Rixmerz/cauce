@@ -949,7 +949,8 @@ def status(store: Store, run_id: int, *, detail: bool = False) -> dict[str, Any]
             entry.update(task=task["id"], cell=task.get("final_cell") or task.get("current_cell"),
                          cost_usd=round(task.get("cost_usd") or 0, 2), result=task.get("result"),
                          branch=(finished or {}).get("data", {}).get("branch") if state == "done" else None,
-                         tries=sum(1 for t in store.run_tasks(run_id) if t["workflow_step"] == step["id"]))
+                         tries=sum(1 for t in store.run_tasks(run_id) if t["workflow_step"] == step["id"]),
+                         waits=dispatch.waiting(store, task))
             if detail:
                 entry.update(progress(store, run, task))
         steps.append(entry)

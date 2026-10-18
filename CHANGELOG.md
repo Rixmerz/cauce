@@ -16,6 +16,23 @@
   that may touch another task's, or hold a file a running task already
   changed, wait without asking the model, whatever the others declare. No
   answer still means the task waits, and when unsure, Haiku answers false.
+- **cauce says why work waits and why it stopped.** A queued task the
+  dispatcher held back says which task it waits for, and why ("waits for #46:
+  <reason>"), in `cauce queue`, `cauce tasks`, `cauce show`, `cauce workflow
+  status` and the web board's queue; each decision is a `dispatch_decided`
+  event, with the task it waits for and what was ahead of it. The decision is
+  still made once, but the task the line names is read from the lane as it
+  is: when the one it was judged against has ended, it names the one it is
+  behind now, and says whom the reason was about. `cauce show` prints what the
+  independent check found under the attempt it checked: each blocker, then
+  each other finding (one in a blocker's file included), with its place, its
+  cause and evidence and its proof, clipped like the rest of the report.
+  `cauce workflow run` prints the warnings the plan of each step it starts
+  with will raise (a browser the workers lack, a server the task names; a plan
+  that cannot be foreseen is a note, never a start that failed); an
+  ending repeats the warnings its task ran with, kept on its `planned` event
+  as `warnings`, and a run's ending those of the steps the engine went past
+  since the session last heard of the run.
 
 ### Fixed
 

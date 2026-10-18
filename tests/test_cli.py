@@ -85,6 +85,40 @@ def test_tasks_show_and_memory(capsys, git_repo):
     assert "nothing recorded" in capsys.readouterr().out
 
 
+def test_show_prints_what_the_independent_check_found_under_its_attempt(capsys):
+    store = Store.open()
+    t = store.create_task("build it", status="blocked", source="cauce", repo="r", kind="implement")
+    for seq in (1, 2):
+        store.add_attempt(t["id"], cell="sonnet/high", max_turns=30, passed=1, summary=f"built it {seq}")
+    blocker = {"where": "src/x.py:12", "what": "the total is rounded twice", "evidence_class": "deterministic",
+               "cause": "introduced", "proof": "pytest -k total\nFAILED test_total"}
+    nearby = {"where": "src/x.py:80", "what": "a stale docstring", "evidence_class": "inferential",
+              "cause": "pre-existing", "proof": ""}
+    old = {"where": "src/y.py:3", "what": "an unused import " + "long " * 80, "evidence_class": "inferential",
+           "cause": "pre-existing", "proof": ""}
+    store.add_event(t["id"], "verified", seq=1, cell="opus/high", verdict="fail", passed=False,
+                    findings=[blocker, nearby, old], blockers=[blocker], blocking=1)
+    store.add_event(t["id"], "verified", seq=2, cell="opus/high", verdict="pass", passed=True, findings=[],
+                    blockers=[], blocking=0)
+    store.close()
+    assert cli.main(["show", str(t["id"])]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    first = lines.index("    built it 1")
+    assert lines[first + 1:first + 5] == [
+        "    independent check at opus/high: fail, 1 blocker(s)",
+        "      blocks: [introduced, deterministic] src/x.py:12: the total is rounded twice — pytest -k total "
+        "FAILED test_total",
+        # Another finding in a blocker's file is its own finding, not the blocker again.
+        "      found: [pre-existing, inferential] src/x.py:80: a stale docstring",
+        lines[first + 4]]
+    # A finding that is not a blocker is printed once, as found, and clipped like the summary.
+    assert lines[first + 4].startswith("      found: [pre-existing, inferential] src/y.py:3: an unused import")
+    assert len(lines[first + 4]) == 4 + 300
+    assert sum("the total is rounded twice" in line for line in lines) == 1
+    second = lines.index("    built it 2")
+    assert lines[second + 1] == "    independent check at opus/high: passed"
+
+
 def test_config_model_shows_pins_and_what_served(capsys):
     store = Store.open()
     store.add_usage(message_id="m1", session_id="s", model="claude-sonnet-5-5", output_tokens=1, ts="2099-01-01")

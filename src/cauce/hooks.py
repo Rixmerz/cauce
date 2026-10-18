@@ -467,6 +467,9 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
         changed = data.get("changed") or []
         total = data.get("changed_n") or len(changed)
         lines.append(f"#{t['id']} [{t['status']}] {t['title']}")
+        # Said when it started, to a caller that may be gone by now: a queued step's above all.
+        lines += [f"  it ran with a warning: {warning}" for warning in _warned(store, t["id"])]
+        lines += _went_past(store, t)
         if t["status"] == "done":
             branch = data.get("branch")
             where = (f"; branch {branch}: show `git diff HEAD...{branch}` and merge only when they say so"
@@ -495,6 +498,31 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
                          f"run `cauce lanes --unpause {t.get('repo')}` to let them start now")
     return "\n".join(lines), [t["id"] for t in ended]
 
+
+def _warned(store: Store, task_id: int) -> list[str]:
+    """What a task's plan warned of when its run started, clipped."""
+    planned = (store.last_event(task_id, "planned") or {}).get("data") or {}
+    return [str(warning)[:300] for warning in planned.get("warnings") or ()]
+
+
+def _went_past(store: Store, ended: Mapping) -> list[str]:
+    """The warnings of the steps of a workflow run the engine went past since the
+    session last heard of that run: their endings are never handed over, so the
+    run's next one says them."""
+    if not ended.get("workflow_run"):
+        return []
+    heard, past = 0, []
+    for step in store.run_tasks(int(ended["workflow_run"])):
+        finished = store.last_event(step["id"], "finished")
+        if step["id"] == ended["id"] or not finished or finished["id"] > ended["finished_id"]:
+            continue
+        via = {e["data"].get("via") for e in store.events_of(step["id"], "reported")}
+        if via - {"workflow"}:
+            heard = max(heard, finished["id"])
+        elif via:
+            past.append((finished["id"], step))
+    return [f"  step {step['workflow_step']} (#{step['id']}) ran with a warning: {warning}"
+            for at, step in past if at > heard for warning in _warned(store, step["id"])]
 
 
 def _stopped_text(store: Store, tasks: list[dict]) -> str:

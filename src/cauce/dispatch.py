@@ -179,6 +179,31 @@ def decide(task: dict, ahead: Sequence[dict], **haiku_kwargs) -> Decision:
     return Decision(out["parallel"], reason or ("independent" if out["parallel"] else "may conflict"), cost)
 
 
+def waiting(store: Store, task: Mapping) -> str | None:
+    """What a queued task the dispatcher held back waits for now, in one line
+    ("waits for #46: <reason>"); None for one it has not held back, or with
+    nothing left ahead of it. The decision is made once, but the work it waits
+    for moves on: it is read from the lane as `flow.runnable` holds the task,
+    until nothing the dispatcher started runs there and nothing queued is ahead."""
+    if task.get("status") != "queued" or task.get("parallel") != 0:
+        return None
+    ahead = [t["id"] for t in store.dispatched_running(task.get("repo"))]
+    ahead += [t["id"] for t in store.queued_in(task.get("repo")) if t["id"] < task["id"]]
+    if not ahead:
+        return None
+    decided = (store.last_event(task["id"], "dispatch_decided") or {}).get("data") or {}
+    reason = task.get("parallel_reason") or decided.get("reason") or "it may conflict with the work ahead"
+    reason = reason.removeprefix("waits its turn: ")  # a model that did not answer: the line says it waits
+    # The task the decision named, else one it was judged against, else the first now
+    # ahead; whenever that is not the one the decision named, the reason says whom it
+    # was about. A decision kept before the event existed names none.
+    judged = decided.get("behind")
+    behind = next((i for i in [judged, *(decided.get("ahead") or ())] if i in ahead), ahead[0])
+    if judged and behind != judged:
+        reason += f" (judged against #{judged})"
+    return f"waits for #{behind}: {reason}"
+
+
 # --- the dispatcher process -------------------------------------------------
 #
 # One `cauce work` per repository at a time, held by a lock file. A task queued

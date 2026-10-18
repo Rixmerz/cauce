@@ -520,12 +520,15 @@ def cmd_tasks(args: argparse.Namespace) -> int:
         # cauce's own work by default: a session's turns are no task to resume or count.
         sources = None if args.turns else ("cauce", "queue")
         tasks = store.list_tasks(repo=_repo_key(args), status=args.status or None, limit=args.limit, source=sources)
+        waits = {t["id"]: dispatch.waiting(store, t) for t in tasks}
     finally:
         store.close()
     for t in tasks:
         cell = t["final_cell"] or t["start_cell"] or ""
         mark = {"hook": " (turn)", "delegation": " (subagent)"}.get(t["source"], "")
         print(f"#{t['id']:<5} {t['status']:<14} {t['kind'] or '-':<16} {cell:<14} {t['title']}{mark}")
+        if waits[t["id"]]:
+            print(f"       {waits[t['id']]}")
     return 0
 
 
@@ -544,8 +547,13 @@ def cmd_show(args: argparse.Namespace) -> int:
         print(f"#{task['id']} [{task['status']}] {task['title']}")
         print(f"repo {task['repo']}  kind {task['kind']} ({task['class_source']}: {task['class_reason']})")
         print(f"cost ${task['cost_usd']:.2f}  start {task['start_cell']}  final {task['final_cell']}")
+        if waits := dispatch.waiting(store, task):
+            print(waits)
         refused = store.denials(args.id)
         climbed = {e["data"]["seq"]: e["data"] for e in store.events_of(args.id, "moved") if "seq" in e["data"]}
+        checks: dict[int, list[dict]] = {}
+        for e in store.events_of(args.id, "verified"):
+            checks.setdefault(e["data"].get("seq"), []).append(e["data"])
         for a in store.attempts(args.id):
             verdict = "pass" if a["passed"] else (a["failure"] or "fail")
             model = f" [{a['served_model']}]" if a.get("served_model") else ""
@@ -555,6 +563,9 @@ def cmd_show(args: argparse.Namespace) -> int:
                 print(f"    {a['summary'][:300]}")
             if refused.get(a["seq"]):
                 print(f"    refused: {', '.join(refused[a['seq']])}")
+            for check in checks.get(a["seq"], ()):
+                for line in _check_lines(check):
+                    print(f"    {line}")
             move = climbed.get(a["seq"])
             if move:
                 if move.get("to_cell"):
@@ -928,6 +939,22 @@ def cmd_neighbours(args: argparse.Namespace) -> int:
     return 0
 
 
+def _check_lines(check: dict) -> list[str]:
+    """An independent check of an attempt, as its `verified` event kept it: its
+    verdict, then each blocker and each other finding, clipped like the summary."""
+    blockers = findings_mod.read({"findings": check.get("blockers") or []})
+    # The blockers are records of the findings themselves: only the very same record
+    # is left out, never another finding in a blocker's file (`findings.same` is that).
+    others = [f for f in findings_mod.read({"findings": check.get("findings") or []}) if f not in blockers]
+    verdict = "passed" if check.get("passed") else check.get("verdict") or "undecided"
+    lines = [f"independent check at {check.get('cell') or '?'}: {verdict}"
+             + (f", {len(blockers)} blocker(s)" if blockers else "")]
+    for label, found in (("blocks", blockers), ("found", others)):
+        # One line each: a proof is often a command's output, over several lines.
+        lines += [f"  {label}: {' '.join(findings_mod.text([f]).removeprefix('- ').split())}"[:300] for f in found]
+    return lines
+
+
 def cmd_queue(args: argparse.Namespace) -> int:
     store = Store.open()
     try:
@@ -945,8 +972,6 @@ def cmd_queue(args: argparse.Namespace) -> int:
                                  session_id=os.environ.get("CAUCE_SESSION_ID"))
             with contextlib.suppress(OSError, project.NotAProject):
                 project.enroll(where)
-            from cauce import dispatch
-
             then = dispatch.kick(where, repo.key(where), os.environ)
             if args.json:
                 print(json.dumps({**{k: task[k] for k in ("id", "title", "status", "repo", "cwd")}, "then": then},
@@ -964,6 +989,8 @@ def cmd_queue(args: argparse.Namespace) -> int:
             return 0
         for t in store.list_tasks(repo=_repo_key(args), status=["queued"], limit=200)[::-1]:
             print(f"#{t['id']:<5} {t['repo'] or '-'}  {t['title']}")
+            if waits := dispatch.waiting(store, t):
+                print(f"       {waits}")
         return 0
     finally:
         store.close()
