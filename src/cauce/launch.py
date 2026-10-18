@@ -147,8 +147,8 @@ When you are done, end your reply with exactly one fenced block:
   test something, a trap. Not what you changed, not guesses, not anything
   plain from reading the code, never a secret. `[]` when there is none.
 - `criteria`: when the task lists criteria `S1..Sn`, one entry for each, met or
-  not, with what shows it. A pass that leaves one out, or says one is not met,
-  is not a pass. `[]` when the task lists none.
+  not, with what shows it. A pass that leaves one out is not a pass, and nor is
+  one that says your work does not meet one. `[]` when the task lists none.
 - `findings`: when you review, audit or verify, each problem you found, as a
   record. `evidence_class` is `deterministic` when a command, a test or the
   diff shows it, `inferential` when you read it from the code, `insufficient`
@@ -160,6 +160,21 @@ When you are done, end your reply with exactly one fenced block:
   for each, with one of the words it names. A pass that leaves one out is not a
   pass. `[]` otherwise.
 """.strip()
+
+#: Added to the contract of a step whose deliverable is a verdict about other work.
+JUDGING_INSTRUCTIONS = """
+You judge work someone else did; your deliverable is that judgment. A criterion
+the work you judge does not meet, or a row you confirm, is your finding: report
+it (`met: false`, `findings`, `verdicts`) and answer `pass` when you delivered
+the judgment and can show it. `fail` is for a judgment you could not make, never
+for what you found wrong.
+""".strip()
+
+
+def instructions(spec: LaunchSpec) -> str:
+    """The result contract a worker is given, with the judging note for a step that judges."""
+    return RESULT_INSTRUCTIONS + ("\n\n" + JUDGING_INSTRUCTIONS if spec.judging else "")
+
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -320,7 +335,7 @@ def run(
     try:
         proc = runner(
             argv,
-            input=spec.prompt + "\n\n" + RESULT_INSTRUCTIONS,
+            input=spec.prompt + "\n\n" + instructions(spec),
             cwd=str(spec.launch_dir),
             capture_output=True,
             text=True,

@@ -65,6 +65,11 @@ def test_a_judging_step_that_reports_a_criterion_unmet_by_the_work_it_judges_pas
     # A step that builds or fixes keeps the rule.
     building = LaunchSpec("p", Cell("sonnet", "medium"), tmp_path, criteria=("S1", "S2"))
     assert launch.parse(proc(ok), building).failure is Failure.CODE_BUG
+    # And it is told so: a refute answered `fail` for "S1 is not met because of F4" when its
+    # contract said only that a pass reporting an unmet criterion is not a pass.
+    assert launch.JUDGING_INSTRUCTIONS in launch.instructions(judging)
+    assert launch.JUDGING_INSTRUCTIONS not in launch.instructions(building)
+    assert launch.instructions(building) == launch.RESULT_INSTRUCTIONS
 
 
 @pytest.mark.parametrize("step_kind, judges", [("review-routine", True), ("review-critical", True),

@@ -36,6 +36,14 @@
 
 ### Fixed
 
+- **A judging step is told that what it finds wrong is its finding.** A refute
+  confirmed both rows it was given, then answered `fail` because "S1 is not met
+  because of F4": the result contract said a pass reporting an unmet criterion
+  is not a pass, and nothing told the step that rule is about its own work. A
+  step that judges (a review, refute, recheck or reading kind) now gets a note
+  after the contract: a criterion the judged work misses, or a row it
+  confirms, is reported, and the verdict is `pass` when the judgment is made
+  and shown; `fail` is for a judgment it could not make.
 - **A judging step is no longer failed for what it found in the work it
   judges.** A review, refute or recheck step of a workflow (and any task of a
   reading kind) that reported "S1, S4 is not met" about the change it judged was
