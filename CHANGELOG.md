@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **The dispatcher's parallel call reads what the tasks declare.** Haiku saw
+  the first 600 characters of each task, so four builds queued with their own
+  migration numbers ("Migration version: 3", "other tasks running in parallel
+  take the other numbers", said at the end of a long goal) were read as
+  depending on each other and ran one after another. The question now gives
+  each task's opening and the lines further on that name a migration, a
+  version, a file, another task or work in parallel (migrations and parallel
+  work first, then versions and other tasks, then files; within a bound), the surfaces each task declared, and, for a running task,
+  the files git shows it changed so far in its worktree. Declared surfaces
+  that may touch another task's, or hold a file a running task already
+  changed, wait without asking the model, whatever the others declare. No
+  answer still means the task waits, and when unsure, Haiku answers false.
+
 ### Fixed
 
 - **Work that passed its own check is no longer discarded when the independent

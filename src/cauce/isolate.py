@@ -30,9 +30,10 @@ import re
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 #: Folders a build needs and git does not carry. Linked, not copied: shared with
 #: the checkout, which is why the brief tells the worker not to reinstall them.
@@ -223,7 +224,7 @@ def carry(ws: Workspace, paths: Sequence[str]) -> list[str]:
 
 
 #: A path-looking word of a task's text: `scripts/slides/`, `config.local.json`.
-_PATHLIKE = re.compile(r"(?<![\w/.-])((?:\.?[\w@-]+/)+[\w.@-]*|[\w-]+\.[A-Za-z0-9]{1,8})(?![\w/-])")
+PATHLIKE = re.compile(r"(?<![\w/.-])((?:\.?[\w@-]+/)+[\w.@-]*|[\w-]+\.[A-Za-z0-9]{1,8})(?![\w/-])")
 #: The most a copied ignored path may weigh: past it, the task says so instead.
 BRING_BYTES = 50 * 1024 * 1024
 
@@ -245,7 +246,7 @@ def ignored_named(ws: Workspace, text: str) -> list[str]:
     """Paths the task's text names that the person's checkout has, git ignores, and the
     worktree therefore lacks."""
     out = []
-    for word in sorted(set(_PATHLIKE.findall(text))):
+    for word in sorted(set(PATHLIKE.findall(text))):
         rel = word.strip("/").removeprefix("./")
         if not rel or ".." in rel.split("/") or not (ws.repo_dir / rel).exists() or (ws.path / rel).exists():
             continue
@@ -298,6 +299,21 @@ def changed(ws: Workspace) -> tuple[str, ...]:
     paths = {e[3:] for e in status.split("\0") if len(e) > 3}
     paths |= set(_git(ws.path, "diff", "--name-only", ws.base, "HEAD").splitlines())
     return tuple(sorted(p for p in paths if p and not _linked(ws, p) and not is_artifact(p)))
+
+
+def changed_so_far(root: Path, repo_dir: Path, task_id: int, started: Mapping[str, Any]) -> tuple[str, ...] | None:
+    """What a running task changed so far in its worktree, against the base its
+    attempt started from (`started` is its `attempt_started` event's data, which
+    names the base and the linked dependencies). None when git cannot say: no
+    worktree, no base, a git that failed."""
+    path = root / "worktrees" / f"task-{task_id}"
+    if not path.is_dir() or not started.get("base"):
+        return None
+    ws = Workspace(repo_dir, path, branch_for(task_id), str(started["base"]), links=tuple(started.get("links") or ()))
+    try:
+        return changed(ws)
+    except (IsolationError, OSError):
+        return None
 
 
 def undo(ws: Workspace, paths: Sequence[str]) -> None:

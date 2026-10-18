@@ -37,6 +37,141 @@ def test_any_failure_means_waiting_never_a_guess():
         assert got.parallel is False and got.reason.startswith("waits its turn")
     blank = dispatch.decide(NEW, [RUNNING], runner=_runner(_reply(parallel=True, reason="  ")))
     assert blank == dispatch.Decision(True, "independent", 0.001)
+    assert "When unsure, answer false." in dispatch.SYSTEM_PROMPT
+
+
+def _build_step(version: int) -> str:
+    """A `feature` workflow's build step: a goal long past the opening, its own
+    migration number and the line saying the others run beside it at its end."""
+    spec = "It lists, filters and exports what an operator keeps, sorted by any column, a page at a time. " * 12
+    goal = (f"Add module {version} to the back office. {spec}\nMigration version: {version}\n"
+            "Other tasks running in parallel take the other numbers.")
+    return (f"Build this feature: {goal}\n\nRead the code it touches and decide the approach yourself, then build "
+            "it with the tests that prove it works.")
+
+
+def test_haiku_reads_the_migration_each_task_declares_not_only_its_opening():
+    """Four builds queued with their own migration numbers ran one after another:
+    Haiku read the first 600 characters of each and took #47 to need #46's migration."""
+    tasks = [{"id": 46 + i, "status": "running" if i == 0 else "queued", "body": _build_step(2 + i)}
+             for i in range(4)]
+    assert all(t["body"].index("Migration version") > 600 for t in tasks)
+    run = _runner(_reply(parallel=True, reason="each takes its own migration number"))
+    got = dispatch.decide(tasks[3], tasks[:3], runner=run)
+    assert got == dispatch.Decision(True, "each takes its own migration number", 0.001)
+    asked = run.calls[0][1]["input"]
+    new, ahead = asked.split("\n\nAlready running or queued ahead of it:\n")
+    assert new.startswith("New task #49:\nBuild this feature: Add module 5") and "\n… Migration version: 5\n" in new
+    blocks = ahead.split("\n- ")
+    assert [b.split(":")[0].lstrip("- ") for b in blocks] == ["#46 (running)", "#47 (queued)", "#48 (queued)"]
+    for block, version in zip(blocks, (2, 3, 4), strict=True):
+        assert f"\n  … Migration version: {version}\n" in block
+    assert asked.count("… Other tasks running in parallel take the other numbers.") == 4
+    # Each task stays bounded: its opening and the lines that fit.
+    assert all(len(part) < dispatch.BODY_CHARS + 50 for part in (new, *blocks))
+
+
+def test_a_long_text_keeps_its_coordination_lines_first_and_within_its_bound():
+    files = "".join(f"\n- Change src/area_{i}/handler.py to read the new column." for i in range(40))
+    body = ("Rework the ledger. " * 30 + files + "\nIt runs in parallel with #12 and takes migration 7."
+            "\nUsa la migración 8 del esquema." + "\nA closing note.")
+    opening, facts = dispatch._excerpt({"body": body})
+    assert opening.startswith("Rework the ledger.") and len(opening) == dispatch.OPENING_CHARS
+    # Coordination lines are kept before the many files, and every line keeps the text's order.
+    assert facts[-2:] == ["It runs in parallel with #12 and takes migration 7.", "Usa la migración 8 del esquema."]
+    assert facts[0] == "- Change src/area_0/handler.py to read the new column." and len(facts) < 40
+    assert len(opening) + sum(len(f) + 3 for f in facts) <= dispatch.BODY_CHARS
+    # A long line is cut around what made it a fact.
+    long = "Rework the ledger. " * 70 + "word " * 100 + "then migration 9 lands " + "word " * 100
+    (fact,) = dispatch._excerpt({"body": long})[1]
+    assert "migration 9" in fact and len(fact) <= dispatch.FACT_CHARS and fact.startswith("…") and fact.endswith("…")
+    # A text that fits is read whole, as before.
+    assert dispatch._excerpt(NEW) == ("add a --dry-run flag to the importer", [])
+
+
+def test_a_declared_migration_outranks_passing_mentions_of_a_version():
+    """Several early lines about some API or Node version used up the room before the
+    line declaring the task's own migration, which a `;` had also cut from its clause."""
+    versions = "".join(f"\nBump the API version field on endpoint {i} to match the new schema." for i in range(12))
+    body = ("Rework. " * 80 + versions
+            + "\nOther tasks running in parallel take the other migration numbers; this is migration 4.")
+    opening, facts = dispatch._excerpt({"body": body})
+    assert facts[-1] == "Other tasks running in parallel take the other migration numbers; this is migration 4."
+    assert len(opening) + sum(len(f) + 3 for f in facts) <= dispatch.BODY_CHARS
+    # What is left of the room goes to the version lines, in the text's order.
+    kept = [f"Bump the API version field on endpoint {i} to match the new schema." for i in range(len(facts) - 1)]
+    assert 0 < len(kept) < 12 and facts[:-1] == kept
+
+
+def test_the_question_names_declared_surfaces_and_what_running_work_changed():
+    running = {**RUNNING, "options": json.dumps({"surfaces": ["src/importer/**"]}),
+               "changed": ["src/importer/read.py"]}
+    fresh = {"id": 3, "status": "running", "body": "add an export", "changed": []}
+    queued = {"id": 4, "status": "queued", "body": "write the docs"}
+    asked = dispatch.question({**NEW, "options": json.dumps({"surfaces": ["src/cli.py"]})}, [running, fresh, queued])
+    assert "add a --dry-run flag to the importer\nSurfaces it declared: src/cli.py\n" in asked
+    assert ("- #1 (running): rewrite the importer\n  Surfaces it declared: src/importer/**\n"
+            "  Files it changed so far (git): src/importer/read.py\n") in asked
+    assert "- #3 (running): add an export\n  Files it changed so far (git): none yet\n" in asked
+    assert asked.endswith("- #4 (queued): write the docs")  # git could not say: nothing is claimed for it
+    many = {**RUNNING, "changed": [f"f{i}.py" for i in range(dispatch.CHANGED_FILES + 5)]}
+    assert f"f{dispatch.CHANGED_FILES - 1}.py and 5 more" in dispatch.question(NEW, [many])
+
+
+def test_the_dispatcher_asks_about_what_running_work_changed_and_keeps_the_answer(store: Store, git_repo):
+    from cauce import isolate
+    from cauce.store import home
+
+    from .conftest import git
+    from .test_flow import _never
+
+    key = str(git_repo.resolve())
+    first = store.enqueue(_build_step(2), repo=key, cwd=str(git_repo))
+    store.claim(first["id"])
+    ws = isolate.prepare(git_repo, first["id"], home())
+    store.add_event(first["id"], "attempt_started", seq=1, cell="opus/high", base=ws.base, links=list(ws.links))
+    (ws.path / "schema.sql").write_text("create table crm (id int);\n")
+    git(ws.path, "add", "schema.sql")
+    git(ws.path, "commit", "-qm", "crm")
+    (ws.path / "crm.py").write_text("x = 1\n")
+    second = store.enqueue(_build_step(3), repo=key, cwd=str(git_repo))
+    run = _runner(_reply(parallel=False, reason=f"#{first['id']} changes schema.sql"))
+    assert flow.runnable(store, key, parallel=True, decide=lambda t, ahead: dispatch.decide(t, ahead, runner=run)) == []
+    asked = run.calls[0][1]["input"]
+    assert f"- #{first['id']} (running): Build this feature: Add module 2" in asked
+    assert asked.endswith("\n  Files it changed so far (git): crm.py, schema.sql")
+    assert "\n… Migration version: 3\n" in asked and "\n  … Migration version: 2\n" in asked
+    # The decision and its reason are kept on the task, once, as before.
+    kept = store.get_task(second["id"])
+    assert (kept["parallel"], kept["parallel_reason"], kept["cost_usd"]) == (0, f"#{first['id']} changes schema.sql",
+                                                                           0.001)
+    assert flow.runnable(store, key, parallel=True, decide=_never) == []
+    # Where git cannot say, nothing is claimed: no list, rather than an empty one.
+    assert isolate.changed_so_far(home(), git_repo, first["id"], {"base": "no-such-commit"}) is None
+    assert flow.with_changes(store, {"id": first["id"], "cwd": None}) == {"id": first["id"], "cwd": None}
+
+
+def test_surfaces_that_may_touch_never_start_side_by_side_whatever_the_others_declare(store: Store):
+    def queued(text, surf=None):
+        return store.enqueue(text, repo="k", cwd="/x", options={"surfaces": surf} if surf else {})
+
+    api, free = queued("a", ["src/api/**"]), queued("b")
+    for t in (api, free):
+        store.claim(t["id"])
+    mine = queued("c", ["src/api/routes.py"])
+    # One task ahead declares none: the overlap with the other is still a wait, never the model's call.
+    yes = lambda task, ahead: dispatch.Decision(True, "independent")  # noqa: E731
+    assert flow.runnable(store, "k", parallel=True, decide=yes) == []
+    kept = store.get_task(mine["id"])
+    assert (kept["parallel"], kept["parallel_reason"]) == (0, f"its surfaces may touch those of #{api['id']}")
+    # A file a running task already changed inside the surfaces the new task declared.
+    web = queued("d", ["src/web/**"])
+    touched = {**free, "changed": ["README.md", "src/web/app.ts"]}
+    assert flow.by_surfaces(web, [touched]) == dispatch.Decision(
+        False, f"#{free['id']} already changed src/web/app.ts, inside its surfaces")
+    # Outside them it is the model's call again; every task declaring, none touching, side by side.
+    assert flow.by_surfaces(web, [{**free, "changed": ["README.md"]}]) is None
+    assert flow.by_surfaces(web, [api]).parallel
 
 
 def test_one_dispatcher_per_repository(tmp_path):

@@ -386,7 +386,7 @@ def test_in_the_checkout_itself_nothing_is_undone(git_repo, store):
 
 
 def test_tasks_whose_surfaces_cannot_touch_run_side_by_side_without_a_model(store):
-    from cauce import flow
+    from cauce import dispatch, flow
 
     def queued(text, surf):
         return store.enqueue(text, repo="k", cwd="/x", options={"surfaces": surf} if surf else {})
@@ -398,7 +398,7 @@ def test_tasks_whose_surfaces_cannot_touch_run_side_by_side_without_a_model(stor
     assert not decision.parallel and f"#{a['id']}" in decision.reason
     assert flow.by_surfaces(queued("d", None), [a]) is None and flow.by_surfaces(b, [queued("e", None)]) is None
     assert flow.by_surfaces(b, []) is None
-    assert flow._surfaces_of({"options": "{"}) == ()
+    assert dispatch.declared_surfaces({"options": "{"}) == ()
 
 
 def test_a_workflow_step_carries_its_surfaces(git_repo, store, monkeypatch):

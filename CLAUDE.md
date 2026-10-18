@@ -217,8 +217,11 @@ yields the default kind, not a guess.
   Tests run with `CAUCE_VERIFIER=off`.
 - Surfaces narrow and grant nothing: a change outside them fails the attempt
   and is undone in its worktree, never in a person's checkout. Two tasks whose
-  surfaces are provably disjoint run side by side without Haiku; in doubt,
-  the dispatcher decides as before.
+  surfaces are provably disjoint run side by side without Haiku; a task whose
+  surfaces may touch another's, or hold a file a running task already changed,
+  waits without it, whatever the others declare; in doubt, the dispatcher
+  decides as before, and Haiku is shown each task's coordination lines, its
+  surfaces and what running work changed so far, never asked to guess them.
 - A move explains itself: `Decision.because` is the evidence chain (what the
   attempt ended with, the rule, where it goes) and `skipped` the rungs passed
   over. A new branch in `decide` gives both; the `moved` event keeps them.

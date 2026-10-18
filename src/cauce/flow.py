@@ -32,7 +32,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
-from cauce import config, dispatch, stops, surfaces
+from cauce import config, dispatch, isolate, stops, surfaces
 from cauce.matrix import Cell
 from cauce.orchestrate import Options, Report
 from cauce.store import Store, home
@@ -179,25 +179,33 @@ def queued_options(task: dict, defaults: Options) -> Options:
 Decide = Callable[[dict, list[dict]], dispatch.Decision]
 
 
-def _surfaces_of(task: dict) -> tuple[str, ...]:
-    try:
-        return tuple(json.loads(task.get("options") or "{}").get("surfaces") or ())
-    except ValueError:
-        return ()
-
-
 def by_surfaces(task: dict, ahead: list[dict]) -> dispatch.Decision | None:
-    """The call surfaces settle without a model: every task involved names its
-    surfaces, and they cannot touch (side by side) or they can (it waits). None
-    when one of them names none: then the dispatcher's judgment decides."""
-    mine = _surfaces_of(task)
-    theirs = [(t, _surfaces_of(t)) for t in ahead]
+    """The call surfaces settle without a model. The task waits when the surfaces it
+    declared may touch those another task declared, or hold a file a running task
+    already changed (`changed`, from git), whatever the others declare; it starts
+    beside the work ahead when every task involved declares surfaces and they cannot
+    touch. None otherwise: then the dispatcher's judgment decides."""
+    mine = dispatch.declared_surfaces(task)
+    theirs = [(t, dispatch.declared_surfaces(t)) for t in ahead]
+    for t, declared in theirs if mine else ():
+        if declared and not surfaces.disjoint(mine, declared):
+            return dispatch.Decision(False, f"its surfaces may touch those of #{t['id']}")
+        touched = next((p for p in t.get("changed") or () if surfaces.allows(mine, p)), None)
+        if touched is not None:
+            return dispatch.Decision(False, f"#{t['id']} already changed {touched}, inside its surfaces")
     if not mine or not theirs or any(not s for _, s in theirs):
         return None
-    clash = next((t for t, s in theirs if not surfaces.disjoint(mine, s)), None)
-    if clash is not None:
-        return dispatch.Decision(False, f"its surfaces may touch those of #{clash['id']}")
     return dispatch.Decision(True, "its surfaces cannot touch those of the work ahead")
+
+
+def with_changes(store: Store, task: dict) -> dict:
+    """A running task with the files git shows it changed so far in its worktree, as
+    `changed`; as it is when git cannot say (no worktree, no attempt started yet)."""
+    if not task.get("cwd"):
+        return task
+    started = store.last_event(task["id"], "attempt_started")
+    files = isolate.changed_so_far(home(), Path(task["cwd"]), task["id"], started["data"] if started else {})
+    return task if files is None else {**task, "changed": list(files)}
 
 
 def runnable(store: Store, repo: str | None, *, parallel: bool, decide: Decide) -> list[dict]:
@@ -209,7 +217,7 @@ def runnable(store: Store, repo: str | None, *, parallel: bool, decide: Decide) 
         if lane["paused"] or not lane["queued"] or (repo is not None and lane["repo"] != repo):
             continue
         running = store.dispatched_running(lane["repo"])
-        ahead, mine = list(running), 0
+        ahead, mine, read = list(running), 0, False
         for task in store.queued_in(lane["repo"]):
             if len(running) + mine >= MAX_PARALLEL:
                 break
@@ -217,6 +225,10 @@ def runnable(store: Store, repo: str | None, *, parallel: bool, decide: Decide) 
                 if not parallel:
                     break
                 if task["parallel"] is None:
+                    if not read:
+                        # Git is read only when a task is to be judged, and once a pass.
+                        ahead[:len(running)] = [with_changes(store, t) for t in running]
+                        read = True
                     decision = by_surfaces(task, ahead) or decide(task, ahead)
                     store.set_parallel(task["id"], decision.parallel, decision.reason)
                     if decision.cost_usd:

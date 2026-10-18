@@ -17,19 +17,43 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import hashlib
+import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from cauce import config
 from cauce.classify import ask_haiku
+from cauce.isolate import PATHLIKE
 from cauce.store import Store, home
+from cauce.text import fold
 
-#: How much of each task the model reads. Enough to see what it touches.
-BODY_CHARS = 600
+#: How much of each task's text the model reads: all of it when it fits, else its
+#: opening and then the lines that carry a coordination fact, which a long text
+#: (a workflow step's, a feature's spec) puts anywhere, often last.
+BODY_CHARS = 1200
+OPENING_CHARS = 400
+#: The most one such line takes, cut around what made it one.
+FACT_CHARS = 200
+#: The most files a running task changed that the question names.
+CHANGED_FILES = 40
+
+#: A coordination fact, read on the folded text (`text.fold`: `migración` is
+#: `migracion`), in two ranks: a migration or work beside it (`parallel`,
+#: `paralelo`) says how the task takes its place among the others; a version or
+#: another task by its number only may, since a spec mentions versions of
+#: everything. A line naming a file (`isolate.PATHLIKE`) is one too, ranked last:
+#: a long text names many files.
+_DECLARES = re.compile(r"\bmigra|\bparal+el")
+_MENTIONS = re.compile(r"\bversion|#\d+")
+#: Where a task's text is cut into lines: its line breaks, and its sentences (a
+#: clause after `;` stays with the sentence it belongs to).
+_SEGMENT = re.compile(r"\n+|(?<=[.!?])\s+")
 
 SYSTEM_PROMPT = (
     "You decide whether a new software task can start now, at the same time as other tasks in "
@@ -37,8 +61,14 @@ SYSTEM_PROMPT = (
     "repository and its changes are merged afterwards. Answer parallel=true only when the new "
     "task needs nothing another task will produce, and is unlikely to change the same files, the "
     "same functions or the same behaviour as any of them. Reading-only tasks (questions, reviews, "
-    "searches) can always run in parallel. When unsure, answer false. The reason is one short "
-    "sentence naming the task it conflicts with, if any."
+    "searches) can always run in parallel. Each task is shown by the opening of its text and the "
+    "lines further on (marked …) that say how it coordinates with other work. What a task's text "
+    "declares is a fact: a migration or version number it gives itself, while the other tasks take "
+    "the other numbers, is no dependency on the tasks numbered before it; only what its text says "
+    "it needs from another task is. The surfaces a task declared are the only files it may change, "
+    "and the files a running task changed so far are read from git: judge overlap on those, not on "
+    "guesses. When unsure, answer false. The reason is one short sentence naming the task it "
+    "conflicts with, if any."
 )
 
 SCHEMA = {
@@ -59,14 +89,82 @@ class Decision:
     cost_usd: float = 0.0
 
 
-def _excerpt(task: dict) -> str:
-    body = " ".join(str(task.get("body") or task.get("title") or "").split())
-    return body if len(body) <= BODY_CHARS else body[:BODY_CHARS - 1] + "…"
+def declared_surfaces(task: Mapping[str, Any]) -> tuple[str, ...]:
+    """The surfaces a task was queued with (`--surface`, a workflow step's)."""
+    try:
+        return tuple(json.loads(task.get("options") or "{}").get("surfaces") or ())
+    except ValueError:
+        return ()
 
 
-def question(task: dict, ahead: Sequence[dict]) -> str:
-    lines = [f"New task #{task['id']}:", _excerpt(task), "", "Already running or queued ahead of it:"]
-    lines += [f"- #{t['id']} ({t['status']}): {_excerpt(t)}" for t in ahead]
+def _clip(line: str, at: int) -> str:
+    """`line` in at most `FACT_CHARS`, keeping what sits at `at` and a little before it."""
+    if len(line) <= FACT_CHARS:
+        return line
+    start = max(0, min(at - FACT_CHARS // 4, len(line) - FACT_CHARS + 2))
+    end = start + FACT_CHARS - 2
+    return ("…" if start else "") + line[start:end] + ("…" if end < len(line) else "")
+
+
+def _excerpt(task: Mapping[str, Any]) -> tuple[str, list[str]]:
+    """What the model reads of a task's text, whitespace collapsed: all of it when it
+    fits in `BODY_CHARS`; else its opening, and the lines past it that carry a
+    coordination fact (those declaring a migration or parallel work first, then those mentioning a
+    version or another task, then those naming a file), in
+    the text's order, as many as fit in the same bound."""
+    raw = str(task.get("body") or task.get("title") or "")
+    whole = " ".join(raw.split())
+    if len(whole) <= BODY_CHARS:
+        return whole, []
+    opening = whole[:OPENING_CHARS - 1] + "…"
+    found, offset = [], 0
+    for n, line in enumerate(" ".join(part.split()) for part in _SEGMENT.split(raw) if part.strip()):
+        offset += len(line) + 1
+        if offset - 1 <= OPENING_CHARS - 1:
+            continue  # read whole in the opening
+        folded = fold(line)
+        if hit := _DECLARES.search(folded):
+            rank = 0
+        elif hit := _MENTIONS.search(folded):
+            rank = 1
+        elif hit := PATHLIKE.search(line):
+            rank = 2
+        else:
+            continue
+        found.append((rank, n, _clip(line, hit.start())))
+    room, kept = BODY_CHARS - len(opening), []
+    for _, n, line in sorted(found):
+        if len(line) + 3 <= room:
+            room -= len(line) + 3
+            kept.append((n, line))
+    return opening, [line for _, line in sorted(kept)]
+
+
+def _files(paths: Sequence[str]) -> str:
+    if not paths:
+        return "none yet"
+    more = len(paths) - CHANGED_FILES
+    return ", ".join(paths[:CHANGED_FILES]) + (f" and {more} more" if more > 0 else "")
+
+
+def _described(task: Mapping[str, Any]) -> list[str]:
+    opening, facts = _excerpt(task)
+    lines = [opening, *(f"… {fact}" for fact in facts)]
+    if declared := declared_surfaces(task):
+        lines.append("Surfaces it declared: " + ", ".join(declared))
+    if task.get("changed") is not None:
+        lines.append("Files it changed so far (git): " + _files(task["changed"]))
+    return lines
+
+
+def question(task: Mapping[str, Any], ahead: Sequence[Mapping[str, Any]]) -> str:
+    """The new task and the work ahead of it, each as `_excerpt` reads it, with the
+    surfaces it declared and, for a running task whose worktree git could read
+    (`changed`, which the dispatcher sets), the files it changed so far."""
+    lines = [f"New task #{task['id']}:", *_described(task), "", "Already running or queued ahead of it:"]
+    for t in ahead:
+        opening, *rest = _described(t)
+        lines += [f"- #{t['id']} ({t['status']}): {opening}", *(f"  {line}" for line in rest)]
     return "\n".join(lines)
 
 

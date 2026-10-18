@@ -916,14 +916,9 @@ def progress(store: Store, run: Mapping[str, Any], task: Mapping[str, Any]) -> d
         out["attempt"] = started["data"].get("seq")
     if task["status"] == "running":
         out["phase"] = phase.of(task["id"], out.get("attempt"))
-        tree = home() / "worktrees" / f"task-{task['id']}"
-        data = started["data"] if started else {}
-        if tree.is_dir() and data.get("base"):
-            # The worktree against the base its run started from, its linked dependencies aside.
-            with contextlib.suppress(isolate.IsolationError, OSError):
-                ws = isolate.Workspace(Path(run["cwd"]), tree, isolate.branch_for(task["id"]), data["base"],
-                                       links=tuple(data.get("links") or ()))
-                out["files"] = list(isolate.changed(ws))
+        files = isolate.changed_so_far(home(), Path(run["cwd"]), task["id"], started["data"] if started else {})
+        if files is not None:
+            out["files"] = list(files)
         return out
     finished = (store.last_event(task["id"], "finished") or {}).get("data") or {}
     out["files"] = list(finished.get("changed") or [])
