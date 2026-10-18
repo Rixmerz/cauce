@@ -3,7 +3,7 @@
 // runs are started, retried and cancelled from a session (`cauce workflow …`).
 import { get } from "./net.js";
 import { curve, label, s } from "./svg.js";
-import { h, short, usd, when } from "./util.js";
+import { h, short, statusBadge, usd, when } from "./util.js";
 
 const COL = 210, ROW = 64, W = 176, BOX = 46, PAD = 12;
 const WAITS = new Set(["failed", "blocked", "replan", "needs_approval", "interrupted", "cancelled", "dismissed"]);
@@ -35,7 +35,8 @@ function graph(run, ctx) {
   const nodes = run.steps.map((step) => {
     const { x, y } = at[step.id];
     const open = step.task ? () => ctx.openTask(step.task) : null;
-    const sub = [step.state, step.cell, step.tries > 1 ? `try ${step.tries}` : null].filter(Boolean).join(" · ");
+    const sub = [step.state, step.parts ? `${step.parts.length} parts` : step.cell,
+      step.tries > 1 ? `try ${step.tries}` : null].filter(Boolean).join(" · ");
     return s("g", {
       class: `wf-node ${stateClass(step.state)}${open ? " link" : ""}`, transform: `translate(${x},${y})`,
       tabindex: open ? 0 : null, role: open ? "button" : null, onclick: open,
@@ -64,6 +65,11 @@ function runCard(run, ctx) {
     h("div", { class: "progress", title: `${done} of ${total} steps passed` },
       bar, h("em", {}, `${done}/${total}`)),
     h("div", { class: "wf-scroll" }, graph(run, ctx)),
+    // A step run in parts (a plan's, or a large review's areas): each part under it, with its own task.
+    run.steps.filter((st) => st.parts).map((st) => h("div", { class: "row wf-parts" },
+      h("span", { class: "meta" }, `${st.id} in parts:`),
+      st.parts.map((p) => h("button", { class: "chip", title: p.result || "", onclick: () => ctx.openTask(p.task) },
+        `${p.id} `, statusBadge(p.state))))),
     run.waiting.length ? h("div", { class: "asks" },
       `waits on you at ${run.waiting.join(", ")}: open the step for why; go on with cauce resume <task> `
       + `or cauce workflow retry ${run.id} <step> in a session`) : null,

@@ -230,6 +230,7 @@ code.anchor { font-family: var(--mono); font-size: 12px; margin-right: 6px; over
 .wf-run { margin-bottom: var(--gap); }
 .wf-scroll, .map-scroll { overflow: auto; max-width: 100%; }
 .wf-graph { display: block; margin-top: 8px; }
+.wf-parts { flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .wf-node rect { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
 .wf-node.done rect { stroke: var(--ok); fill: color-mix(in srgb, var(--ok) 8%, var(--panel)); }
 .wf-node.now rect { stroke: var(--accent); fill: var(--accent-soft); }
@@ -372,6 +373,9 @@ pre.diff .file { font-weight: 600; }
 .phasebar { display: flex; height: 22px; border-radius: var(--radius-sm); overflow: hidden; background: var(--sunk);
             margin-bottom: 10px; }
 .phasebar span { flex: 0 1 0; min-width: 2px; }
+.ph-advance { background: repeating-linear-gradient(45deg, var(--queue) 0 4px, var(--panel) 4px 7px); }
+.ph-pickup { background: color-mix(in srgb, var(--queue) 65%, var(--panel)); }
+.ph-spawn { background: repeating-linear-gradient(-45deg, var(--accent) 0 4px, var(--panel) 4px 7px); }
 .ph-queued { background: var(--queue); } .ph-plan { background: var(--m-sonnet); } .ph-setup { background: var(--warn); }
 .ph-worker { background: var(--accent); } .ph-check { background: var(--ok); } .ph-verifier { background: var(--m-opus); }
 .ph-wait { background: var(--bad); }

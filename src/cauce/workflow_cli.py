@@ -22,7 +22,7 @@ from cauce.store import Store
 NOW_HELP = ("write the change at once even while runs use the workflow (they go on with the copy they started "
             "with); without it the change waits for them")
 STEP_FLAGS = (("title", str), ("prompt", str), ("kind", str), ("role", str), ("verify", str), ("start", str),
-              ("max_turns", int), ("ledger", str))
+              ("max_turns", int), ("ledger", str), ("fanout", str))
 
 
 def _cwd(args: argparse.Namespace) -> Path:
@@ -41,6 +41,8 @@ def _step_fields(args: argparse.Namespace) -> dict[str, Any]:
         out["memory"] = [m.strip() for m in args.memory.split(",") if m.strip()] or None
     if getattr(args, "surfaces", None) is not None:
         out["surfaces"] = [m.strip() for m in args.surfaces.split(",") if m.strip()] or None
+    if getattr(args, "integrate", False):
+        out["integrate"] = True
     return out
 
 
@@ -65,8 +67,8 @@ def _print_definition(defn: dict[str, Any]) -> None:
     print(f"  inputs: {', '.join(defn['inputs']) or 'none'}")
     for step in defn["steps"]:
         after = f" after {', '.join(step['needs'])}" if step["needs"] else " (first)"
-        extra = ", ".join(f"{k} {step[k]}" for k in ("kind", "start", "verify", "max_turns")
-                          if step.get(k) is not None)
+        extra = ", ".join(f"{k} {step[k]}" for k in ("kind", "start", "verify", "max_turns", "fanout")
+                          if step.get(k) is not None) + (", integrate" if step.get("integrate") else "")
         print(f"\n  {step['id']} — {step['title']}{after}" + (f" [{extra}]" if extra else ""))
         for line in step["prompt"].splitlines():
             print(f"      {line}")
@@ -133,6 +135,8 @@ def _print_run(run: dict[str, Any], *, full: bool = False) -> None:
         print(f"  {name}: {value if full else _clip(value)}")
     for step in run["steps"]:
         print(f"  {MARK.get(step['state'], '!')} {step['id']:<14} {_step_line(step)}")
+        for part in step.get("parts") or ():
+            print(f"    {MARK.get(part['state'], '!')} {part['id']:<12} {_step_line(part)}")
     if run["waiting"]:
         print(f"  waits on you: {', '.join(run['waiting'])} — `cauce show <task>`, then `cauce resume <task>` "
               f"or `cauce workflow retry {run['id']} <step>`")
@@ -237,7 +241,11 @@ def cmd_workflow(args: argparse.Namespace) -> int:
                 return 0
             if what == "retry":
                 task = workflows.retry(store, args.run, args.step)
-                print(f"run #{args.run}: step {args.step} queued again as #{task['id']}")
+                if task.get("parts_retried"):
+                    print(f"run #{args.run}: step {args.step}: " + ", ".join(
+                        f"{part} queued again as #{tid}" for part, tid in task["parts_retried"]))
+                else:
+                    print(f"run #{args.run}: step {args.step} queued again as #{task['id']}")
                 return 0
         finally:
             store.close()
@@ -488,11 +496,14 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         p.add_argument("--memory", help="memory its brief carries, comma-separated: note:<id> (or <id>), "
                        "topic:<name>, problem:<id>")
         p.add_argument("--surfaces", help="comma-separated paths or globs the step may change")
+        p.add_argument("--integrate", action="store_true",
+                       help="join the branches the parts of a fanout step before it kept, in the plan's order")
         if verb == "add":
             p.add_argument("--after", metavar="STEP", help="insert it after this step")
         else:
             p.add_argument("--clear", action="append",
-                           choices=[*(f for f, _ in STEP_FLAGS if f != "prompt"), "memory", "surfaces"])
+                           choices=[*(f for f, _ in STEP_FLAGS if f != "prompt"), "memory", "surfaces",
+                                    "integrate"])
 
     p = wsub.add_parser("pending", help="changes waiting for the runs that use their workflow to end")
     p.add_argument("name", nargs="?")

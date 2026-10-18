@@ -63,11 +63,12 @@ def target(store: Store, *, task_id: int | None = None, run_id: int | None = Non
             raise AfterError(f"there is no workflow run #{run_id}")
         if run["status"] == "cancelled":
             raise AfterError(f"run #{run_id} was cancelled: nothing it does will pass")
-        for step, task in _latest(store, run_id).items():
+        for task in _latest(store, run_id).values():
             if _work_dropped(store, task):
-                raise AfterError(f"run #{run_id} stopped at step {step!r} (task #{task['id']}), which "
-                                 f"{_ended(store, task)}: `cauce workflow retry {run_id} {step}` first, or queue "
-                                 "this without --after")
+                # A part is retried by its step's id: a retry runs again the parts that did not pass.
+                raise AfterError(f"run #{run_id} stopped at {_at(task, 'task #')}, which "
+                                 f"{_ended(store, task)}: `cauce workflow retry {run_id} {task['workflow_step']}` "
+                                 "first, or queue this without --after")
         return {"run": int(run_id)}
     assert task_id is not None
     task = store.get_task(task_id)
@@ -103,11 +104,28 @@ def _ended(store: Store, task: Mapping[str, Any]) -> str:
 
 
 def _latest(store: Store, run_id: int) -> dict[str, dict]:
-    """Each step's newest task in a run (a retried step's last try is the one that counts)."""
+    """Each step's newest task in a run (a retried step's last try is the one that counts);
+    a step run in parts, each part's, as `step/part`."""
     out: dict[str, dict] = {}
     for task in store.run_tasks(run_id):
-        out[task["workflow_step"]] = task
+        part = _part_id(task)
+        out[f"{task['workflow_step']}/{part}" if part else task["workflow_step"]] = task
     return out
+
+
+def _part_id(task: Mapping[str, Any]) -> str | None:
+    """The part of its step a run's task is, None for a step run whole."""
+    try:
+        return (json.loads(task.get("options") or "{}").get("part") or {}).get("id")
+    except (ValueError, AttributeError):
+        return None
+
+
+def _at(task: Mapping[str, Any], label: str) -> str:
+    """Where in its run a task is, as a person names it: "step 'build' (part web, #12)",
+    `label` before its number."""
+    part = _part_id(task)
+    return f"step {task['workflow_step']!r} ({f'part {part}, ' if part else ''}{label}{task['id']})"
 
 
 def waiting(store: Store, task: Mapping[str, Any]) -> str | None:
@@ -124,11 +142,11 @@ def waiting(store: Store, task: Mapping[str, Any]) -> str | None:
             return f"waits for run #{run_id}, which no longer exists: `cauce dismiss {task['id']}` drops this"
         if run["status"] == "cancelled":
             return f"waits for run #{run_id}, which stopped as cancelled: `cauce dismiss {task['id']}` drops this"
-        stopped = next(((step, t) for step, t in _latest(store, run_id).items()
+        stopped = next((t for t in _latest(store, run_id).values()
                         if t["status"] not in ("queued", "running", "done")), None)
         if stopped is not None:
-            step, t = stopped
-            return (f"waits for run #{run_id}, which stopped at step {step!r} (#{t['id']}) as "
+            t = stopped
+            return (f"waits for run #{run_id}, which stopped at {_at(t, '#')} as "
                     f"{_ended(store, t).removeprefix('stopped as ')}: a resume of it to a pass releases this")
         return f"waits for run #{run_id} to pass"
     task_id = int(wanted.get("task") or 0)

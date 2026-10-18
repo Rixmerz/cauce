@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from cauce import dispatch, flow, habits, phase, project, stops, usage
+from cauce import capacity, config, dispatch, flow, habits, phase, project, stops, usage
 from cauce.matrix import LADDERS
 from cauce.store import Store
 
@@ -142,7 +142,16 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
             queued[repo] = {"repo": repo, "paused": True, "reason": lane["reason"], "tasks": []}
     for lane in queued.values():
         lane["dispatching"] = dispatch.held(store.path.parent, lane["repo"] or "*")
+    # The workers this machine runs at once, every repository's together, and each lane's share.
+    ceiling = config.max_parallel(os.environ)
+    level = capacity.current(store.path.parent, ceiling=ceiling)
+    shared = flow.shares(store, level.value)
+    for lane in queued.values():
+        if (share := shared.get(lane["repo"] or None)) is not None:
+            lane["share"] = share.data()
     return {
+        "capacity": {"level": level.value, "line": capacity.line(level), "ceiling": ceiling,
+                     "lanes": {k or "": v.data() for k, v in shared.items() if repos is None or k in repos}},
         "counts": {"needs_you": len(needs), "running": len(running),
                    "workers": sum(1 for r in running if r.get("worker")),
                    "queued": sum(len(v["tasks"]) for v in queued.values()), "done": len(done),

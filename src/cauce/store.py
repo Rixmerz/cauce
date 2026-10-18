@@ -604,6 +604,21 @@ class Store:
             (repo,)).fetchall()
         return [dict(r) for r in rows]
 
+    def dispatched_counts(self) -> dict[str | None, int]:
+        """How many tasks the dispatcher runs now in each lane, every repository's."""
+        rows = self._conn.execute("SELECT repo, count(*) AS n FROM tasks WHERE status = 'running' AND dispatched = 1 "
+                                  "GROUP BY repo").fetchall()
+        return {r["repo"]: int(r["n"]) for r in rows}
+
+    def capacity_events(self, after: int, *, limit: int = 2000) -> list[dict]:
+        """The attempts and endings since event `after`, oldest first, each with whether
+        the dispatcher started its task: what the machine's level reads (`cauce.capacity`)."""
+        rows = self._conn.execute(
+            "SELECT e.*, COALESCE(t.dispatched, 0) AS dispatched FROM events e LEFT JOIN tasks t ON t.id = e.task_id "
+            "WHERE e.id > ? AND e.kind IN ('attempt_finished', 'finished') ORDER BY e.id LIMIT ?",
+            (after, limit)).fetchall()
+        return [{**dict(r), "data": json.loads(r["data"])} for r in rows]
+
     def set_parallel(self, task_id: int, parallel: bool, reason: str) -> None:
         self.update_task(task_id, parallel=int(parallel), parallel_reason=reason)
 

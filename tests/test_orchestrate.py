@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -1543,3 +1544,111 @@ def test_a_task_that_changed_many_files_counts_them_all_on_its_ending(git_repo, 
     assert len(report.changed) == 106 and finished["changed_n"] == 106
     assert finished["changed"] == report.changed
     assert git(git_repo, "diff", "--name-only", "main", finished["branch"]).count("\n") + 1 == 106
+
+
+def _two_branches(repo, *, conflict: bool) -> str:
+    """Two part branches from the base: both change app.py (a conflict), or each its own file."""
+    from .conftest import git
+
+    base = git(repo, "rev-parse", "HEAD")
+    for n, text in ((901, "api"), (902, "web")):
+        git(repo, "branch", f"cauce/task-{n}", base)
+        git(repo, "checkout", "-q", f"cauce/task-{n}")
+        (repo / ("app.py" if conflict else f"{text}.py")).write_text(f"print('{text}')\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", f"{text} part")
+        git(repo, "checkout", "-q", "main")
+    return base
+
+
+JOIN = {"branches": [{"part": "api", "task": 901, "branch": "cauce/task-901"},
+                     {"part": "web", "task": 902, "branch": "cauce/task-902"}],
+        "contract": "- main() prints one line"}
+
+
+def test_a_conflict_makes_the_integrate_step_a_worker_told_the_files_the_branch_and_the_contract(git_repo, store):
+    from .conftest import git
+
+    base = _two_branches(git_repo, conflict=True)
+    told = []
+
+    def resolve(spec):
+        told.append(spec.prompt)
+        work = spec.target_dir
+        subprocess.run(["git", "merge", "--no-edit", "cauce/task-902"], cwd=work, capture_output=True)
+        (work / "app.py").write_text("print('api and web')\n")
+        git(work, "add", "app.py")
+        git(work, "commit", "-q", "--no-edit")
+        return ok("resolved app.py")
+
+    report = run("Join the parts", git_repo, store, Options(kind="implement", base=base, integrate=JOIN),
+                 registry={}, launcher=resolve, classifier=kind("implement"), adapters=[])
+    assert report.status == "done" and len(told) == 1
+    brief = told[0]
+    assert "api merged cleanly" in brief and "Merging `cauce/task-902` (the web part) conflicts in: app.py" in brief
+    assert "`git merge --no-edit cauce/task-902`" in brief and "> - main() prints one line" in brief
+    joined = store.last_event(report.task_id, "integrated")["data"]
+    assert joined["merged"] == ["cauce/task-901"] and joined["conflict"] == "cauce/task-902"
+    assert joined["files"] == ["app.py"]
+    assert git(git_repo, "show", f"{report.branch}:app.py") == "print('api and web')"
+
+
+def test_a_new_model_on_a_conflicting_join_starts_from_the_parts_that_joined_cleanly(git_repo, store):
+    from .conftest import git
+
+    base = _two_branches(git_repo, conflict=True)
+    seen = []
+
+    def launcher(spec):
+        work = spec.target_dir
+        seen.append(((work / "app.py").read_text(), spec.cell.model))
+        if len(seen) == 1:
+            (work / "app.py").write_text("print('a wrong guess')\n")
+            return bad(Failure.APPROACH, "rewrote the wrong module")
+        subprocess.run(["git", "merge", "--no-edit", "cauce/task-902"], cwd=work, capture_output=True)
+        (work / "app.py").write_text("print('api and web')\n")
+        git(work, "add", "app.py")
+        git(work, "commit", "-q", "--no-edit")
+        return ok("resolved app.py")
+
+    report = run("Join the parts", git_repo, store, Options(kind="implement", base=base, integrate=JOIN),
+                 registry={}, launcher=launcher, classifier=kind("implement"), adapters=[])
+    assert report.status == "done" and len(seen) == 2 and seen[0][1] != seen[1][1]
+    # The worktree went back to the base, and the api part, which joined cleanly, was joined again.
+    assert seen[1][0] == "print('api')\n"
+    assert "Join the api part" in git(git_repo, "log", "--format=%s", report.branch)
+
+
+def test_a_clean_join_whose_check_fails_goes_to_a_worker_with_the_output(git_repo, store):
+    base = _two_branches(git_repo, conflict=False)
+    told = []
+
+    def fix(spec):
+        told.append(spec.prompt)
+        (spec.target_dir / "glue.py").write_text("import api, web\n")
+        return ok("glued")
+
+    report = run("Join the parts", git_repo, store,
+                 Options(kind="implement", base=base, integrate=JOIN, verify="test -f glue.py && echo joined"),
+                 registry={}, launcher=fix, classifier=kind("implement"), adapters=[])
+    assert report.status == "done" and len(told) == 1
+    assert "merged cleanly (api, web), but the run's check `test -f glue.py && echo joined` fails" in told[0]
+    # A clean join whose check passes needs no worker at all.
+    clean = run("Join the parts again", git_repo, store,
+                Options(kind="implement", base=base, integrate=JOIN, verify="test -f api.py && test -f web.py"),
+                registry={}, launcher=lambda spec: pytest.fail("no worker for a clean join"),
+                classifier=kind("implement"), adapters=[])
+    assert clean.status == "done" and "joined 2 parts cleanly (api, web)" in clean.summary
+    assert "`test -f api.py && test -f web.py` passed on the joined work" in clean.summary
+    assert sorted(clean.changed) == ["api.py", "web.py"] and clean.branch
+
+
+def test_an_integrate_step_with_a_branch_that_is_gone_stops_for_the_environment(git_repo, store):
+    from .conftest import git
+
+    base = git(git_repo, "rev-parse", "HEAD")
+    report = run("Join the parts", git_repo, store, Options(kind="implement", base=base, integrate=JOIN),
+                 registry={}, launcher=lambda spec: pytest.fail("no worker"), classifier=kind("implement"),
+                 adapters=[])
+    assert report.status == "blocked" and report.stop.cause == "environment"
+    assert "could not join the parts" in report.stop.reason

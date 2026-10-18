@@ -34,6 +34,12 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # cauce's own suite may run inside a cauce worker, which refuses to start work.
     monkeypatch.delenv("CAUCE_WORKER_TASK", raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    # The dispatcher's level starts at what the machine holds: in a test, a fixed machine
+    # of three CPUs whose memory and disk say nothing, whatever runs the suite.
+    from cauce import capacity
+
+    monkeypatch.setattr(capacity, "machine", lambda root=None: capacity.Machine(cpus=3, memory_mb=None, disk_mb=None))
+    monkeypatch.delenv("CAUCE_MAX_PARALLEL", raising=False)
     for var, value in {
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
         "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),

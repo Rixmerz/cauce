@@ -17,6 +17,7 @@ from cauce import (
     __version__,
     after,
     capabilities,
+    capacity,
     config,
     dispatch,
     flow,
@@ -884,6 +885,15 @@ def cmd_config(args: argparse.Namespace) -> int:
     if args.value is None:
         print(json.dumps(config.load()[args.key]))
         return 0
+    if args.key == "max_parallel":
+        picked = config.ceiling_word(args.value)
+        if picked is None:
+            print("expected auto or a whole number from 1: the most workers this machine runs at once",
+                  file=sys.stderr)
+            return 1
+        config.save({args.key: picked})
+        print(f"{args.key} = {json.dumps(picked)}")
+        return 0
     if args.key in config.CHOICES:
         picked = config.word(args.key, args.value)
         if picked is None:
@@ -1068,9 +1078,17 @@ def cmd_lanes(args: argparse.Namespace) -> int:
             store.unpause_lane(key)
             print(f"unpaused {key}" + (", started its dispatcher" if _go_on(store, key) else ""))
             return 0
-        for lane in store.lanes():
+        # The workers this machine runs at once, and each lane's share of them (`cauce.capacity`).
+        ceiling = config.max_parallel(os.environ)
+        level = capacity.current(home(), ceiling=ceiling)
+        print(f"workers: {capacity.line(level)} · max_parallel {ceiling or 'auto'}")
+        shared = flow.shares(store, level.value)
+        rows = {lane["repo"] or None: lane for lane in store.lanes()}
+        for key in [*rows, *(k for k in shared if k not in rows)]:
+            lane = rows.get(key) or {"queued": 0, "paused": 0}
             state = f"paused: {lane['reason']}" if lane["paused"] else "open"
-            print(f"{lane['repo'] or '-'}  {lane['queued']} queued  {state}")
+            share = f" · {shared[key].text()}" if key in shared else ""
+            print(f"{key or '-'}  {lane['queued']} queued  {state}{share}")
         return 0
     finally:
         store.close()

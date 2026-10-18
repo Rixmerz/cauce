@@ -33,13 +33,14 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
 | `src/cauce/habits.py` | mining sequences per repository (and the ones several repositories share), recipes for the brief, and approval-gated habit hooks |
 | `src/cauce/usage.py` | tokens per model from session transcripts and their subagents' (counted to the delegation that started each), spend by model and cell, and what a task's or a session's own turns cost |
-| `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, the stale sweep |
+| `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, as many at once as the machine's level allots each lane (`pick`), the stale sweep |
+| `src/cauce/capacity.py` | how many workers this machine runs at once: the level, kept in the cauce home, that starts at what the machine holds and rises or halves on the API's and the machine's own signals, and its allotment to the lanes by reserve and lending; stdlib |
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
 | `src/cauce/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
@@ -55,9 +56,9 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step; `svg.js` draws the workflow graphs and the project map node by node |
 | `src/cauce/compact.py` | the facts of a session (requests verbatim, failed calls, changed files), written before a compaction and put back after it; no model call |
 | `src/cauce/scribe.py` | the scribe: at every turn's end, what a session's transcript gained (requests verbatim, corrections, files written, failed calls and the one that passed after), kept in the cauce home; the thread a task the session sent gets in its brief, when the notes are due, and the relay to a fresh session; no model call |
-| `src/cauce/analysis.py` | where cauce's time and money go (`cauce stats`, the UI's Analysis): runs from `planned` to `finished`, their timed phases, attempts by cell, the session's thread in briefs, a session's own turns; read only, no model |
+| `src/cauce/analysis.py` | where cauce's time and money go (`cauce stats`, the UI's Analysis): runs from `planned` to `finished`, their timed phases (and the gaps before them: advance, pickup, spawn), attempts by cell, the session's thread in briefs, a session's own turns; read only, no model |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
-| `src/cauce/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; `workflow_cli.py` is `cauce workflow …` |
+| `src/cauce/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; a step that fans out over a plan's parts, one that joins their branches, a large change's review by area; `workflow_cli.py` is `cauce workflow …` |
 | `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
 | `src/cauce/services.py` | the servers a task needs up (`--service 'cmd@port'`): started in the task's directory, waited for, stopped with their process group when the run ends |
 | `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified |
@@ -357,6 +358,31 @@ yields the default kind, not a guess.
   line. Tests run with
   `CAUCE_PARALLEL=off`, `CAUCE_AUTOWORK=off` and `CAUCE_NAMES=off`; a test
   that wants them passes a fake `decide`, `start` or `popen`.
+- Scaling has two axes, and money moves neither. Horizontal scaling is the
+  number of workers this machine runs at once: the dispatcher's level
+  (`cauce.capacity`), kept in the person's cauce home, never a fixed number.
+  It starts at what the machine can hold (its CPUs, free memory and the free
+  disk where worktrees live, each worker counted at `WORKER_MEMORY_MB` and
+  `WORKTREE_DISK_MB`, at least 1), rises by one when work waits for a worker
+  and a round of the tasks it started (as many as the level) ended with no
+  limit, and halves, never below 1, on a rate limit or an overloaded API
+  (read from the CLI's own result, `launch.api_limit`, never from a check's
+  output), on a worker the machine starved (a CLI or a `run-queued` process
+  killed, a full disk) or on free memory or disk under its constant; after a
+  rate limit it does not rise before the retry-after. `max_parallel` (`auto`
+  or a number) is the person's ceiling, and the level adapts under it. Each
+  change is a `level_changed` event, on the task that caused it or on task 0
+  when the machine did. The lanes share the level by reserve and lending: with
+  level L and k lanes with work to run, each is reserved max(1, L // k),
+  granted in the order its oldest work was queued while L lasts; what a lane
+  does not use is lent, and a lent worker goes back to its lane as soon as that
+  lane has work and a borrowed task ends. Nothing running is stopped to give
+  it back, and a lane paused on a person reserves nothing. Every dispatcher
+  settles, allots and claims under one lock (`capacity.held`), and judges only
+  its own lane's tasks. Vertical scaling is the cell and the turns each task
+  starts with and climbs by evidence (`matrix`, `escalate`), as above. Neither
+  reads a cost. Tests run on a fake machine of three CPUs (`capacity.machine`,
+  in `tests/conftest.py`); a test that wants another passes `machine`.
 - A session belongs to the `.cauce/` in its own directory or up to the top of
   its checkout, never above it; outside a checkout, its own directory only.
   The home directory and `/` are never a project, a dotfiles checkout at home
@@ -501,7 +527,40 @@ yields the default kind, not a guess.
   steps get the findings of the steps they wait on as records, beside their
   summaries. The bundled templates follow this; their review chain fixes only
   what the ledger confirms, and costs nothing more when the review is clean.
-  A refuter is told whether one review or two found its rows.
+  A refuter is told whether one review or two found its rows. What the steps
+  before said reaches a step quoted, as context, never as its criteria.
+- A step can run in parts. A `fanout` step names a plan step before it that it
+  waits on; that plan (`kind plan`, read-only) is asked for `parts` (1 to
+  `launch.MAX_PARTS`, each an id, a prompt and surfaces no other part reaches)
+  and their `contract`, read strictly (`launch.read_parts`: no parts, more than
+  six, a part without surfaces beside another, or surfaces that may touch are
+  `inconclusive`, never a guess). When the plan passes, `advance` queues one
+  task per part in its transaction: the step's prompt, its inputs quoted as
+  context (a part's criteria are its own prompt's; the review judges the whole
+  request), the part's prompt, the contract verbatim and quoted, the part's
+  surfaces, and the step's other fields. A plan of one part is the step run
+  whole, as without one. Parts whose surfaces may touch (`surfaces.disjoint`,
+  checked again by the engine) take the plan's pass back as `parts`: the run
+  stops at the plan with the paths named. What needs a step run in parts waits
+  for every part; a part that stops stops the run there, and `cauce workflow
+  retry` queues only the parts that did not pass. `status` and the board show
+  each part under its step.
+- An `integrate` step joins the branches the parts kept, on the commit they
+  started from, in the plan's order, before any worker (`isolate.join`): a
+  clean join whose check (the run's `--verify`) passes, or that has none,
+  passes with no worker; a conflict, or a check that fails on the joined work,
+  goes to a worker told which files, whose branch to merge, and the contract;
+  one branch or none passes at once, and what follows starts from it. The
+  review chain after it reads the combined diff, blind, as the verifier does.
+  Only an integrate step waits on a step run in parts: a step starts from one
+  branch, and the parts keep one each, so a definition where another step
+  waits on it directly is refused.
+- A blind review of a change over `workflows.AREA_REVIEW_LINES` changed lines
+  that touches two or more areas (the surfaces the parts declared, else the
+  top-level folders) runs as one blind review per area, side by side, each
+  given the whole request, its area's diff and the names of the other files
+  changed. Their findings add up in the one ledger; refute, fix and recheck
+  run once on it. Below the threshold it is one review.
 - A worker never starts cauce work (`run`, `resume`, `work`, `queue add`,
   `workflow run|retry`, `investigate start` refuse under `CAUCE_WORKER_TASK`),
   and forks are off inside it (`CLAUDE_CODE_FORK_SUBAGENT=0`): what is left
@@ -545,7 +604,11 @@ yields the default kind, not a guess.
 - The analysis is read, never written, and never by a model. A run's phases
   are kept on its events as it runs (`plan_s`, `queued_s`, `since_start_s`,
   each attempt's `wall_s`, `check_s`, `verifier_s`, the waits for a network
-  `wait_s`, the run's `wall_s`); a phase
+  `wait_s`, the run's `wall_s`), and on its ending what came before it:
+  `advance_s` (from the step it waited on passing to its being queued, an
+  `advanced` event), `pickup_s` (from queued, or released, to the dispatcher
+  starting it, a `dispatched` event) and `spawn_s` (from that to its plan),
+  which split `queued_s` where they were measured; a phase
   a run never measured is left out of the breakdown, never guessed. The session
   thread comparison is observed, never presented as a trial.
 - Insights and the survey are read, never written, and never by a model: one

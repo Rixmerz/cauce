@@ -489,6 +489,10 @@ def test_surfaces_hold_what_they_name_and_nothing_else():
     assert not surfaces.disjoint(["src/**"], ["src/web/a.ts"]) and not surfaces.disjoint(["*.md"], ["src/x"])
     assert not surfaces.disjoint([], ["src/x"]) and not surfaces.disjoint(["src/x"], ["src/x"])
     assert surfaces.brief(()) == "" and "src/api/**" in surfaces.brief(("src/api/**",))
+    # Each pair of surfaces of two groups that may touch, named by the group that declared it.
+    assert surfaces.overlapping({"api": ["src/api/**"], "web": ["src/web/**", "docs/web.md"]}) == []
+    assert surfaces.overlapping({"api": ["src/api/**", "docs/**"], "web": ["src/**"], "doc": ["docs/a.md"]}) == [
+        "api's src/api/** and web's src/**", "api's docs/** and doc's docs/a.md"]
 
 
 def test_a_change_outside_the_surfaces_is_undone_and_fails_the_attempt(git_repo, store):

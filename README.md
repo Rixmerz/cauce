@@ -561,10 +561,22 @@ it only when Haiku, reading it against everything running and queued ahead,
 finds it independent — it needs nothing those produce and is unlikely to change
 the same code. Each task can run in its own worktree, so this decision is about
 whether the results will merge, not about sharing a checkout. The decision and
-its reason stay on the task, it is made once, and up to three tasks run at once
-per repository. When Haiku cannot be asked, the task waits: waiting costs
-time, a wrong "parallel" costs a broken merge. `cauce config parallel off`
-makes every repository one serial lane.
+its reason stay on the task, and it is made once. When Haiku cannot be asked,
+the task waits: waiting costs time, a wrong "parallel" costs a broken merge.
+`cauce config parallel off` makes every repository one serial lane.
+
+How many workers run at once is **the machine's level**, every repository's
+together, and it adapts: it starts at what the machine holds (its CPUs, free
+memory and free disk), rises by one when work waits and the last round of tasks
+ended with no limit, and halves on a rate limit or an overloaded API (waiting
+out its retry-after), on a worker the machine starved, or on low memory or
+disk. `cauce config max_parallel 4` sets a ceiling over it (`auto`, the
+default, sets none). Each repository with work is reserved its share, in the
+order its work was queued, and lends what it does not use; a lent worker comes
+back when the borrowed task ends. `cauce lanes` says where the level is and
+why ("2: halved, the API answered 429 3 minutes ago"), and each lane's reserve,
+use and loans. Cost never moves it: horizontal scaling is the number of
+workers, vertical scaling is the cell and turns each task climbs by evidence.
 
 A task that ends in anything but a pass **pauses its repository's lane**, so
 nothing new starts on a state it may have left broken. `cauce lanes` shows
@@ -649,12 +661,17 @@ Definitions are JSON files:
 - `project`: `.cauce/workflows/<name>.json`, shared through the repository.
 - `user`: in the cauce home.
 - `bundled`: the templates `feature` (build with its tests → blind review →
-  refute → fix → recheck), `bugfix` (reproduce and fix in one worker, then the
-  same review chain), `review-fix` and `dual-review`. The ledger steps are
-  skipped when the review found nothing, so a clean change costs two workers.
+  refute → fix → recheck), `feature-parallel` (for a feature that touches
+  several areas: a plan splits it into parts with surfaces of their own and a
+  contract they keep → the parts built side by side → joined → the same review
+  chain; one part is `feature`), `bugfix` (reproduce and fix in one worker,
+  then the same review chain), `review-fix` and `dual-review`. The ledger steps
+  are skipped when the review found nothing, so a clean change costs two
+  workers, and a join that merges cleanly costs none.
 
 A definition holds steps (`id`, `prompt` with `{input}` names, `needs`,
-`kind`, `verify`, `start`, `max_turns`, `memory`) and never a permission rule,
+`kind`, `verify`, `start`, `max_turns`, `memory`, `surfaces`, `ledger`,
+`fanout`, `integrate`) and never a permission rule,
 an approval, a capability or a dollar limit. Rules, approvals and a run-wide
 check (`--verify`, for every step that writes and names none) are the person's
 flags on `run`. A step's `memory` topic with no note yet is said, never a

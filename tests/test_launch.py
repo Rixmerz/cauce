@@ -453,3 +453,48 @@ def test_a_fork_the_cli_cannot_resume_starts_fresh_and_says_why(tmp_path):
                           resume_prompt=launch.DEEPER_PROMPT), runner=runner)
     assert seen == [True, False] and not out.resumed and out.session_id == "sess-2"
     assert out.fresh.startswith("the CLI could not resume session sess-1: No conversation found")
+
+
+PARTS = [{"id": "api", "prompt": "Build the endpoint", "surfaces": ["src/api/**"]},
+         {"id": "web", "prompt": "Build the page", "surfaces": ["src/web/**"]}]
+
+
+def test_a_plan_that_runs_in_parts_is_read_strictly(tmp_path):
+    asked = spec(tmp_path, parts=True)
+    # The contract a plan step is given asks for its parts and their contract.
+    assert "`parts`" in launch.instructions(asked) and "`contract`" in launch.instructions(asked)
+    assert "`parts`" not in launch.instructions(spec(tmp_path))
+    out = parse(proc(envelope(block(verdict="pass", summary="two parts", evidence="read the code", parts=PARTS,
+                                    contract="GET /orders returns {id, total}"))), asked)
+    assert out.passed and [p["id"] for p in out.parts] == ["api", "web"]
+    assert out.parts[1]["surfaces"] == ["src/web/**"] and out.contract == "GET /orders returns {id, total}"
+    # One part, when splitting does not pay: no surfaces or contract needed.
+    one = parse(proc(envelope(block(verdict="pass", summary="one", evidence="e",
+                                    parts=[{"id": "all", "prompt": "Build it"}]))), asked)
+    assert one.passed and one.parts == ({"id": "all", "prompt": "Build it", "surfaces": []},) and one.contract == ""
+    # A step not asked for parts ignores them.
+    assert parse(proc(envelope(block(verdict="pass", summary="s", evidence="e", parts=PARTS))),
+                 spec(tmp_path)).parts == ()
+
+
+@pytest.mark.parametrize("parts, contract, said", [
+    (None, "c", "it gave no parts"),
+    ([], "c", "it gave no parts"),
+    ([*PARTS, *({"id": f"p{i}", "prompt": "x", "surfaces": [f"p{i}/**"]} for i in range(5))], "c",
+     "7 parts; a plan splits into at most 6"),
+    ([PARTS[0], {**PARTS[1], "surfaces": ["src/**"]}], "c",
+     "its parts' surfaces overlap: api's src/api/** and web's src/**"),
+    ([PARTS[0], {**PARTS[1], "surfaces": []}], "c", "part 'web' declares no surfaces"),
+    ([PARTS[0], {**PARTS[1], "id": "api"}], "c", "two parts are called 'api'"),
+    ([PARTS[0], {**PARTS[1], "prompt": " "}], "c", "part 'web' has no prompt"),
+    ([PARTS[0], {**PARTS[1], "id": "Web Page"}], "c", "part 2 has no id"),
+    ([PARTS[0], {**PARTS[1], "surfaces": ["../up"]}], "c", "part 'web': a surface stays inside the project"),
+    ([PARTS[0], "web"], "c", "part 2 is not an object"),
+    (PARTS, None, "it gave no contract"),
+])
+def test_a_plan_with_no_parts_overlapping_ones_or_too_many_is_inconclusive(tmp_path, parts, contract, said):
+    fields = {k: v for k, v in {"parts": parts, "contract": contract}.items() if v is not None}
+    out = parse(proc(envelope(block(verdict="pass", summary="planned", evidence="read it", **fields))),
+                spec(tmp_path, parts=True))
+    assert not out.passed and out.failure is Failure.INCONCLUSIVE and out.parts == ()
+    assert said in out.summary and out.summary.startswith("claimed a pass, but its plan cannot run in parts")

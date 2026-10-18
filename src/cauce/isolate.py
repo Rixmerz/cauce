@@ -430,6 +430,43 @@ def _commit(ws: Workspace, message: str, *extra: str) -> None:
     _git(ws.path, *_identity(ws.path), "commit", "-q", "--no-verify", *extra, "-m", message)
 
 
+def join(ws: Workspace, branches: Sequence[str], *, message: Callable[[str], str]) -> dict[str, Any]:
+    """Merge `branches` into the task's worktree one by one, in order, each a merge commit
+    (`message(branch)`), until one conflicts: that merge is undone, and its conflicting
+    files named. {merged, conflict, files, left}: what is left starts with the one that
+    conflicted. Raises when a merge fails for another reason (a branch that is gone)."""
+    merged: list[str] = []
+    for n, branch in enumerate(branches):
+        proc = subprocess.run(["git", *_identity(ws.path), "merge", "--no-ff", "--no-verify", "--no-edit", "-m",
+                               message(branch), f"refs/heads/{branch}"],
+                              cwd=str(ws.path), capture_output=True, text=True, check=False)
+        if proc.returncode == 0:
+            merged.append(branch)
+            continue
+        files = _git(ws.path, "diff", "--name-only", "--diff-filter=U", check=False).splitlines()
+        _git(ws.path, "merge", "--abort", check=False)
+        if not files:
+            said = " ".join((proc.stderr or proc.stdout).split())[:300]
+            raise IsolationError(f"git merge {branch} failed: {said}")
+        return {"merged": merged, "conflict": branch, "files": sorted(files), "left": list(branches[n:])}
+    return {"merged": merged, "conflict": None, "files": [], "left": []}
+
+
+def numstat(repo_dir: Path, start: str, end: str) -> list[tuple[int, str]] | None:
+    """Each file changed from `start` to `end` with its changed lines (added and removed; a
+    binary file counts none), tool artifacts aside. None when git cannot say."""
+    proc = subprocess.run(["git", "diff", "--numstat", "--no-renames", start, end, "--"], cwd=str(repo_dir),
+                          capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        return None
+    rows = []
+    for line in proc.stdout.splitlines():
+        added, deleted, path = [*line.split("\t", 2), "", ""][:3]
+        if path and not is_artifact(path):
+            rows.append(((int(added) if added.isdigit() else 0) + (int(deleted) if deleted.isdigit() else 0), path))
+    return rows
+
+
 def head(repo_dir: Path, ref: str) -> str:
     return _git(repo_dir, "rev-parse", ref)
 

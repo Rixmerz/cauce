@@ -28,8 +28,14 @@ from typing import Any
 from cauce import usage
 from cauce.store import Store
 
-#: The phases of a run, in the order they happen.
-PHASES = ("queued_s", "plan_s", "setup_s", "worker_s", "check_s", "verifier_s", "wait_s", "other_s")
+#: The phases of a run, in the order they happen. The first four come before its own wall
+#: time: the engine queueing it after the step it waited on passed (`advance_s`), its wait
+#: for the dispatcher (`pickup_s`) and the process starting (`spawn_s`), which split the
+#: older `queued_s` where they were measured.
+PHASES = ("advance_s", "pickup_s", "spawn_s", "queued_s", "plan_s", "setup_s", "worker_s", "check_s", "verifier_s",
+          "wait_s", "other_s")
+#: The phases before a run's own start: never part of its wall time, so never taken from "other".
+BEFORE_RUN = frozenset({"advance_s", "pickup_s", "spawn_s", "queued_s"})
 #: The events a compaction decision leaves (`cauce.compaction`).
 COMPACTION_EVENTS = ("compaction_decided", "compaction_delivered", "compaction_settled", "compaction_seen")
 #: How many compaction decisions the text lists, newest last.
@@ -114,6 +120,7 @@ def _start(task: Mapping[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
         "has_session": bool(task.get("session_id")),
         "start_cell": data.get("start"), "final_cell": None, "status": None, "stop": None,
         "started_at": event["ts"], "ended_at": None, "wall_s": None,
+        "advance_s": None, "pickup_s": None, "spawn_s": None,
         "queued_s": _number(data.get("queued_s")), "plan_s": _number(data.get("plan_s")), "setup_s": None,
         "worker_s": None, "check_s": None, "verifier_s": None, "wait_s": None, "hold_s": None,
         "attempts": 0, "first_try": None, "verified": 0, "verifier_blocked": 0, "moves": [], "cells": [],
@@ -154,7 +161,7 @@ def _end(run: dict[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
     run["wall_s"] = _number(data.get("wall_s")) or _between(run["started_at"], run["ended_at"])
     # The run's own account of its cost wins: it holds the classification and the checks.
     run["cost_usd"] = round(_number(data.get("cost_usd")) or run["cost_usd"], 4)
-    for phase in ("worker_s", "check_s", "verifier_s", "wait_s", "hold_s"):
+    for phase in ("worker_s", "check_s", "verifier_s", "wait_s", "hold_s", "advance_s", "pickup_s", "spawn_s"):
         run[phase] = _number(data.get(phase))
     # A run from before the phases were timed: what its attempts measured, the CLI's
     # own duration for the work, and nothing for what was never measured.
@@ -173,10 +180,12 @@ def phases(found: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     totals = dict.fromkeys(PHASES, 0.0)
     for r in timed:
         known = 0.0
+        # A run whose queue time was split into pickup and spawn is not counted twice.
+        split = r.get("pickup_s") is not None or r.get("spawn_s") is not None
         for phase in PHASES[:-1]:
-            value = r.get(phase) or 0.0
+            value = 0.0 if phase == "queued_s" and split else r.get(phase) or 0.0
             totals[phase] += value
-            known += value if phase != "queued_s" else 0.0
+            known += value if phase not in BEFORE_RUN else 0.0
         totals["other_s"] += max((r["wall_s"] or 0) - known, 0.0)
     whole = sum(totals.values())
     return {"runs": len(timed), "seconds": {k: round(v, 1) for k, v in totals.items()},

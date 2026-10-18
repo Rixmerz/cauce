@@ -55,6 +55,9 @@ export async function renderBoard(ctx) {
             ? h("button", { onclick: async () => { try { await post("/api/work", { repo: lane.repo }); ctx.toast("dispatcher started"); } catch (err) { ctx.toast(err.message); } } }, "Start")
             : null),
     lane.paused && lane.reason ? h("div", { class: "asks" }, short(lane.reason, 160)) : null,
+    // Its share of the machine's workers: what it is reserved, runs, and lends or borrows.
+    lane.share ? h("div", { class: "meta" }, `reserve ${lane.share.reserve} · runs ${lane.share.running}`
+      + (lane.share.lent ? ` · lends ${lane.share.lent}` : lane.share.borrowed ? ` · borrows ${lane.share.borrowed}` : "")) : null,
     lane.tasks.filter(keep).map((t) => card(t, ctx.openTask, [decision(t)]))));
   const days = new Map();
   for (const t of b.done.filter(keep)) {
@@ -77,6 +80,10 @@ export async function renderBoard(ctx) {
           h("span", {}, when(t.updated_at))])),
         ...(answering ? [h("div", { class: "empty" }, `${answering} session${answering === 1 ? "" : "s"} answering a prompt now`)] : [])],
         "running"),
-      column("Queued", b.queued.reduce((n, lane) => n + lane.tasks.filter(keep).length, 0), lanes.length ? lanes : [], "queued"),
+      column("Queued", b.queued.reduce((n, lane) => n + lane.tasks.filter(keep).length, 0), [
+        // How many workers this machine runs at once, and why it is there now.
+        b.capacity ? h("div", { class: "meta", title: b.capacity.ceiling ? `your max_parallel ${b.capacity.ceiling}` : "max_parallel auto" },
+          `workers ${b.capacity.line}`) : null,
+        ...lanes], "queued"),
       column("Done", b.done.filter(keep).length, diary, "done")));
 }

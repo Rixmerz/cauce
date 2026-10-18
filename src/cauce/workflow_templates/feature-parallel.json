@@ -1,0 +1,74 @@
+{
+  "name": "feature-parallel",
+  "description": "For a feature that touches several areas: a plan splits it into parts, each with surfaces no other part touches and a contract they all keep; the parts are built side by side, joined into one branch, and the joined change goes through the review chain of `feature`. A plan of one part is today's `feature`",
+  "inputs": [
+    "goal"
+  ],
+  "steps": [
+    {
+      "id": "plan",
+      "title": "Split it into parts",
+      "kind": "plan",
+      "prompt": "Plan, without changing any file, how to build this feature in parts that run side by side: {goal}\n\nRead the code it touches. Split it only where its areas are really apart: each part gets surfaces no other part reaches, and the contract names what the parts share. When splitting does not pay (one area, or parts that would keep touching each other), give one part."
+    },
+    {
+      "id": "build",
+      "title": "Build each part, with its tests",
+      "kind": "feature",
+      "fanout": "plan",
+      "needs": [
+        "plan"
+      ],
+      "prompt": "Build this feature, or the part of it given below when the plan split it: {goal}\n\nRead the code it touches and decide the approach yourself, then build it with the tests that prove it works: a failing test first, then the code. Run them, and the suite around them, before you stop."
+    },
+    {
+      "id": "integrate",
+      "title": "Join the parts",
+      "kind": "implement",
+      "integrate": true,
+      "needs": [
+        "build"
+      ],
+      "prompt": "Join the parts built for this feature into one branch: {goal}\n\nChange only what makes the parts work together, keep the contract, and run the tests before you stop."
+    },
+    {
+      "id": "review",
+      "title": "Review the change",
+      "kind": "review-routine",
+      "needs": [
+        "integrate"
+      ],
+      "prompt": "Review, without changing any file, the change made for: {goal}\n\nRead the diff named below: bugs, missing tests, broken behaviour. Report each real problem in `findings`: its place (file:line), what is wrong, how it is known (`deterministic` with the command or hunk that shows it as `proof`, else `inferential`) and whether this change caused it. Say plainly when there is none."
+    },
+    {
+      "id": "refute",
+      "title": "Decide what the review only read",
+      "kind": "review-routine",
+      "ledger": "refute",
+      "needs": [
+        "review"
+      ],
+      "prompt": "Decide, without changing any file, the findings on the change for: {goal}"
+    },
+    {
+      "id": "fix",
+      "title": "Fix the confirmed findings",
+      "kind": "implement",
+      "ledger": "fix",
+      "needs": [
+        "refute"
+      ],
+      "prompt": "Fix the confirmed findings below, in the change for: {goal}\n\nRun the tests before you stop."
+    },
+    {
+      "id": "recheck",
+      "title": "Check each fix",
+      "kind": "review-routine",
+      "ledger": "recheck",
+      "needs": [
+        "fix"
+      ],
+      "prompt": "Check, without changing any file, the fix just made in the change for: {goal}"
+    }
+  ]
+}

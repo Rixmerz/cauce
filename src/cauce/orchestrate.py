@@ -28,6 +28,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from cauce import (
     after,
@@ -144,6 +145,11 @@ class Options:
     #: A workflow run's check, for a step classified when it runs: it becomes the
     #: step's `verify` only when the step turns out to write.
     run_verify: str | None = None
+    #: A plan step a workflow fans out over: its pass carries the parts and their contract.
+    parts: bool = False
+    #: A workflow's integrate step: the parts' branches it joins, in the plan's order
+    #: (`{part, task, branch}` each), and the contract they keep.
+    integrate: dict | None = None
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -154,7 +160,7 @@ class Options:
                   "livespec": self.livespec, "no_isolate": not self.isolate, "role": self.role,
                   "step_role": self.step_role, "surfaces": list(self.surfaces),
                   "ledger": self.ledger, "add_dirs": list(self.add_dirs), "services": list(self.services),
-                  "run_verify": self.run_verify}
+                  "run_verify": self.run_verify, "parts": self.parts, "integrate": self.integrate}
         kept = {k: v for k, v in values.items() if v not in (None, [], False)}
         if not self.keep_learned:
             kept["keep_learned"] = False  # a task whose findings wait on a person's word
@@ -224,6 +230,9 @@ class Report:
     #: What the passing worker learned, and where each fact was filed in the notes.
     learned: tuple[str, ...] = ()
     noted: list[dict] = field(default_factory=list)
+    #: A passing plan's parts and the contract they keep, for the workflow step that fans out over it.
+    parts: tuple[dict, ...] = ()
+    contract: str = ""
 
     def text(self) -> str:
         lines = [
@@ -579,7 +588,7 @@ def run(
     options = options or Options()
     # Wall time of the run and of its phases, kept on its events: where a task's
     # time goes (waiting, setting up, working, checking) is evidence for the router.
-    clock = time.monotonic()
+    clock, began = time.monotonic(), time.time()
     registry = registry if registry is not None else caps.load_all(home() / "capabilities.json")
     launcher = launcher or launch.run
     repo_dir = repo_dir.resolve()
@@ -597,6 +606,9 @@ def run(
         class_reason=c.reason, start_cell=the_plan.start.label, pinned=int(options.start is not None),
     )
     queued_s = None
+    # The time before this run that no phase of its own measures: from the step it waited on
+    # passing to its being queued, from queued to the dispatcher starting it, and from that to here.
+    gaps = _gaps(store, task_id, began) if task_id is not None else {}
     if task_id is not None:
         # A queued or resumed task: it keeps its id, its messages, its cost so
         # far and its place in the lane's history.
@@ -724,6 +736,8 @@ def run(
     in_place = no_worktree is None and workspace is None and (
         (writes and not declared_read_only) or bool(options.verify))
     held = contextlib.ExitStack()
+    # What an integrate step joined before its first attempt (`_integrate`).
+    joined: dict[str, Any] | None = None
     timing = {"hold_s": 0.0, "services_s": 0.0, "worker_s": 0.0, "check_s": 0.0, "verifier_s": 0.0, "wait_s": 0.0}
     try:
         mark = time.monotonic()
@@ -735,7 +749,8 @@ def run(
         timing["hold_s"] = time.monotonic() - mark
         ready = no_worktree is None
         if not ready:
-            report.stop = stops.Stop("environment", f"its worktree could not be made: {no_worktree}"[:500])
+            report.stop = stops.Stop("environment", f"its worktree could not be made: {no_worktree}"[:500],
+                                     extra={"starved": "disk"} if launch.NO_SPACE.search(no_worktree or "") else {})
             report.status, report.summary = "blocked", report.stop.reason
         elif options.services:
             mark = time.monotonic()
@@ -752,6 +767,10 @@ def run(
                 say(f"cauce: #{task['id']} servers up: " + "; ".join(up))
                 context.append("Servers up for this task, started and stopped by cauce (do not start or stop them "
                                "yourself): " + "; ".join(up))
+        if ready and options.integrate:
+            # The parts' branches are joined before any worker: one is needed only for a conflict,
+            # or for a check that fails on the joined work.
+            joined, ready = _integrate(store, task["id"], workspace, options, report, context, say)
         while ready:
             # A try after the network dropped is no attempt at the work: it does not
             # count toward the ceiling, and its own streak is bounded in `decide`.
@@ -805,6 +824,7 @@ def run(
                 judging=not writes or declared_read_only or deciding is not None,
                 verdicts=tuple(deciding.get("ids") or ()) if deciding else (),
                 verdict_words=ledger_mod.WORDS.get(deciding["role"], ()) if deciding else (),
+                parts=options.parts,
                 # Kept only in a worktree, where its directory is the task's: a session in the
                 # person's checkout would be one of theirs.
                 persist_session=workspace is not None,
@@ -909,6 +929,10 @@ def run(
                             # The attempt's cost holds its independent check's; each is kept apart here.
                             worker_cost_usd=round(worker_cost, 4),
                             verifier_cost_usd=round(result.cost_usd - worker_cost, 4),
+                            # What the dispatcher's level reads (`cauce.capacity`): the API, or the machine, said no.
+                            **({"limited": result.limited, "retry_after_s": result.retry_after_s}
+                               if result.limited else {}),
+                            **({"starved": result.starved} if result.starved else {}),
                             **({"refused_but_written": list(result.overcome)} if result.overcome else {}))
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
@@ -926,7 +950,7 @@ def run(
                 break
             if result.passed:
                 report.status, report.final_cell, report.summary = "done", cell.label, result.summary
-                report.learned = result.learned
+                report.learned, report.parts, report.contract = result.learned, result.parts, result.contract
                 for adapter, status in the_plan.active:
                     report.impact += adapter.assess(result.changed_paths, repo_dir, status)
                 if len(attempts) > 1:
@@ -968,6 +992,9 @@ def run(
                 # last one did is kept on a ref, and the brief says both.
                 ref = isolate.set_aside(workspace, seq)
                 isolate.reset(workspace)
+                if joined and joined["merged"]:
+                    # The base is where the parts began: the ones that joined cleanly are joined again.
+                    isolate.join(workspace, joined["merged"], message=_join_message(task["id"], options))
                 if ref:
                     aside.append(f"Before this attempt the worktree was reset to the base commit {workspace.base[:12]}"
                                  f": attempt {seq}'s changes ({cell.label}) are not in it. They are kept: "
@@ -1044,8 +1071,11 @@ def run(
                         risk=the_plan.risk.data(),
                         findings=list(attempts[-1].findings)[:30] if status == "done" and attempts else [],
                         wall_s=round(time.monotonic() - clock, 2), attempts=len(attempts),
+                        at=round(time.time(), 3), **gaps,
                         **{k: round(v, 2) for k, v in timing.items()},
-                        **({"ledger": settled.data()} if settled else {}))
+                        **({"ledger": settled.data()} if settled else {}),
+                        **({"parts": list(report.parts), "contract": report.contract}
+                           if status == "done" and report.parts else {}))
         store.add_message(task["id"], "worker", report.text())
         # The next step, and the work queued after this one, start here, from the engine:
         # no session relays them. Advancing never fails the run that just ended, and never silently.
@@ -1055,6 +1085,67 @@ def run(
             store.add_event(task["id"], "workflow_error", error=str(exc)[:300])
             say(f"cauce: #{task['id']} could not start the work that waits on it: {exc}")
     return report
+
+
+def _join_message(task_id: int, options: Options) -> Callable[[str], str]:
+    """The merge commit of each part an integrate step joins: the part it brings, as the history reads it."""
+    names = {b["branch"]: b.get("part") or b["branch"] for b in (options.integrate or {}).get("branches") or ()}
+    return lambda branch: isolate.message(task_id, title=f"Join the {names.get(branch, branch)} part",
+                                          summary=f"Merges {branch}, the part the plan named {names.get(branch)}.")
+
+
+def _integrate(store: Store, task_id: int, workspace: isolate.Workspace | None, options: Options, report: Report,
+               context: list[str], say: Callable[[str], None]) -> tuple[dict[str, Any] | None, bool]:
+    """Join an integrate step's branches in its worktree, in the plan's order. A clean join
+    whose check (the run's `--verify`) passes, or that has none, passes with no worker; a
+    conflict, or a check that fails on the joined work, goes to one, told what and why.
+    (what was joined, whether a worker must go on); `report` holds the ending otherwise."""
+    spec = options.integrate or {}
+    branches = [b["branch"] for b in spec.get("branches") or () if b.get("branch")]
+    names = {b["branch"]: b.get("part") or b["branch"] for b in spec.get("branches") or ()}
+    if workspace is None:
+        report.stop = stops.Stop("environment", "an integrate step joins the parts' branches in a worktree of its "
+                                 "own, and this run has none (not a git checkout, or isolation is off)")
+        report.status, report.summary = "blocked", report.stop.reason
+        return None, False
+    try:
+        joined = isolate.join(workspace, branches, message=_join_message(task_id, options))
+    except isolate.IsolationError as exc:
+        report.stop = stops.Stop("environment", f"could not join the parts: {exc}"[:500])
+        report.status, report.summary = "blocked", report.stop.reason
+        return None, False
+    store.add_event(task_id, "integrated", merged=joined["merged"], conflict=joined["conflict"],
+                    files=joined["files"])
+    clean = ", ".join(names[b] for b in joined["merged"]) or "nothing"
+    contract = (("\n\nThe contract every part keeps, from the plan, verbatim (context: keep it):\n"
+                 + "\n".join(f"> {line}" for line in spec["contract"].splitlines())) if spec.get("contract") else "")
+    if joined["conflict"]:
+        branch = joined["conflict"]
+        rest = " then ".join(f"`git merge --no-edit {b}`" for b in joined["left"][1:])
+        say(f"cauce: #{task_id} joining {names[branch]} conflicts in {', '.join(joined['files'][:5])}")
+        context.append(
+            f"Joining the parts in the plan's order: {clean} merged cleanly. Merging `{branch}` (the {names[branch]} "
+            f"part) conflicts in: {', '.join(joined['files'])}. Run `git merge --no-edit {branch}` here, resolve "
+            "those files so the parts work together and keep the contract, and commit the merge"
+            + (f"; then merge the rest in this order, resolving each the same way: {rest}." if rest else ".")
+            + contract)
+        return joined, True
+    summary = f"joined {len(joined['merged'])} parts cleanly ({clean})"
+    if not options.verify:
+        report.status, report.summary = "done", summary + "; no check was given: the review that follows reads it"
+        return joined, False
+    code, output = _check(options.verify, workspace.path)
+    if code == 0:
+        report.status, report.summary = "done", f"{summary}; `{options.verify}` passed on the joined work"
+        return joined, False
+    if (why := cannot_run(code, output)) is not None:
+        report.stop = stops.Stop("environment", f"{summary}, but `{options.verify}` could not run here ({why})")
+        report.status, report.summary = "blocked", report.stop.reason
+        return joined, False
+    context.append(f"The parts merged cleanly ({clean}), but the run's check `{options.verify}` fails on the joined "
+                   "work. Make it pass where the parts meet, keeping the contract; change what a part does only as "
+                   f"far as that needs. Its output:\n{output[-1500:]}" + contract)
+    return joined, True
 
 
 #: Words that say a task needs a browser, or servers that keep running.
@@ -1320,6 +1411,40 @@ def how_to_run(workdir: Path, rules: Sequence[str]) -> list[str]:
 
 #: Fewer corrections than this a verifier's findings may earn; then a person decides.
 MAX_CORRECTIONS = 2
+
+
+def _gaps(store: Store, task_id: int, began: float) -> dict[str, float]:
+    """What came before a dispatched run of this task: `advance_s` (from the step it waited
+    on passing to its being queued), `pickup_s` (from queued, or released from behind other
+    work, to the dispatcher starting it) and `spawn_s` (from that to this run's start). Only
+    what this run's own events measured, since its last ending; nothing is guessed."""
+    ended = store.last_event(task_id, "finished")
+    since = ended["id"] if ended else 0
+    out: dict[str, float] = {}
+    advanced = store.last_event(task_id, "advanced")
+    took = ((advanced or {}).get("data") or {}).get("advance_s")
+    if advanced and advanced["id"] > since and isinstance(took, int | float):
+        out["advance_s"] = round(float(took), 3)
+    dispatched = store.last_event(task_id, "dispatched")
+    at = ((dispatched or {}).get("data") or {}).get("at")
+    if not dispatched or dispatched["id"] <= since or not isinstance(at, int | float):
+        return out
+    out["spawn_s"] = round(max(began - at, 0.0), 3)
+    released = store.last_event(task_id, "released")
+    task = store.get_task(task_id) or {}
+    queued = _epoch(released["ts"] if released and released["id"] > since else task.get("created_at"))
+    if queued is not None:
+        out["pickup_s"] = round(max(at - queued, 0.0), 3)
+    return out
+
+
+def _epoch(stamp: str | None) -> float | None:
+    """A stored timestamp as seconds since the epoch; None when it cannot be read."""
+    try:
+        then = datetime.fromisoformat(str(stamp))
+    except ValueError:
+        return None
+    return (then if then.tzinfo else then.replace(tzinfo=UTC)).timestamp()
 
 
 def _seconds_since(stamp: str | None) -> float | None:

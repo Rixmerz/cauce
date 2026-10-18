@@ -548,6 +548,17 @@ def test_a_step_role_in_the_team_is_the_one_it_runs_as(git_repo, store):
 # --- context boundaries --------------------------------------------------------------
 
 
+def test_what_the_steps_before_said_is_context_never_the_step_s_criteria(git_repo, store: Store, kicks):
+    from cauce import criteria
+
+    _save(CHAIN, git_repo)
+    started = workflows.start(store, "chain", git_repo, {"goal": "the export"})
+    flow.work(store, runner=_runner([ok("built it"), ok("no problems"), ok("polished")], []))
+    polish = store.run_tasks(started["id"])[2]
+    assert "> - build (task #" in polish["body"] and "> - check (task #" in polish["body"]
+    assert criteria.items(polish["body"]) == []
+
+
 def test_a_review_step_is_blind_and_the_step_after_it_gets_its_findings_as_records(git_repo, store: Store, kicks):
     _save(CHAIN, git_repo)
     workflows.start(store, "chain", git_repo, {"goal": "the export"})
@@ -844,3 +855,379 @@ def test_a_step_on_a_base_that_did_not_move_says_nothing(git_repo, store: Store,
     flow.work(store, runner=_runner([ok("built"), ok("polished")], []))
     status = workflows.status(store, started["id"], detail=True)
     assert [s.get("behind") for s in status["steps"]] == [None, None]
+
+
+# --- parts: a step that fans out over a plan -----------------------------------------
+
+PLAN_PARTS = ({"id": "api", "prompt": "Build the orders endpoint:\n- GET /orders lists them\n- GET /orders/1 is one",
+               "surfaces": ["api/**"]},
+              {"id": "web", "prompt": "Build the orders page", "surfaces": ["web/**"]})
+CONTRACT = "- `Order` is {id: int, total_cents: int}\n- GET /orders returns a list of Order"
+FANNED = {"name": "fanned", "inputs": ["goal"], "steps": [
+    {"id": "plan", "prompt": "Plan {goal} in parts", "kind": "plan"},
+    {"id": "build", "prompt": "Build your part of: {goal}", "kind": "implement", "fanout": "plan",
+     "max_turns": 40},
+    {"id": "after", "prompt": "Join and polish {goal}", "kind": "implement", "integrate": True},
+]}
+
+
+def planned(parts=PLAN_PARTS, contract=CONTRACT) -> WorkerResult:
+    return WorkerResult(True, None, "split in parts", evidence="read the code", parts=tuple(parts),
+                        contract=contract)
+
+
+def _parts_runner(results, seen):
+    """Each part writes inside its own surfaces; the others write a file at the top."""
+    results = list(results)
+
+    def launch(spec):
+        seen.append({"prompt": spec.prompt, "parts": spec.parts, "dir": spec.target_dir,
+                     "files": sorted(str(f.relative_to(spec.target_dir)) for f in spec.target_dir.rglob("*")
+                                     if f.is_file() and ".git" not in f.relative_to(spec.target_dir).parts)})
+        if "Edit" not in spec.disallowed_tools:
+            mine = next((p["id"] for p in PLAN_PARTS if f"Your part: {p['id']}" in spec.prompt), None)
+            target = spec.target_dir / (f"{mine}/{mine}.py" if mine else f"step{len(seen)}.txt")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(f"{mine or 'work'}\n")
+        return results.pop(0)
+
+    def runner(text, where, store, options, **kw):
+        return run(text, where, store, options, registry={}, launcher=launch, classifier=kind("implement"),
+                   adapters=[], **kw)
+
+    return runner
+
+
+def test_a_fanout_names_a_plan_step_before_it_that_it_waits_on():
+    def steps(*extra):
+        return {"name": "x", "steps": [{"id": "plan", "prompt": "p", "kind": "plan"},
+                                       {"id": "look", "prompt": "l", "kind": "explore", "needs": []}, *extra]}
+
+    for step, said in (
+            ({"id": "b", "prompt": "b", "fanout": "ghost"}, "fanout names 'ghost', which is no step before it"),
+            ({"id": "b", "prompt": "b", "fanout": "look", "needs": ["look"]},
+             "the parts come from a plan step's result"),
+            ({"id": "b", "prompt": "b", "fanout": "plan", "needs": ["look"]}, "does not wait on it"),
+            ({"id": "b", "prompt": "b", "fanout": "plan", "needs": ["plan"], "ledger": "fix"},
+             "a fanout step is no ledger step"),
+            ({"id": "b", "prompt": "b", "integrate": "yes"}, "integrate is true or false"),
+            ({"id": "b", "prompt": "b", "integrate": True}, "joins the parts of a fanout step it waits on")):
+        with pytest.raises(workflows.WorkflowError, match=said):
+            workflows.normalize(steps(step))
+    later = workflows.normalize(steps({"id": "b", "prompt": "b", "fanout": "plan", "needs": ["look", "plan"]}))
+    assert later["steps"][2]["fanout"] == "plan"
+
+
+def test_only_an_integrate_step_waits_on_a_step_run_in_parts():
+    # What follows starts from one branch: a step run in parts keeps one per part, so only
+    # an integrate step, which joins them, may wait on it.
+    plan = {"id": "plan", "prompt": "p", "kind": "plan"}
+    build = {"id": "build", "prompt": "b", "fanout": "plan", "needs": ["plan"]}
+    for after_build in ({"id": "review", "prompt": "r", "kind": "review-routine", "needs": ["build"]},
+                        {"id": "polish", "prompt": "o", "needs": ["plan", "build"]}):
+        with pytest.raises(workflows.WorkflowError, match="waits on 'build', a step run in parts"):
+            workflows.normalize({"name": "x", "steps": [plan, build, after_build]})
+    joined = workflows.normalize({"name": "x", "steps": [plan, build, {"id": "join", "prompt": "j", "integrate": True},
+                                                          {"id": "review", "prompt": "r", "needs": ["join"]}]})
+    assert [s["id"] for s in joined["steps"]] == ["plan", "build", "join", "review"]
+
+
+def test_a_step_fans_out_into_one_task_per_part_and_what_needs_it_waits_for_all(git_repo, store: Store, kicks):
+    _save(FANNED, git_repo)
+    started = workflows.start(store, "fanned", git_repo, {"goal": "the orders view\n- it pages by 50"})
+    seen: list[dict] = []
+    flow.work(store, runner=_parts_runner([planned(), ok("api built"), ok("web built"), ok("polished")], seen))
+    plan_task, api, web, polish = store.run_tasks(started["id"])
+    # The plan was asked for its parts, and its finished event keeps them.
+    assert seen[0]["parts"] and not seen[1]["parts"]
+    kept = store.final_event(plan_task["id"])["data"]
+    assert [p["id"] for p in kept["parts"]] == ["api", "web"] and kept["contract"] == CONTRACT
+    # One task per part: the part's prompt after the step's, its surfaces, the step's other fields.
+    for task, part in ((api, PLAN_PARTS[0]), (web, PLAN_PARTS[1])):
+        opts = json.loads(task["options"])
+        assert task["workflow_step"] == "build" and opts["surfaces"] == part["surfaces"]
+        assert opts["part"]["id"] == part["id"] and opts["max_turns"] == 40 and opts["kind"] == "implement"
+        assert task["body"].startswith("Build your part of:") and part["prompt"] in task["body"]
+        # The contract verbatim, quoted as context; the request quoted too: its items are no criteria here.
+        assert "\n".join(f"> {line}" for line in CONTRACT.splitlines()) in task["body"]
+        assert "> - it pages by 50" in task["body"]
+        assert f"[fanned#{started['id']} build/{part['id']}]" in task["title"]
+    from cauce import criteria
+
+    # A part's criteria are its own prompt's items, never the whole request's nor what the plan said.
+    assert criteria.items(api["body"]) == ["GET /orders lists them", "GET /orders/1 is one"]
+    assert criteria.items(web["body"]) == [] and "it pages by 50" not in criteria.brief(api["body"])
+    assert "> - plan (task #" in api["body"]
+    # The step after waits for every part.
+    assert polish["workflow_step"] == "after" and polish["id"] > max(api["id"], web["id"])
+    assert workflows.status(store, started["id"])["state"] == "done"
+
+
+def test_a_part_that_stops_stops_the_run_and_a_retry_runs_only_the_parts_that_did_not_pass(
+        git_repo, store: Store, kicks, capsys, monkeypatch):
+    _save(FANNED, git_repo)
+    started = workflows.start(store, "fanned", git_repo, {"goal": "the orders view"}, session_id="s1")
+    seen: list[dict] = []
+    flow.work(store, runner=_parts_runner([planned(), ok("api built"),
+                                           bad(Failure.SPEC_BUG, "the page has no route")], seen))
+    status = workflows.status(store, started["id"], detail=True)
+    build = status["steps"][1]
+    assert status["state"] == "waits on you" and status["waiting"] == ["build"] and build["state"] == "replan"
+    # The parts show under their step, each with its own task and state.
+    assert [(p["id"], p["state"]) for p in build["parts"]] == [("api", "done"), ("web", "replan")]
+    assert status["steps"][2]["state"] == "pending"
+    monkeypatch.chdir(git_repo)
+    assert cli.main(["workflow", "status", str(started["id"])]) == 0
+    out = capsys.readouterr().out
+    assert "    ✓ api" in out and "    ! web" in out and "replan #" in out
+    from cauce.ui import api as ui_api
+
+    board = ui_api.workflows_view(store, started["repo"])["runs"][0]
+    assert [p["id"] for p in board["steps"][1]["parts"]] == ["api", "web"]
+
+    failed = build["parts"][1]["task"]
+    assert cli.main(["workflow", "retry", str(started["id"]), "build"]) == 0
+    assert "web queued again as #" in capsys.readouterr().out
+    again = store.run_tasks(started["id"])[-1]
+    assert json.loads(again["options"])["part"]["id"] == "web" and again["id"] > failed
+    with pytest.raises(workflows.WorkflowError, match="nothing to retry"):
+        workflows.retry(store, started["id"], "build")
+    flow.work(store, runner=_parts_runner([ok("web built"), ok("polished")], seen))
+    status = workflows.status(store, started["id"])
+    assert status["state"] == "done" and [p["tries"] for p in status["steps"][1]["parts"]] == [1, 2]
+
+
+def test_work_queued_after_a_run_stopped_at_a_part_is_told_a_retry_that_runs(git_repo, store: Store, kicks):
+    import re
+
+    from cauce import after
+
+    _save(FANNED, git_repo)
+    started = workflows.start(store, "fanned", git_repo, {"goal": "the orders view"})
+    flow.work(store, runner=_parts_runner([planned(), ok("api built"),
+                                           bad(Failure.SPEC_BUG, "the page has no route")], []))
+    held = store.enqueue("document it", repo=started["repo"], cwd=str(git_repo),
+                         options={after.KEY: {"run": started["id"]}})
+    assert "stopped at step 'build' (part web" in after.waiting(store, held)
+    with pytest.raises(after.AfterError) as refused:
+        after.target(store, run_id=started["id"])
+    said = str(refused.value)
+    assert "step 'build' (part web" in said
+    run_id, step = re.search(r"`cauce workflow retry (\d+) (\S+)`", said).groups()
+    # The command it names is one that runs: the step, whose stopped parts go again.
+    assert workflows.retry(store, int(run_id), step)["parts_retried"][0][0] == "web"
+
+
+def test_a_plan_of_one_part_is_today_s_single_step(git_repo, store: Store, kicks):
+    _save(FANNED, git_repo)
+    started = workflows.start(store, "fanned", git_repo, {"goal": "the orders view\n- it pages by 50"})
+    one = ({"id": "all", "prompt": "Build it as one: the view and its endpoint", "surfaces": []},)
+    flow.work(store, runner=_parts_runner([planned(one, ""), ok("built"), ok("polished")], []))
+    _plan, build, _polish = store.run_tasks(started["id"])
+    opts = json.loads(build["options"])
+    assert "part" not in opts and "surfaces" not in opts and build["title"].endswith("] build")
+    # The request is read as today's step reads it: its items are the step's criteria.
+    assert "Build your part of: the orders view\n- it pages by 50" in build["body"]
+    assert "Build it as one" in build["body"]
+    assert workflows.status(store, started["id"])["state"] == "done"
+
+
+def test_parts_whose_surfaces_overlap_stop_the_run_at_the_plan_with_the_paths_named(git_repo, store: Store, kicks):
+    _save(FANNED, git_repo)
+    started = workflows.start(store, "fanned", git_repo, {"goal": "the orders view"}, session_id="s1")
+    plan_task = store.run_tasks(started["id"])[0]
+    store.claim(plan_task["id"])
+    store.update_task(plan_task["id"], status="done")
+    # A plan read before its parts were checked: the engine checks them again, with surfaces.disjoint.
+    store.add_event(plan_task["id"], "finished", status="done", branch=None, changed=[],
+                    parts=[*PLAN_PARTS[:1], {**PLAN_PARTS[1], "surfaces": ["api/web/**"]}], contract=CONTRACT)
+    assert workflows.advance(store, store.get_task(plan_task["id"])) == []
+    plan_task = store.get_task(plan_task["id"])
+    assert plan_task["status"] == "replan" and len(store.run_tasks(started["id"])) == 1
+    from cauce import stops
+
+    stop = stops.of(store, plan_task)
+    assert stop.cause == "parts" and "api's api/** and web's api/web/**" in stop.reason
+    status = workflows.status(store, started["id"])
+    assert status["state"] == "waits on you" and status["waiting"] == ["plan"]
+    # The session hears of it; a retry plans again.
+    assert plan_task["id"] in [t["id"] for t in store.unreported("s1")]
+    assert workflows.retry(store, started["id"], "plan")["workflow_step"] == "plan"
+
+
+JOINED = {"name": "joined", "inputs": ["goal"], "steps": [
+    {"id": "plan", "prompt": "Plan {goal} in parts", "kind": "plan"},
+    {"id": "build", "prompt": "Build your part of: {goal}", "kind": "implement", "fanout": "plan"},
+    {"id": "join", "prompt": "Join the parts of: {goal}", "kind": "implement", "integrate": True},
+    {"id": "review", "prompt": "Review, without changing any file, the change made for: {goal}",
+     "kind": "review-routine"},
+]}
+
+
+def test_an_integrate_step_joins_the_parts_with_no_worker_when_they_merge_cleanly(git_repo, store: Store, kicks):
+    from .conftest import git
+
+    _save(JOINED, git_repo)
+    started = workflows.start(store, "joined", git_repo, {"goal": "the orders view\n- it pages by 50"})
+    seen: list[dict] = []
+    flow.work(store, runner=_parts_runner([planned(), ok("api built"), ok("web built"), ok("no problems")], seen))
+    _plan, api, web, join, review = store.run_tasks(started["id"])
+    # Four workers: the plan, two parts, the review. The join needed none.
+    assert len(seen) == 4 and join["status"] == "done" and not store.attempts(join["id"])
+    opts = json.loads(join["options"])
+    assert [b["part"] for b in opts["integrate"]["branches"]] == ["api", "web"]
+    assert opts["integrate"]["contract"] == CONTRACT
+    # Its base is the commit the parts started from, and the request is context in its brief.
+    assert opts["base"] == store.last_event(api["id"], "attempt_started")["data"]["base"]
+    assert "> - it pages by 50" in join["body"] and "api — cauce/task-" in join["body"]
+    ended = store.final_event(join["id"])["data"]
+    assert ended["branch"] == f"cauce/task-{join['id']}" and ended["changed"] == ["api/api.py", "web/web.py"]
+    assert store.last_event(join["id"], "integrated")["data"]["merged"] == [f"cauce/task-{api['id']}",
+                                                                          f"cauce/task-{web['id']}"]
+    subjects = git(git_repo, "log", "--format=%s", "--merges", ended["branch"]).splitlines()
+    assert subjects == ["Join the web part", "Join the api part"]
+    # The review reads the combined diff, blind, in a worktree that holds both parts.
+    assert "git diff" in seen[3]["prompt"] and {"api/api.py", "web/web.py"} <= set(seen[3]["files"])
+    assert "api built" not in seen[3]["prompt"]
+    assert workflows.status(store, started["id"])["state"] == "done" and review["status"] == "done"
+
+
+def test_an_integrate_step_of_one_branch_passes_and_what_follows_starts_from_it(git_repo, store: Store, kicks):
+    _save(JOINED, git_repo)
+    started = workflows.start(store, "joined", git_repo, {"goal": "the orders view"})
+    one = ({"id": "all", "prompt": "Build it as one", "surfaces": []},)
+    seen: list[dict] = []
+    flow.work(store, runner=_parts_runner([planned(one, ""), ok("built"), ok("no problems")], seen))
+    _plan, _build, join, _review = store.run_tasks(started["id"])
+    assert join["status"] == "done" and "nothing to join" in join["result"]
+    assert "integrate" not in json.loads(join["options"])
+    assert store.final_event(join["id"])["data"]["branch"] is None
+    # The review starts from the one part's branch.
+    assert "step2.txt" in seen[2]["files"]
+    assert workflows.status(store, started["id"])["state"] == "done"
+
+
+def test_the_bundled_feature_parallel_plans_builds_in_parts_joins_and_reviews_like_feature(git_repo, store: Store,
+                                                                                           kicks):
+    from cauce import matrix
+
+    defn = workflows.load("feature-parallel", git_repo, "bundled")
+    steps = {s["id"]: s for s in defn["steps"]}
+    assert list(steps) == ["plan", "build", "integrate", "review", "refute", "fix", "recheck"]
+    # The plan reads only, starts where plans pass here (no pinned cell), and its ladder never holds Haiku.
+    assert steps["plan"]["kind"] == "plan" and "start" not in steps["plan"]
+    assert all(cell.model != "haiku" for cell in matrix.ladder_for("plan"))
+    assert steps["build"]["fanout"] == "plan" and steps["integrate"]["integrate"] is True
+    assert steps["review"]["needs"] == ["integrate"]
+    feature = {s["id"]: s for s in workflows.load("feature", git_repo, "bundled")["steps"]}
+    for sid in ("review", "refute", "fix", "recheck"):
+        assert {k: v for k, v in steps[sid].items() if k != "needs"} == \
+            {k: v for k, v in feature[sid].items() if k != "needs"}
+    assert "several areas" in defn["description"] and "`feature`" in defn["description"]
+
+    started = workflows.start(store, "feature-parallel", git_repo, {"goal": "the orders view"})
+    seen: list[dict] = []
+    flow.work(store, runner=_parts_runner([planned(), ok("api built"), ok("web built"), ok("no problems")], seen))
+    # The plan, two parts and the review: the join and the ledger steps needed no worker.
+    assert len(seen) == 4 and seen[0]["parts"]
+    assert workflows.status(store, started["id"])["state"] == "done"
+
+
+def test_a_large_change_is_reviewed_by_area_side_by_side_into_one_ledger(git_repo, store: Store, kicks,
+                                                                          monkeypatch):
+    monkeypatch.setattr(workflows, "AREA_REVIEW_LINES", 1)
+    started = workflows.start(store, "feature-parallel", git_repo, {"goal": "the orders view"})
+    found = ({"where": "api/api.py:1", "what": "the list is not paged", "evidence_class": "deterministic",
+              "cause": "introduced", "proof": "python -c 'import api'"},)
+    seen: list[dict] = []
+    flow.work(store, runner=_parts_runner([
+        planned(), ok("api built"), ok("web built"),
+        WorkerResult(True, None, "one problem", "read it", findings=found), ok("web reads fine"),
+        ok("paged it"),
+        WorkerResult(True, None, "fixed", "ran it", verdicts=({"id": "F1", "verdict": "fixed", "proof": "ran"},))],
+        seen))
+    tasks = store.run_tasks(started["id"])
+    reviews = [t for t in tasks if t["workflow_step"] == "review"]
+    # One blind review per area (the parts' surfaces), side by side; each reads only its area's diff.
+    assert [json.loads(t["options"])["part"]["id"] for t in reviews] == ["api", "web"]
+    api_review = reviews[0]["body"]
+    assert "Review, without changing any file, the change made for: the orders view" in api_review
+    assert ":(glob)api/**" in api_review and "The other files the change touched" in api_review
+    assert "web/web.py" in api_review and "api built" not in api_review
+    # Their findings go into the one ledger: one refute, one fix, one recheck.
+    for sid in ("refute", "fix", "recheck"):
+        assert len([t for t in tasks if t["workflow_step"] == sid]) == 1, sid
+    fix = next(t for t in tasks if t["workflow_step"] == "fix")
+    assert json.loads(fix["options"])["ledger"]["ids"] == ["F1"] and "the list is not paged" in fix["body"]
+    status = workflows.status(store, started["id"])
+    assert status["state"] == "done" and [p["id"] for p in status["steps"][3]["parts"]] == ["api", "web"]
+
+
+def test_what_no_part_declared_is_reviewed_as_its_own_area(git_repo, store: Store, kicks, monkeypatch):
+    monkeypatch.setattr(workflows, "AREA_REVIEW_LINES", 1)
+    _save({"name": "prepared", "inputs": ["goal"], "steps": [
+        {"id": "prepare", "prompt": "Prepare {goal}", "kind": "implement"},
+        *JOINED["steps"]]}, git_repo)
+    started = workflows.start(store, "prepared", git_repo, {"goal": "the orders view"})
+    seen: list[dict] = []
+    flow.work(store, runner=_parts_runner([ok("prepared"), planned(), ok("api built"), ok("web built"),
+                                           ok("api reads fine"), ok("web reads fine"), ok("the rest reads fine")],
+                                          seen))
+    reviews = [t for t in store.run_tasks(started["id"]) if t["workflow_step"] == "review"]
+    # The file the step before the plan wrote is in no part's surfaces: it is the `rest` area's.
+    assert [json.loads(t["options"])["part"]["id"] for t in reviews] == ["api", "rest", "web"]
+    assert "-- step1.txt`" in reviews[1]["body"] and "api/api.py" in reviews[1]["body"]
+    assert workflows.status(store, started["id"])["state"] == "done"
+
+
+def test_a_large_change_with_no_parts_is_reviewed_by_top_level_folder(git_repo, store: Store, kicks, monkeypatch):
+    monkeypatch.setattr(workflows, "AREA_REVIEW_LINES", 1)
+    _save({"name": "wide", "inputs": ["goal"], "steps": [
+        {"id": "build", "prompt": "Build {goal}", "kind": "implement"},
+        {"id": "review", "prompt": "Review, without changing any file, {goal}", "kind": "review-routine"}]},
+        git_repo)
+
+    def launch(spec):
+        if "Edit" not in spec.disallowed_tools:
+            for rel in ("src/a.py", "docs/a.md", "README.txt"):
+                (spec.target_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+                (spec.target_dir / rel).write_text("x\n")
+        return ok()
+
+    def runner(text, where, store, options, **kw):
+        return run(text, where, store, options, registry={}, launcher=launch, classifier=kind("implement"),
+                   adapters=[], **kw)
+
+    started = workflows.start(store, "wide", git_repo, {"goal": "the export"})
+    flow.work(store, runner=runner)
+    reviews = [t for t in store.run_tasks(started["id"]) if t["workflow_step"] == "review"]
+    assert [json.loads(t["options"])["part"]["id"] for t in reviews] == ["top", "docs", "src"]
+    assert "-- docs/`" in reviews[1]["body"] and "-- README.txt`" in reviews[0]["body"]
+    # Below the threshold it is one review, as today.
+    monkeypatch.setattr(workflows, "AREA_REVIEW_LINES", 600)
+    again = workflows.start(store, "wide", git_repo, {"goal": "the import"})
+    flow.work(store, runner=runner)
+    assert len([t for t in store.run_tasks(again["id"]) if t["workflow_step"] == "review"]) == 1
+
+
+def test_the_cli_makes_a_step_fan_out_and_one_join_the_parts(git_repo, kicks, capsys, monkeypatch):
+    monkeypatch.chdir(git_repo)
+    assert cli.main(["workflow", "new", "split"]) == 0
+    assert cli.main(["workflow", "step", "set", "split", "do", "--kind", "plan", "--prompt", "Plan {goal}"]) == 0
+    assert cli.main(["workflow", "step", "add", "split", "build", "--prompt", "Build {goal}", "--kind", "implement",
+                     "--fanout", "do"]) == 0
+    assert cli.main(["workflow", "step", "add", "split", "join", "--prompt", "Join {goal}", "--kind", "implement",
+                     "--integrate"]) == 0
+    steps = workflows.load("split", git_repo)["steps"]
+    assert steps[1]["fanout"] == "do" and steps[2]["integrate"] is True
+    capsys.readouterr()
+    assert cli.main(["workflow", "show", "split"]) == 0
+    out = capsys.readouterr().out
+    assert "[kind implement, fanout do]" in out and "[kind implement, integrate]" in out
+    assert cli.main(["workflow", "step", "set", "split", "build", "--fanout", "ghost"]) == 1
+    assert "fanout names 'ghost'" in capsys.readouterr().err
+    # Only an integrate step waits on a step run in parts: one that stops joining waits on the plan.
+    assert cli.main(["workflow", "step", "set", "split", "join", "--clear", "integrate"]) == 1
+    assert "waits on 'build', a step run in parts" in capsys.readouterr().err
+    assert cli.main(["workflow", "step", "set", "split", "join", "--clear", "integrate", "--needs", "do"]) == 0
+    assert "integrate" not in workflows.load("split", git_repo)["steps"][2]

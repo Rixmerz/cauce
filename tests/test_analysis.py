@@ -175,3 +175,49 @@ def test_attempts_that_went_on_in_a_session_are_compared_with_fresh_ones(git_rep
     assert sum(r["attempts"] for r in report["continuations"]) == 3
     said = analysis.text(report)
     assert "after more effort or more turns" in said and "more_effort  continued attempts    1" in said
+
+
+def test_the_gaps_between_steps_are_measured_on_each_run_s_ending(git_repo, store, kicks):
+    from cauce import flow, workflows
+
+    from .test_workflows import CHAIN, _runner, _save
+
+    _save(CHAIN, git_repo)
+    started = workflows.start(store, "chain", git_repo, {"goal": "the export"})
+    flow.work(store, runner=_runner([ok(), ok(), ok()], []))
+    build, check, polish = (store.final_event(t["id"])["data"] for t in store.run_tasks(started["id"]))
+    # The dispatcher started each one: from queued to its start, and from there to the plan.
+    for ended in (build, check, polish):
+        assert ended["pickup_s"] >= 0 and ended["spawn_s"] >= 0 and isinstance(ended["at"], float)
+    # The first step was queued by the run's start, no step before it passed: no advance is guessed.
+    assert "advance_s" not in build and check["advance_s"] >= 0 and polish["advance_s"] >= 0
+    found = {r["step"]: r for r in analysis.runs(*store.runs_since(""))}
+    assert found["check"]["advance_s"] == check["advance_s"] and found["build"]["advance_s"] is None
+    # A run nobody dispatched (a person's `cauce run`) measured none of them.
+    direct = run("fix the cart total", git_repo, store, registry={}, launcher=Script(ok()),
+                 classifier=kind("implement"))
+    ended = store.final_event(direct.task_id)["data"]
+    assert not {"spawn_s", "pickup_s", "advance_s"} & set(ended)
+
+
+def test_the_breakdown_shows_the_gaps_instead_of_other_and_leaves_out_what_was_not_measured(store):
+    def ended(task_id, wall, **phases):
+        store.add_event(task_id, "planned", kind="implement", start="sonnet/medium", plan_s=1.0, queued_s=30.0)
+        store.add_event(task_id, "finished", status="done", wall_s=wall, worker_s=50.0, check_s=10.0,
+                        verifier_s=0.0, wait_s=0.0, **phases)
+
+    a = store.create_task("a step", status="done", source="queue", kind="implement")
+    ended(a["id"], 70.0, advance_s=4.0, pickup_s=25.0, spawn_s=5.0)
+    b = store.create_task("a person's run", status="done", source="cauce", kind="implement")
+    ended(b["id"], 70.0)
+    found = analysis.runs(*store.runs_since(""))
+    ph = analysis.phases(found)
+    seconds = ph["seconds"]
+    assert (seconds["advance_s"], seconds["pickup_s"], seconds["spawn_s"]) == (4.0, 25.0, 5.0)
+    # The queue time a run split into pickup and spawn is not counted twice; the other run's stays.
+    assert seconds["queued_s"] == 30.0
+    # Inside each run, what no phase measured: 70 - 1 - 50 - 10, twice.
+    assert seconds["other_s"] == 18.0
+    said = analysis.text(analysis.compute(store, days=0))
+    assert "advance 4s" in said and "pickup 25s" in said and "spawn 5s" in said
+    assert {"advance_s", "pickup_s", "spawn_s"} <= set(analysis.RUN_COLUMNS)

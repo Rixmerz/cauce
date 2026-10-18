@@ -103,6 +103,12 @@
       "title": "Let the session start cauce work without asking",
       "description": "With Claude Code's mods: when Claude Code would ask you before the session queues or resumes a cauce task, the mod lets it through, so the orchestrator hands out work without waiting on you. A rule or a setting that denies it still denies it, an organization's limits still hold, and a resume the session starts still refuses what only you may clear (a Fable approval, a permission rule, keeping one). Off: you approve each queue and resume.",
       "default": true
+    },
+    "max_parallel": {
+      "type": "string",
+      "title": "Workers at once",
+      "description": "The most workers this machine runs at once, every repository's together. auto: no ceiling; cauce starts at what the machine can hold (its CPUs, free memory and free disk), adds one when work waits and the last tasks ended with no limit, and halves on a rate limit, an overloaded API, a worker the machine starved, or low memory or disk. A number: your ceiling, and the level still adapts under it. Each repository with work is reserved its share, and lends what it does not use. Cost never moves it.",
+      "default": "auto"
     }
   },
   "types": "./types/index.d.ts"

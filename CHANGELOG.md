@@ -4,6 +4,54 @@
 
 ### Added
 
+- **A workflow step can run in parts.** A step with `"fanout": "<plan step>"`
+  runs one task per part of that plan, side by side as the dispatcher allows:
+  a read-only `plan` step is asked for `parts` (2 to 6, or 1 when splitting
+  does not pay), each with surfaces no other part reaches, and the `contract`
+  they all keep, read strictly (no parts, overlapping surfaces or more than six
+  is `inconclusive`). Each part gets the step's prompt (the request quoted as
+  context: its criteria are its own prompt's), its own prompt, the contract
+  verbatim and quoted, and its surfaces. What needs the step waits for every
+  part; a part that stops stops the run there, and `cauce workflow retry`
+  queues only the parts that did not pass. Parts whose surfaces may touch stop
+  the run at the plan with the paths named. A plan of one part is the step run
+  whole. `cauce workflow status` and the board show the parts under their step;
+  `cauce workflow step add|set` takes `--fanout STEP` and `--integrate`.
+- **An integrate step joins the parts.** A step with `"integrate": true` merges
+  each part's branch, in the plan's order, on the commit they started from,
+  with no worker when they merge cleanly and the run's `--verify` passes; a
+  conflict, or a check that fails on the joined work, goes to a worker told
+  which files conflict, whose branch to merge and the contract. The review
+  chain after it reads the combined diff. Only an integrate step may wait on a
+  step run in parts; a definition where another one does is refused.
+- **`feature-parallel`**, a bundled template for a feature that touches several
+  areas: plan → build (fanout over the plan's parts) → integrate → review →
+  refute → fix → recheck. The plan starts where plans pass in the repository
+  (never Haiku); a plan of one part is today's `feature`.
+- **A large change is reviewed by area.** A blind review of a change over 600
+  changed lines that touches two or more areas (the parts' surfaces, else the
+  top-level folders) runs as one review per area, side by side, each with the
+  whole request, its area's diff and the other files' names; their findings go
+  into the one ledger, and refute, fix and recheck run once.
+- **The workers at once adapt instead of being fixed.** The dispatcher's three
+  per repository became a level per machine, every repository's together
+  (`cauce.capacity`): it starts at what the machine holds (CPUs, free memory,
+  free disk where worktrees live), rises by one when work waits and a round of
+  tasks ended with no limit, and halves on a rate limit or an overloaded API
+  (read from the CLI's own result, waiting out its retry-after), on a worker
+  the machine starved, or on low memory or disk. `cauce config max_parallel
+  auto|N` (a plugin option, `auto` by default) sets a ceiling over it. The
+  repositories with work share it by reserve and lending: each is reserved
+  max(1, level / lanes) in the order its oldest work was queued, lends what it
+  does not use, and gets a lent worker back when its borrowed task ends.
+  `cauce lanes` and the board show the level and its reason, and each lane's
+  reserve, use and loans; every change is a `level_changed` event. Cost never
+  moves it.
+- **The time between steps is measured.** A run's `finished` event gains
+  `advance_s` (from the step it waited on passing to its being queued),
+  `pickup_s` (from queued to the dispatcher starting it) and `spawn_s` (from
+  that to its plan), and `cauce stats` and the board's Analysis show them as
+  phases. A run that never measured one leaves it out.
 - **More effort continues the same model's session.** A `more_effort` move
   whose next cell has the same model resumes the last attempt's Claude Code
   session as a fork at the new effort (`claude -p --resume <id> --fork-session
@@ -56,6 +104,9 @@
 
 ### Fixed
 
+- What the steps before a workflow step said reached its brief as list items,
+  so a step after two others was asked to answer each one as a criterion of its
+  own; it is quoted as context now.
 - The independent check after an attempt that continued a session ran in the
   worker's session instead of its own; it never inherits one now.
 - A task whose check runs Playwright, or whose project's tests drive a

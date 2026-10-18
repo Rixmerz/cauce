@@ -59,6 +59,8 @@ CAUSES = {
     "review": ("blocked", "cauce"),
     "dismissed": ("dismissed", "you"),
     "superseded": ("dismissed", "cauce"),
+    # A plan whose parts cannot run side by side (their surfaces may touch): its pass is taken back.
+    "parts": ("replan", "cauce"),
 }
 
 #: Endings a person may dismiss: they wait on someone, and nothing else takes
@@ -195,6 +197,8 @@ def what_to_do(stop: Stop) -> str:
                   "hand or resume for one more round",
         "dismissed": "nothing: you took it off the board; resume it if you want it after all",
         "superseded": "nothing: a later task with the same text passed; resume it if you want it after all",
+        "parts": "its parts may touch the same files, so they cannot run side by side: plan again (resume it, "
+                 "or `cauce workflow retry` its step)",
     }.get(stop.cause, "read the attempts")
 
 
