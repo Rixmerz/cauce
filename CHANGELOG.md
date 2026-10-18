@@ -36,6 +36,29 @@
 
 ### Fixed
 
+- **A judging step is no longer failed for what it found in the work it
+  judges.** A review, refute or recheck step of a workflow (and any task of a
+  reading kind) that reported "S1, S4 is not met" about the change it judged was
+  ended `failed` with "claimed a pass, but says S1, S4 is not met", climbed the
+  ladder and paused the lane, although its ledger rows were decided. For a step
+  whose deliverable is a verdict (`LaunchSpec.judging`), a criterion it says the
+  work under judgment does not meet is a finding carried forward, kept on the
+  attempt; the step passes when it answered what it was asked, and a criterion
+  it left out is still `inconclusive`. A step that builds or fixes keeps the
+  rule: an unmet criterion is a `code_bug`.
+- **A move taken for a correction says the work passed its own check.** For an
+  attempt whose only failure is the independent check's blockers, `more_effort`
+  and `next_model` (the shallow climb and the repeated-answer climb) explained
+  themselves as "the work happened and was shallow". Each now says the work
+  passed its own check, how many blockers the independent check found, and why
+  this rung.
+- **A task is no longer read as changing nothing for what it quotes.** A fix
+  that quoted what the observed step did ("read-only", "changed no file", a
+  parenthesized "(a read-only review)") was briefed as read-only and given no
+  check. Quoted text and parentheses are evidence about something else and are
+  not read; a parenthesis that opens with the declaration (`(read-only)`,
+  `(read-only: report the cause)`), the task's own, still is.
+
 - **Work that passed its own check is no longer discarded when the independent
   check's corrections use up the ladder.** A feature started at opus/high
   passed the repository's `--verify` twice; the verifier found a different

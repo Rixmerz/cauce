@@ -1045,6 +1045,50 @@ def test_a_task_that_writes_is_not_read_only(text):
     assert orchestrate._READ_ONLY.search(text) is None
 
 
+@pytest.mark.parametrize("text", [
+    'Fix the refute step. Its brief said "This task is read-only: find out" and it changed no file.',
+    "Fix the bug. Evidence: task #4 (a read-only review) changed no file.",
+    "Fix it (the earlier task was read-only: it did not edit any files) and add a test.",
+    "Fix it: the step said \u201cdo not edit any file\u201d and changed none.",
+    "Fix it: the step said `read-only:` in its brief.",
+])
+def test_quoted_or_parenthesized_evidence_about_another_task_is_not_a_read_only_task(text):
+    """A fix task quoting what the observed step did ("read-only", "changed no file") was read as
+    changing nothing and briefed so; only the task's own words count."""
+    from cauce import orchestrate
+
+    # Each case is read-only to the bare pattern: it is the stripping that makes it a task that writes.
+    assert orchestrate._READ_ONLY.search(text)
+    assert orchestrate.declares_read_only("bugfix", text) is False
+
+
+@pytest.mark.parametrize("text", [
+    "Investiga el bug (solo lectura, no edites ning\u00fan archivo)",
+    "Find why the payment test fails (read-only: report the cause)",
+    "Encuentra por qu\u00e9 falla el test de pagos (solo lectura, solo reporta)",
+    "Investigate (read-only) a timezone bug",
+])
+def test_a_parenthesis_that_opens_with_the_task_s_own_declaration_is_read(text):
+    """The aside that opens with the declaration is the task's own, whatever words follow it."""
+    from cauce import orchestrate
+
+    assert orchestrate.declares_read_only("bugfix", text) is True
+
+
+def test_a_fix_that_quotes_a_step_s_read_only_evidence_is_briefed_as_one_that_writes(git_repo, store):
+    script = Script(ok())
+    run('Fix the refute step, which ended "read-only" (read-only review) and changed no file',
+        git_repo, store, registry={}, launcher=script, classifier=kind("test"))
+    assert "This task is read-only" not in script.specs[0].prompt
+
+
+def test_a_task_s_own_words_still_make_it_read_only():
+    from cauce import orchestrate
+
+    assert orchestrate.declares_read_only("test", "Validate the flow (READ-ONLY)") is True
+    assert orchestrate.declares_read_only("feature", "Validate the flow (READ-ONLY)") is False
+
+
 def test_a_feature_that_names_something_read_only_still_writes(git_repo, store):
     """A feature asking for a read-only version history was briefed as read-only,
     three times, and stopped each time as a task found wrong."""

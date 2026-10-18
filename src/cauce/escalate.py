@@ -209,6 +209,13 @@ def _skipped(ladder: Sequence[Cell], cell: Cell, target: Cell) -> tuple[str, ...
                  if c.model == cell.model)
 
 
+def _correction(last: Attempt, why: str) -> str:
+    """What every move taken for a correction says: the work passed its own check, only the independent
+    check's blockers failed it, and `why` this rung."""
+    return (f"the work passed its own check; the independent check found {len(last.blockers)} blocker(s) in it, "
+            f"so this is a correction: {why}")
+
+
 def _arrives(target: Cell) -> str:
     purpose = f" ({EFFORT_PURPOSE[target.effort]})" if target.effort else ""
     return f"next: {target.label}{purpose}"
@@ -343,14 +350,17 @@ def decide(
             return Decision(Move.REPLAN, reason=f"{why}, and there is no stronger model on this ladder",
                             because=(seen, rule, f"no model above {last.cell.model} on this ladder: the task "
                                                  "is rewritten instead"))
-        return _gated(Move.NEXT_MODEL, target, last.max_turns, why, allow_approval,
-                      (seen, rule, _arrives(target)), _skipped(ladder, last.cell, target))
+        because = (seen, *([_correction(last, why)] if last.blockers else []), rule, _arrives(target))
+        return _gated(Move.NEXT_MODEL, target, last.max_turns, why, allow_approval, because,
+                      _skipped(ladder, last.cell, target))
 
     # Effort axis: the work was shallow. The next effort of the same model,
     # and only when this model has run out does the next one start.
     shallow = "the work happened and was shallow: the same model, more thorough"
     target = _next_effort(ladder, last.cell)
     if target is not None:
+        if last.blockers:
+            shallow = _correction(last, "a defect the work missed is the shallow kind: the same model, more thorough")
         return Decision(Move.MORE_EFFORT, target, last.max_turns, f"{failure}: same model, more thorough",
                         because=(seen, shallow, _arrives(target)))
     target = _next_model(ladder, last.cell)
@@ -361,6 +371,9 @@ def decide(
                         because=(seen, f"{last.cell.label} is the top of this ladder: there is nothing left "
                                        "to climb to"))
     why = f"{failure}, and {last.cell.label} was this model's last cell"
+    if last.blockers:
+        shallow = _correction(last, f"{last.cell.label} is {last.cell.model}'s last cell, so a missed defect it "
+                                    "could not find goes to a stronger model")
     return _gated(Move.NEXT_MODEL, target, last.max_turns, why, allow_approval,
                   (seen, shallow, f"{last.cell.label} was {last.cell.model}'s last cell on this ladder, so the "
                                   "next model takes over", _arrives(target)))

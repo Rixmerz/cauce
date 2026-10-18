@@ -194,6 +194,10 @@ class LaunchSpec:
     append_system_prompt: str = ""
     #: The criteria `S#` the task lists: a pass must say each one is met.
     criteria: tuple[str, ...] = ()
+    #: The step's deliverable is a verdict about other work (a review, a refute, a recheck, a reading
+    #: kind): a criterion it says the work under judgment does not meet is its finding, carried
+    #: forward, not a failure of the step. A step that builds or fixes keeps the rule.
+    judging: bool = False
     #: The ledger rows the task decides, and the words a verdict may use (`cauce.ledger`).
     verdicts: tuple[str, ...] = ()
     verdict_words: tuple[str, ...] = ()
@@ -414,7 +418,7 @@ def parse(
             return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
                                 "claimed a pass with no evidence: " + summary, raw=text, verdict=verdict, **common)
         left_out, not_met = criteria_mod.unmet(spec.criteria, common["criteria"])
-        if not_met:
+        if not_met and not spec.judging:
             return WorkerResult(False, _refused(Failure.CODE_BUG, denied),
                                 f"claimed a pass, but says {', '.join(not_met)} is not met: " + summary, evidence,
                                 raw=text, verdict=verdict, **common)

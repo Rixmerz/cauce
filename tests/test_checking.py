@@ -50,6 +50,31 @@ def test_a_pass_must_say_each_criterion_is_met(tmp_path):
     assert plain.passed
 
 
+def test_a_judging_step_that_reports_a_criterion_unmet_by_the_work_it_judges_passes(tmp_path):
+    """A refute step decided its row and was failed for 'S1, S4 is not met': the criteria it
+    reported unmet were the judged change's, a finding carried forward, not its own failure."""
+    ok = {"verdict": "pass", "summary": "F1 confirmed", "evidence": "pytest -k cart: 1 failed",
+          "criteria": [{"id": "S1", "met": False}, {"id": "S2", "met": True}]}
+    judging = LaunchSpec("p", Cell("sonnet", "medium"), tmp_path, criteria=("S1", "S2"), judging=True)
+    judged = launch.parse(proc(ok), judging)
+    assert judged.passed and judged.failure is None
+    assert [c["id"] for c in judged.criteria if c["met"] is False] == ["S1"]
+    # What it was not asked is still not a pass: a criterion left out stays inconclusive.
+    left_out = launch.parse(proc({**ok, "criteria": [{"id": "S1", "met": False}]}), judging)
+    assert not left_out.passed and left_out.failure is Failure.INCONCLUSIVE
+    # A step that builds or fixes keeps the rule.
+    building = LaunchSpec("p", Cell("sonnet", "medium"), tmp_path, criteria=("S1", "S2"))
+    assert launch.parse(proc(ok), building).failure is Failure.CODE_BUG
+
+
+@pytest.mark.parametrize("step_kind, judges", [("review-routine", True), ("review-critical", True),
+                                               ("explore", True), ("bugfix", False), ("implement", False)])
+def test_only_a_step_that_gives_a_verdict_is_launched_as_judging(git_repo, store, step_kind, judges):
+    script = Script(WorkerResult(True, None, "ok", "1 passed", criteria=({"id": "S1", "met": True},)))
+    run("Judge it:\n- one", git_repo, store, registry={}, launcher=script, classifier=kind(step_kind))
+    assert script.specs[0].judging is judges
+
+
 def test_the_brief_carries_the_criteria(git_repo, store):
     script = Script(WorkerResult(True, None, "ok", "1 passed", criteria=({"id": "S1", "met": True},
                                                                           {"id": "S2", "met": True})))
@@ -256,6 +281,29 @@ def test_decide_reviews_only_work_whose_own_check_passed():
     # Below the top, a correction still climbs.
     below = Attempt(Cell("opus", "high"), 60, False, Failure.CODE_BUG, "x", blockers=(BUG,))
     assert decide(ladder, [below]).move is Move.MORE_EFFORT
+
+
+def test_every_move_taken_for_a_correction_says_the_work_passed_its_own_check():
+    """A correction climbed with only 'the work happened and was shallow': the person reading
+    why saw a failed attempt, when the work had passed and only the independent check's blockers failed."""
+    ladder = LADDERS["feature"]
+    two = (BUG, OTHER)
+    # More effort, below the top of the model.
+    effort = decide(ladder, [Attempt(Cell("opus", "high"), 60, False, Failure.CODE_BUG, "x", blockers=two)])
+    # The model's last cell: the next model takes over.
+    handed = decide(ladder, [Attempt(Cell("sonnet", "xhigh"), 60, False, Failure.CODE_BUG, "x", blockers=two)])
+    # Two cells that agreed.
+    same = Attempt(Cell("sonnet", "medium"), 60, False, Failure.CODE_BUG, "same", blockers=two)
+    again = Attempt(Cell("sonnet", "high"), 60, False, Failure.CODE_BUG, "same", blockers=two)
+    agreed = decide(ladder, [same, again])
+    moved = [effort, handed, agreed]
+    assert [d.move for d in moved][:2] == [Move.MORE_EFFORT, Move.NEXT_MODEL]
+    for decision in moved:
+        text = " | ".join(decision.because)
+        assert "passed its own check" in text and "2 blocker(s)" in text, decision
+    # An attempt that is no correction is not told it passed.
+    plain = decide(ladder, [Attempt(Cell("opus", "high"), 60, False, Failure.CODE_BUG, "red")])
+    assert "passed its own check" not in " ".join(plain.because)
 
 
 def test_the_attempt_limit_with_only_the_checks_blockers_open_keeps_the_work_too(git_repo, store, verifier_on):

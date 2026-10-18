@@ -739,6 +739,7 @@ def run(
                                                                selection.system_prompt()) if p),
                 env={**run_env, "CAUCE_WORKER_TASK": str(task["id"]), "CAUCE_WORKER_ATTEMPT": str(nth)},
                 criteria=criteria_mod.ids(text),
+                judging=not writes or declared_read_only or deciding is not None,
                 verdicts=tuple(deciding.get("ids") or ()) if deciding else (),
                 verdict_words=ledger_mod.WORDS.get(deciding["role"], ()) if deciding else (),
             )
@@ -999,14 +1000,25 @@ _READ_ONLY = re.compile(
     r"|\bno (?:edites|modifiques|cambies|toques)\b[\w ,]{0,25}?\b(?:ning[uú]n\s+)?archivos?\b"
     r"(?!\s+(?:de|en|bajo|dentro|fuera|salvo|excepto|que)\b)",
     re.IGNORECASE)
+#: What a task quotes or puts in parentheses is usually evidence about something else (what another
+#: task did: "read-only", (a read-only review)). A parenthesis that opens with the declaration is the
+#: task's own, whatever follows it: "Investigate (read-only) a timezone bug", "(read-only: report the
+#: cause)", and the same in Spanish ("solo lectura").
+_QUOTED = re.compile(r'"[^"\n]*"|\u201c[^\u201d\n]*\u201d|`[^`\n]*`')
+_ASIDE = re.compile(r"\((?!\s*(?:read[- ]only|s[oó]lo\s+(?:de\s+)?lectura)\s*[:;,)])[^()\n]*\)", re.IGNORECASE)
 #: Kinds whose work is the change itself: whatever their text says is read-only,
 #: they write. Every misreading of a task as read-only was one of these.
 _BUILDS = frozenset({"feature", "implement", "refactor", "docs"})
 
 
 def declares_read_only(kind: str | None, text: str) -> bool:
-    """Whether a task's own words say it changes nothing, for a kind that is not a build."""
-    return kind not in _BUILDS and bool(_READ_ONLY.search(text))
+    """Whether the task says in its own words that it changes nothing. A build kind never does, and what
+    the text quotes or puts in an aside describes something else, so it is not read."""
+    if kind in _BUILDS:
+        return False
+    return bool(_READ_ONLY.search(_ASIDE.sub(" ", _QUOTED.sub(" ", text))))
+
+
 _PORT = re.compile(r"(?:localhost|127\.0\.0\.1):(\d{2,5})\b")
 
 

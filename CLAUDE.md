@@ -181,7 +181,11 @@ yields the default kind, not a guess.
   A cancel says where it came from; "a person did it" is never a guess.
 - The model's stated confidence about its own work is not an input.
 - A request's criteria are its own words: a pass answers every `S#`, one left
-  out is `inconclusive` and one not met is a `code_bug`. Prose has no criteria.
+  out is `inconclusive` and one not met is a `code_bug`, unless the step judges
+  other work (a workflow's review, refute or recheck, a reading kind:
+  `LaunchSpec.judging`): a criterion it reports the work under judgment misses
+  is its finding, carried forward, and the step passes when it answered what it
+  was asked. A step that builds or fixes keeps the rule. Prose has no criteria.
   Items the request puts out of scope (under a line ending in `:` that says
   so, or marked so themselves) are no criteria, and the brief names them.
 - A finding blocks only when the change caused or worsened it (or it cannot be
