@@ -7,6 +7,9 @@
 //   parameters", which tells the model nothing.
 // - Work a session queued that ends while it is idle wakes it: a turn starts
 //   with the notice, and the session tells the person and goes on.
+// - At a good moment to compact (cauce decides it at a turn's end), the `/compact`
+//   line cauce built is shown to the person, or, with `compact auto`, the engine
+//   compacts with its instructions while no turn runs, and a toast says so.
 // - A status entry that counts what waits on the person, runs and is queued,
 //   and `/cauce`, which opens the web board: the one place to look and press
 //   (resume, allow, dismiss, unpause). A terminal copy of it was a poorer one.
@@ -18,11 +21,13 @@
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { CauceBoard } from '../types'
-import type { Ran } from './cauce-cli'
-import { DEFAULT_TOPICS, endedToast, json, statusLine } from './cauce-cli'
+import type { CompactionStep, Ran } from './cauce-cli'
+import { compactedToast, DEFAULT_TOPICS, endedToast, json, skippedToast, statusLine, suggestToast } from './cauce-cli'
 
 const BOARD_URL = 'http://127.0.0.1:8790/'
 const POLL_MS = 15_000
+/** How long a toast with a `/compact` line to paste, or a fallback to say, stays: the longest the engine takes. */
+const SUGGEST_MS = 60_000
 const KINDS = ['chat', 'explore', 'docs', 'test', 'refactor', 'implement', 'ui', 'feature', 'debug-repro',
   'debug-unclear', 'review-routine', 'review-critical', 'plan']
 const LINKS = ['depends_on', 'explains', 'replaces', 'contradicts', 'example_of']
@@ -92,9 +97,14 @@ async function topics($: EngineInterface, cwd: string): Promise<string[]> {
   return names.length ? names : [...DEFAULT_TOPICS]
 }
 
-// The module's own: started over on a reload, which is fine for both.
+// The module's own: started over on a reload, which is fine for all four.
 let busy = false
 let polling = false
+let engine: string | null = null
+/** Whether cauce may have a moment to compact to hand over: it decides only at a
+ * turn's end, so the mod asks after one (and once after a reload), and again
+ * only while cauce says a decision waits. */
+let compactionDue = true
 
 async function refresh($: EngineInterface): Promise<void> {
   const cwd = await $.session.cwd()
@@ -115,11 +125,69 @@ async function wake($: EngineInterface, enabled: boolean): Promise<boolean> {
   return true
 }
 
+/** The Claude Code version the session runs on: cauce learns per version
+ * whether a `/compact` the mod submits runs as the command. */
+async function version($: EngineInterface): Promise<string> {
+  if (engine === null) {
+    try {
+      engine = (await $.session.version()).version || 'unknown'
+    } catch {
+      engine = 'unknown'
+    }
+  }
+  return engine
+}
+
+/** cauce's moment to compact, taken once: the line shown to the person, or,
+ * with `compact auto`, the engine's own compaction with the line's instructions
+ * while no turn runs. What it answered is told to cauce, which learns from it
+ * (and from its hooks) whether this build compacts on a mod's word. */
+async function compaction($: EngineInterface): Promise<void> {
+  if (busy) return
+  compactionDue = false
+  const session = await $.session.id()
+  const engineVersion = await version($)
+  const step = json<CompactionStep>(
+    await cauce($, ['compaction', 'next', '--session', session, '--version', engineVersion, '--json']))
+  if (!step) return
+  compactionDue = step.wait === true
+  if (step.said) $.ui.toast(step.said, { timeoutMs: SUGGEST_MS })
+  if (!step.line || step.decision === undefined || !step.action) return
+  const decision = String(step.decision)
+  const tell = (outcome: string[]) => cauce($, ['compaction', 'delivered', decision, '--session', session,
+    '--version', engineVersion, ...outcome, '--json'])
+  if (step.action === 'submit' && !busy) {
+    try {
+      // The call `/compact` makes, between turns: the engine refuses a `/` text a
+      // mod submits, and this never reaches the model as a message.
+      const result = await $.session.compact({ instructions: step.instructions ?? '' })
+      if (result.skip === undefined) {
+        $.ui.toast(compactedToast(step.decision))
+        await tell(['--ran'])
+      } else {
+        $.ui.toast(skippedToast(step.decision, result.skip), { timeoutMs: SUGGEST_MS })
+        await tell(['--skipped', result.skip])
+      }
+      return
+    } catch (err) {
+      // A turn started, or the call failed for a reason the mod cannot tell from
+      // a build without it: nothing is learned of the build, and the line is the
+      // person's to paste.
+      await tell(['--rejected', String(err)])
+    }
+  } else if (step.action === 'submit') {
+    // A turn started while cauce answered: the line is the person's to paste,
+    // and cauce must not read a line nobody submitted as one this build ignored.
+    await cauce($, ['compaction', 'delivered', decision, '--session', session])
+  }
+  $.ui.toast(suggestToast(step.line), { timeoutMs: SUGGEST_MS })
+}
+
 async function poll($: EngineInterface, wakes: boolean): Promise<void> {
   if (polling) return
   polling = true
   try {
-    await wake($, wakes)
+    if (!(await wake($, wakes)) && compactionDue) await compaction($)
     await refresh($)
   } finally {
     polling = false
@@ -245,6 +313,7 @@ export const register: Register = (on, options) => {
     const answer = await next(e)
     if (e.agentId === undefined) {
       busy = false
+      compactionDue = true
       void refresh($).catch(ignore)
     }
     return answer

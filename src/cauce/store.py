@@ -798,6 +798,20 @@ class Store:
             "SELECT * FROM events WHERE task_id = ? AND kind = ? ORDER BY id DESC LIMIT 1", (task_id, kind)).fetchone()
         return {**dict(row), "data": json.loads(row["data"])} if row else None
 
+    def session_events(self, session_id: str | None, kinds: Sequence[str], *, since: str = "",
+                       repo: str | None = None) -> list[dict]:
+        """Events of these kinds on any task of a session (None: of every session),
+        oldest first, each with its task's session and repository."""
+        scope, params = "", [*kinds, since]
+        if session_id is not None:
+            scope, params = scope + " AND t.session_id = ?", [*params, session_id]
+        if repo is not None:
+            scope, params = scope + " AND t.repo = ?", [*params, repo]
+        rows = self._conn.execute(
+            "SELECT e.*, t.session_id, t.repo FROM events e JOIN tasks t ON t.id = e.task_id "  # noqa: S608
+            f"WHERE e.kind IN ({', '.join('?' * len(kinds))}) AND e.ts >= ?{scope} ORDER BY e.id", params).fetchall()
+        return [{**dict(r), "data": json.loads(r["data"])} for r in rows]
+
     def final_event(self, task_id: int, status: str | None = None) -> dict | None:
         """The `finished` event that ended the task as it stands: the last one whose
         status is the task's own. A task resumed after dying has an ending per try,

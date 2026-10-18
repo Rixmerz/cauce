@@ -86,6 +86,17 @@
       "title": "Save what workers learned in engram",
       "description": "What a passing worker learned (the facts cauce keeps in its own notes: never a secret, never a failed attempt's, never text marked <private>) is also saved in engram as learning observations of the project, one session per task, so your team's agents find it. Off by default: it writes to a store that is not cauce's.",
       "default": false
+    },
+    "compact": {
+      "type": "string",
+      "title": "Compact at the right moment",
+      "description": "cauce decides when a session should compact (a large context, at a break between tasks, while the prompt cache is warm, never while this session's run holds the checkout) and what /compact should keep, read from your requests verbatim and the session's open work. suggest: the mod shows you the /compact line to paste. auto: the mod has Claude Code compact with those instructions between turns; a build never seen to run it falls back to suggest and says so once. off: Claude Code's own auto-compaction alone.",
+      "options": [
+        "suggest",
+        "auto",
+        "off"
+      ],
+      "default": "suggest"
     }
   },
   "types": "./types/index.d.ts"

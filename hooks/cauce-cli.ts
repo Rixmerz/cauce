@@ -51,3 +51,30 @@ export function endedToast(ids: number[], statuses?: Record<string, string | nul
   })
   return `cauce: ${each.join(' · ')}`
 }
+
+/** What `cauce compaction next` answers: what the mod does now that the session
+ * is idle, once per decision, and what cauce found out about this build. `wait`:
+ * a decision is held (a run of this session holds the checkout), so ask again. */
+export type CompactionStep = {
+  action: 'suggest' | 'submit' | null
+  decision?: number
+  line?: string
+  instructions?: string
+  said?: string
+  wait?: boolean
+}
+
+/** The toast that hands the person the `/compact` line to paste. */
+export function suggestToast(line: string): string {
+  return `cauce: a good moment to compact (a break between tasks, the cache still warm). Paste this:\n${line}`
+}
+
+/** The toast that says the engine compacted on cauce's word: every action the mod takes is visible. */
+export function compactedToast(decision: number): string {
+  return `cauce: compacted (#${decision}): \`compact auto\` compacted between turns with cauce's /compact instructions`
+}
+
+/** The toast that says a hook vetoed the compaction cauce asked for. */
+export function skippedToast(decision: number, reason: string): string {
+  return `cauce: the compaction cauce asked for (#${decision}) was skipped: ${reason}`
+}

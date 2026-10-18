@@ -30,6 +30,10 @@ from cauce.store import Store
 
 #: The phases of a run, in the order they happen.
 PHASES = ("queued_s", "plan_s", "setup_s", "worker_s", "check_s", "verifier_s", "wait_s", "other_s")
+#: The events a compaction decision leaves (`cauce.compaction`).
+COMPACTION_EVENTS = ("compaction_decided", "compaction_delivered", "compaction_settled", "compaction_seen")
+#: How many compaction decisions the text lists, newest last.
+COMPACTIONS_SHOWN = 10
 #: The columns of a run, as `cauce stats --runs` writes them.
 RUN_COLUMNS = ("task", "repo", "kind", "source", "workflow", "step", "status", "stop", "start_cell", "final_cell",
                "started_at", "ended_at", "wall_s", *PHASES[:-1], "attempts", "first_try", "verified",
@@ -303,6 +307,38 @@ def daily(found: Sequence[Mapping[str, Any]], turn_days: Mapping[str, int]) -> l
              "cost_usd": round(v["cost_usd"], 2), "hours": round(v["hours"], 2)} for d, v in sorted(days.items())]
 
 
+def compactions(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Each compaction decision (`cauce.compaction`), oldest first: why, what the
+    summary would cost with the cache warm beside a cold one, how it was
+    delivered, and whether it ran (as settled, or as its marker was seen)."""
+    from cauce import compaction
+
+    rows: dict[int, dict[str, Any]] = {}
+    for event in events:
+        data = event["data"]
+        if event["kind"] == compaction.DECIDED:
+            warm, cold = _number(data.get("warm_usd")), _number(data.get("cold_usd"))
+            tokens, window = data.get("tokens") or 0, data.get("window") or compaction.WINDOW
+            rows[event["id"]] = {
+                "decision": event["id"], "at": event["ts"], "session": event.get("session_id"),
+                "repo": event.get("repo"), "now": bool(data.get("now")), "mode": data.get("mode"),
+                "tokens": tokens, "share": round(tokens / window, 2) if window else None,
+                "because": data.get("because") or [], "warm_usd": warm, "cold_usd": cold,
+                "warm_share": round(warm / cold, 2) if warm is not None and cold else None,
+                "delivered": None, "ran": None, "evidence": None}
+            continue
+        row = rows.get(int(data.get("decision") or data.get("marker") or 0))
+        if row is None:
+            continue
+        if event["kind"] == compaction.DELIVERED:
+            row["delivered"] = data.get("how")
+        elif event["kind"] == compaction.SETTLED:
+            row["ran"], row["evidence"] = bool(data.get("ran")), data.get("evidence")
+        elif event["kind"] == compaction.SEEN and row["ran"] is None:
+            row["ran"], row["evidence"] = True, f"{data.get('source')} carried its marker"
+    return list(rows.values())
+
+
 def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs: int | None = 20) -> dict[str, Any]:
     """Everything the screen and the command show, for the last `days` (0: all) of
     one repository (None: every one). `keep_runs` slowest and costliest runs are
@@ -322,6 +358,7 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "stops": dict(stops.most_common()), "moves": dict(moves.most_common()),
         "turns": {k: v for k, v in turn_rows.items() if k != "by_day"},
         "daily": daily(found, turn_rows["by_day"]),
+        "compactions": compactions(store.session_events(None, COMPACTION_EVENTS, since=since, repo=repo)),
     }
     if keep_runs is None:
         report["runs"] = found
@@ -394,7 +431,27 @@ def text(report: Mapping[str, Any]) -> str:
     if t["count"]:
         lines += ["", f"session turns {t['count']}  p50 {_seconds(t['seconds_p50'])}  p90 {_seconds(t['seconds_p90'])}"
                   f"  ${t['usd']:.2f}  interrupted {t['interrupted']}"]
+    lines += _compaction_lines(report.get("compactions") or [])
     return "\n".join(lines)
+
+
+def _compaction_lines(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    if not rows:
+        return []
+    said = [r for r in rows if r["now"]]
+    lines = ["", f"compaction decisions {len(rows)}  said now {len(said)}  delivered "
+             f"{sum(1 for r in said if r['delivered'])}  ran {sum(1 for r in said if r['ran'])}"]
+    for r in rows[-COMPACTIONS_SHOWN:]:
+        price = (f"warm {_usd(r['warm_usd'])} vs cold {_usd(r['cold_usd'])} ({_rate(r['warm_share'])})"
+                 if r["cold_usd"] else "cost not measurable")
+        if r["now"]:
+            outcome = (f"{r['delivered'] or 'not delivered'}, "
+                       + ("ran" if r["ran"] else "did not run" if r["ran"] is False else "not seen to run"))
+        else:
+            outcome = next((b for b in r["because"] if b.startswith("not now: ")), "not now")
+        lines.append(f"  {str(r['at'])[:16]} #{r['decision']} {r['tokens'] // 1000}k ({_rate(r['share'])})  "
+                     f"{'now' if r['now'] else 'wait'}  {price}  {outcome}")
+    return lines
 
 
 def as_json(report: Mapping[str, Any]) -> str:

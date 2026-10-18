@@ -31,9 +31,12 @@ WRITERS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 #: Text the harness puts in a user turn that the person never typed.
 NOT_TYPED = ("<command-", "<local-command", "<system-reminder>", "<task-notification>", "Caveat:",
              "[Request interrupted")
-#: A prompt a plugin submitted between turns, or a bare slash command: in the
-#: person's place, not in their words.
-NOT_TYPED_RE = re.compile(r"^(?:The [\w.:@-]+ plugin sent a message|/[\w:-]+$)")
+#: How a `/compact` cauce asked for opens (`cauce.compaction`): its marker
+#: follows the command.
+ASKED = "/compact [cauce-compaction #"
+#: A prompt a plugin submitted between turns, a bare slash command, or a
+#: compaction cauce asked for: in the person's place, not in their words.
+NOT_TYPED_RE = re.compile(r"^(?:The [\w.:@-]+ plugin sent a message|/[\w:-]+$|" + re.escape(ASKED) + ")")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 

@@ -526,6 +526,28 @@ def checkout_lock(root: Path, checkout: Path) -> Path:
     return root / "work" / f"checkout-{digest}.lock"
 
 
+def holder(root: Path, checkout: Path) -> int | None:
+    """The task whose run holds `checkout` now, or None when no run does. Looked
+    at with a shared lock taken and let go at once: a run that starts in that
+    instant waits one poll."""
+    path = checkout_lock(root, checkout)
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - not on the platforms cauce runs on
+        return None
+    if not path.is_file():
+        return None
+    with open(path, "a+") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except OSError:
+            fh.seek(0)
+            held = fh.read().strip()
+            return int(held) if held.isdigit() else None
+        fcntl.flock(fh, fcntl.LOCK_UN)
+    return None
+
+
 @contextlib.contextmanager
 def in_place(root: Path, checkout: Path, task_id: int, *, waiting: Callable[[str], None],
              check: Callable[[], None]) -> Iterator[None]:

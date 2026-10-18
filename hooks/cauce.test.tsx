@@ -21,6 +21,7 @@ function world(on: On, answers: Record<string, Answer>, broken = false) {
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)
   on('session.id', () => ({ value: 'sess-1' }))
   on('session.cwd', () => ({ value: '/work/shop' }))
+  on('session.version', () => ({ value: { version: '2.1.302', base: '2.1.302' } }))
   on('process.run', ($, e) => {
     if (broken) throw new Error('spawn ENOENT')
     const args = e.argv.slice(1)
@@ -370,6 +371,164 @@ test('an endings answer that fails or is garbled wakes nothing', async ($, on) =
   })
   await clock.advance(30_000)
   expect(seen.prompts).toEqual([])
+})
+
+// --- compaction at cauce's moment -----------------------------------------------------------
+
+const LINE = '/compact [cauce-compaction #7] cauce asked for this compaction at a break between tasks.'
+const compactionCalls = (seen: { argv: string[][] }) => seen.argv.filter(a => a[0] === 'compaction')
+
+test('suggest: the line is shown to the person once, never sent to the model', async ($, on) => {
+  let calls = 0
+  const { seen, clock } = await started($, on, {
+    'compaction next': () => ({ exitCode: 0, stdout: JSON.stringify(calls++ === 0
+      ? { action: 'suggest', decision: 7, line: LINE } : { action: null }) }),
+  })
+  await clock.advance(15_000)
+  await clock.advance(15_000)
+  expect(seen.prompts).toEqual([])
+  expect(seen.toasts).toHaveLength(1)
+  expect(seen.toasts[0]).toContain('a good moment to compact')
+  expect(seen.toasts[0]).toContain(LINE)
+  expect(compactionCalls(seen)[0]).toEqual(['compaction', 'next', '--session', 'sess-1', '--version', '2.1.302', '--json'])
+})
+
+const INSTRUCTIONS = LINE.slice('/compact '.length)
+const SUBMIT = JSON.stringify({ action: 'submit', decision: 7, line: LINE, instructions: INSTRUCTIONS })
+const DELIVERED = ['compaction', 'delivered', '7', '--session', 'sess-1', '--version', '2.1.302']
+
+/** The engine's compaction, as the mod calls it: what it was asked with, and its answer. */
+function compacts(on: On, answer: () => object) {
+  const asked: (string | undefined)[] = []
+  on('session.compact', ($, e) => {
+    asked.push(e.instructions)
+    return answer() as never
+  })
+  return asked
+}
+
+test('auto: the engine compacts between turns with the instructions, said after it stood, and cauce is told',
+  async ($, on) => {
+    let calls = 0
+    const asked = compacts(on, () => ({ messages: [{ role: 'user', text: 'the summary', toolUses: [] }] }))
+    const { seen, clock } = await started($, on, {
+      'compaction next': () => ({ exitCode: 0, stdout: calls++ === 0 ? SUBMIT : JSON.stringify({ action: null }) }),
+      'compaction delivered': { exitCode: 0, stdout: JSON.stringify({ kept: true }) },
+    })
+    await clock.advance(15_000)
+    expect(asked).toEqual([INSTRUCTIONS])
+    expect(seen.prompts).toEqual([])  // nothing reaches the model as a message
+    expect(compactionCalls(seen)[1]).toEqual([...DELIVERED, '--ran', '--json'])
+    expect(seen.toasts).toEqual(["cauce: compacted (#7): `compact auto` compacted between turns with cauce's /compact "
+      + 'instructions'])
+  })
+
+test('auto: a hook that vetoes it is said, and is no verdict on the build', async ($, on) => {
+  compacts(on, () => ({ skip: 'blocked by a PreCompact hook' }))
+  const { seen, clock } = await started($, on, {
+    'compaction next': { exitCode: 0, stdout: SUBMIT },
+    'compaction delivered': { exitCode: 0, stdout: JSON.stringify({ kept: true }) },
+  })
+  await clock.advance(15_000)
+  expect(compactionCalls(seen)[1]).toEqual([...DELIVERED, '--skipped', 'blocked by a PreCompact hook', '--json'])
+  expect(seen.toasts).toEqual(['cauce: the compaction cauce asked for (#7) was skipped: blocked by a PreCompact hook'])
+})
+
+test('auto: a call that fails is no refusal of the build: the line is shown, and nothing said before it',
+  async ($, on) => {
+    // A hook that throws is passed over, and the engine's own compaction, with no
+    // transcript here, rejects the call: a failure the mod cannot read the build from.
+    compacts(on, () => { throw new Error('a turn is running') })
+    const { seen, clock } = await started($, on, {
+      'compaction next': { exitCode: 0, stdout: SUBMIT },
+      'compaction delivered': { exitCode: 0, stdout: JSON.stringify({ kept: true }) },
+    })
+    await clock.advance(15_000)
+    const [, delivered] = compactionCalls(seen)
+    expect(delivered!.slice(0, 8)).toEqual([...DELIVERED, '--rejected'])
+    expect(delivered![8]).toContain('HooksError')
+    expect(delivered).not.toContain('--refused')
+    expect(seen.prompts).toEqual([])
+    expect(seen.toasts).toHaveLength(1)
+    expect(seen.toasts[0]).toContain(LINE)
+  })
+
+test('never during a turn: cauce is not even asked until it ends', async ($, on) => {
+  const asked = compacts(on, () => ({ messages: [{ role: 'user', text: 'the summary', toolUses: [] }] }))
+  const { seen, clock } = await started($, on, {
+    'compaction next': { exitCode: 0, stdout: SUBMIT },
+  })
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await clock.advance(30_000)
+  expect(compactionCalls(seen)).toEqual([])
+  expect(seen.toasts).toEqual([])
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+  await clock.advance(15_000)
+  expect(compactionCalls(seen)[0]!.slice(0, 2)).toEqual(['compaction', 'next'])
+  expect(asked).toEqual([INSTRUCTIONS])
+  expect(seen.toasts[0]).toContain('compacted (#7)')
+})
+
+test('idle polls ask cauce only after a turn ended, or while it says a decision waits', async ($, on) => {
+  const answers = [{ action: null, wait: true }, { action: null }]
+  const { seen, clock } = await started($, on, {
+    'compaction next': () => ({ exitCode: 0, stdout: JSON.stringify(answers.shift() ?? { action: null }) }),
+  })
+  await clock.advance(15_000)  // once after a (re)load
+  await clock.advance(15_000)  // asked again: a decision waits on a run holding the checkout
+  await clock.advance(60_000)  // nothing waits: four idle polls start no process
+  expect(compactionCalls(seen)).toHaveLength(2)
+  await $.turn.start({ text: 'go', turnId: 't2' } as never)
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer' } as never)
+  await clock.advance(30_000)
+  expect(compactionCalls(seen)).toHaveLength(3)
+})
+
+test('a turn that starts while cauce answers gets the line shown, and cauce is told it was not submitted',
+  async ($, on) => {
+    const { seen, clock } = await started($, on, {
+      'compaction next': () => {
+        void $.turn.start({ text: 'typed meanwhile', turnId: 't9' } as never)
+        return { exitCode: 0, stdout: JSON.stringify({ action: 'submit', decision: 7, line: LINE }) }
+      },
+    })
+    await clock.advance(15_000)
+    expect(seen.prompts).toEqual([])
+    expect(compactionCalls(seen)[1]).toEqual(['compaction', 'delivered', '7', '--session', 'sess-1'])
+    expect(seen.toasts[0]).toContain(LINE)
+  })
+
+test('a build found not to run it: cauce says so, and the line is shown instead', async ($, on) => {
+  const said = 'cauce: this Claude Code (2.1.302) did not run the /compact cauce submitted'
+  const { seen, clock } = await started($, on, {
+    'compaction next': { exitCode: 0, stdout: JSON.stringify({ action: 'suggest', decision: 8, line: LINE, said }) },
+  })
+  await clock.advance(15_000)
+  expect(seen.prompts).toEqual([])
+  expect(seen.toasts[0]).toBe(said)
+  expect(seen.toasts[1]).toContain(LINE)
+})
+
+test('ending work wakes first; a compaction waits for the next idle look', async ($, on) => {
+  let n = 0
+  const { seen, clock } = await started($, on, {
+    endings: () => ({ exitCode: 0, stdout: JSON.stringify(n++ === 0 ? { notice: NOTICE, ids: [21] } : { notice: null, ids: [] }) }),
+    'compaction next': { exitCode: 0, stdout: JSON.stringify({ action: null }) },
+  })
+  await clock.advance(15_000)
+  expect(compactionCalls(seen)).toEqual([])
+  await clock.advance(15_000)
+  expect(compactionCalls(seen)).toHaveLength(1)
+})
+
+test('a compaction answer that fails or is garbled does nothing', async ($, on) => {
+  let n = 0
+  const { seen, clock } = await started($, on, {
+    'compaction next': () => (n++ === 0 ? { exitCode: 1, stdout: '', stderr: 'locked' } : { exitCode: 0, stdout: '{"action": ' }),
+  })
+  await clock.advance(30_000)
+  expect(seen.prompts).toEqual([])
+  expect(seen.toasts).toEqual([])
 })
 
 // --- the status entry ---------------------------------------------------------------------

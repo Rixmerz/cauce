@@ -20,6 +20,9 @@
 - **PreCompact**, **SessionEnd** — a detached Haiku reads what the session
   said since the last time and keeps its durable facts in the project's notes,
   before the conversation is summarized away or closed.
+- **Stop**, **PreCompact**, **PostCompact** — whether a turn that ended is a
+  good moment to compact, and every compaction seen, for the mod to suggest or
+  submit `/compact` and learn whether it ran (`cauce.compaction`).
 
 Hooks fail open: an exception never reaches Claude Code, because a hook that
 raises takes the user's session down. But failing open is not failing silently
@@ -78,12 +81,15 @@ _PLUGIN_SENT = re.compile(r"^The [\w.:@-]+ plugin sent a message")
 
 
 def _ignored(text: str) -> bool:
+    from cauce.compact import ASKED
+
     stripped = text.strip()
     # Harness-generated turns (task notifications, local command output) are not
     # requests anyone made, and neither is a notice cauce itself put in the
-    # session: none of them is a turn to record as a task.
+    # session, nor a `/compact` the mod submitted that reached the model as a
+    # message: none of them is a turn to record as a task.
     return (not stripped or stripped.startswith(("<task-notification", "<command-", "<local-command", "<system-",
-                                                 ENDINGS_HEADER))
+                                                 ENDINGS_HEADER, ASKED))
             or bool(_PLUGIN_SENT.match(stripped)))
 
 
@@ -214,7 +220,37 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
         # The turn would end without the session knowing its work stopped:
         # it goes on, once per ending, to tell the person and continue.
         return {"decision": "block", "reason": notice}
+    _consider_compaction(event, store, target, home(), os.environ)
     return None
+
+
+def _consider_compaction(event: Mapping[str, Any], store: Store, target: dict | None, root: Path,
+                         env: Mapping[str, str]) -> None:
+    """The turn ended for good: is now the moment to compact (`cauce.compaction`)?
+    The mod reads the decision; its failure is noted and costs the turn nothing."""
+    turn = target or store.last_prompt_task(str(event["session_id"]))
+    if not event.get("transcript_path") or turn is None:
+        return
+    try:
+        from cauce import compaction
+
+        compaction.consider(store, root, session_id=str(event["session_id"]),
+                            transcript=Path(str(event["transcript_path"])), cwd=event.get("cwd"), task_id=turn["id"],
+                            env=env)
+    except Exception:  # the turn ends as it would have
+        note_error(root, "Stop (compaction)")
+
+
+def _compaction_seen(store: Store, root: Path, session_id: str, source: str, *, trigger: Any = None,
+                     instructions: Any = None) -> None:
+    """Keep a compaction the hooks saw (`cauce.compaction.seen`), after the digest
+    is kept or put back: its failure is noted and costs the hook nothing else."""
+    try:
+        from cauce import compaction
+
+        compaction.seen(store, session_id, source, trigger=trigger, instructions=instructions)
+    except Exception:  # the digest and its restore never depend on this record
+        note_error(root, f"{source} (compaction)")
 
 
 def _scribe(event: Mapping[str, Any], root: Path, env: Mapping[str, str]) -> None:
@@ -373,6 +409,7 @@ def session_start(
         kept = compact.recall(root, str(session_id))
         if kept:
             blocks.append(kept)
+        _compaction_seen(store, root, str(session_id), "SessionStart")
     if event.get("source") in ("startup", "clear") and cwd and config.enabled("scribe", {**os.environ, **env}):
         relayed = _relay(store, root, str(session_id), str(cwd), event.get("transcript_path"))
         if relayed:
@@ -609,7 +646,7 @@ HANDLERS = {
 
 
 #: Hooks that need the environment and the cauce home, not only the store.
-WITH_ENV = frozenset({"SessionStart", "PreCompact", "SessionEnd"})
+WITH_ENV = frozenset({"SessionStart", "PreCompact", "PostCompact", "SessionEnd"})
 
 
 def handle(
@@ -619,6 +656,11 @@ def handle(
         return session_start(event, store, root, env)
     if event_name == "PreCompact":
         keep_digest(event, store, root)
+    if event_name in ("PreCompact", "PostCompact") and event.get("session_id"):
+        # Whatever asked for it: the mod reads these to learn whether a `/compact`
+        # it asked for ran, and every compaction starts the cooldown.
+        _compaction_seen(store, root, str(event["session_id"]), event_name, trigger=event.get("trigger"),
+                         instructions=event.get("custom_instructions"))
     if event_name in ("PreCompact", "SessionEnd"):
         keep_notes(event, root, dict(os.environ if env is None else env))
         return None

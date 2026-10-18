@@ -831,6 +831,14 @@ def cmd_config(args: argparse.Namespace) -> int:
     if args.value is None:
         print(json.dumps(config.load()[args.key]))
         return 0
+    if args.key in config.CHOICES:
+        picked = config.word(args.key, args.value)
+        if picked is None:
+            print(f"expected one of {', '.join(config.CHOICES[args.key])}", file=sys.stderr)
+            return 1
+        config.save({args.key: picked})
+        print(f"{args.key} = {json.dumps(picked)}")
+        return 0
     value = config._bool(args.value)
     if value is None:
         print("expected on or off", file=sys.stderr)
@@ -1626,6 +1634,41 @@ def cmd_endings(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_compaction(args: argparse.Namespace) -> int:
+    """The mod's side of `cauce.compaction`: what to do now that the session is
+    idle (`next`), or what became of a decision it was to submit (`delivered`)."""
+    from cauce import compaction
+
+    mode = config.choice("compact", os.environ)
+    if os.environ.get("CAUCE_WORKER_TASK") or (args.compaction_command == "next" and mode == "off"):
+        # A worker's session never compacts on cauce's word, and with the setting
+        # off there is nothing to take: neither opens the store.
+        if args.json:
+            print(json.dumps({"action": None}))
+        return 0
+    store = Store.open()
+    try:
+        answer: dict[str, object]
+        if args.compaction_command == "delivered" and (args.ran or args.skipped is not None):
+            answer = compaction.compacted(store, home(), args.session, args.decision, version=args.version,
+                                          skip=args.skipped)
+        elif args.compaction_command == "delivered":
+            why = (f"the engine rejected it: {args.rejected}" if args.rejected is not None
+                   else "a turn started before it could be submitted")
+            answer = {"kept": compaction.delivered(store, args.session, args.decision, how="suggest", why=why)}
+        else:
+            answer = compaction.next_step(store, home(), args.session, version=args.version, mode=mode)
+    finally:
+        store.close()
+    if args.json:
+        print(json.dumps(answer, ensure_ascii=False))
+    else:
+        for key in ("said", "line"):
+            if answer.get(key):
+                print(answer[key])
+    return 0
+
+
 def cmd_hook(args: argparse.Namespace) -> int:
     return hooks.main(args.event, sys.stdin, sys.stdout, os.environ)
 
@@ -1965,6 +2008,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_allow)
 
     p = sub.add_parser("config", help="show or change a setting: cauce config livespec off; "
+                                      "cauce config compact suggest|auto|off; "
                                       "cauce config model sonnet <model id>|default; "
                                       "cauce config mode <model|default> <mode>|reset")
     p.add_argument("key", nargs="?")
@@ -2013,6 +2057,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dir", help="where to write it (default ~/.local/bin)")
     p.add_argument("--remove", action="store_true", help="take it away again")
     p.set_defaults(func=cmd_link)
+
+    cp = sub.add_parser("compaction", help="when a session should compact and what /compact keeps: the mod "
+                                           "takes a decision once (`next`)")
+    csub = cp.add_subparsers(dest="compaction_command", required=True)
+    p = csub.add_parser("next", help="settle a submitted /compact and take the pending decision, once")
+    p.add_argument("--session", required=True)
+    p.add_argument("--version", default="unknown", help="the Claude Code version the session runs on")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_compaction)
+    p = csub.add_parser("delivered", help="what became of a decision the mod was to submit; with none of the "
+                                          "flags, a turn started first and the line was shown instead")
+    p.add_argument("decision", type=int)
+    p.add_argument("--session", required=True)
+    outcome = p.add_mutually_exclusive_group()
+    outcome.add_argument("--ran", action="store_true", help="the engine compacted it")
+    outcome.add_argument("--skipped", metavar="REASON", help="a hook vetoed the compaction, saying why")
+    outcome.add_argument("--rejected", metavar="REASON", help="the call failed, saying why: the line was shown")
+    p.add_argument("--version", default="unknown", help="the Claude Code version that answered")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_compaction)
 
     p = sub.add_parser("endings", help="what ended since a session last heard; delivered once, --peek to look")
     p.add_argument("--session", required=True)

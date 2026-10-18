@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Compaction at the right moment.** At the end of every turn cauce decides,
+  with no model, whether now is a good moment to compact: a context at least
+  half the window, a natural break (work the session sent ended and was
+  reported, a branch merged), no run of this session holding the checkout,
+  the prompt cache still warm, nothing compacted or suggested in 30 minutes.
+  Each decision is a `compaction_decided` event with its reasons. The
+  `/compact` line it builds keeps the person's requests and corrections
+  verbatim, the open work with its next command and the branches waiting to
+  merge, on one bounded line, secrets masked. The new `compact` setting
+  (`suggest` by default, `auto`, `off`) has the mod show the line in a toast,
+  or have the engine compact with its instructions between turns
+  (`$.session.compact`: the engine refuses a `/` text a mod submits); what the
+  engine answered, or the hooks saw (PreCompact's marker, a manual compaction,
+  a SessionStart after one; a PostCompact hook is new), is kept per version in
+  the cauce home, and a build never seen to run it falls back to suggest and
+  says so once. A call that only failed shows the line and is no verdict on
+  the build. The mod asks cauce after a turn ends, not on every idle poll.
+  `cauce stats` lists each decision, what the
+  summary costs warm beside cold, and whether it ran. Claude Code's own
+  auto-compaction is left as it is; the README says how to move it.
+
 ### Changed
 
 - **The dispatcher's parallel call reads what the tasks declare.** Haiku saw

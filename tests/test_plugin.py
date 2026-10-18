@@ -49,7 +49,10 @@ def test_every_setting_is_an_option_on_the_plugin_s_settings_screen():
     plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
     assert set(config.DEFAULTS) <= set(plugin["userConfig"])
     for key, default in config.DEFAULTS.items():
-        assert plugin["userConfig"][key]["default"] is default
+        option = plugin["userConfig"][key]["default"]
+        assert type(option) is type(default) and option == default
+        if key in config.CHOICES:
+            assert plugin["userConfig"][key]["options"] == list(config.CHOICES[key])
 
 
 def test_no_guidance_tells_a_session_to_pass_a_budget():
