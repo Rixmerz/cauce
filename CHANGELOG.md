@@ -2,6 +2,172 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Compaction at the right moment.** At the end of every turn cauce decides,
+  with no model, whether now is a good moment to compact: a context at least
+  half the window, a natural break (work the session sent ended and was
+  reported, a branch merged), no run of this session holding the checkout,
+  the prompt cache still warm, nothing compacted or suggested in 30 minutes.
+  Each decision is a `compaction_decided` event with its reasons. The
+  `/compact` line it builds keeps the person's requests and corrections
+  verbatim, the open work with its next command and the branches waiting to
+  merge, on one bounded line, secrets masked. The new `compact` setting
+  (`suggest` by default, `auto`, `off`) has the mod show the line in a toast,
+  or have the engine compact with its instructions between turns
+  (`$.session.compact`: the engine refuses a `/` text a mod submits); what the
+  engine answered, or the hooks saw (PreCompact's marker, a manual compaction,
+  a SessionStart after one; a PostCompact hook is new), is kept per version in
+  the cauce home, and a build never seen to run it falls back to suggest and
+  says so once. A call that only failed shows the line and is no verdict on
+  the build. The mod asks cauce after a turn ends, not on every idle poll.
+  `cauce stats` lists each decision, what the
+  summary costs warm beside cold, and whether it ran. Claude Code's own
+  auto-compaction is left as it is; the README says how to move it.
+
+### Changed
+
+- **The dispatcher's parallel call reads what the tasks declare.** Haiku saw
+  the first 600 characters of each task, so four builds queued with their own
+  migration numbers ("Migration version: 3", "other tasks running in parallel
+  take the other numbers", said at the end of a long goal) were read as
+  depending on each other and ran one after another. The question now gives
+  each task's opening and the lines further on that name a migration, a
+  version, a file, another task or work in parallel (migrations and parallel
+  work first, then versions and other tasks, then files; within a bound), the surfaces each task declared, and, for a running task,
+  the files git shows it changed so far in its worktree. Declared surfaces
+  that may touch another task's, or hold a file a running task already
+  changed, wait without asking the model, whatever the others declare. No
+  answer still means the task waits, and when unsure, Haiku answers false.
+- **cauce says why work waits and why it stopped.** A queued task the
+  dispatcher held back says which task it waits for, and why ("waits for #46:
+  <reason>"), in `cauce queue`, `cauce tasks`, `cauce show`, `cauce workflow
+  status` and the web board's queue; each decision is a `dispatch_decided`
+  event, with the task it waits for and what was ahead of it. The decision is
+  still made once, but the task the line names is read from the lane as it
+  is: when the one it was judged against has ended, it names the one it is
+  behind now, and says whom the reason was about. `cauce show` prints what the
+  independent check found under the attempt it checked: each blocker, then
+  each other finding (one in a blocker's file included), with its place, its
+  cause and evidence and its proof, clipped like the rest of the report.
+  `cauce workflow run` prints the warnings the plan of each step it starts
+  with will raise (a browser the workers lack, a server the task names; a plan
+  that cannot be foreseen is a note, never a start that failed); an
+  ending repeats the warnings its task ran with, kept on its `planned` event
+  as `warnings`, and a run's ending those of the steps the engine went past
+  since the session last heard of the run.
+
+### Fixed
+
+- **A judging step is told that what it finds wrong is its finding.** A refute
+  confirmed both rows it was given, then answered `fail` because "S1 is not met
+  because of F4": the result contract said a pass reporting an unmet criterion
+  is not a pass, and nothing told the step that rule is about its own work. A
+  step that judges (a review, refute, recheck or reading kind) now gets a note
+  after the contract: a criterion the judged work misses, or a row it
+  confirms, is reported, and the verdict is `pass` when the judgment is made
+  and shown; `fail` is for a judgment it could not make.
+- **A judging step is no longer failed for what it found in the work it
+  judges.** A review, refute or recheck step of a workflow (and any task of a
+  reading kind) that reported "S1, S4 is not met" about the change it judged was
+  ended `failed` with "claimed a pass, but says S1, S4 is not met", climbed the
+  ladder and paused the lane, although its ledger rows were decided. For a step
+  whose deliverable is a verdict (`LaunchSpec.judging`), a criterion it says the
+  work under judgment does not meet is a finding carried forward, kept on the
+  attempt; the step passes when it answered what it was asked, and a criterion
+  it left out is still `inconclusive`. A step that builds or fixes keeps the
+  rule: an unmet criterion is a `code_bug`.
+- **A move taken for a correction says the work passed its own check.** For an
+  attempt whose only failure is the independent check's blockers, `more_effort`
+  and `next_model` (the shallow climb and the repeated-answer climb) explained
+  themselves as "the work happened and was shallow". Each now says the work
+  passed its own check, how many blockers the independent check found, and why
+  this rung.
+- **A task is no longer read as changing nothing for what it quotes.** A fix
+  that quoted what the observed step did ("read-only", "changed no file", a
+  parenthesized "(a read-only review)") was briefed as read-only and given no
+  check. Quoted text and parentheses are evidence about something else and are
+  not read; a parenthesis that opens with the declaration (`(read-only)`,
+  `(read-only: report the cause)`), the task's own, still is.
+
+- **Work that passed its own check is no longer discarded when the independent
+  check's corrections use up the ladder.** A feature started at opus/high
+  passed the repository's `--verify` twice; the verifier found a different
+  blocker each round, each correction took a rung, and at the top of the ladder
+  the task ended `failed`: branch and worktree deleted, 25 files and the money
+  gone, before `MAX_CORRECTIONS` could stop it as `review`. When the last
+  attempt passed its own check and only the verifier's blockers stand, running
+  out of ladder (no stronger cell, two cells agreeing with no model above, or
+  the attempt limit) now stops the task as `review`: its work kept on its
+  branch, unverified (`Cauce-Verified: no`), the stop saying the ladder ran out
+  with the verifier's blockers open and its account naming them, resumed like
+  any `review` stop (its first check is given those blockers). A correction
+  still climbs the ladder as it did: a blocker the check shows in work that
+  passed is a missed defect, which is the shallow kind (more effort, or a
+  stronger model when a cheap cell cannot find it); it is not evidence that the
+  task is wrong, so running out of rungs is not a failure (`Move.REVIEW`,
+  `Decision.because` says so). A `failed` whose attempts never passed a check
+  still drops its work.
+- **A task resumed after its worker died is reported by its last ending.**
+  The notice a session got for a task that died twice and then passed after
+  `cauce resume` could say "it changed nothing" with no branch: while the run
+  filed its notes, the latest `finished` event on record was an earlier death's.
+  The endings, the board, the workflow status and the stop account now read
+  the task's final ending (`Store.final_event`: the last `finished` whose
+  status is the task's own), and a task with none yet is not reported until
+  it has one.
+- **One count of a task's changed files.** The `finished` event kept only the
+  first 50 paths, so `cauce workflow status` said "50 file(s)" where the
+  report and `git diff --stat` said 106. The event now keeps up to 500 paths
+  and the whole count (`changed_n`), and the endings notice, the report and
+  the workflow status all read it.
+- **A kept commit's subject no longer ends in "…".** A long worker line or task
+  title was cut with an ellipsis. It is now cut at the last whole word that
+  fits (not on a dangling "and", "to", "of"…), and the full text goes first
+  in the commit body.
+- **Reading work no longer waits behind writing work.** The review, refute and
+  recheck steps of a `feature` or `bugfix` run sat queued behind other runs'
+  builds for an hour or more: the dispatcher asked Haiku about them like any
+  task, and Haiku read the goal their text carries ("adds migration 3") as what
+  the step does. A queued task that will not write (a reading kind from
+  `matrix.READ_ONLY_KINDS`, or text `orchestrate` reads as read-only when its
+  kind is no build; a task with no kind has the one `classify` gives it without
+  the model, a build when no rule reads it) now starts beside running work with
+  no question, up to `MAX_PARALLEL`, recorded as "reads only: runs beside
+  writing work"; one a "no" had already held starts too. A writing task is
+  judged against the writing work ahead of it only, never against a reading
+  task, and with none ahead it starts without a call, a "no" given against
+  work that has ended included.
+- **A dispatch reason is plain text.** A reason the model closed with markup
+  ("…as #55.</reason> </invoke>") reached the board as typed; `dispatch.decide`
+  now strips tags and keeps one line of at most 200 characters. An answer
+  whose `parallel` is not a boolean still makes the task wait.
+- **A resume after its worker died continues where it was.** A run whose
+  process died mid-attempt (a machine restart, a killed session) left its
+  worktree registered with the attempt's uncommitted work, and `cauce resume`
+  failed on it with `already exists`. The resume now continues in that
+  worktree, keeping what the dead attempt wrote.
+- **A resume that cannot start no longer strands its task.** `cauce resume`
+  whose worktree could not be made (`IsolationError` from `isolate.prepare`)
+  raised before the first attempt and left the task `running` under the pid of
+  the process that had just exited, so every later resume refused it and only
+  the stale sweep freed it. An error before the first attempt now stops the
+  task as `environment` with the error's one-line cause, resumable, and a
+  resume of a `running` task whose process is gone sweeps it first instead of
+  refusing. A failure of cauce itself under a resume reaches the person as one
+  line (the cause and the command that continues it) with a non-zero exit; the
+  traceback goes to the log the hooks already report at the next session.
+- **After a restart, queued work starts again.** Neither `cauce lanes
+  --unpause` nor the end of a `cauce resume` started a dispatcher, so a task
+  queued behind a stopped one stayed `queued` until a person ran `cauce work`
+  by hand. Both now start the repository's dispatcher when work waits in its
+  lane and none holds its lock (with `autowork` on, like the web board's
+  unpause).
+- **A lane paused on a task opens when that task is resumed.** A lane paused
+  by "task #N stopped with no sign of life" stayed paused after #N was resumed
+  and running again. A resume that starts the task now reopens a lane paused
+  only on it; a pause on another task stays.
+
 ## [0.19.0] - 2026-10-16
 
 ### Added

@@ -147,8 +147,8 @@ When you are done, end your reply with exactly one fenced block:
   test something, a trap. Not what you changed, not guesses, not anything
   plain from reading the code, never a secret. `[]` when there is none.
 - `criteria`: when the task lists criteria `S1..Sn`, one entry for each, met or
-  not, with what shows it. A pass that leaves one out, or says one is not met,
-  is not a pass. `[]` when the task lists none.
+  not, with what shows it. A pass that leaves one out is not a pass, and nor is
+  one that says your work does not meet one. `[]` when the task lists none.
 - `findings`: when you review, audit or verify, each problem you found, as a
   record. `evidence_class` is `deterministic` when a command, a test or the
   diff shows it, `inferential` when you read it from the code, `insufficient`
@@ -160,6 +160,21 @@ When you are done, end your reply with exactly one fenced block:
   for each, with one of the words it names. A pass that leaves one out is not a
   pass. `[]` otherwise.
 """.strip()
+
+#: Added to the contract of a step whose deliverable is a verdict about other work.
+JUDGING_INSTRUCTIONS = """
+You judge work someone else did; your deliverable is that judgment. A criterion
+the work you judge does not meet, or a row you confirm, is your finding: report
+it (`met: false`, `findings`, `verdicts`) and answer `pass` when you delivered
+the judgment and can show it. `fail` is for a judgment you could not make, never
+for what you found wrong.
+""".strip()
+
+
+def instructions(spec: LaunchSpec) -> str:
+    """The result contract a worker is given, with the judging note for a step that judges."""
+    return RESULT_INSTRUCTIONS + ("\n\n" + JUDGING_INSTRUCTIONS if spec.judging else "")
+
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -194,6 +209,10 @@ class LaunchSpec:
     append_system_prompt: str = ""
     #: The criteria `S#` the task lists: a pass must say each one is met.
     criteria: tuple[str, ...] = ()
+    #: The step's deliverable is a verdict about other work (a review, a refute, a recheck, a reading
+    #: kind): a criterion it says the work under judgment does not meet is its finding, carried
+    #: forward, not a failure of the step. A step that builds or fixes keeps the rule.
+    judging: bool = False
     #: The ledger rows the task decides, and the words a verdict may use (`cauce.ledger`).
     verdicts: tuple[str, ...] = ()
     verdict_words: tuple[str, ...] = ()
@@ -316,7 +335,7 @@ def run(
     try:
         proc = runner(
             argv,
-            input=spec.prompt + "\n\n" + RESULT_INSTRUCTIONS,
+            input=spec.prompt + "\n\n" + instructions(spec),
             cwd=str(spec.launch_dir),
             capture_output=True,
             text=True,
@@ -414,7 +433,7 @@ def parse(
             return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
                                 "claimed a pass with no evidence: " + summary, raw=text, verdict=verdict, **common)
         left_out, not_met = criteria_mod.unmet(spec.criteria, common["criteria"])
-        if not_met:
+        if not_met and not spec.judging:
             return WorkerResult(False, _refused(Failure.CODE_BUG, denied),
                                 f"claimed a pass, but says {', '.join(not_met)} is not met: " + summary, evidence,
                                 raw=text, verdict=verdict, **common)

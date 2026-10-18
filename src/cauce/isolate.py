@@ -30,9 +30,10 @@ import re
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 #: Folders a build needs and git does not carry. Linked, not copied: shared with
 #: the checkout, which is why the brief tells the worker not to reinstall them.
@@ -85,6 +86,17 @@ def kept(repo_dir: Path, task_id: int) -> bool:
     return bool(_git(repo_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_for(task_id)}", check=False))
 
 
+def _attached(top: Path, path: Path, branch: str) -> bool:
+    """Whether `path` is already a worktree of `top` on `branch`."""
+    listing = _git(top, "worktree", "list", "--porcelain", check=False) or ""
+    for block in listing.split("\n\n"):
+        lines = block.splitlines()
+        here = f"worktree {path}" in lines or f"worktree {path.resolve()}" in lines
+        if here and f"branch refs/heads/{branch}" in lines:
+            return True
+    return False
+
+
 def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None) -> Workspace:
     """The task's worktree, on its own branch: from HEAD, or from `base` (a
     commit a workflow step builds on) when it names one that exists."""
@@ -96,7 +108,11 @@ def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None
     path = root / "worktrees" / f"task-{task_id}"
     path.parent.mkdir(parents=True, exist_ok=True)
     _git(top, "worktree", "prune", check=False)  # a run that died left its entry behind
-    if kept(top, task_id):
+    if _attached(top, path, branch):
+        # A run whose process died left its worktree, uncommitted work and all:
+        # the resume continues in it instead of failing to add it again.
+        base = _git(top, "merge-base", head, branch)
+    elif kept(top, task_id):
         # A resumed task continues from the work it kept.
         _git(top, "worktree", "add", str(path), branch)
         base = _git(top, "merge-base", head, branch)
@@ -208,7 +224,7 @@ def carry(ws: Workspace, paths: Sequence[str]) -> list[str]:
 
 
 #: A path-looking word of a task's text: `scripts/slides/`, `config.local.json`.
-_PATHLIKE = re.compile(r"(?<![\w/.-])((?:\.?[\w@-]+/)+[\w.@-]*|[\w-]+\.[A-Za-z0-9]{1,8})(?![\w/-])")
+PATHLIKE = re.compile(r"(?<![\w/.-])((?:\.?[\w@-]+/)+[\w.@-]*|[\w-]+\.[A-Za-z0-9]{1,8})(?![\w/-])")
 #: The most a copied ignored path may weigh: past it, the task says so instead.
 BRING_BYTES = 50 * 1024 * 1024
 
@@ -230,7 +246,7 @@ def ignored_named(ws: Workspace, text: str) -> list[str]:
     """Paths the task's text names that the person's checkout has, git ignores, and the
     worktree therefore lacks."""
     out = []
-    for word in sorted(set(_PATHLIKE.findall(text))):
+    for word in sorted(set(PATHLIKE.findall(text))):
         rel = word.strip("/").removeprefix("./")
         if not rel or ".." in rel.split("/") or not (ws.repo_dir / rel).exists() or (ws.path / rel).exists():
             continue
@@ -285,6 +301,21 @@ def changed(ws: Workspace) -> tuple[str, ...]:
     return tuple(sorted(p for p in paths if p and not _linked(ws, p) and not is_artifact(p)))
 
 
+def changed_so_far(root: Path, repo_dir: Path, task_id: int, started: Mapping[str, Any]) -> tuple[str, ...] | None:
+    """What a running task changed so far in its worktree, against the base its
+    attempt started from (`started` is its `attempt_started` event's data, which
+    names the base and the linked dependencies). None when git cannot say: no
+    worktree, no base, a git that failed."""
+    path = root / "worktrees" / f"task-{task_id}"
+    if not path.is_dir() or not started.get("base"):
+        return None
+    ws = Workspace(repo_dir, path, branch_for(task_id), str(started["base"]), links=tuple(started.get("links") or ()))
+    try:
+        return changed(ws)
+    except (IsolationError, OSError):
+        return None
+
+
 def undo(ws: Workspace, paths: Sequence[str]) -> None:
     """Put these paths back as they were at the base, in the task's worktree only:
     a file the base had is restored, one it did not have is removed."""
@@ -331,6 +362,37 @@ def _unverified(message: str) -> bool:
     return UNVERIFIED in message or UNVERIFIED_BEFORE in message.split("\n", 1)[0]
 
 
+#: Words a cut subject must not end on: the thought they open is the part that was cut.
+_DANGLING = frozenset({
+    "a", "an", "the", "this", "that", "these", "those", "its", "his", "her", "their", "our", "your", "my",
+    "each", "every", "all", "any", "no", "not", "and", "or", "but", "so", "if", "when", "while", "because",
+    "which", "where", "than", "then", "as", "at", "by", "for", "from", "in", "into", "of", "on", "to", "with",
+    "via", "per", "after", "before", "over", "under", "about", "between", "through", "during", "until", "upon",
+    "is", "are", "was", "were", "be", "been", "will", "would", "should", "can", "could"})
+
+
+def _subject_of(text: str) -> str:
+    """A commit subject from one line: itself when it fits, else cut at the last
+    whole word within `SUBJECT_CHARS`, before a word that opens a clause the cut
+    left out and before a parenthesis it left open. Never an ellipsis: git
+    history is read as sentences."""
+    if len(text) <= SUBJECT_CHARS:
+        return text
+    cut = text[:SUBJECT_CHARS]
+    if text[SUBJECT_CHARS] != " ":
+        cut = cut.rpartition(" ")[0] or cut  # no space to cut at: the limit is the cut
+    words = cut.split()
+    while True:
+        while words and words[-1].lower().strip(",;:") in _DANGLING:
+            words.pop()
+        kept = " ".join(words)
+        if kept.count("(") <= kept.count(")"):
+            break
+        words = kept.rpartition("(")[0].split()
+    # Nothing but dangling words or an open clause: the whole-word cut is the subject.
+    return kept.rstrip(" ,;:-–—(") or cut
+
+
 def message(task_id: int, *, title: str, subject: str = "", summary: str = "", status: str = "done") -> str:
     """The commit message of a task's work, as a project's history reads it: the
     change in one line (the worker's, else the task's title), what it does, and
@@ -338,13 +400,14 @@ def message(task_id: int, *, title: str, subject: str = "", summary: str = "", s
     import textwrap
 
     from cauce.notes import _SECRET
-    from cauce.text import title_of
 
-    line = " ".join((subject or "").split()) or title_of(" ".join((title or "").split()), SUBJECT_CHARS)
-    line = _SECRET.sub("[secret]", line) or f"Work of cauce task #{task_id}"
-    if len(line) > SUBJECT_CHARS:
-        line = line[:SUBJECT_CHARS - 1].rsplit(" ", 1)[0] + "…"
+    whole = _SECRET.sub("[secret]", " ".join((subject or "").split()) or " ".join((title or "").split()))
+    whole = whole or f"Work of cauce task #{task_id}"
+    line = _subject_of(whole)
     parts = [line]
+    # A subject that had to be cut is given whole first in the body: the history keeps what was asked.
+    if line != whole:
+        parts.append(textwrap.fill(whole, 72))
     body = _SECRET.sub("[secret]", " ".join((summary or "").split()))
     if body:
         body = body if len(body) <= BODY_CHARS else body[:BODY_CHARS - 1].rsplit(" ", 1)[0] + "…"
@@ -461,6 +524,28 @@ def held_by(directory: Path, toplevel: Path | None) -> list[Path]:
 def checkout_lock(root: Path, checkout: Path) -> Path:
     digest = hashlib.sha256(str(checkout.resolve()).encode()).hexdigest()[:16]
     return root / "work" / f"checkout-{digest}.lock"
+
+
+def holder(root: Path, checkout: Path) -> int | None:
+    """The task whose run holds `checkout` now, or None when no run does. Looked
+    at with a shared lock taken and let go at once: a run that starts in that
+    instant waits one poll."""
+    path = checkout_lock(root, checkout)
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - not on the platforms cauce runs on
+        return None
+    if not path.is_file():
+        return None
+    with open(path, "a+") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except OSError:
+            fh.seek(0)
+            held = fh.read().strip()
+            return int(held) if held.isdigit() else None
+        fcntl.flock(fh, fcntl.LOCK_UN)
+    return None
 
 
 @contextlib.contextmanager

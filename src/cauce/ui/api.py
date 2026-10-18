@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from cauce import flow, habits, phase, project, stops, usage
+from cauce import dispatch, flow, habits, phase, project, stops, usage
 from cauce.matrix import LADDERS
 from cauce.store import Store
 
@@ -115,7 +115,7 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
             item["worker"] = worker_of(store, t, steps) if item.get("flow") else None
             running.append(item)
         elif t["status"] == "done":
-            finished = store.last_event(t["id"], "finished")
+            finished = store.final_event(t["id"])
             branch = finished["data"].get("branch") if finished else None
             item["branch"] = branch
             done.append(item)
@@ -136,12 +136,10 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
         lane["repo"] = t["repo"] or ""
         lane["paused"] = bool(lanes.get(t["repo"] or "", {}).get("paused"))
         lane["reason"] = lanes.get(t["repo"] or "", {}).get("reason")
-        lane["tasks"].append(_brief(t))
+        lane["tasks"].append({**_brief(t), "waits": dispatch.waiting(store, t)})
     for repo, lane in lanes.items():
         if lane["paused"] and repo not in queued and (repos is None or repo in repos):
             queued[repo] = {"repo": repo, "paused": True, "reason": lane["reason"], "tasks": []}
-    from cauce import dispatch
-
     for lane in queued.values():
         lane["dispatching"] = dispatch.held(store.path.parent, lane["repo"] or "*")
     return {
@@ -252,14 +250,14 @@ def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:
         a["capabilities"] = json.loads(a["capabilities"] or "[]")
         a["denied"] = refused.get(a["seq"], [])
         a["climb"] = climb
-    finished = store.last_event(task_id, "finished")
+    finished = store.final_event(task_id)
     children = store.children(task_id)
     turns = usage.cost_by(store, "task_id", [task_id, *(c["id"] for c in children)])
     return {
         "task": {**_brief(task), "body": task["body"], "options": json.loads(task.get("options") or "{}"),
                  "class_source": task["class_source"], "class_reason": task["class_reason"],
                  # What the session's own turns on it cost, its subagents' included; cost_usd is workers'.
-                 "turns_usd": round(sum(turns.values()), 4)},
+                 "turns_usd": round(sum(turns.values()), 4), "waits": dispatch.waiting(store, task)},
         "plan": (store.last_event(task_id, "planned") or {}).get("data"),
         "attempts": attempts,
         "messages": [{**m, "author": author(m["role"], task)} for m in store.messages(task_id)],
@@ -291,7 +289,7 @@ def task_diff(store: Store, task_id: int) -> dict[str, Any] | None:
     task = store.get_task(task_id)
     if task is None:
         return None
-    finished = store.last_event(task_id, "finished")
+    finished = store.final_event(task_id)
     branch = (finished["data"].get("branch") if finished else None) or f"cauce/task-{task_id}"
     where = task.get("cwd")
     if not where or not Path(where).is_dir():

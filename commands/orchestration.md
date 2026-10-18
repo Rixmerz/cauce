@@ -210,6 +210,9 @@ Request: $ARGUMENTS
    about the project (a business rule, why something is built a certain way, a
    convention, how to run it), keep it: `cauce note "<fact>" --topic <t>`.
    Workers file what they learn on their own; do not copy their reports in.
+   When to compact is cauce's `compact` setting (`cauce config compact
+   suggest|auto|off`); a message that opens `/compact [cauce-compaction #N]`
+   is its attempt, never a request.
 
 6. **Memory.** Before debugging, `cauce memory search "<symptom>"` shows fixes
    already tried against similar problems, in any repository. When a fix is

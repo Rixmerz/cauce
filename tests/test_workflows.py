@@ -169,6 +169,92 @@ def test_a_run_goes_on_by_itself_each_step_on_the_work_before_it(git_repo, store
         any(t.get("workflow_step") == "polish" for t in seen_now["other"])
 
 
+def test_a_run_says_its_first_steps_warnings_and_an_ending_repeats_them(git_repo, store: Store, kicks, capsys,
+                                                                        monkeypatch):
+    from cauce import hooks
+
+    monkeypatch.chdir(git_repo)
+    monkeypatch.setenv("CAUCE_SESSION_ID", "s1")
+    _save({"name": "look", "inputs": ["page"], "steps": [
+        {"id": "edit", "prompt": "Change {page}", "kind": "implement"},
+        {"id": "see", "prompt": "Open {page} in the browser and fix what is off", "kind": "implement",
+         "needs": ["edit"]}]}, git_repo)
+    _save({"name": "shot", "steps": [
+        {"id": "snap", "prompt": "Take a screenshot of the home page and fix it", "kind": "implement"}]}, git_repo)
+    assert cli.main(["workflow", "run", "shot"]) == 0
+    out = capsys.readouterr().out
+    snap = store.run_tasks(store.list_runs()[0]["id"])[0]["id"]
+    assert f"warning: step snap (#{snap}): this task needs a browser and workers have none" in out
+    assert cli.main(["workflow", "run", "shot", "--json"]) == 0
+    assert "needs a browser" in json.loads(capsys.readouterr().out)["warnings"][0]["warning"]
+    assert cli.main(["workflow", "cancel", "1"]) == 0
+    assert cli.main(["workflow", "cancel", "2"]) == 0
+    # A step that waits on another is not planned yet: nothing to say of it.
+    assert cli.main(["workflow", "run", "look", "the settings page"]) == 0
+    assert "warning:" not in capsys.readouterr().out
+    run_id = store.list_runs()[0]["id"]
+    flow.work(store, runner=_runner([ok(), ok()], []))
+    edit, see = store.run_tasks(run_id)
+    assert store.last_event(edit["id"], "planned")["data"]["warnings"] == []
+    assert "needs a browser" in store.last_event(see["id"], "planned")["data"]["warnings"][0]
+    # The run's ending is its last step's, and it repeats the warning that step ran with.
+    text, ids = hooks.endings(store, "s1")
+    assert see["id"] in ids and edit["id"] not in ids
+    ending = text[text.index(f"#{see['id']} [done]"):]
+    assert ending.splitlines()[1].startswith("  it ran with a warning: this task needs a browser and workers have none")
+
+
+def test_a_plan_that_cannot_be_foreseen_never_undoes_the_start_of_a_run(git_repo, store: Store, kicks, capsys,
+                                                                       monkeypatch):
+    from cauce import orchestrate
+
+    def broken(*args, **kwargs):
+        raise ValueError("the registry is unreadable")
+
+    monkeypatch.chdir(git_repo)
+    monkeypatch.setattr(orchestrate, "foresee", broken)
+    _save({"name": "shot", "steps": [
+        {"id": "snap", "prompt": "Take a screenshot of the home page and fix it", "kind": "implement"}]}, git_repo)
+    assert cli.main(["workflow", "run", "shot"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("started run #1 of shot")
+    assert "note: the warnings of the first steps could not be foreseen (ValueError: the registry is unreadable)" in out
+    assert "warning:" not in out
+    assert [r["id"] for r in store.list_runs()] == [1]
+    assert cli.main(["workflow", "run", "shot", "--json"]) == 0
+    shown = json.loads(capsys.readouterr().out)
+    assert shown["warnings"] == [] and shown["warnings_error"] == "ValueError: the registry is unreadable"
+
+
+def test_the_warning_of_a_step_the_engine_went_past_is_said_by_the_run_s_next_ending(git_repo, store: Store,
+                                                                                      kicks):
+    from cauce import hooks
+
+    _save({"name": "look", "steps": [
+        {"id": "see", "prompt": "Open the settings page in the browser and fix what is off", "kind": "implement"},
+        {"id": "check", "prompt": "Make the settings form validate its fields", "kind": "implement"},
+        {"id": "polish", "prompt": "Polish the settings module", "kind": "implement", "needs": ["check"]}]},
+        git_repo)
+    started = workflows.start(store, "look", git_repo, session_id="s1")
+    # see and check start together; see passes, and the engine goes past it while check runs.
+    flow.work(store, parallel=False, runner=_runner([ok(), bad(Failure.SPEC_BUG, "cannot be read")], []))
+    see, check = store.run_tasks(started["id"])
+    assert see["status"] == "done" and check["status"] == "replan"
+    text, ids = hooks.endings(store, "s1", claim="stop")
+    assert ids == [check["id"]]
+    ending = text[text.index(f"#{check['id']} [replan]"):].splitlines()
+    assert ending[1].startswith(f"  step see (#{see['id']}) ran with a warning: this task needs a browser "
+                                "and workers have none")
+
+    # Said once: the run's later endings do not repeat what the session already heard.
+    workflows.retry(store, started["id"], "check")
+    flow.work(store, runner=_runner([ok(), ok()], []))
+    assert workflows.status(store, started["id"])["state"] == "done"
+    text, ids = hooks.endings(store, "s1", claim="stop")
+    polish = store.run_tasks(started["id"])[-1]
+    assert ids == [polish["id"]] and "ran with a warning" not in text
+
+
 def test_a_step_that_stops_waits_for_the_person_then_the_run_goes_on(git_repo, store: Store, kicks):
     _save(CHAIN, git_repo)
     started = workflows.start(store, "chain", git_repo, {"goal": "the export"}, session_id="s1")
@@ -578,6 +664,24 @@ def test_the_status_says_how_far_each_run_got_in_a_line(git_repo, store: Store, 
     assert brief.strip() in capsys.readouterr().out
 
 
+def test_the_status_says_what_a_held_back_step_waits_for(git_repo, store: Store, kicks, capsys, monkeypatch):
+    from cauce import dispatch
+
+    monkeypatch.chdir(git_repo)
+    _save(CHAIN, git_repo)
+    other = store.enqueue("rewrite the exporter", repo=str(git_repo.resolve()), cwd=str(git_repo))
+    store.claim(other["id"])
+    started = workflows.start(store, "chain", git_repo, {"goal": "the export"})
+    flow.runnable(store, None, parallel=True,
+                  decide=lambda task, ahead: dispatch.Decision(False, f"both change the exporter #{other['id']}"))
+    line = f"waits for #{other['id']}: both change the exporter #{other['id']}"
+    assert workflows.status(store, started["id"])["steps"][0]["waits"] == line
+    assert cli.main(["workflow", "status"]) == 0
+    assert line in capsys.readouterr().out
+    assert cli.main(["workflow", "status", str(started["id"])]) == 0
+    assert line in capsys.readouterr().out
+
+
 def test_a_running_step_says_its_attempt_and_the_files_it_touched_so_far(git_repo, store: Store):
     from cauce import isolate
     from cauce.store import home
@@ -636,3 +740,22 @@ def test_the_line_of_a_run_names_the_step_that_waits_on_the_person():
                                        {"id": "a", "state": "failed", "task": 10},
                                        {"id": "b", "state": "running", "task": 11, "attempt": 1}]})
     assert "step a (1/2): failed #10" in line
+
+
+def test_a_resumed_step_counts_the_files_of_its_final_ending_not_an_attempts(git_repo, store: Store):
+    from cauce import workflow_cli
+
+    task = store.create_task("build it", status="interrupted", source="queue", cwd=str(git_repo))
+    for _ in range(2):
+        store.add_event(task["id"], "finished", status="interrupted", reason="no sign of life",
+                        stop={"cause": "died", "reason": "no sign of life"})
+    store.update_task(task["id"], status="done")
+    files = [f"src/f{i}.ts" for i in range(106)]
+    # The run kept the head of the list; the count is the whole of it.
+    store.add_event(task["id"], "finished", status="done", branch="cauce/task-1", changed=files[:100], changed_n=106)
+    found = workflows.progress(store, {"cwd": str(git_repo)}, store.get_task(task["id"]))
+    assert found["files_n"] == 106 and len(found["files"]) == 100
+    assert "106 file(s): src/f0.ts, src/f1.ts, src/f2.ts +103" in workflow_cli._step_line(
+        {"state": "done", "task": task["id"], **found})
+    # Without the count (an older ending) the list is the count.
+    assert "3 file(s)" in workflow_cli._step_line({"state": "done", "files": ["a", "b", "c"]})

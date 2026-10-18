@@ -3,7 +3,8 @@ import { stopCard } from "./stop.js";
 import { cellChip, h, kindChip, short, statusBadge, usd, when } from "./util.js";
 
 // Where a queued task stands with the dispatcher: Haiku's call on whether it may
-// start beside the running work, with its reason.
+// start beside the running work, with its reason. The card's reason line names the
+// task it waits for (`waits`, from the API) when the dispatcher held it back.
 function decision(task) {
   if (task.parallel === null || task.parallel === undefined) return null;
   return h("span", { class: task.parallel ? "chip ok" : "chip wait", title: task.parallel_reason || "" },
@@ -20,7 +21,8 @@ function card(task, openTask, extra = []) {
       task.cost_usd ? h("span", {}, usd(task.cost_usd)) : null,
       ...extra),
     task.stop ? stopCard(task.stop) : task.asks ? h("div", { class: "asks" }, task.asks) : null,
-    task.status === "queued" && task.parallel_reason ? h("div", { class: "reason" }, short(task.parallel_reason, 160)) : null);
+    task.status === "queued" && (task.waits || task.parallel_reason)
+      ? h("div", { class: "reason" }, short(task.waits || task.parallel_reason, 160)) : null);
 }
 
 function column(title, count, children, cls = "") {

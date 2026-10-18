@@ -118,6 +118,270 @@ def test_haiku_lets_independent_work_start_beside_running_work(store: Store):
     assert [t["id"] for t in flow.runnable(store, "r", parallel=True, decide=_never)] == [same["id"]]
 
 
+def test_a_held_back_task_says_what_it_waits_for_wherever_it_is_shown(capsys, store: Store):
+    from cauce import cli
+    from cauce.ui import api
+
+    first = store.enqueue("rewrite the importer", repo="r", cwd="/x")
+    store.claim(first["id"])
+    second = store.enqueue("refactor the parser", repo="r", cwd="/x")
+    held = store.enqueue("add a flag to the importer", repo="r", cwd="/x")
+
+    def decide(task, ahead):
+        if task["id"] == held["id"]:
+            return dispatch.Decision(False, f"it changes the importer #{first['id']} rewrites")
+        return dispatch.Decision(False, "the model answered outside the schema")
+
+    assert flow.runnable(store, "r", parallel=True, decide=decide) == []
+    # The decision is an event when it is made, with the task it waits for: the one
+    # its reason names, else the first ahead of it.
+    decided = store.last_event(held["id"], "dispatch_decided")["data"]
+    assert decided == {"parallel": False, "reason": f"it changes the importer #{first['id']} rewrites",
+                       "behind": first["id"], "ahead": [first["id"], second["id"]], "by": "haiku"}
+    assert store.last_event(second["id"], "dispatch_decided")["data"]["behind"] == first["id"]
+    line = f"waits for #{first['id']}: it changes the importer #{first['id']} rewrites"
+    assert dispatch.waiting(store, store.get_task(held["id"])) == line
+
+    assert cli.main(["queue", "list", "--all"]) == 0
+    out = capsys.readouterr().out
+    assert line in out and out.index("add a flag") < out.index(line)
+    assert cli.main(["tasks", "--all"]) == 0
+    assert line in capsys.readouterr().out
+    assert cli.main(["show", str(held["id"])]) == 0
+    assert line in capsys.readouterr().out
+    assert cli.main(["show", str(first["id"])]) == 0
+    assert "waits" not in capsys.readouterr().out  # a running task waits for nothing
+
+    lane = next(q for q in api.board(store)["queued"] if q["repo"] == "r")
+    assert {t["id"]: t["waits"] for t in lane["tasks"]}[held["id"]] == line
+    assert api.task_detail(store, held["id"])["task"]["waits"] == line
+
+    # A decision kept before the event existed names the first task now ahead of it.
+    old = store.enqueue("older", repo="r", cwd="/x")
+    store.set_parallel(old["id"], False, "may conflict")
+    assert dispatch.waiting(store, store.get_task(old["id"])) == f"waits for #{first['id']}: may conflict"
+    store.set_parallel(old["id"], True, "independent")
+    assert dispatch.waiting(store, store.get_task(old["id"])) is None
+
+
+def test_what_a_held_back_task_waits_for_moves_on_with_its_lane(capsys, store: Store):
+    from cauce import cli
+
+    first = store.enqueue("rewrite the importer", repo="r", cwd="/x")
+    store.claim(first["id"])
+    second = store.enqueue("refactor the parser", repo="r", cwd="/x")
+    held = store.enqueue("add a flag to the importer", repo="r", cwd="/x")
+    assert flow.runnable(store, "r", parallel=True,
+                         decide=lambda task, ahead: dispatch.Decision(False, "both change the importer")) == []
+    assert dispatch.waiting(store, store.get_task(held["id"])) == f"waits for #{first['id']}: both change the importer"
+
+    # The task it was held behind ends and the next one starts: the decision stands, made
+    # once, and the line names the task it is behind now, and says whom the reason was about.
+    store.update_task(first["id"], status="done")
+    assert [t["id"] for t in flow.runnable(store, "r", parallel=True, decide=_never)] == [second["id"]]
+    store.claim(second["id"])
+    assert flow.runnable(store, "r", parallel=True, decide=_never) == []
+    line = f"waits for #{second['id']}: both change the importer (judged against #{first['id']})"
+    assert dispatch.waiting(store, store.get_task(held["id"])) == line
+    assert cli.main(["queue", "list", "--all"]) == 0
+    out = capsys.readouterr().out
+    assert line in out and f"waits for #{first['id']}" not in out
+
+    # Every task it was judged against has gone: the one ahead now, and the reason says whom it was about.
+    store.update_task(second["id"], status="done")
+    later = store.enqueue("a typo in the readme", repo="r", cwd="/x")
+    store.claim(later["id"])
+    assert dispatch.waiting(store, store.get_task(held["id"])) == (
+        f"waits for #{later['id']}: both change the importer (judged against #{first['id']})")
+    assert cli.main(["show", str(held["id"])]) == 0
+    assert f"waits for #{later['id']}: " in capsys.readouterr().out
+
+    # Nothing ahead of it any more: it waits for no task, and starts next.
+    store.update_task(later["id"], status="done")
+    assert dispatch.waiting(store, store.get_task(held["id"])) is None
+    assert [t["id"] for t in flow.runnable(store, "r", parallel=True, decide=_never)] == [held["id"]]
+
+
+def test_a_reason_about_a_task_that_ended_says_it_when_another_one_is_still_ahead(store: Store):
+    first = store.enqueue("rewrite the importer", repo="r", cwd="/x")
+    second = store.enqueue("refactor the parser", repo="r", cwd="/x")
+    store.claim(first["id"])
+    store.claim(second["id"])
+    held = store.enqueue("add a flag to the importer", repo="r", cwd="/x")
+    reason = f"it changes the importer #{first['id']} rewrites"
+    assert flow.runnable(store, "r", parallel=True, decide=lambda task, ahead: dispatch.Decision(False, reason)) == []
+    assert dispatch.waiting(store, store.get_task(held["id"])) == f"waits for #{first['id']}: {reason}"
+
+    # #1 ended and #2, which it was judged against too, still runs: the line names #2,
+    # and the reason about #1 does not read as one about #2.
+    store.update_task(first["id"], status="done")
+    assert dispatch.waiting(store, store.get_task(held["id"])) == (
+        f"waits for #{second['id']}: {reason} (judged against #{first['id']})")
+
+
+def test_a_model_that_did_not_answer_reads_as_waiting_once(store: Store):
+    running = store.enqueue("a", repo="r", cwd="/x")
+    store.claim(running["id"])
+    held = store.enqueue("b", repo="r", cwd="/x")
+    flow.runnable(store, "r", parallel=True,
+                  decide=lambda task, ahead: dispatch.Decision(False, "waits its turn: claude not found"))
+    assert dispatch.waiting(store, store.get_task(held["id"])) == f"waits for #{running['id']}: claude not found"
+
+
+def test_surfaces_that_clash_name_the_task_they_wait_for(store: Store):
+    running = store.enqueue("a", repo="r", cwd="/x", options={"surfaces": ["src/**"]})
+    store.claim(running["id"])
+    clash = store.enqueue("b", repo="r", cwd="/x", options={"surfaces": ["src/api/**"]})
+    assert flow.runnable(store, "r", parallel=True, decide=_never) == []
+    decided = store.last_event(clash["id"], "dispatch_decided")["data"]
+    assert decided["by"] == "surfaces" and decided["behind"] == running["id"] and not decided["parallel"]
+    assert dispatch.waiting(store, store.get_task(clash["id"])).startswith(f"waits for #{running['id']}: ")
+
+def _writes_ahead(store: Store, text: str = "add migration 3 to the schema") -> dict:
+    running = store.enqueue(text, repo="r", cwd="/x", options={"kind": "feature"})
+    store.claim(running["id"])
+    return running
+
+
+def test_reading_work_runs_beside_writing_work_without_asking_haiku(store: Store):
+    """A review, refute or recheck step of a workflow changes no file and holds no
+    checkout: Haiku read the goal embedded in its text ("adds migration 3") as what
+    the step does, and queued it behind the build for an hour."""
+    _writes_ahead(store)
+    reads = {
+        "review": store.enqueue("Review: add migration 3 to the schema", repo="r", cwd="/x",
+                                options={"kind": "review-routine"}),
+        "refute": store.enqueue("Refute: add migration 3 to the schema", repo="r", cwd="/x",
+                                options={"kind": "review-critical", "ledger": {"role": "refute"}}),
+        "explore": store.enqueue("Where is the schema migrated?", repo="r", cwd="/x", options={"kind": "explore"}),
+        "plan": store.enqueue("Plan migration 4", repo="r", cwd="/x", options={"kind": "plan"}),
+    }
+
+    def no(task, ahead):
+        raise AssertionError(f"Haiku must not be asked about #{task['id']}: it reads only")
+
+    picked = flow.runnable(store, "r", parallel=True, decide=no)
+    # Within MAX_PARALLEL: the build plus two readers; the rest wait for a slot, undecided.
+    assert [t["id"] for t in picked] == [reads["review"]["id"], reads["refute"]["id"]]
+    for name in ("review", "refute"):
+        row = store.get_task(reads[name]["id"])
+        assert row["parallel"] == 1 and row["parallel_reason"] == "reads only: runs beside writing work"
+    assert store.get_task(reads["explore"]["id"])["parallel"] is None
+
+
+def test_a_text_that_declares_itself_read_only_reads_unless_it_is_a_build(store: Store):
+    _writes_ahead(store)
+    audit = store.enqueue("Read-only audit: list the call sites of the importer. Change nothing.",
+                          repo="r", cwd="/x")
+    tagged = store.enqueue("#feature read-only: add the flag", repo="r", cwd="/x")
+    built = store.enqueue("Read-only audit of the importer", repo="r", cwd="/x", options={"kind": "feature"})
+    asked = []
+
+    def decide(task, ahead):
+        asked.append(task["id"])
+        return dispatch.Decision(False, "writes", 0.0)
+
+    picked = flow.runnable(store, "r", parallel=True, decide=decide)
+    assert [t["id"] for t in picked] == [audit["id"]]
+    assert "reads only" in store.get_task(audit["id"])["parallel_reason"]
+    # A kind that builds writes whatever its text says, by tag or by option: judged as ever.
+    assert asked == [tagged["id"], built["id"]]
+
+
+def test_a_task_is_read_by_its_kind_from_the_options_or_from_the_column():
+    assert flow.reads_only({"options": '{"kind": "plan"}', "body": "x"})
+    assert flow.reads_only({"options": "not json", "kind": "explore", "body": "x"})
+    assert not flow.reads_only({"options": "not json", "kind": "feature", "body": "x"})
+    assert not flow.reads_only({"options": None, "body": "add migration 3", "title": "t"})
+    assert flow.reads_only({"options": None, "body": None, "title": "Read-only audit: list the importers"})
+
+
+def test_the_serial_setting_still_holds_reading_work_behind_running_work(store: Store):
+    _writes_ahead(store)
+    store.enqueue("Review the change", repo="r", cwd="/x", options={"kind": "review-routine"})
+    assert flow.runnable(store, "r", parallel=False, decide=_never) == []
+
+
+def test_a_decision_made_before_the_rule_does_not_hold_a_reader(store: Store):
+    """Steps queued behind a build with Haiku's "no" already recorded start now."""
+    _writes_ahead(store)
+    held = store.enqueue("Recheck the fix", repo="r", cwd="/x", options={"kind": "review-routine"})
+    store.set_parallel(held["id"], False, "migration 4 depends on migration 3's numbering")
+    assert [t["id"] for t in flow.runnable(store, "r", parallel=True, decide=_never)] == [held["id"]]
+    row = store.get_task(held["id"])
+    assert row["parallel"] == 1 and row["parallel_reason"] == "reads only: runs beside writing work"
+
+
+def test_a_writer_held_behind_a_build_starts_when_only_readers_are_left(store: Store):
+    """Readers run for an hour beside builds: a writer a "no" held behind the build
+    must not go on waiting for a reader that writes nothing."""
+    build = _writes_ahead(store)
+    review = store.enqueue("Review the change", repo="r", cwd="/x", options={"kind": "review-routine"})
+    store.claim(review["id"])
+    held = store.enqueue("add a flag to the importer", repo="r", cwd="/x", options={"kind": "implement"})
+    store.set_parallel(held["id"], False, "touches the schema the build changes")
+    later = store.enqueue("rename the importer", repo="r", cwd="/x", options={"kind": "implement"})
+    asked = []
+
+    def decide(task, ahead):
+        asked.append((task["id"], [t["id"] for t in ahead]))
+        return dispatch.Decision(False, "renames what the flag uses", 0.0)
+
+    # The build still runs: both wait, and the next writer is judged against writers alone.
+    assert flow.runnable(store, "r", parallel=True, decide=decide) == []
+    assert asked == [(later["id"], [build["id"], held["id"]])]
+    store.update_task(build["id"], status="done")
+    assert [t["id"] for t in flow.runnable(store, "r", parallel=True, decide=_never)] == [held["id"]]
+    row = store.get_task(held["id"])
+    assert row["parallel"] == 1 and row["parallel_reason"] == "nothing that writes runs or waits ahead of it"
+
+
+def test_a_text_the_run_classifies_as_a_build_writes_whatever_its_words(store: Store):
+    """With no kind of its own a task gets the one `classify` would give it without the
+    model: asking for a change makes it `implement`, and a text no rule reads is one too."""
+    audit = "Read-only audit: list the importers and fix nothing"
+    unruled = "the importer drops rows when the batch is empty"
+    assert not flow.reads_only({"options": None, "body": audit})
+    assert not flow.reads_only({"options": None, "body": unruled})
+    assert flow.reads_only({"options": None, "body": "Read-only audit: list the call sites of the importer"})
+    _writes_ahead(store)
+    asked = []
+
+    def decide(task, ahead):
+        asked.append(task["id"])
+        return dispatch.Decision(False, "writes", 0.0)
+
+    first, second = (store.enqueue(t, repo="r", cwd="/x") for t in (audit, unruled))
+    assert flow.runnable(store, "r", parallel=True, decide=decide) == []
+    assert asked == [first["id"], second["id"]]
+
+
+def test_a_writing_task_is_never_judged_against_reading_work(store: Store):
+    build = _writes_ahead(store)
+    review = store.enqueue("Review the change", repo="r", cwd="/x", options={"kind": "review-routine"})
+    write = store.enqueue("add a flag to the importer", repo="r", cwd="/x", options={"kind": "implement"})
+    asked = []
+
+    def decide(task, ahead):
+        asked.append((task["id"], [t["id"] for t in ahead]))
+        return dispatch.Decision(False, "touches the schema #1 changes", 0.0)
+
+    picked = flow.runnable(store, "r", parallel=True, decide=decide)
+    assert [t["id"] for t in picked] == [review["id"]]
+    # The reader runs ahead of it, and is no conflict: only the build is put to the model.
+    assert asked == [(write["id"], [build["id"]])]
+    assert store.get_task(write["id"])["parallel"] == 0
+
+
+def test_behind_nothing_but_reading_work_a_writing_task_has_nothing_to_conflict_with(store: Store):
+    reading = store.enqueue("Review the change", repo="r", cwd="/x", options={"kind": "review-routine"})
+    store.claim(reading["id"])
+    write = store.enqueue("add a flag to the importer", repo="r", cwd="/x", options={"kind": "implement"})
+    assert [t["id"] for t in flow.runnable(store, "r", parallel=True, decide=_never)] == [write["id"]]
+    row = store.get_task(write["id"])
+    assert row["parallel"] == 1 and row["parallel_reason"] == "nothing that writes runs or waits ahead of it"
+
+
 def test_never_more_than_the_parallel_cap(store: Store, monkeypatch):
     monkeypatch.setattr(flow, "MAX_PARALLEL", 2)
     for i in range(4):

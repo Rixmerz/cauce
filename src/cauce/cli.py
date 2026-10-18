@@ -200,6 +200,11 @@ def cmd_resume(args: argparse.Namespace) -> int:
         if task is None or task["source"] != "cauce" or not task["cwd"]:
             print(f"no task #{args.id} that cauce ran", file=sys.stderr)
             return 1
+        if task["status"] == "running" and not flow.alive(task["pid"]):
+            # A restart (or a crash) left it running under a process that is gone: the sweep
+            # records what it would have, and the resume goes on from there.
+            flow.sweep(store)
+            task = store.get_task(args.id)
         # A dismissed task resumes as what it was before: a dismissal hides a
         # task, it never makes one that was found wrong resumable.
         was, hidden = task["status"], None
@@ -276,8 +281,16 @@ def cmd_resume(args: argparse.Namespace) -> int:
         kept = (options.stored() | {k: prior[k] for k in ("investigation",) if k in prior}
                 | ({"allow_approval": True} if inherited else {}))
         store.update_task(args.id, options=json.dumps(kept), dispatched=0, cancel_requested=0)
-        report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=args.id, history=history,
-                                 progress=_say, known_findings=known)
+        # It runs again: a lane paused on its stopping no longer waits on anyone.
+        store.release_lane(task["repo"], args.id)
+        try:
+            report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=args.id,
+                                     history=history, progress=_say, known_findings=known)
+        except Exception as exc:  # cauce failed under the task, not the task: say so and keep the traceback
+            return _could_not_run(args.id, exc)
+        finally:
+            # Work queued behind it has no dispatcher after a restart: its end starts one.
+            _go_on(store, task["repo"])
         if not args.no_report:
             # Its report is printed to whoever ran it; a detached resume's is not,
             # and reaches the session as an ending instead.
@@ -287,6 +300,23 @@ def cmd_resume(args: argparse.Namespace) -> int:
         store.close()
     print(report.text())
     return 0 if report.status == "done" else 1
+
+
+def _go_on(store: Store, key: str | None) -> bool:
+    """Start the repository's dispatcher when work waits in its lane and `autowork` is on:
+    a machine that restarted has queued tasks and no `cauce work` to run them."""
+    return config.enabled("autowork", os.environ) and dispatch.start_lane(store, home(), key)
+
+
+def _could_not_run(task_id: int, exc: Exception) -> int:
+    """cauce failed under a task: one line with the cause and the command that continues
+    it, the traceback in the log the hooks report from, and a non-zero exit. Called from
+    the `except` that caught `exc`."""
+    hooks.note_error(home(), f"resume #{task_id}")
+    cause = " ".join(f"{type(exc).__name__}: {exc}".split())[:300]
+    print(f"cauce: task #{task_id} could not run: {cause}; `cauce resume {task_id}` continues it "
+          f"(traceback in {home() / hooks.ERROR_LOG})", file=sys.stderr)
+    return 1
 
 
 #: The attempts after which a resume nobody approved is refused: two runs' worth.
@@ -490,12 +520,15 @@ def cmd_tasks(args: argparse.Namespace) -> int:
         # cauce's own work by default: a session's turns are no task to resume or count.
         sources = None if args.turns else ("cauce", "queue")
         tasks = store.list_tasks(repo=_repo_key(args), status=args.status or None, limit=args.limit, source=sources)
+        waits = {t["id"]: dispatch.waiting(store, t) for t in tasks}
     finally:
         store.close()
     for t in tasks:
         cell = t["final_cell"] or t["start_cell"] or ""
         mark = {"hook": " (turn)", "delegation": " (subagent)"}.get(t["source"], "")
         print(f"#{t['id']:<5} {t['status']:<14} {t['kind'] or '-':<16} {cell:<14} {t['title']}{mark}")
+        if waits[t["id"]]:
+            print(f"       {waits[t['id']]}")
     return 0
 
 
@@ -514,8 +547,13 @@ def cmd_show(args: argparse.Namespace) -> int:
         print(f"#{task['id']} [{task['status']}] {task['title']}")
         print(f"repo {task['repo']}  kind {task['kind']} ({task['class_source']}: {task['class_reason']})")
         print(f"cost ${task['cost_usd']:.2f}  start {task['start_cell']}  final {task['final_cell']}")
+        if waits := dispatch.waiting(store, task):
+            print(waits)
         refused = store.denials(args.id)
         climbed = {e["data"]["seq"]: e["data"] for e in store.events_of(args.id, "moved") if "seq" in e["data"]}
+        checks: dict[int, list[dict]] = {}
+        for e in store.events_of(args.id, "verified"):
+            checks.setdefault(e["data"].get("seq"), []).append(e["data"])
         for a in store.attempts(args.id):
             verdict = "pass" if a["passed"] else (a["failure"] or "fail")
             model = f" [{a['served_model']}]" if a.get("served_model") else ""
@@ -525,6 +563,9 @@ def cmd_show(args: argparse.Namespace) -> int:
                 print(f"    {a['summary'][:300]}")
             if refused.get(a["seq"]):
                 print(f"    refused: {', '.join(refused[a['seq']])}")
+            for check in checks.get(a["seq"], ()):
+                for line in _check_lines(check):
+                    print(f"    {line}")
             move = climbed.get(a["seq"])
             if move:
                 if move.get("to_cell"):
@@ -790,6 +831,14 @@ def cmd_config(args: argparse.Namespace) -> int:
     if args.value is None:
         print(json.dumps(config.load()[args.key]))
         return 0
+    if args.key in config.CHOICES:
+        picked = config.word(args.key, args.value)
+        if picked is None:
+            print(f"expected one of {', '.join(config.CHOICES[args.key])}", file=sys.stderr)
+            return 1
+        config.save({args.key: picked})
+        print(f"{args.key} = {json.dumps(picked)}")
+        return 0
     value = config._bool(args.value)
     if value is None:
         print("expected on or off", file=sys.stderr)
@@ -898,6 +947,22 @@ def cmd_neighbours(args: argparse.Namespace) -> int:
     return 0
 
 
+def _check_lines(check: dict) -> list[str]:
+    """An independent check of an attempt, as its `verified` event kept it: its
+    verdict, then each blocker and each other finding, clipped like the summary."""
+    blockers = findings_mod.read({"findings": check.get("blockers") or []})
+    # The blockers are records of the findings themselves: only the very same record
+    # is left out, never another finding in a blocker's file (`findings.same` is that).
+    others = [f for f in findings_mod.read({"findings": check.get("findings") or []}) if f not in blockers]
+    verdict = "passed" if check.get("passed") else check.get("verdict") or "undecided"
+    lines = [f"independent check at {check.get('cell') or '?'}: {verdict}"
+             + (f", {len(blockers)} blocker(s)" if blockers else "")]
+    for label, found in (("blocks", blockers), ("found", others)):
+        # One line each: a proof is often a command's output, over several lines.
+        lines += [f"  {label}: {' '.join(findings_mod.text([f]).removeprefix('- ').split())}"[:300] for f in found]
+    return lines
+
+
 def cmd_queue(args: argparse.Namespace) -> int:
     store = Store.open()
     try:
@@ -915,8 +980,6 @@ def cmd_queue(args: argparse.Namespace) -> int:
                                  session_id=os.environ.get("CAUCE_SESSION_ID"))
             with contextlib.suppress(OSError, project.NotAProject):
                 project.enroll(where)
-            from cauce import dispatch
-
             then = dispatch.kick(where, repo.key(where), os.environ)
             if args.json:
                 print(json.dumps({**{k: task[k] for k in ("id", "title", "status", "repo", "cwd")}, "then": then},
@@ -934,6 +997,8 @@ def cmd_queue(args: argparse.Namespace) -> int:
             return 0
         for t in store.list_tasks(repo=_repo_key(args), status=["queued"], limit=200)[::-1]:
             print(f"#{t['id']:<5} {t['repo'] or '-'}  {t['title']}")
+            if waits := dispatch.waiting(store, t):
+                print(f"       {waits}")
         return 0
     finally:
         store.close()
@@ -945,7 +1010,7 @@ def cmd_lanes(args: argparse.Namespace) -> int:
         if args.unpause is not None:
             key = repo.key(Path(args.unpause).resolve()) if Path(args.unpause).is_dir() else args.unpause
             store.unpause_lane(key)
-            print(f"unpaused {key}")
+            print(f"unpaused {key}" + (", started its dispatcher" if _go_on(store, key) else ""))
             return 0
         for lane in store.lanes():
             state = f"paused: {lane['reason']}" if lane["paused"] else "open"
@@ -1569,6 +1634,41 @@ def cmd_endings(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_compaction(args: argparse.Namespace) -> int:
+    """The mod's side of `cauce.compaction`: what to do now that the session is
+    idle (`next`), or what became of a decision it was to submit (`delivered`)."""
+    from cauce import compaction
+
+    mode = config.choice("compact", os.environ)
+    if os.environ.get("CAUCE_WORKER_TASK") or (args.compaction_command == "next" and mode == "off"):
+        # A worker's session never compacts on cauce's word, and with the setting
+        # off there is nothing to take: neither opens the store.
+        if args.json:
+            print(json.dumps({"action": None}))
+        return 0
+    store = Store.open()
+    try:
+        answer: dict[str, object]
+        if args.compaction_command == "delivered" and (args.ran or args.skipped is not None):
+            answer = compaction.compacted(store, home(), args.session, args.decision, version=args.version,
+                                          skip=args.skipped)
+        elif args.compaction_command == "delivered":
+            why = (f"the engine rejected it: {args.rejected}" if args.rejected is not None
+                   else "a turn started before it could be submitted")
+            answer = {"kept": compaction.delivered(store, args.session, args.decision, how="suggest", why=why)}
+        else:
+            answer = compaction.next_step(store, home(), args.session, version=args.version, mode=mode)
+    finally:
+        store.close()
+    if args.json:
+        print(json.dumps(answer, ensure_ascii=False))
+    else:
+        for key in ("said", "line"):
+            if answer.get(key):
+                print(answer[key])
+    return 0
+
+
 def cmd_hook(args: argparse.Namespace) -> int:
     return hooks.main(args.event, sys.stdin, sys.stdout, os.environ)
 
@@ -1908,6 +2008,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_allow)
 
     p = sub.add_parser("config", help="show or change a setting: cauce config livespec off; "
+                                      "cauce config compact suggest|auto|off; "
                                       "cauce config model sonnet <model id>|default; "
                                       "cauce config mode <model|default> <mode>|reset")
     p.add_argument("key", nargs="?")
@@ -1956,6 +2057,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dir", help="where to write it (default ~/.local/bin)")
     p.add_argument("--remove", action="store_true", help="take it away again")
     p.set_defaults(func=cmd_link)
+
+    cp = sub.add_parser("compaction", help="when a session should compact and what /compact keeps: the mod "
+                                           "takes a decision once (`next`)")
+    csub = cp.add_subparsers(dest="compaction_command", required=True)
+    p = csub.add_parser("next", help="settle a submitted /compact and take the pending decision, once")
+    p.add_argument("--session", required=True)
+    p.add_argument("--version", default="unknown", help="the Claude Code version the session runs on")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_compaction)
+    p = csub.add_parser("delivered", help="what became of a decision the mod was to submit; with none of the "
+                                          "flags, a turn started first and the line was shown instead")
+    p.add_argument("decision", type=int)
+    p.add_argument("--session", required=True)
+    outcome = p.add_mutually_exclusive_group()
+    outcome.add_argument("--ran", action="store_true", help="the engine compacted it")
+    outcome.add_argument("--skipped", metavar="REASON", help="a hook vetoed the compaction, saying why")
+    outcome.add_argument("--rejected", metavar="REASON", help="the call failed, saying why: the line was shown")
+    p.add_argument("--version", default="unknown", help="the Claude Code version that answered")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_compaction)
 
     p = sub.add_parser("endings", help="what ended since a session last heard; delivered once, --peek to look")
     p.add_argument("--session", required=True)

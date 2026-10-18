@@ -6,14 +6,14 @@ import subprocess
 
 import pytest
 
-from cauce import criteria, findings, flow, launch, orchestrate, risk
+from cauce import criteria, findings, flow, isolate, launch, orchestrate, risk
 from cauce.escalate import Attempt, Failure, Move, decide
 from cauce.launch import LaunchSpec, WorkerResult
 from cauce.matrix import LADDERS, Cell
 from cauce.orchestrate import Options, run, verifier_brief, verify_cell
 from cauce.store import home
 
-from .test_orchestrate import Script, kind, ok
+from .test_orchestrate import Script, bad, kind, ok
 from .test_ui import ui  # noqa: F401  (the fixture)
 
 # --- criteria -------------------------------------------------------------------------
@@ -48,6 +48,36 @@ def test_a_pass_must_say_each_criterion_is_met(tmp_path):
     assert not not_met.passed and not_met.failure is Failure.CODE_BUG and "S2 is not met" in not_met.summary
     plain = launch.parse(proc(ok), LaunchSpec("p", Cell("sonnet", "medium"), tmp_path))
     assert plain.passed
+
+
+def test_a_judging_step_that_reports_a_criterion_unmet_by_the_work_it_judges_passes(tmp_path):
+    """A refute step decided its row and was failed for 'S1, S4 is not met': the criteria it
+    reported unmet were the judged change's, a finding carried forward, not its own failure."""
+    ok = {"verdict": "pass", "summary": "F1 confirmed", "evidence": "pytest -k cart: 1 failed",
+          "criteria": [{"id": "S1", "met": False}, {"id": "S2", "met": True}]}
+    judging = LaunchSpec("p", Cell("sonnet", "medium"), tmp_path, criteria=("S1", "S2"), judging=True)
+    judged = launch.parse(proc(ok), judging)
+    assert judged.passed and judged.failure is None
+    assert [c["id"] for c in judged.criteria if c["met"] is False] == ["S1"]
+    # What it was not asked is still not a pass: a criterion left out stays inconclusive.
+    left_out = launch.parse(proc({**ok, "criteria": [{"id": "S1", "met": False}]}), judging)
+    assert not left_out.passed and left_out.failure is Failure.INCONCLUSIVE
+    # A step that builds or fixes keeps the rule.
+    building = LaunchSpec("p", Cell("sonnet", "medium"), tmp_path, criteria=("S1", "S2"))
+    assert launch.parse(proc(ok), building).failure is Failure.CODE_BUG
+    # And it is told so: a refute answered `fail` for "S1 is not met because of F4" when its
+    # contract said only that a pass reporting an unmet criterion is not a pass.
+    assert launch.JUDGING_INSTRUCTIONS in launch.instructions(judging)
+    assert launch.JUDGING_INSTRUCTIONS not in launch.instructions(building)
+    assert launch.instructions(building) == launch.RESULT_INSTRUCTIONS
+
+
+@pytest.mark.parametrize("step_kind, judges", [("review-routine", True), ("review-critical", True),
+                                               ("explore", True), ("bugfix", False), ("implement", False)])
+def test_only_a_step_that_gives_a_verdict_is_launched_as_judging(git_repo, store, step_kind, judges):
+    script = Script(WorkerResult(True, None, "ok", "1 passed", criteria=({"id": "S1", "met": True},)))
+    run("Judge it:\n- one", git_repo, store, registry={}, launcher=script, classifier=kind(step_kind))
+    assert script.specs[0].judging is judges
 
 
 def test_the_brief_carries_the_criteria(git_repo, store):
@@ -207,6 +237,97 @@ def test_the_same_problem_twice_earns_a_second_correction_then_a_person(git_repo
     assert len(report.cells) == 3
 
 
+def test_the_ladder_running_out_with_only_the_checks_blockers_open_keeps_the_work(git_repo, store, verifier_on):
+    """Task #50 of another repository: a feature started at opus/high, two rungs left. Both
+    attempts passed the repository's check; the independent check found a different blocker
+    each round (progress). The corrections took the ladder's rungs, and the top of it said
+    `exhausted`: failed, branch deleted, 25 files and the money gone. The work passed its own
+    check and only the verifier's findings stand: it stops for a person, kept."""
+    script = Script(passing("added the export endpoint and its csv writer"), check("fail", [BUG]),
+                    passing("fixed the dropped last row in the totals"), check("fail", [OTHER]), write="app.py")
+    report = run("add the cart export", git_repo, store, Options(start=Cell("opus", "high"), verify="true"),
+                 registry={}, launcher=script, classifier=kind("feature"))
+    assert report.cells == ["opus/high", "opus/xhigh"] and len(script.specs) == 4
+    assert report.status == "blocked" and report.stop.cause == "review"
+    assert "ladder" in report.stop.reason and "opus/xhigh" in report.stop.reason
+    assert OTHER["what"] in report.stop.account and BUG["what"] not in report.stop.account
+    assert report.branch and isolate.kept(git_repo, report.task_id)
+    assert isolate.UNVERIFIED in subprocess.run(["git", "log", "-1", "--format=%B", report.branch], cwd=git_repo,
+                                                capture_output=True, text=True, check=True).stdout
+    # Why, in the move's own words: no model above, and the check's blockers are all that is open.
+    decision = report.decisions[-1]
+    assert decision.move is Move.REVIEW and any("passed its own check" in line for line in decision.because)
+    finished = store.last_event(report.task_id, "finished")["data"]
+    assert finished["status"] == "blocked" and finished["stop"]["cause"] == "review"
+    # It resumes like any review stop: its first check is given the blockers the last round kept.
+    assert [f["what"] for f in store.last_event(report.task_id, "verified")["data"]["blockers"]] == [OTHER["what"]]
+
+
+def test_two_cells_agreeing_with_no_stronger_model_left_also_keeps_the_work(git_repo, store, verifier_on):
+    """The same sequence with summaries that read alike: the repeated-answer rule found no model above
+    and sent it to `replan`, which drops the work as well."""
+    script = Script(passing(), check("fail", [BUG]), passing(), check("fail", [OTHER]), write="app.py")
+    report = run("add the cart export", git_repo, store, Options(start=Cell("opus", "high"), verify="true"),
+                 registry={}, launcher=script, classifier=kind("feature"))
+    assert report.status == "blocked" and report.stop.cause == "review" and OTHER["what"] in report.stop.account
+    assert report.branch and isolate.kept(git_repo, report.task_id)
+
+
+def test_decide_reviews_only_work_whose_own_check_passed():
+    top = Cell("opus", "xhigh")
+    ladder = LADDERS["feature"]
+    open_ = Attempt(top, 60, False, Failure.CODE_BUG, "the independent check found 1 problem(s)",
+                    blockers=(BUG,))
+    review = decide(ladder, [open_])
+    assert review.move is Move.REVIEW and not review.continues and "top of this ladder" in review.reason
+    assert "blocker" in review.reason and any("passed its own check" in line for line in review.because)
+    # Its own check never passed: the ladder running out is a failure, as before.
+    assert decide(ladder, [Attempt(top, 60, False, Failure.CODE_BUG, "red")]).move is Move.EXHAUSTED
+    # Below the top, a correction still climbs.
+    below = Attempt(Cell("opus", "high"), 60, False, Failure.CODE_BUG, "x", blockers=(BUG,))
+    assert decide(ladder, [below]).move is Move.MORE_EFFORT
+
+
+def test_every_move_taken_for_a_correction_says_the_work_passed_its_own_check():
+    """A correction climbed with only 'the work happened and was shallow': the person reading
+    why saw a failed attempt, when the work had passed and only the independent check's blockers failed."""
+    ladder = LADDERS["feature"]
+    two = (BUG, OTHER)
+    # More effort, below the top of the model.
+    effort = decide(ladder, [Attempt(Cell("opus", "high"), 60, False, Failure.CODE_BUG, "x", blockers=two)])
+    # The model's last cell: the next model takes over.
+    handed = decide(ladder, [Attempt(Cell("sonnet", "xhigh"), 60, False, Failure.CODE_BUG, "x", blockers=two)])
+    # Two cells that agreed.
+    same = Attempt(Cell("sonnet", "medium"), 60, False, Failure.CODE_BUG, "same", blockers=two)
+    again = Attempt(Cell("sonnet", "high"), 60, False, Failure.CODE_BUG, "same", blockers=two)
+    agreed = decide(ladder, [same, again])
+    moved = [effort, handed, agreed]
+    assert [d.move for d in moved][:2] == [Move.MORE_EFFORT, Move.NEXT_MODEL]
+    for decision in moved:
+        text = " | ".join(decision.because)
+        assert "passed its own check" in text and "2 blocker(s)" in text, decision
+    # An attempt that is no correction is not told it passed.
+    plain = decide(ladder, [Attempt(Cell("opus", "high"), 60, False, Failure.CODE_BUG, "red")])
+    assert "passed its own check" not in " ".join(plain.because)
+
+
+def test_the_attempt_limit_with_only_the_checks_blockers_open_keeps_the_work_too(git_repo, store, verifier_on):
+    script = Script(passing(), check("fail", [BUG]), write="app.py")
+    report = run("add the cart export", git_repo, store,
+                 Options(start=Cell("opus", "high"), verify="true", max_attempts=1), registry={}, launcher=script,
+                 classifier=kind("feature"))
+    assert report.status == "blocked" and report.stop.cause == "review" and BUG["what"] in report.stop.account
+    assert report.branch and isolate.kept(git_repo, report.task_id)
+
+
+def test_a_ladder_that_ran_out_without_any_check_passing_still_drops_its_work(git_repo, store, verifier_on):
+    script = Script(bad(Failure.CODE_BUG), bad(Failure.CODE_BUG, "different words entirely"), write="app.py")
+    report = run("add the cart export", git_repo, store, Options(start=Cell("opus", "high"), verify="true"),
+                 registry={}, launcher=script, classifier=kind("feature"))
+    assert report.status == "failed" and report.stop.cause == "exhausted"
+    assert report.branch is None and not isolate.kept(git_repo, report.task_id)
+
+
 def test_an_undecided_check_or_a_fail_without_findings(git_repo, store, verifier_on):
     script = Script(passing(), check("inconclusive", summary="no browser"), write="app.py")
     report = run("fix it", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
@@ -318,7 +439,7 @@ def test_in_the_checkout_itself_nothing_is_undone(git_repo, store):
 
 
 def test_tasks_whose_surfaces_cannot_touch_run_side_by_side_without_a_model(store):
-    from cauce import flow
+    from cauce import dispatch, flow
 
     def queued(text, surf):
         return store.enqueue(text, repo="k", cwd="/x", options={"surfaces": surf} if surf else {})
@@ -330,7 +451,7 @@ def test_tasks_whose_surfaces_cannot_touch_run_side_by_side_without_a_model(stor
     assert not decision.parallel and f"#{a['id']}" in decision.reason
     assert flow.by_surfaces(queued("d", None), [a]) is None and flow.by_surfaces(b, [queued("e", None)]) is None
     assert flow.by_surfaces(b, []) is None
-    assert flow._surfaces_of({"options": "{"}) == ()
+    assert dispatch.declared_surfaces({"options": "{"}) == ()
 
 
 def test_a_workflow_step_carries_its_surfaces(git_repo, store, monkeypatch):

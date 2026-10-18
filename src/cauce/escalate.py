@@ -15,6 +15,9 @@ circles:
   does not clear on its own; it is raised once, then the task is split.
 - **Replan** — the spec or the architecture is wrong. No model fixes a task that
   should not exist; the run stops and says so.
+- **Review** — the work passed its own check and nothing is left to climb
+  to; only the independent check's blockers stand. The work is kept for a
+  person, never dropped as a failure.
 - **Blocked** — a person has to act: the environment failed twice, or the
   worker was refused a command (a refusal is a setting, so retrying it, or
   sending a stronger model into it, gets the same refusal).
@@ -72,6 +75,7 @@ class Move(StrEnum):
     EXHAUSTED = "exhausted"
     BLOCKED = "blocked"
     CONVERGED = "converged"
+    REVIEW = "review"
 
 
 #: The moves after which another attempt runs.
@@ -107,6 +111,9 @@ class Attempt:
     findings: tuple[dict[str, str], ...] = ()
     #: What says the network dropped under it (see `WorkerResult.network`).
     network: str = ""
+    #: The independent check's blockers, when they are all that failed it: the
+    #: work passed its own check (or had none to run and its own check passed).
+    blockers: tuple[dict[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -200,6 +207,13 @@ def _skipped(ladder: Sequence[Cell], cell: Cell, target: Cell) -> tuple[str, ...
     between = ladder[_position(ladder, cell) + 1: ladder.index(target)]
     return tuple(f"{c.label}: more effort from {c.model}, which is not what failed" for c in between
                  if c.model == cell.model)
+
+
+def _correction(last: Attempt, why: str) -> str:
+    """What every move taken for a correction says: the work passed its own check, only the independent
+    check's blockers failed it, and `why` this rung."""
+    return (f"the work passed its own check; the independent check found {len(last.blockers)} blocker(s) in it, "
+            f"so this is a correction: {why}")
 
 
 def _arrives(target: Cell) -> str:
@@ -330,29 +344,60 @@ def decide(
                     f"same way ({failure}) and their summaries read alike: two cells agreeing is a settled bet, "
                     "so more effort would give the same answer")
         target = _next_model(ladder, last.cell)
+        if target is None and last.blockers:
+            return _review(last, seen, f"{why}, and there is no stronger model on this ladder")
         if target is None:
             return Decision(Move.REPLAN, reason=f"{why}, and there is no stronger model on this ladder",
                             because=(seen, rule, f"no model above {last.cell.model} on this ladder: the task "
                                                  "is rewritten instead"))
-        return _gated(Move.NEXT_MODEL, target, last.max_turns, why, allow_approval,
-                      (seen, rule, _arrives(target)), _skipped(ladder, last.cell, target))
+        because = (seen, *([_correction(last, why)] if last.blockers else []), rule, _arrives(target))
+        return _gated(Move.NEXT_MODEL, target, last.max_turns, why, allow_approval, because,
+                      _skipped(ladder, last.cell, target))
 
     # Effort axis: the work was shallow. The next effort of the same model,
     # and only when this model has run out does the next one start.
     shallow = "the work happened and was shallow: the same model, more thorough"
     target = _next_effort(ladder, last.cell)
     if target is not None:
+        if last.blockers:
+            shallow = _correction(last, "a defect the work missed is the shallow kind: the same model, more thorough")
         return Decision(Move.MORE_EFFORT, target, last.max_turns, f"{failure}: same model, more thorough",
                         because=(seen, shallow, _arrives(target)))
     target = _next_model(ladder, last.cell)
+    if target is None and last.blockers:
+        return _review(last, seen, f"{last.cell.label} is the top of this ladder")
     if target is None:
         return Decision(Move.EXHAUSTED, reason="the top of the ladder failed too",
                         because=(seen, f"{last.cell.label} is the top of this ladder: there is nothing left "
                                        "to climb to"))
     why = f"{failure}, and {last.cell.label} was this model's last cell"
+    if last.blockers:
+        shallow = _correction(last, f"{last.cell.label} is {last.cell.model}'s last cell, so a missed defect it "
+                                    "could not find goes to a stronger model")
     return _gated(Move.NEXT_MODEL, target, last.max_turns, why, allow_approval,
                   (seen, shallow, f"{last.cell.label} was {last.cell.model}'s last cell on this ladder, so the "
                                   "next model takes over", _arrives(target)))
+
+
+def review_reason(last: Attempt, why: str) -> str:
+    """Why work that passed its own check stops for a person: said once, for the ladder and the attempt limit."""
+    return (f"{why} and the independent check's {len(last.blockers)} blocker(s) are still open; the work passed "
+            "its own check and is kept, unverified, for a person")
+
+
+def _review(last: Attempt, seen: str, why: str) -> Decision:
+    """The ladder is out, and what failed the last attempt is only the independent check's blockers.
+
+    A correction does climb the ladder, as before: a blocker the check shows in work
+    that passed is a missed defect, the shallow kind (more effort), and a cheap cell
+    that cannot find it hands over to a stronger model. What a correction is not is
+    evidence that the work is wrong, so the ladder running out is no `exhausted`: the
+    work passed its own check, and dropping it is what the correction cap
+    (`orchestrate.MAX_CORRECTIONS`) exists to avoid. It stops as a review, kept."""
+    return Decision(Move.REVIEW, reason=review_reason(last, why),
+                    because=(seen, "the work passed its own check; only the independent check's blockers failed it, "
+                                   "so this is no wrong approach and no failure of the task",
+                             f"{why}: nothing is left to climb to", "the work stays on its branch, unverified"))
 
 
 def _gated(move: Move, cell: Cell, turns: int, why: str, allow_approval: bool,

@@ -56,7 +56,7 @@ from cauce import services as services_mod
 from cauce import surfaces as surfaces_mod
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify, narrow
-from cauce.escalate import MAX_TURNS_CEILING, Attempt, Decision, Failure, Move, decide
+from cauce.escalate import MAX_TURNS_CEILING, Attempt, Decision, Failure, Move, decide, review_reason
 from cauce.matrix import DEFAULT_TURNS, READ_ONLY_KINDS, Cell, ladder_for, turns_for
 from cauce.store import Store, home
 
@@ -75,6 +75,7 @@ _FINAL_STATUS = {
     Move.EXHAUSTED: "failed",
     Move.BLOCKED: "blocked",
     Move.CONVERGED: "failed",
+    Move.REVIEW: "blocked",
 }
 
 #: Endings that wait on a person, not on the task being rewritten: the work done
@@ -85,6 +86,8 @@ KEEPS_WORK = frozenset({"done", "blocked", "needs_approval"})
 MIN_REPO_SAMPLES = 3
 MIN_GLOBAL_SAMPLES = 5
 VERIFY_TIMEOUT_S = 900
+#: How many changed paths a task's `finished` event lists; `changed_n` counts them all.
+CHANGED_KEPT = 500
 
 Launcher = Callable[[launch.LaunchSpec], launch.WorkerResult]
 
@@ -440,6 +443,24 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
                 risk_mod.of_request(text, kind))
 
 
+#: How the plan's reasons a person should hear before the work starts begin: what
+#: the task needs and workers lack, and what stopped workers here before.
+WARNINGS = ("this task needs", "this task mentions", "this task spans", "workers here were refused before", "task #")
+
+
+def warnings(reasons: Sequence[str]) -> list[str]:
+    return [r for r in reasons if r.startswith(WARNINGS)]
+
+
+def foresee(text: str, repo_dir: Path, store: Store, options: Options) -> list[str]:
+    """What a task's plan will warn of when it starts, said before it does: a dry
+    plan, classified by rules alone and with no neighbour asked, since a neighbour's
+    notes warn of nothing."""
+    dry = dataclasses.replace(options, dry_run=True, use_model_classifier=False)
+    registry = caps.load_all(home() / "capabilities.json")
+    return warnings(plan(text, repo_dir.resolve(), store, dry, registry, adapters=()).reasons)
+
+
 def _team(options: Options, key: str | None, catalog: roles.Catalog) -> tuple[str, list[roles.Role], list[str]]:
     """The roles a task here may run as: the one a person named, or the project's team."""
     lines: list[str] = []
@@ -560,11 +581,10 @@ def run(
     if not options.max_turns and turns_for(the_plan.kind) != DEFAULT_TURNS:
         the_plan.reasons.append(f"{the_plan.kind} work starts with {turns_for(the_plan.kind)} turns: "
                                 f"at {DEFAULT_TURNS} its attempts ran out")
-    for reason in the_plan.reasons:
-        if reason.startswith(("this task needs", "this task mentions", "this task spans",
-                              "workers here were refused before", "task #")):
-            say(f"cauce: #{task['id']} warning: {reason}")
-    store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label,
+    warned = warnings(the_plan.reasons)
+    for reason in warned:
+        say(f"cauce: #{task['id']} warning: {reason}")
+    store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label, warnings=warned,
                     role=the_plan.role.name if the_plan.role else None, team=the_plan.team,
                     risk=the_plan.risk.data(),
                     ladder=[x.label for x in the_plan.ladder], reasons=the_plan.reasons,
@@ -572,9 +592,11 @@ def run(
                     queued_s=queued_s)
 
     workspace = None
+    # Why the task's worktree could not be made, in one line. It stops the task before its first
+    # attempt, resumable, instead of leaving it `running` under a process that is about to exit.
+    no_worktree: str | None = None
     writes = the_plan.kind not in READ_ONLY_KINDS
-    declared_read_only = the_plan.kind not in _BUILDS and bool(
-        _READ_ONLY.search(task.get("body") or task.get("title") or ""))
+    declared_read_only = declares_read_only(the_plan.kind, task.get("body") or task.get("title") or "")
     if not options.verify and options.run_verify and writes and not declared_read_only:
         # A workflow step with no kind of its own was classified into one that writes:
         # the run's check is its check.
@@ -583,16 +605,19 @@ def run(
     # A reading step of a workflow reads the work of the steps before it: it gets
     # their commit too, in a worktree its tools cannot write to.
     if options.isolate and (writes or options.base) and repo.toplevel(repo_dir) is not None:
-        resumed = isolate.kept(repo_dir, task["id"])
-        workspace = isolate.prepare(repo_dir, task["id"], home(), base=options.base)
-        if resumed:
-            context.append("This task was stopped before and is resumed: what its earlier attempts wrote is "
-                           "already here. Check it, and finish it rather than starting over.")
-        if workspace.links:
-            context.append("Linked from the person's checkout and shared with it: "
-                           + ", ".join(workspace.links) + ". Use them; do not delete or reinstall them.")
-        if not resumed:
-            context += _fill_worktree(store, task["id"], workspace, text, options.carry, say)
+        try:
+            resumed = isolate.kept(repo_dir, task["id"])
+            workspace = isolate.prepare(repo_dir, task["id"], home(), base=options.base)
+            if resumed:
+                context.append("This task was stopped before and is resumed: what its earlier attempts wrote is "
+                               "already here. Check it, and finish it rather than starting over.")
+            if workspace.links:
+                context.append("Linked from the person's checkout and shared with it: "
+                               + ", ".join(workspace.links) + ". Use them; do not delete or reinstall them.")
+            if not resumed:
+                context += _fill_worktree(store, task["id"], workspace, text, options.carry, say)
+        except (isolate.IsolationError, OSError) as exc:  # git failed, or git or the disk is not there
+            no_worktree = " ".join(str(exc).split())
     workdir = workspace.path if workspace else repo_dir
     context += how_to_run(workdir, (*options.allow_tools, *grants.granted(key)))
     # The thread of the session that sent it, as the scribe kept it: the worker
@@ -634,7 +659,8 @@ def run(
     subject = ""
     # In the checkout itself, one run at a time: the work and its check share the
     # person's files. A run in a worktree has its own.
-    in_place = workspace is None and ((writes and not declared_read_only) or bool(options.verify))
+    in_place = no_worktree is None and workspace is None and (
+        (writes and not declared_read_only) or bool(options.verify))
     held = contextlib.ExitStack()
     timing = {"hold_s": 0.0, "services_s": 0.0, "worker_s": 0.0, "check_s": 0.0, "verifier_s": 0.0, "wait_s": 0.0}
     try:
@@ -645,8 +671,11 @@ def run(
                     home(), place, task["id"], waiting=lambda who: _waits(store, task["id"], who, say),
                     check=lambda: _check_cancel(store, task["id"])))
         timing["hold_s"] = time.monotonic() - mark
-        ready = True
-        if options.services:
+        ready = no_worktree is None
+        if not ready:
+            report.stop = stops.Stop("environment", f"its worktree could not be made: {no_worktree}"[:500])
+            report.status, report.summary = "blocked", report.stop.reason
+        elif options.services:
             mark = time.monotonic()
             try:
                 up = held.enter_context(services_mod.running(
@@ -665,9 +694,16 @@ def run(
             # A try after the network dropped is no attempt at the work: it does not
             # count toward the ceiling, and its own streak is bounded in `decide`.
             if sum(not a.network for a in attempts) >= options.max_attempts:
-                report.stop = stops.Stop("attempts", f"{options.max_attempts} attempts without a pass",
-                                         attempt=len(attempts))
-                report.status, report.summary = "failed", report.stop.reason
+                if attempts and attempts[-1].blockers:
+                    # The work passed its own check; only the independent check's blockers stand.
+                    report.stop = stops.Stop(
+                        "review", review_reason(attempts[-1], f"the limit of {options.max_attempts} attempts"),
+                        attempt=len(attempts), account=findings_mod.text(attempts[-1].blockers)[:2000])
+                    report.status, report.summary = "blocked", report.stop.reason
+                else:
+                    report.stop = stops.Stop("attempts", f"{options.max_attempts} attempts without a pass",
+                                             attempt=len(attempts))
+                    report.status, report.summary = "failed", report.stop.reason
                 break
             _check_cancel(store, task["id"])
             selection = _equip(_with_role(caps.select(registry, the_plan.kind, failed_before=bool(attempts),
@@ -703,6 +739,7 @@ def run(
                                                                selection.system_prompt()) if p),
                 env={**run_env, "CAUCE_WORKER_TASK": str(task["id"]), "CAUCE_WORKER_ATTEMPT": str(nth)},
                 criteria=criteria_mod.ids(text),
+                judging=not writes or declared_read_only or deciding is not None,
                 verdicts=tuple(deciding.get("ids") or ()) if deciding else (),
                 verdict_words=ledger_mod.WORDS.get(deciding["role"], ()) if deciding else (),
             )
@@ -742,13 +779,14 @@ def run(
                 store.add_event(task["id"], "outside_surfaces", seq=nth, paths=strayed[:50],
                                 surfaces=list(options.surfaces), undone=workspace is not None)
             review_stop = None
+            open_blockers: tuple[dict[str, str], ...] = ()
             mark = time.monotonic()
             worker_cost = result.cost_usd
             if result.passed and verifying:
                 so_far = list(isolate.changed(workspace)) if workspace else sorted({*changed, *result.changed_paths})
                 risk_mod.of_change(the_plan.risk, so_far if (workspace or base_commit) else None)
                 if so_far and risk_mod.needs_verifier(the_plan.risk, cheap=_cheap(cell)):
-                    result, review_stop, ledger, corrections = _independent_check(
+                    result, review_stop, ledger, corrections, open_blockers = _independent_check(
                         result, text=text, kind=the_plan.kind, cell=cell, spec=spec, workdir=workdir,
                         base=base_commit, changed=so_far, risk=the_plan.risk, ledger=ledger,
                         corrections=corrections, launcher=launcher, store=store, task_id=task["id"], nth=nth,
@@ -791,7 +829,8 @@ def run(
                             **({"refused_but_written": list(result.overcome)} if result.overcome else {}))
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
-                              transient=result.transient, findings=result.findings, network=result.network)
+                              transient=result.transient, findings=result.findings, network=result.network,
+                              blockers=open_blockers)
             attempts.append(attempt)
             subject = result.commit or subject
             if result.report is not None:
@@ -835,7 +874,9 @@ def run(
                 report.stop = stops.Stop(
                     _cause(decision, attempt), decision.reason, denied=attempt.denied, allow=attempt.allow,
                     attempt=seq,
-                    next_cell=decision.cell.label if decision.cell else None, account=result.summary[:2000])
+                    next_cell=decision.cell.label if decision.cell else None,
+                    account=(findings_mod.text(attempt.blockers) if decision.move is Move.REVIEW
+                             else result.summary)[:2000])
                 break
             if decision.move is Move.NEXT_MODEL and workspace is not None:
                 # A new model starts from the base, not the bet that lost; what the
@@ -913,7 +954,8 @@ def run(
         timing["notes_s"] = time.monotonic() - mark
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
-                        changed=report.changed[:50], stop=report.stop.data() if report.stop else None,
+                        changed=report.changed[:CHANGED_KEPT], changed_n=len(report.changed),
+                        stop=report.stop.data() if report.stop else None,
                         risk=the_plan.risk.data(),
                         findings=list(attempts[-1].findings)[:30] if status == "done" and attempts else [],
                         wall_s=round(time.monotonic() - clock, 2), attempts=len(attempts),
@@ -958,9 +1000,25 @@ _READ_ONLY = re.compile(
     r"|\bno (?:edites|modifiques|cambies|toques)\b[\w ,]{0,25}?\b(?:ning[uú]n\s+)?archivos?\b"
     r"(?!\s+(?:de|en|bajo|dentro|fuera|salvo|excepto|que)\b)",
     re.IGNORECASE)
+#: What a task quotes or puts in parentheses is usually evidence about something else (what another
+#: task did: "read-only", (a read-only review)). A parenthesis that opens with the declaration is the
+#: task's own, whatever follows it: "Investigate (read-only) a timezone bug", "(read-only: report the
+#: cause)", and the same in Spanish ("solo lectura").
+_QUOTED = re.compile(r'"[^"\n]*"|\u201c[^\u201d\n]*\u201d|`[^`\n]*`')
+_ASIDE = re.compile(r"\((?!\s*(?:read[- ]only|s[oó]lo\s+(?:de\s+)?lectura)\s*[:;,)])[^()\n]*\)", re.IGNORECASE)
 #: Kinds whose work is the change itself: whatever their text says is read-only,
 #: they write. Every misreading of a task as read-only was one of these.
 _BUILDS = frozenset({"feature", "implement", "refactor", "docs"})
+
+
+def declares_read_only(kind: str | None, text: str) -> bool:
+    """Whether the task says in its own words that it changes nothing. A build kind never does, and what
+    the text quotes or puts in an aside describes something else, so it is not read."""
+    if kind in _BUILDS:
+        return False
+    return bool(_READ_ONLY.search(_ASIDE.sub(" ", _QUOTED.sub(" ", text))))
+
+
 _PORT = re.compile(r"(?:localhost|127\.0\.0\.1):(\d{2,5})\b")
 
 
@@ -1059,6 +1117,8 @@ def _cause(decision: Decision, attempt: Attempt) -> str:
         return "approval"
     if decision.move is Move.CONVERGED:
         return "converged"
+    if decision.move is Move.REVIEW:
+        return "review"
     if decision.move is Move.REPLAN:
         if attempt.failure in (Failure.SPEC_BUG, Failure.ARCHITECTURE_BUG):
             return "spec"
@@ -1268,7 +1328,8 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
                        workdir: Path, base: str | None, changed: Sequence[str], risk: risk_mod.Risk,
                        ledger: dict[str, Mapping[str, str]], corrections: int, launcher: Launcher, store: Store,
                        task_id: int, nth: int, say: Callable[[str], None], outgrew: bool = False
-                       ) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int]:
+                       ) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int,
+           tuple[dict[str, str], ...]]:
     """A pass checked again by a worker that verifies the request, not the work.
 
     The first problems it finds earn one correction. A later round is earned by
@@ -1321,7 +1382,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     if not decided:
         say(f"cauce: #{task_id} the independent check could not decide; the pass stands")
         return dataclasses.replace(result, cost_usd=cost, evidence=result.evidence + "\n\n[independent check "
-                                   f"inconclusive: {verdict.summary[:300]}]"), None, ledger, corrections
+                                   f"inconclusive: {verdict.summary[:300]}]"), None, ledger, corrections, ()
     if not blockers:
         if carried:
             say(f"cauce: #{task_id} the earlier problems are fixed; {len(carried)} new one(s) read from the code "
@@ -1330,8 +1391,8 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
                 result, cost_usd=cost, findings=(*result.findings, *carried),
                 evidence=result.evidence + "\n\n[independent check: the problems it found before are fixed. "
                 f"New, read from the code and not shown by a probe, for a person to read:\n"
-                f"{findings_mod.text(carried)[:1500]}]"), None, ledger, corrections
-        return dataclasses.replace(result, cost_usd=cost), None, ledger, corrections
+                f"{findings_mod.text(carried)[:1500]}]"), None, ledger, corrections, ()
+        return dataclasses.replace(result, cost_usd=cost), None, ledger, corrections, ()
     found = findings_mod.text(blockers)
     failure = Failure.TURNS_EXHAUSTED if outgrew else Failure.CODE_BUG
     room = " (the worker had run out of turns before checking its own work)" if outgrew else ""
@@ -1344,7 +1405,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
             summary=f"the independent check found {len(blockers)} problem(s) this change caused{room}: "
                     f"{result.summary}",
             evidence=f"The independent check found:\n{found}\n\nIts probes:\n{verdict.evidence[-1500:]}")
-        return failed, None, ledger, corrections + 1
+        return failed, None, ledger, corrections + 1, tuple(blockers)
     why = (f"after {MAX_CORRECTIONS} corrections it still shows problems the earlier checks had not"
            if progress else f"the same problem survived {MAX_CORRECTIONS} corrections" if len(still) == len(blockers)
            else f"after {MAX_CORRECTIONS} corrections a problem it found before is still there, beside new ones")
@@ -1353,7 +1414,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     failed = dataclasses.replace(result, passed=False, failure=failure, cost_usd=cost,
                                  summary=f"the independent check still finds problems{room}: {result.summary}",
                                  evidence=found)
-    return failed, stop, ledger, corrections
+    return failed, stop, ledger, corrections, tuple(blockers)
 
 
 def brief(

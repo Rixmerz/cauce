@@ -769,7 +769,7 @@ def _cauce(store: Store | None, key: str, *, deep: bool = False) -> dict[str, An
     if deep:
         stopped = []
         for t in store.list_tasks(repo=key, status=STOPPED, source=("cauce", "queue"), limit=DEEP["stopped"]):
-            ended = store.last_event(t["id"], "finished")
+            ended = store.final_event(t["id"])
             stop = ((ended or {}).get("data") or {}).get("stop") or {}
             stopped.append({"id": t["id"], "title": _clip(t["title"] or "", COMMAND_CHARS), "status": t["status"],
                             "kind": t.get("kind"), "cause": stop.get("cause"),

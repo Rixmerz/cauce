@@ -198,6 +198,54 @@ reads a file on disk, so it can leave things out to fit but never paraphrase.
 States of sessions not seen for 30 days are forgotten. Turn it off with the
 `scribe` plugin setting or `cauce config scribe off`.
 
+### Compaction at the right moment
+
+Claude Code compacts when the context crosses a threshold: often in the middle
+of work, and often after the prompt cache went cold, so the summary request
+pays for the whole history again. At the end of every turn the Stop hook asks
+whether *now* is a better moment, with no model: the context is at least half
+the model's window (read from the transcript's last usage), a natural break
+just happened (work the session sent ended and was reported, or a branch was
+merged), no run of this session holds the checkout, the last turn ended while
+the cache is warm (an hour when the session's own cache writes say so, five
+minutes otherwise), and nothing compacted or was suggested in the last 30
+minutes. Each decision is an event with its reasons, and `cauce stats` lists
+them: the context's size, what the summary would cost warm beside cold, how
+it was delivered and whether it ran.
+
+What `/compact` is told is read from what cauce already keeps — the person's
+latest requests and the corrections they made, verbatim; the session's open
+work with its task numbers and the command that continues it; the branches
+that wait to be merged — on one line, bounded, secrets masked. It says what to
+keep verbatim and what may be summarized, and the digest cauce writes before a
+compaction is put back after it, as for any other.
+
+The `compact` setting (`cauce config compact suggest|auto|off`, or the plugin
+setting) says what the mod does with a decision:
+
+- **suggest** (the default): a toast shows the `/compact …` line to paste,
+  once per decision. Nothing is sent to the model.
+- **auto**: between turns, never during one, the mod asks the engine to
+  compact with the line's instructions (`$.session.compact`, the call
+  `/compact` makes; the engine refuses a `/` text a plugin submits as a
+  prompt), and a toast says so once it stood, or that a hook vetoed it. A call
+  that fails (a turn started) shows the line instead and says nothing of the
+  build. The hooks also see each compaction (PreCompact carries the line's
+  marker, or a manual compaction or a SessionStart after one follows within
+  three minutes): a build that ran it is kept as one that does, one never seen
+  to run it as one that does not, `auto` falls back to suggest on it and says
+  so once, and the next Claude Code version is tried again. The line opens
+  with `[cauce-compaction #N]` and tells a model that receives it as a message
+  that it is no request.
+- **off**: Claude Code's own auto-compaction alone.
+
+cauce never blocks Claude Code's own auto-compaction and never writes a
+settings file. If you want cauce's moments to come first, you can move Claude
+Code's: `/autocompact` (or `autoCompact` in `/config`) turns it off or on, and
+`autoCompactWindow` sets the token count at which it compacts. That is your
+call, and turning it off means a session that never reaches a break never
+compacts.
+
 ### Project notes
 
 Problems and fixes are global: a dead end in one repository is a dead end in

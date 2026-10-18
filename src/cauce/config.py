@@ -51,7 +51,14 @@ DEFAULTS: dict[str, Any] = {
     # What a passing worker learned is also saved in engram, for the team. Off
     # unless the person turns it on: it writes to a store that is not cauce's.
     "engram_write": False,
+    # When a session should compact, and what `/compact` should keep (`cauce.compaction`):
+    # `suggest` shows the person the line at a good moment, `auto` has the mod submit
+    # it (only on a Claude Code build seen to run it), `off` leaves it alone.
+    "compact": "suggest",
 }
+
+#: Settings that take one of a few words rather than on or off.
+CHOICES: dict[str, tuple[str, ...]] = {"compact": ("suggest", "auto", "off")}
 
 _TRUE = {"1", "true", "on", "yes"}
 _FALSE = {"0", "false", "off", "no"}
@@ -95,12 +102,25 @@ def enabled(key: str, env: Mapping[str, str], flag: bool | None = None) -> bool:
     return bool(load(env).get(key, DEFAULTS.get(key, False)))
 
 
+def word(key: str, raw: Any) -> str | None:
+    """`raw` as one of the words setting `key` takes, or None."""
+    value = str(raw).strip().lower() if isinstance(raw, str) else None
+    return value if value in CHOICES[key] else None
+
+
+def choice(key: str, env: Mapping[str, str]) -> str:
+    """A setting that takes a word: the `CAUCE_<KEY>` variable, else the file, else
+    the default. A word the setting does not take is read as unset."""
+    return word(key, env.get(f"CAUCE_{key.upper()}")) or word(key, load(env).get(key)) or DEFAULTS[key]
+
+
 def sync_plugin_options(env: Mapping[str, str]) -> None:
     """Copy `CLAUDE_PLUGIN_OPTION_<KEY>` values into the file, for the commands
     that never see them."""
-    updates = {}
+    updates: dict[str, Any] = {}
     for key in DEFAULTS:
-        value = _bool(env.get(f"CLAUDE_PLUGIN_OPTION_{key.upper()}"))
+        raw = env.get(f"CLAUDE_PLUGIN_OPTION_{key.upper()}")
+        value = word(key, raw) if key in CHOICES else _bool(raw)
         if value is not None:
             updates[key] = value
     if updates and any(load(env).get(k) != v for k, v in updates.items()):

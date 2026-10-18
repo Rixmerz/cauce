@@ -80,6 +80,24 @@ def test_precompact_keeps_and_the_session_after_it_gets_it_back(store: Store, tm
     assert fresh is None or "cauce compact:" not in fresh["hookSpecificOutput"]["additionalContext"]
 
 
+
+def test_a_compaction_record_that_fails_costs_neither_the_digest_nor_its_restore(store: Store, tmp_path, git_repo,
+                                                                                 monkeypatch):
+    from cauce import compaction
+
+    def locked(*args, **kwargs):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(compaction, "seen", locked)
+    event = {"session_id": "s1", "transcript_path": str(transcript(tmp_path, ENTRIES)), "cwd": str(git_repo)}
+    hooks.handle("PreCompact", event, store, tmp_path, {})
+    assert "fix the login redirect" in (compact.recall(tmp_path, "s1") or "")
+    answer = hooks.session_start({"session_id": "s1", "source": "compact", "cwd": str(git_repo)}, store,
+                                 tmp_path, {})
+    assert "cauce compact:" in answer["hookSpecificOutput"]["additionalContext"]
+    log = (tmp_path / hooks.ERROR_LOG).read_text()
+    assert "PreCompact (compaction)" in log and "SessionStart (compaction)" in log
+
 def test_no_transcript_keeps_nothing(store: Store, tmp_path):
     assert hooks.keep_digest({"session_id": "s1"}, store, tmp_path) is None
     assert hooks.keep_digest({"session_id": "s1", "transcript_path": str(tmp_path / "none")}, store,

@@ -181,7 +181,11 @@ yields the default kind, not a guess.
   A cancel says where it came from; "a person did it" is never a guess.
 - The model's stated confidence about its own work is not an input.
 - A request's criteria are its own words: a pass answers every `S#`, one left
-  out is `inconclusive` and one not met is a `code_bug`. Prose has no criteria.
+  out is `inconclusive` and one not met is a `code_bug`, unless the step judges
+  other work (a workflow's review, refute or recheck, a reading kind:
+  `LaunchSpec.judging`): a criterion it reports the work under judgment misses
+  is its finding, carried forward, and the step passes when it answered what it
+  was asked. A step that builds or fixes keeps the rule. Prose has no criteria.
   Items the request puts out of scope (under a line ending in `:` that says
   so, or marked so themselves) are no criteria, and the brief names them.
 - A finding blocks only when the change caused or worsened it (or it cannot be
@@ -205,7 +209,9 @@ yields the default kind, not a guess.
   persists or by progress (every blocker of the round before fixed and a new
   one a probe shows), at most `MAX_CORRECTIONS`; a new finding after progress
   that is only read from the code goes with the pass, recorded, never a
-  blocker; what is left at the cap stops the task as `review`. A verifier that
+  blocker; what is left at the cap stops the task as `review`, and so does a ladder that runs
+  out (or the attempt limit) while only the verifier's blockers stand on work that
+  passed its own check: kept on its branch, never `failed`. A verifier that
   cannot decide keeps the pass and says so. It is told why it runs (the
   risk's reasons) and, for a fix, to show the failure at the base and gone; it
   has its own turns (`VERIFIER_TURNS`), never the worker's raised ones, and is
@@ -215,8 +221,11 @@ yields the default kind, not a guess.
   Tests run with `CAUCE_VERIFIER=off`.
 - Surfaces narrow and grant nothing: a change outside them fails the attempt
   and is undone in its worktree, never in a person's checkout. Two tasks whose
-  surfaces are provably disjoint run side by side without Haiku; in doubt,
-  the dispatcher decides as before.
+  surfaces are provably disjoint run side by side without Haiku; a task whose
+  surfaces may touch another's, or hold a file a running task already changed,
+  waits without it, whatever the others declare; in doubt, the dispatcher
+  decides as before, and Haiku is shown each task's coordination lines, its
+  surfaces and what running work changed so far, never asked to guess them.
 - A move explains itself: `Decision.because` is the evidence chain (what the
   attempt ended with, the rule, where it goes) and `skipped` the rungs passed
   over. A new branch in `decide` gives both; the `moved` event keeps them.
@@ -301,7 +310,13 @@ yields the default kind, not a guess.
 - Tests run with `CAUCE_LIVESPEC=off` and an empty `CLAUDE_CONFIG_DIR`; a
   test that wants livespec builds the fixture index in `tests/livespec_fixture.py`.
 - A dispatch decision fails closed: no answer from Haiku means the task
-  waits. It is made once and kept on the task with its reason. Tests run with
+  waits. It is made once and kept on the task with its reason. A task that will
+  not write (`matrix.READ_ONLY_KINDS`, or text `orchestrate.declares_read_only`
+  reads as read-only; with no kind yet, the one `classify` gives it without the
+  model, a build when no rule reads it) is never put to Haiku: it runs beside
+  running work, and is no conflict for a writing task, which is judged against
+  the writing work ahead of it alone. A reason is kept as plain text on one
+  line. Tests run with
   `CAUCE_PARALLEL=off`, `CAUCE_AUTOWORK=off` and `CAUCE_NAMES=off`; a test
   that wants them passes a fake `decide`, `start` or `popen`.
 - A session belongs to the `.cauce/` in its own directory or up to the top of
