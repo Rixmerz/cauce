@@ -2,10 +2,12 @@
 
 A queued task costs nothing until it runs, and it runs in a worker — never in
 the orchestrating session's context. Each repository is one lane. The first
-task of an idle lane starts; one queued behind running work starts beside it
-only when Haiku judged it independent of everything running and queued ahead
-(`dispatch.decide`, kept on the task with its reason, `parallel` setting) —
-otherwise it waits its turn. A task that ends in anything but a pass pauses
+task of an idle lane starts; one queued behind running work that will not write
+(a reading kind, or text that says it changes nothing) starts beside it with no
+question; any other starts beside it only when Haiku judged it independent of
+all the writing work running and queued ahead (`dispatch.decide`, kept on the
+task with its reason, `parallel` setting) — otherwise it waits its turn. A
+task that ends in anything but a pass pauses
 the lane, so nothing new starts on a state it may have left broken — unless a
 person cancelled it, which is their call on that task, not on the queue. A
 person unpauses it.
@@ -33,9 +35,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
-from cauce import config, dispatch, isolate, stops, surfaces
-from cauce.matrix import Cell
-from cauce.orchestrate import Options, Report
+from cauce import classify, config, dispatch, isolate, stops, surfaces
+from cauce.matrix import READ_ONLY_KINDS, Cell
+from cauce.orchestrate import Options, Report, declares_read_only
 from cauce.store import Store, home
 
 #: How long a session prompt may sit in `running` with no update before it is
@@ -217,36 +219,85 @@ def _behind(decision: dispatch.Decision, ahead: list[dict]) -> int | None:
     return next((int(n) for n in re.findall(r"#(\d+)", decision.reason) if int(n) in ids), ids[0])
 
 
+#: Why a task that changes nothing starts beside writing work with no question asked.
+READS_ONLY = "reads only: runs beside writing work"
+#: Why a task that writes starts beside work that does not.
+NOTHING_WRITES_AHEAD = "nothing that writes runs or waits ahead of it"
+
+
+def reads_only(task: dict) -> bool:
+    """Whether a task will not write: its kind is a reading one, or its own words
+    say it changes nothing (the rule `orchestrate.run` applies once it has a kind).
+    A task with no kind yet gets the one the run would give it without the model:
+    a text no rule reads, or one that asks for a change, is a build and writes."""
+    try:
+        chosen = json.loads(task.get("options") or "{}").get("kind") or task.get("kind")
+    except ValueError:
+        chosen = task.get("kind")
+    text = task.get("body") or task.get("title") or ""
+    kind = chosen or classify.classify(text, use_model=False).kind
+    return kind in READ_ONLY_KINDS or declares_read_only(kind, text)
+
+
+def _judged(store: Store, task: dict, ahead: list[dict], decide: Decide,
+            read_changes: Callable[[], None]) -> dict:
+    """The queued task with its dispatch decision made. A task that will not write
+    is never put to the model, and a writing one is judged against the writing
+    work ahead of it alone: a reader changes no file and holds no checkout, and the
+    goal its text carries is not what it does. With no writing work ahead it starts,
+    whatever a "no" given against work that has ended once held it behind.
+    `read_changes` puts what git shows the running tasks changed into `ahead`,
+    called only when a task is put to a decision."""
+    if reads_only(task):
+        if not task["parallel"]:  # a "no" given before this rule held a reader behind a build
+            store.set_parallel(task["id"], True, READS_ONLY)
+        return {**task, "parallel": 1}
+    writing = [t for t in ahead if not reads_only(t)]
+    if not writing:
+        if not task["parallel"]:
+            store.set_parallel(task["id"], True, NOTHING_WRITES_AHEAD)
+        return {**task, "parallel": 1}
+    if task["parallel"] is not None:
+        return task
+    read_changes()
+    writing = [t for t in ahead if not reads_only(t)]
+    settled = by_surfaces(task, writing)
+    decision = settled or decide(task, writing)
+    store.set_parallel(task["id"], decision.parallel, decision.reason)
+    store.add_event(task["id"], "dispatch_decided", parallel=decision.parallel,
+                    reason=decision.reason, behind=_behind(decision, writing),
+                    ahead=[t["id"] for t in writing], by="surfaces" if settled else "haiku")
+    if decision.cost_usd:
+        store.update_task(task["id"], cost_usd=(task["cost_usd"] or 0) + decision.cost_usd)
+    return {**task, "parallel": int(decision.parallel)}
+
+
 def runnable(store: Store, repo: str | None, *, parallel: bool, decide: Decide) -> list[dict]:
     """What may start now. Per open lane: the first task when nothing runs; after
-    that, only tasks judged independent of everything running and queued ahead,
-    up to `MAX_PARALLEL` at once. A task not judged yet is judged here, once."""
+    that, tasks that will not write, and tasks judged independent of the writing
+    work running and queued ahead, up to `MAX_PARALLEL` at once. A task not
+    judged yet is judged here, once."""
     picked = []
     for lane in store.lanes():
         if lane["paused"] or not lane["queued"] or (repo is not None and lane["repo"] != repo):
             continue
         running = store.dispatched_running(lane["repo"])
         ahead, mine, read = list(running), 0, False
+
+        def read_changes(running: list[dict] = running, ahead: list[dict] = ahead) -> None:
+            nonlocal read
+            if not read:
+                # Git is read only when a task is to be judged, and once a pass.
+                ahead[:len(running)] = [with_changes(store, t) for t in running]
+                read = True
+
         for task in store.queued_in(lane["repo"]):
             if len(running) + mine >= MAX_PARALLEL:
                 break
             if running or mine:
                 if not parallel:
                     break
-                if task["parallel"] is None:
-                    if not read:
-                        # Git is read only when a task is to be judged, and once a pass.
-                        ahead[:len(running)] = [with_changes(store, t) for t in running]
-                        read = True
-                    settled = by_surfaces(task, ahead)
-                    decision = settled or decide(task, ahead)
-                    store.set_parallel(task["id"], decision.parallel, decision.reason)
-                    store.add_event(task["id"], "dispatch_decided", parallel=decision.parallel,
-                                    reason=decision.reason, behind=_behind(decision, ahead),
-                                    ahead=[t["id"] for t in ahead], by="surfaces" if settled else "haiku")
-                    if decision.cost_usd:
-                        store.update_task(task["id"], cost_usd=(task["cost_usd"] or 0) + decision.cost_usd)
-                    task = {**task, "parallel": int(decision.parallel)}
+                task = _judged(store, task, ahead, decide, read_changes)
                 if not task["parallel"]:
                     ahead.append(task)
                     continue

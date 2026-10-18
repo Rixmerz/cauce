@@ -596,8 +596,7 @@ def run(
     # attempt, resumable, instead of leaving it `running` under a process that is about to exit.
     no_worktree: str | None = None
     writes = the_plan.kind not in READ_ONLY_KINDS
-    declared_read_only = the_plan.kind not in _BUILDS and bool(
-        _READ_ONLY.search(task.get("body") or task.get("title") or ""))
+    declared_read_only = declares_read_only(the_plan.kind, task.get("body") or task.get("title") or "")
     if not options.verify and options.run_verify and writes and not declared_read_only:
         # A workflow step with no kind of its own was classified into one that writes:
         # the run's check is its check.
@@ -1003,6 +1002,11 @@ _READ_ONLY = re.compile(
 #: Kinds whose work is the change itself: whatever their text says is read-only,
 #: they write. Every misreading of a task as read-only was one of these.
 _BUILDS = frozenset({"feature", "implement", "refactor", "docs"})
+
+
+def declares_read_only(kind: str | None, text: str) -> bool:
+    """Whether a task's own words say it changes nothing, for a kind that is not a build."""
+    return kind not in _BUILDS and bool(_READ_ONLY.search(text))
 _PORT = re.compile(r"(?:localhost|127\.0\.0\.1):(\d{2,5})\b")
 
 

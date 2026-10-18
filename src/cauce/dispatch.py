@@ -82,6 +82,12 @@ SCHEMA = {
 }
 
 
+#: Tags the model leaked past its answer ("…as #55.</reason> </invoke>"), and a closing
+#: tag cut off at the end. A bare `<` in prose ("a < b") is no tag and stays.
+_MARKUP = re.compile(r"</?[A-Za-z][^<>]*>|</[^<>]*$")
+REASON_CHARS = 200
+
+
 @dataclass(frozen=True)
 class Decision:
     parallel: bool
@@ -168,6 +174,11 @@ def question(task: Mapping[str, Any], ahead: Sequence[Mapping[str, Any]]) -> str
     return "\n".join(lines)
 
 
+def _plain(reason: object) -> str:
+    """A reason as the board shows it: text on one line, with no markup the model leaked."""
+    return " ".join(_MARKUP.sub(" ", str(reason or "")).split())[:REASON_CHARS].rstrip()
+
+
 def decide(task: dict, ahead: Sequence[dict], **haiku_kwargs) -> Decision:
     """Never raises. Nothing ahead means nothing to conflict with, and no call."""
     if not ahead:
@@ -175,7 +186,7 @@ def decide(task: dict, ahead: Sequence[dict], **haiku_kwargs) -> Decision:
     out, cost, failure = ask_haiku(SYSTEM_PROMPT, SCHEMA, question(task, ahead), **haiku_kwargs)
     if out is None or not isinstance(out.get("parallel"), bool):
         return Decision(False, f"waits its turn: {failure or 'the model answered outside the schema'}", cost)
-    reason = " ".join(str(out.get("reason") or "").split())[:200]
+    reason = _plain(out.get("reason"))
     return Decision(out["parallel"], reason or ("independent" if out["parallel"] else "may conflict"), cost)
 
 

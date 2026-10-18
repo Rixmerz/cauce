@@ -237,6 +237,150 @@ def test_surfaces_that_clash_name_the_task_they_wait_for(store: Store):
     assert decided["by"] == "surfaces" and decided["behind"] == running["id"] and not decided["parallel"]
     assert dispatch.waiting(store, store.get_task(clash["id"])).startswith(f"waits for #{running['id']}: ")
 
+def _writes_ahead(store: Store, text: str = "add migration 3 to the schema") -> dict:
+    running = store.enqueue(text, repo="r", cwd="/x", options={"kind": "feature"})
+    store.claim(running["id"])
+    return running
+
+
+def test_reading_work_runs_beside_writing_work_without_asking_haiku(store: Store):
+    """A review, refute or recheck step of a workflow changes no file and holds no
+    checkout: Haiku read the goal embedded in its text ("adds migration 3") as what
+    the step does, and queued it behind the build for an hour."""
+    _writes_ahead(store)
+    reads = {
+        "review": store.enqueue("Review: add migration 3 to the schema", repo="r", cwd="/x",
+                                options={"kind": "review-routine"}),
+        "refute": store.enqueue("Refute: add migration 3 to the schema", repo="r", cwd="/x",
+                                options={"kind": "review-critical", "ledger": {"role": "refute"}}),
+        "explore": store.enqueue("Where is the schema migrated?", repo="r", cwd="/x", options={"kind": "explore"}),
+        "plan": store.enqueue("Plan migration 4", repo="r", cwd="/x", options={"kind": "plan"}),
+    }
+
+    def no(task, ahead):
+        raise AssertionError(f"Haiku must not be asked about #{task['id']}: it reads only")
+
+    picked = flow.runnable(store, "r", parallel=True, decide=no)
+    # Within MAX_PARALLEL: the build plus two readers; the rest wait for a slot, undecided.
+    assert [t["id"] for t in picked] == [reads["review"]["id"], reads["refute"]["id"]]
+    for name in ("review", "refute"):
+        row = store.get_task(reads[name]["id"])
+        assert row["parallel"] == 1 and row["parallel_reason"] == "reads only: runs beside writing work"
+    assert store.get_task(reads["explore"]["id"])["parallel"] is None
+
+
+def test_a_text_that_declares_itself_read_only_reads_unless_it_is_a_build(store: Store):
+    _writes_ahead(store)
+    audit = store.enqueue("Read-only audit: list the call sites of the importer. Change nothing.",
+                          repo="r", cwd="/x")
+    tagged = store.enqueue("#feature read-only: add the flag", repo="r", cwd="/x")
+    built = store.enqueue("Read-only audit of the importer", repo="r", cwd="/x", options={"kind": "feature"})
+    asked = []
+
+    def decide(task, ahead):
+        asked.append(task["id"])
+        return dispatch.Decision(False, "writes", 0.0)
+
+    picked = flow.runnable(store, "r", parallel=True, decide=decide)
+    assert [t["id"] for t in picked] == [audit["id"]]
+    assert "reads only" in store.get_task(audit["id"])["parallel_reason"]
+    # A kind that builds writes whatever its text says, by tag or by option: judged as ever.
+    assert asked == [tagged["id"], built["id"]]
+
+
+def test_a_task_is_read_by_its_kind_from_the_options_or_from_the_column():
+    assert flow.reads_only({"options": '{"kind": "plan"}', "body": "x"})
+    assert flow.reads_only({"options": "not json", "kind": "explore", "body": "x"})
+    assert not flow.reads_only({"options": "not json", "kind": "feature", "body": "x"})
+    assert not flow.reads_only({"options": None, "body": "add migration 3", "title": "t"})
+    assert flow.reads_only({"options": None, "body": None, "title": "Read-only audit: list the importers"})
+
+
+def test_the_serial_setting_still_holds_reading_work_behind_running_work(store: Store):
+    _writes_ahead(store)
+    store.enqueue("Review the change", repo="r", cwd="/x", options={"kind": "review-routine"})
+    assert flow.runnable(store, "r", parallel=False, decide=_never) == []
+
+
+def test_a_decision_made_before_the_rule_does_not_hold_a_reader(store: Store):
+    """Steps queued behind a build with Haiku's "no" already recorded start now."""
+    _writes_ahead(store)
+    held = store.enqueue("Recheck the fix", repo="r", cwd="/x", options={"kind": "review-routine"})
+    store.set_parallel(held["id"], False, "migration 4 depends on migration 3's numbering")
+    assert [t["id"] for t in flow.runnable(store, "r", parallel=True, decide=_never)] == [held["id"]]
+    row = store.get_task(held["id"])
+    assert row["parallel"] == 1 and row["parallel_reason"] == "reads only: runs beside writing work"
+
+
+def test_a_writer_held_behind_a_build_starts_when_only_readers_are_left(store: Store):
+    """Readers run for an hour beside builds: a writer a "no" held behind the build
+    must not go on waiting for a reader that writes nothing."""
+    build = _writes_ahead(store)
+    review = store.enqueue("Review the change", repo="r", cwd="/x", options={"kind": "review-routine"})
+    store.claim(review["id"])
+    held = store.enqueue("add a flag to the importer", repo="r", cwd="/x", options={"kind": "implement"})
+    store.set_parallel(held["id"], False, "touches the schema the build changes")
+    later = store.enqueue("rename the importer", repo="r", cwd="/x", options={"kind": "implement"})
+    asked = []
+
+    def decide(task, ahead):
+        asked.append((task["id"], [t["id"] for t in ahead]))
+        return dispatch.Decision(False, "renames what the flag uses", 0.0)
+
+    # The build still runs: both wait, and the next writer is judged against writers alone.
+    assert flow.runnable(store, "r", parallel=True, decide=decide) == []
+    assert asked == [(later["id"], [build["id"], held["id"]])]
+    store.update_task(build["id"], status="done")
+    assert [t["id"] for t in flow.runnable(store, "r", parallel=True, decide=_never)] == [held["id"]]
+    row = store.get_task(held["id"])
+    assert row["parallel"] == 1 and row["parallel_reason"] == "nothing that writes runs or waits ahead of it"
+
+
+def test_a_text_the_run_classifies_as_a_build_writes_whatever_its_words(store: Store):
+    """With no kind of its own a task gets the one `classify` would give it without the
+    model: asking for a change makes it `implement`, and a text no rule reads is one too."""
+    audit = "Read-only audit: list the importers and fix nothing"
+    unruled = "the importer drops rows when the batch is empty"
+    assert not flow.reads_only({"options": None, "body": audit})
+    assert not flow.reads_only({"options": None, "body": unruled})
+    assert flow.reads_only({"options": None, "body": "Read-only audit: list the call sites of the importer"})
+    _writes_ahead(store)
+    asked = []
+
+    def decide(task, ahead):
+        asked.append(task["id"])
+        return dispatch.Decision(False, "writes", 0.0)
+
+    first, second = (store.enqueue(t, repo="r", cwd="/x") for t in (audit, unruled))
+    assert flow.runnable(store, "r", parallel=True, decide=decide) == []
+    assert asked == [first["id"], second["id"]]
+
+
+def test_a_writing_task_is_never_judged_against_reading_work(store: Store):
+    build = _writes_ahead(store)
+    review = store.enqueue("Review the change", repo="r", cwd="/x", options={"kind": "review-routine"})
+    write = store.enqueue("add a flag to the importer", repo="r", cwd="/x", options={"kind": "implement"})
+    asked = []
+
+    def decide(task, ahead):
+        asked.append((task["id"], [t["id"] for t in ahead]))
+        return dispatch.Decision(False, "touches the schema #1 changes", 0.0)
+
+    picked = flow.runnable(store, "r", parallel=True, decide=decide)
+    assert [t["id"] for t in picked] == [review["id"]]
+    # The reader runs ahead of it, and is no conflict: only the build is put to the model.
+    assert asked == [(write["id"], [build["id"]])]
+    assert store.get_task(write["id"])["parallel"] == 0
+
+
+def test_behind_nothing_but_reading_work_a_writing_task_has_nothing_to_conflict_with(store: Store):
+    reading = store.enqueue("Review the change", repo="r", cwd="/x", options={"kind": "review-routine"})
+    store.claim(reading["id"])
+    write = store.enqueue("add a flag to the importer", repo="r", cwd="/x", options={"kind": "implement"})
+    assert [t["id"] for t in flow.runnable(store, "r", parallel=True, decide=_never)] == [write["id"]]
+    row = store.get_task(write["id"])
+    assert row["parallel"] == 1 and row["parallel_reason"] == "nothing that writes runs or waits ahead of it"
+
 
 def test_never_more_than_the_parallel_cap(store: Store, monkeypatch):
     monkeypatch.setattr(flow, "MAX_PARALLEL", 2)

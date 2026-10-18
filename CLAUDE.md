@@ -306,7 +306,13 @@ yields the default kind, not a guess.
 - Tests run with `CAUCE_LIVESPEC=off` and an empty `CLAUDE_CONFIG_DIR`; a
   test that wants livespec builds the fixture index in `tests/livespec_fixture.py`.
 - A dispatch decision fails closed: no answer from Haiku means the task
-  waits. It is made once and kept on the task with its reason. Tests run with
+  waits. It is made once and kept on the task with its reason. A task that will
+  not write (`matrix.READ_ONLY_KINDS`, or text `orchestrate.declares_read_only`
+  reads as read-only; with no kind yet, the one `classify` gives it without the
+  model, a build when no rule reads it) is never put to Haiku: it runs beside
+  running work, and is no conflict for a writing task, which is judged against
+  the writing work ahead of it alone. A reason is kept as plain text on one
+  line. Tests run with
   `CAUCE_PARALLEL=off`, `CAUCE_AUTOWORK=off` and `CAUCE_NAMES=off`; a test
   that wants them passes a fake `decide`, `start` or `popen`.
 - A session belongs to the `.cauce/` in its own directory or up to the top of

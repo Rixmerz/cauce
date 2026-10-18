@@ -71,6 +71,23 @@
   title was cut with an ellipsis. It is now cut at the last whole word that
   fits (not on a dangling "and", "to", "of"…), and the full text goes first
   in the commit body.
+- **Reading work no longer waits behind writing work.** The review, refute and
+  recheck steps of a `feature` or `bugfix` run sat queued behind other runs'
+  builds for an hour or more: the dispatcher asked Haiku about them like any
+  task, and Haiku read the goal their text carries ("adds migration 3") as what
+  the step does. A queued task that will not write (a reading kind from
+  `matrix.READ_ONLY_KINDS`, or text `orchestrate` reads as read-only when its
+  kind is no build; a task with no kind has the one `classify` gives it without
+  the model, a build when no rule reads it) now starts beside running work with
+  no question, up to `MAX_PARALLEL`, recorded as "reads only: runs beside
+  writing work"; one a "no" had already held starts too. A writing task is
+  judged against the writing work ahead of it only, never against a reading
+  task, and with none ahead it starts without a call, a "no" given against
+  work that has ended included.
+- **A dispatch reason is plain text.** A reason the model closed with markup
+  ("…as #55.</reason> </invoke>") reached the board as typed; `dispatch.decide`
+  now strips tags and keeps one line of at most 200 characters. An answer
+  whose `parallel` is not a boolean still makes the task wait.
 - **A resume after its worker died continues where it was.** A run whose
   process died mid-attempt (a machine restart, a killed session) left its
   worktree registered with the attempt's uncommitted work, and `cauce resume`

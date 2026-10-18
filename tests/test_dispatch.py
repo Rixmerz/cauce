@@ -174,6 +174,28 @@ def test_surfaces_that_may_touch_never_start_side_by_side_whatever_the_others_de
     assert flow.by_surfaces(web, [api]).parallel
 
 
+def test_the_reason_is_plain_text_on_one_line():
+    """Markup the model leaked past its answer ("…as #55.</reason> </invoke>") reached the board."""
+    leaked = "it changes the schema\n#55 migrates.</reason>\n</invoke>"
+    got = dispatch.decide(NEW, [RUNNING], runner=_runner(_reply(parallel=False, reason=leaked)))
+    assert got.reason == "it changes the schema #55 migrates." and "\n" not in got.reason
+    for raw, plain in (("touches #1.</reason> </invoke>", "touches #1."),
+                       ("<reason>touches #1</reason>", "touches #1"),
+                       ("touches #1.</rea", "touches #1."),
+                       ("a < b and b > a", "a < b and b > a"),
+                       ("</invoke>", "may conflict")):
+        got = dispatch.decide(NEW, [RUNNING], runner=_runner(_reply(parallel=False, reason=raw)))
+        assert got.reason == plain, raw
+    long = dispatch.decide(NEW, [RUNNING], runner=_runner(_reply(parallel=True, reason="word " * 100)))
+    assert len(long.reason) <= 200 and not long.reason.endswith(" ")
+
+
+def test_a_leaked_answer_that_is_not_a_boolean_still_fails_closed():
+    for parallel in ("true", "true</parallel>", 1, None):
+        got = dispatch.decide(NEW, [RUNNING], runner=_runner(_reply(parallel=parallel, reason="fine")))
+        assert got.parallel is False and got.reason.startswith("waits its turn"), parallel
+
+
 def test_one_dispatcher_per_repository(tmp_path):
     with dispatch.hold(tmp_path, "r") as mine:
         assert mine and dispatch.held(tmp_path, "r") and not dispatch.held(tmp_path, "other")
