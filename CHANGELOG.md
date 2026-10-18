@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A resume after its worker died continues where it was.** A run whose
+  process died mid-attempt (a machine restart, a killed session) left its
+  worktree registered with the attempt's uncommitted work, and `cauce resume`
+  failed on it with `already exists`. The resume now continues in that
+  worktree, keeping what the dead attempt wrote.
+
 ## [0.19.0] - 2026-10-16
 
 ### Added
