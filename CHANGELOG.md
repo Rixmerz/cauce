@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-18
+
 ### Added
 
 - **Compaction at the right moment.** At the end of every turn cauce decides,
