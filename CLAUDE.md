@@ -205,7 +205,9 @@ yields the default kind, not a guess.
   persists or by progress (every blocker of the round before fixed and a new
   one a probe shows), at most `MAX_CORRECTIONS`; a new finding after progress
   that is only read from the code goes with the pass, recorded, never a
-  blocker; what is left at the cap stops the task as `review`. A verifier that
+  blocker; what is left at the cap stops the task as `review`, and so does a ladder that runs
+  out (or the attempt limit) while only the verifier's blockers stand on work that
+  passed its own check: kept on its branch, never `failed`. A verifier that
   cannot decide keeps the pass and says so. It is told why it runs (the
   risk's reasons) and, for a fix, to show the failure at the base and gone; it
   has its own turns (`VERIFIER_TURNS`), never the worker's raised ones, and is

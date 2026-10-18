@@ -56,7 +56,7 @@ from cauce import services as services_mod
 from cauce import surfaces as surfaces_mod
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify, narrow
-from cauce.escalate import MAX_TURNS_CEILING, Attempt, Decision, Failure, Move, decide
+from cauce.escalate import MAX_TURNS_CEILING, Attempt, Decision, Failure, Move, decide, review_reason
 from cauce.matrix import DEFAULT_TURNS, READ_ONLY_KINDS, Cell, ladder_for, turns_for
 from cauce.store import Store, home
 
@@ -75,6 +75,7 @@ _FINAL_STATUS = {
     Move.EXHAUSTED: "failed",
     Move.BLOCKED: "blocked",
     Move.CONVERGED: "failed",
+    Move.REVIEW: "blocked",
 }
 
 #: Endings that wait on a person, not on the task being rewritten: the work done
@@ -675,9 +676,16 @@ def run(
             # A try after the network dropped is no attempt at the work: it does not
             # count toward the ceiling, and its own streak is bounded in `decide`.
             if sum(not a.network for a in attempts) >= options.max_attempts:
-                report.stop = stops.Stop("attempts", f"{options.max_attempts} attempts without a pass",
-                                         attempt=len(attempts))
-                report.status, report.summary = "failed", report.stop.reason
+                if attempts and attempts[-1].blockers:
+                    # The work passed its own check; only the independent check's blockers stand.
+                    report.stop = stops.Stop(
+                        "review", review_reason(attempts[-1], f"the limit of {options.max_attempts} attempts"),
+                        attempt=len(attempts), account=findings_mod.text(attempts[-1].blockers)[:2000])
+                    report.status, report.summary = "blocked", report.stop.reason
+                else:
+                    report.stop = stops.Stop("attempts", f"{options.max_attempts} attempts without a pass",
+                                             attempt=len(attempts))
+                    report.status, report.summary = "failed", report.stop.reason
                 break
             _check_cancel(store, task["id"])
             selection = _equip(_with_role(caps.select(registry, the_plan.kind, failed_before=bool(attempts),
@@ -752,13 +760,14 @@ def run(
                 store.add_event(task["id"], "outside_surfaces", seq=nth, paths=strayed[:50],
                                 surfaces=list(options.surfaces), undone=workspace is not None)
             review_stop = None
+            open_blockers: tuple[dict[str, str], ...] = ()
             mark = time.monotonic()
             worker_cost = result.cost_usd
             if result.passed and verifying:
                 so_far = list(isolate.changed(workspace)) if workspace else sorted({*changed, *result.changed_paths})
                 risk_mod.of_change(the_plan.risk, so_far if (workspace or base_commit) else None)
                 if so_far and risk_mod.needs_verifier(the_plan.risk, cheap=_cheap(cell)):
-                    result, review_stop, ledger, corrections = _independent_check(
+                    result, review_stop, ledger, corrections, open_blockers = _independent_check(
                         result, text=text, kind=the_plan.kind, cell=cell, spec=spec, workdir=workdir,
                         base=base_commit, changed=so_far, risk=the_plan.risk, ledger=ledger,
                         corrections=corrections, launcher=launcher, store=store, task_id=task["id"], nth=nth,
@@ -801,7 +810,8 @@ def run(
                             **({"refused_but_written": list(result.overcome)} if result.overcome else {}))
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
-                              transient=result.transient, findings=result.findings, network=result.network)
+                              transient=result.transient, findings=result.findings, network=result.network,
+                              blockers=open_blockers)
             attempts.append(attempt)
             subject = result.commit or subject
             if result.report is not None:
@@ -845,7 +855,9 @@ def run(
                 report.stop = stops.Stop(
                     _cause(decision, attempt), decision.reason, denied=attempt.denied, allow=attempt.allow,
                     attempt=seq,
-                    next_cell=decision.cell.label if decision.cell else None, account=result.summary[:2000])
+                    next_cell=decision.cell.label if decision.cell else None,
+                    account=(findings_mod.text(attempt.blockers) if decision.move is Move.REVIEW
+                             else result.summary)[:2000])
                 break
             if decision.move is Move.NEXT_MODEL and workspace is not None:
                 # A new model starts from the base, not the bet that lost; what the
@@ -1069,6 +1081,8 @@ def _cause(decision: Decision, attempt: Attempt) -> str:
         return "approval"
     if decision.move is Move.CONVERGED:
         return "converged"
+    if decision.move is Move.REVIEW:
+        return "review"
     if decision.move is Move.REPLAN:
         if attempt.failure in (Failure.SPEC_BUG, Failure.ARCHITECTURE_BUG):
             return "spec"
@@ -1278,7 +1292,8 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
                        workdir: Path, base: str | None, changed: Sequence[str], risk: risk_mod.Risk,
                        ledger: dict[str, Mapping[str, str]], corrections: int, launcher: Launcher, store: Store,
                        task_id: int, nth: int, say: Callable[[str], None], outgrew: bool = False
-                       ) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int]:
+                       ) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int,
+           tuple[dict[str, str], ...]]:
     """A pass checked again by a worker that verifies the request, not the work.
 
     The first problems it finds earn one correction. A later round is earned by
@@ -1331,7 +1346,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     if not decided:
         say(f"cauce: #{task_id} the independent check could not decide; the pass stands")
         return dataclasses.replace(result, cost_usd=cost, evidence=result.evidence + "\n\n[independent check "
-                                   f"inconclusive: {verdict.summary[:300]}]"), None, ledger, corrections
+                                   f"inconclusive: {verdict.summary[:300]}]"), None, ledger, corrections, ()
     if not blockers:
         if carried:
             say(f"cauce: #{task_id} the earlier problems are fixed; {len(carried)} new one(s) read from the code "
@@ -1340,8 +1355,8 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
                 result, cost_usd=cost, findings=(*result.findings, *carried),
                 evidence=result.evidence + "\n\n[independent check: the problems it found before are fixed. "
                 f"New, read from the code and not shown by a probe, for a person to read:\n"
-                f"{findings_mod.text(carried)[:1500]}]"), None, ledger, corrections
-        return dataclasses.replace(result, cost_usd=cost), None, ledger, corrections
+                f"{findings_mod.text(carried)[:1500]}]"), None, ledger, corrections, ()
+        return dataclasses.replace(result, cost_usd=cost), None, ledger, corrections, ()
     found = findings_mod.text(blockers)
     failure = Failure.TURNS_EXHAUSTED if outgrew else Failure.CODE_BUG
     room = " (the worker had run out of turns before checking its own work)" if outgrew else ""
@@ -1354,7 +1369,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
             summary=f"the independent check found {len(blockers)} problem(s) this change caused{room}: "
                     f"{result.summary}",
             evidence=f"The independent check found:\n{found}\n\nIts probes:\n{verdict.evidence[-1500:]}")
-        return failed, None, ledger, corrections + 1
+        return failed, None, ledger, corrections + 1, tuple(blockers)
     why = (f"after {MAX_CORRECTIONS} corrections it still shows problems the earlier checks had not"
            if progress else f"the same problem survived {MAX_CORRECTIONS} corrections" if len(still) == len(blockers)
            else f"after {MAX_CORRECTIONS} corrections a problem it found before is still there, beside new ones")
@@ -1363,7 +1378,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     failed = dataclasses.replace(result, passed=False, failure=failure, cost_usd=cost,
                                  summary=f"the independent check still finds problems{room}: {result.summary}",
                                  evidence=found)
-    return failed, stop, ledger, corrections
+    return failed, stop, ledger, corrections, tuple(blockers)
 
 
 def brief(

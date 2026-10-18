@@ -4,6 +4,24 @@
 
 ### Fixed
 
+- **Work that passed its own check is no longer discarded when the independent
+  check's corrections use up the ladder.** A feature started at opus/high
+  passed the repository's `--verify` twice; the verifier found a different
+  blocker each round, each correction took a rung, and at the top of the ladder
+  the task ended `failed`: branch and worktree deleted, 25 files and the money
+  gone, before `MAX_CORRECTIONS` could stop it as `review`. When the last
+  attempt passed its own check and only the verifier's blockers stand, running
+  out of ladder (no stronger cell, two cells agreeing with no model above, or
+  the attempt limit) now stops the task as `review`: its work kept on its
+  branch, unverified (`Cauce-Verified: no`), the stop saying the ladder ran out
+  with the verifier's blockers open and its account naming them, resumed like
+  any `review` stop (its first check is given those blockers). A correction
+  still climbs the ladder as it did: a blocker the check shows in work that
+  passed is a missed defect, which is the shallow kind (more effort, or a
+  stronger model when a cheap cell cannot find it); it is not evidence that the
+  task is wrong, so running out of rungs is not a failure (`Move.REVIEW`,
+  `Decision.because` says so). A `failed` whose attempts never passed a check
+  still drops its work.
 - **A resume after its worker died continues where it was.** A run whose
   process died mid-attempt (a machine restart, a killed session) left its
   worktree registered with the attempt's uncommitted work, and `cauce resume`
