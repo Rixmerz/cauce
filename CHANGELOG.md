@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A step split into more parts than the dispatcher's limit no longer
+  stalls** (#52). A detached dispatcher that stops after its 10 starts with
+  work still queued in its lane hands that work to a fresh one once its lock
+  is released; a person's own `cauce work --max N` keeps its bound.
+- **A workflow step's task is named by its run's goal** (#55): `[feature#3
+  build] Migrate the MCP apps…` in `cauce tasks`, the board and the endings,
+  instead of the template step's title on every run.
+- **What cauce's own check writes is said and marked** (#54). The files a
+  `--verify` run writes in the worktree (compared before and after it) are a
+  `check_rewrote` event, a line in the report beside `changed (from git)` and
+  a `Cauce-Check-Output: N files` trailer on the kept commit.
+- **Generated files get no review of their own** (#53). A blind review leaves
+  out the files `.gitattributes` marks `linguist-generated` or `-diff` and the
+  ones a step's own check wrote: they are no area of a review by area, count
+  no lines toward its threshold, and the review is told they are generated.
+
+### Added
+
+- **`--after` work in another repository** (#56). Task and run numbers are
+  global, so `--after N` already held work behind a task or run of another
+  repository; released, it now starts on its own repository's base (nothing
+  crosses), is given the other checkout to read (`add_dirs`, kept for every
+  step of a held run), and its plan names the branch and the git commands
+  that read it there.
+
 ## [0.21.0] - 2026-10-19
 
 ### Fixed

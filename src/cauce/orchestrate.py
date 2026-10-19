@@ -227,6 +227,8 @@ class Report:
     impact: list[str] = field(default_factory=list)
     #: What the task changed, from git — never from the worker.
     changed: list[str] = field(default_factory=list)
+    #: Files cauce's own check wrote in the worktree (`isolate.rewritten`): committed as its output, and said.
+    check_output: list[str] = field(default_factory=list)
     #: Whether it worked in a worktree; outside one, its changes are in the checkout.
     isolated: bool = False
     #: Why it stopped short of a pass, and who made that call.
@@ -274,6 +276,11 @@ class Report:
             more = len(self.changed) - 8
             shown = ", ".join(self.changed[:8]) + (f" and {more} more" if more > 0 else "")
             lines.append(f"changed (from git): {shown or 'nothing'}")
+            if self.check_output:
+                more = len(self.check_output) - 8
+                wrote = ", ".join(self.check_output[:8]) + (f" and {more} more" if more > 0 else "")
+                lines.append(f"written by the check itself ({len(self.check_output)}, committed as its output; "
+                             f"a check that rewrites tracked files may give other files in your checkout): {wrote}")
         if self.branch and self.status == "done":
             lines.append(f"branch {self.branch} — review it, then merge it; your checkout has none of it until then")
         elif self.branch:
@@ -884,11 +891,20 @@ def run(
             # the work had no room to finish, and room is what the next attempt gets.
             outgrew = result.failure is Failure.TURNS_EXHAUSTED
             mark = time.monotonic()
+            # What cauce's own check writes in the worktree is the check's output, not the
+            # worker's: it is committed with the work, and said, since a check that rewrites
+            # tracked files may not give the same files on the person's checkout.
+            before = isolate.fingerprint(workspace.path) if workspace is not None and options.verify else None
             if result.passed and options.verify:
                 result = _verified(result, options.verify, workdir)
             elif _settles(result, options.verify) and (
                     isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
                 result = _settled(result, options.verify, workdir)
+            if before is not None and workspace is not None and \
+                    (wrote := isolate.rewritten(before, isolate.fingerprint(workspace.path))):
+                report.check_output = sorted({*report.check_output, *wrote})
+                store.add_event(task["id"], "check_rewrote", command=options.verify, n=len(wrote),
+                                files=list(wrote[:200]))
             check_s = time.monotonic() - mark
             strayed = surfaces_mod.outside(options.surfaces, result.changed_paths)
             if strayed:
@@ -1049,7 +1065,8 @@ def run(
                 workspace, keep=report.status in KEEPS_WORK or outgrew,
                 message=isolate.message(task["id"], title=commit_title(task), subject=subject,
                                         summary=attempts[-1].summary if attempts else "",
-                                        status="done" if report.status == "done" else report.status),
+                                        status="done" if report.status == "done" else report.status,
+                                        check_output=len([p for p in report.check_output if p in report.changed])),
             )
             if report.branch and report.status == "done":
                 # The fix that worked is anchored to the commit a person can check.

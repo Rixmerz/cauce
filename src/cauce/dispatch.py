@@ -294,7 +294,7 @@ def start(repo_dir: Path, root: Path, scope: str, *, popen: Callable[..., object
             return False
         log = root / "work" / "dispatcher.log"
         with open(log, "a") as out:
-            popen([sys.executable, "-m", "cauce", "work", "--repo", str(repo_dir)], cwd=str(repo_dir),
+            popen([sys.executable, "-m", "cauce", "work", "--repo", str(repo_dir), "--detached"], cwd=str(repo_dir),
                   env=child_env(), stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                   start_new_session=True)
         return True

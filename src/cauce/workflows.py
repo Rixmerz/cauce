@@ -32,7 +32,7 @@ import os
 import re
 import signal
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -834,6 +834,8 @@ def _areas(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: 
     if not base or base == options["origin"] or not run["cwd"] or not Path(run["cwd"]).is_dir():
         return None
     changed = isolate.numstat(Path(run["cwd"]), options["origin"], base)
+    made = _generated(store, run, [path for _, path in changed or ()])
+    changed = [(n, path) for n, path in changed or () if path not in made]
     if not changed or sum(n for n, _ in changed) <= AREA_REVIEW_LINES:
         return None
     declared = {(_part(t) or {}).get("id"): list(json.loads(t.get("options") or "{}").get("surfaces") or ())
@@ -858,6 +860,29 @@ def _areas(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: 
     every = [path for _, path in changed]
     return [{**area, "spec": area["spec"] or area["paths"], "lines": lines,
              "others": [p for p in every if p not in area["paths"]]} for area in groups.values()]
+
+
+def _generated(store: Store, run: Mapping[str, Any], paths: Sequence[str]) -> set[str]:
+    """The changed paths no review reads: the ones the repository marks generated
+    (`isolate.generated`) and the ones a step's own check wrote (its `check_rewrote`
+    events). They are still changed files, listed as such; no model decides it."""
+    if not paths:
+        return set()
+    wrote = {f for task in store.run_tasks(run["id"]) for e in store.events_of(task["id"], "check_rewrote")
+             for f in e["data"].get("files") or ()}
+    return {p for p in paths if p in wrote} | isolate.generated(Path(run["cwd"]), paths)
+
+
+def _generated_note(store: Store, run: Mapping[str, Any], origin: str, base: str) -> str:
+    """What a blind review of a change is told of the generated files in it, or ""."""
+    changed = [path for _, path in isolate.numstat(Path(run["cwd"]), origin, base) or ()]
+    made = sorted(_generated(store, run, changed))
+    if not made:
+        return ""
+    more = f" and {len(made) - AREA_OTHERS} more" if len(made) > AREA_OTHERS else ""
+    return (f"{len(made)} of the changed files are generated (marked so in `.gitattributes`, or written by the "
+            f"run's own check): {', '.join(made[:AREA_OTHERS])}{more}. They are no review's: judge the sources "
+            "that produce them, never their contents.")
 
 
 def _area_brief(area: Mapping[str, Any], origin: str) -> str:
@@ -910,6 +935,14 @@ def _part_brief(part: Mapping[str, Any]) -> str:
                      "keep these names, types and interfaces exactly as written, so the parts join:\n"
                      + _quoted(part["contract"]))
     return "\n\n".join(lines)
+
+
+def _headline(inputs: Mapping[str, str]) -> str:
+    """What a step's task is called after its bracket: the first line of the run's goal (its
+    first input when it has none), so the runs of one workflow read apart on every list; the
+    bracket already says which step it is."""
+    text = str(inputs.get("goal") or next(iter(inputs.values()), "") or "")
+    return next((line.strip() for line in text.splitlines() if line.strip()), "")
 
 
 def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Mapping[str, Any],
@@ -965,6 +998,10 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
     base = (joining or {}).get("base") or _base(store, run, defn, step["id"], latest)
     if area is not None:
         body += "\n\n" + _area_brief(area, options["origin"])
+    if str(step.get("kind") or "").startswith("review") and not step.get("ledger") and options.get("origin") \
+            and base and base != options["origin"] and run["cwd"] and Path(run["cwd"]).is_dir() \
+            and (made := _generated_note(store, run, options["origin"], base)):
+        body += "\n\n" + made
     elif base and options.get("origin") and base != options["origin"]:
         body += ("\n\nEverything this workflow changed so far is in this checkout: "
                  f"`git diff {options['origin'][:12]}` shows it.")
@@ -977,6 +1014,8 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         "max_turns": step.get("max_turns"),
         "allow_tools": options.get("allow_tools") or None, "allow_approval": options.get("allow_approval") or None,
         "base": base, "step_role": step.get("role"),
+        # Another repository a run queued after work there reads (`after.reads`).
+        "add_dirs": options.get("add_dirs") or None,
         "surfaces": list(part["surfaces"]) if split and part else step.get("surfaces"),
         "part": ({k: part[k] for k in ("id", "n", "of", "plan")} if split and part else
                  {"id": area["id"], "n": area["n"], "of": area["of"], "area": True} if area else None),
@@ -991,7 +1030,8 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
                              repo=run["repo"], cwd=run["cwd"], session_id=run["session_id"],
                              options=json.dumps(opts),
                              title=f"[{defn['name']}#{run['id']} {step['id']}"
-                                   f"{'/' + part['id'] if part and (split or area) else ''}] {step['title']}"[:200],
+                                   f"{'/' + part['id'] if part and (split or area) else ''}] "
+                                   f"{_headline(inputs) or step['title']}"[:200],
                              workflow_run=run["id"], workflow_step=step["id"])
     if empty:
         # Nothing to decide, fix or join: the step passes without a worker, and no session is told of it.

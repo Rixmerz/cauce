@@ -1030,7 +1030,7 @@ def test_a_plan_of_one_part_is_today_s_single_step(git_repo, store: Store, kicks
     flow.work(store, runner=_parts_runner([planned(one, ""), ok("built"), ok("polished")], []))
     _plan, build, _polish = store.run_tasks(started["id"])
     opts = json.loads(build["options"])
-    assert "part" not in opts and "surfaces" not in opts and build["title"].endswith("] build")
+    assert "part" not in opts and "surfaces" not in opts and build["title"] == "[fanned#1 build] the orders view"
     # The request is read as today's step reads it: its items are the step's criteria.
     assert "Build your part of: the orders view\n- it pages by 50" in build["body"]
     assert "Build it as one" in build["body"]
@@ -1213,6 +1213,41 @@ def test_a_large_change_with_no_parts_is_reviewed_by_top_level_folder(git_repo, 
     again = workflows.start(store, "wide", git_repo, {"goal": "the import"})
     flow.work(store, runner=runner)
     assert len([t for t in store.run_tasks(again["id"]) if t["workflow_step"] == "review"]) == 1
+
+
+def test_generated_files_get_no_review_of_their_own(git_repo, store: Store, kicks, monkeypatch):
+    from .conftest import git
+
+    monkeypatch.setattr(workflows, "AREA_REVIEW_LINES", 1)
+    (git_repo / ".gitattributes").write_text("dist/** linguist-generated\n")
+    git(git_repo, "add", ".gitattributes")
+    git(git_repo, "commit", "-qm", "mark dist generated")
+    _save({"name": "built", "inputs": ["goal"], "steps": [
+        {"id": "build", "prompt": "Build {goal}", "kind": "implement"},
+        {"id": "review", "prompt": "Review, without changing any file, {goal}", "kind": "review-routine"}]},
+        git_repo)
+
+    def launch(spec):
+        if "Edit" not in spec.disallowed_tools:
+            for rel in ("src/a.py", "dist/app.js", "out/bundle.js"):
+                (spec.target_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+                (spec.target_dir / rel).write_text("x\n")
+        return ok()
+
+    def runner(text, where, store, options, **kw):
+        return run(text, where, store, options, registry={}, launcher=launch, classifier=kind("implement"),
+                   adapters=[], **kw)
+
+    started = workflows.start(store, "built", git_repo, {"goal": "the export"})
+    build = store.run_tasks(started["id"])[0]
+    # What the build's own check wrote is generated too.
+    store.add_event(build["id"], "check_rewrote", command="make", n=1, files=["out/bundle.js"])
+    flow.work(store, runner=runner)
+    reviews = [t for t in store.run_tasks(started["id"]) if t["workflow_step"] == "review"]
+    # dist/ and out/ hold only generated files: one review is left, which is told of them.
+    assert len(reviews) == 1 and "part" not in json.loads(reviews[0]["options"])
+    assert "2 of the changed files are generated" in reviews[0]["body"]
+    assert "dist/app.js" in reviews[0]["body"] and "out/bundle.js" in reviews[0]["body"]
 
 
 def test_the_cli_makes_a_step_fan_out_and_one_join_the_parts(git_repo, kicks, capsys, monkeypatch):

@@ -44,6 +44,8 @@ UNVERIFIED = "Cauce-Verified: no"
 UNVERIFIED_BEFORE = "(unverified"
 #: The trailer that ties a commit to its task.
 TASK_TRAILER = "Cauce-Task"
+#: How many files of the kept commit cauce's own check wrote (`fingerprint`, `rewritten`).
+CHECK_OUTPUT_TRAILER = "Cauce-Check-Output"
 #: How long a commit's subject and the summary under it may be.
 SUBJECT_CHARS, BODY_CHARS = 72, 700
 #: The person's own permission rules for the project, never committed. Copied,
@@ -301,6 +303,40 @@ def changed(ws: Workspace) -> tuple[str, ...]:
     return tuple(sorted(p for p in paths if p and not _linked(ws, p) and not is_artifact(p)))
 
 
+def fingerprint(path: Path) -> dict[str, str] | None:
+    """Every file of a worktree that differs from its HEAD (tracked or not), with the blob
+    git would make of it ("" when deleted): taken before and after cauce runs a check, to
+    tell what the check itself wrote. None when git cannot say."""
+    try:
+        status = _git(path, "--no-optional-locks", "status", "--porcelain", "-uall", "-z", strip=False)
+    except (IsolationError, OSError):
+        return None
+    entries = status.split("\0")
+    paths: list[str] = []
+    skip = False
+    for entry in entries:
+        if skip:  # the old name of a rename
+            skip = False
+            continue
+        if len(entry) > 3:
+            paths.append(entry[3:])
+            skip = entry[0] in "RC"
+    present = [p for p in paths if (path / p).is_file() and not (path / p).is_symlink()]
+    proc = subprocess.run(["git", "hash-object", "--stdin-paths"], cwd=str(path), input="\n".join(present),
+                          capture_output=True, text=True, check=False) if present else None
+    if proc is not None and proc.returncode != 0:
+        return None
+    blobs = dict(zip(present, proc.stdout.split(), strict=False)) if proc is not None else {}
+    return {p: blobs.get(p, "") for p in paths if not is_artifact(p)}
+
+
+def rewritten(before: Mapping[str, str] | None, after: Mapping[str, str] | None) -> tuple[str, ...]:
+    """The files a check wrote: their content after it differs from before it."""
+    if before is None or after is None:
+        return ()
+    return tuple(sorted(p for p in {*before, *after} if before.get(p) != after.get(p)))
+
+
 def changed_so_far(root: Path, repo_dir: Path, task_id: int, started: Mapping[str, Any]) -> tuple[str, ...] | None:
     """What a running task changed so far in its worktree, against the base its
     attempt started from (`started` is its `attempt_started` event's data, which
@@ -393,7 +429,8 @@ def _subject_of(text: str) -> str:
     return kept.rstrip(" ,;:-–—(") or cut
 
 
-def message(task_id: int, *, title: str, subject: str = "", summary: str = "", status: str = "done") -> str:
+def message(task_id: int, *, title: str, subject: str = "", summary: str = "", status: str = "done",
+            check_output: int = 0) -> str:
     """The commit message of a task's work, as a project's history reads it: the
     change in one line (the worker's, else the task's title), what it does, and
     cauce's trailers: the task, and whether it was verified."""
@@ -413,6 +450,8 @@ def message(task_id: int, *, title: str, subject: str = "", summary: str = "", s
         body = body if len(body) <= BODY_CHARS else body[:BODY_CHARS - 1].rsplit(" ", 1)[0] + "…"
         parts.append(textwrap.fill(body, 72))
     trailers = [f"{TASK_TRAILER}: #{task_id}"]
+    if check_output:
+        trailers.append(f"{CHECK_OUTPUT_TRAILER}: {check_output} file{'s' if check_output != 1 else ''}")
     if status != "done":
         trailers.append(f"{UNVERIFIED} ({status})")
     parts.append("\n".join(trailers))
@@ -465,6 +504,23 @@ def numstat(repo_dir: Path, start: str, end: str) -> list[tuple[int, str]] | Non
         if path and not is_artifact(path):
             rows.append(((int(added) if added.isdigit() else 0) + (int(deleted) if deleted.isdigit() else 0), path))
     return rows
+
+
+def generated(repo_dir: Path, paths: Sequence[str]) -> set[str]:
+    """The paths the repository marks as generated in its `.gitattributes`: the standard
+    `linguist-generated`, or `-diff`. Empty when git cannot say."""
+    if not paths:
+        return set()
+    proc = subprocess.run(["git", "check-attr", "-z", "--stdin", "linguist-generated", "diff"], cwd=str(repo_dir),
+                          input="\0".join(paths), capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        return set()
+    fields = proc.stdout.split("\0")
+    out = set()
+    for path, attr, value in zip(fields[0::3], fields[1::3], fields[2::3], strict=False):
+        if (attr == "linguist-generated" and value in ("set", "true")) or (attr == "diff" and value == "unset"):
+            out.add(path)
+    return out
 
 
 def head(repo_dir: Path, ref: str) -> str:

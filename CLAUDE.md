@@ -42,7 +42,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
 | `src/cauce/habits.py` | mining sequences per repository (and the ones several repositories share), recipes for the brief, and approval-gated habit hooks |
 | `src/cauce/usage.py` | tokens per model from session transcripts and their subagents' (counted to the delegation that started each), spend by model and cell, and what a task's or a session's own turns cost |
-| `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, as many at once as the machine's level allots each lane (`pick`), the stale sweep |
+| `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, as many at once as the machine's level allots each lane (`pick`), the stale sweep; a detached dispatcher at its task limit hands queued work to a fresh one |
 | `src/cauce/capacity.py` | how many workers this machine runs at once: the level, kept in the cauce home, that starts at what the machine holds and rises or halves on the API's and the machine's own signals, and its allotment to the lanes by reserve and lending; stdlib |
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
 | `src/cauce/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
@@ -371,6 +371,10 @@ yields the default kind, not a guess.
 - A worker that stopped before its own check (refused, or out of turns) is
   checked with `--verify` by cauce when the task changed something;
   a red check is evidence for the next brief, never a pass.
+- What cauce's own check writes in a worktree (`isolate.fingerprint` before
+  and after it) is committed with the work and said: a `check_rewrote` event,
+  the report's line beside `changed (from git)`, and a `Cauce-Check-Output`
+  trailer. It is never a verdict.
 - An adopted neighbour is read, never written: the livespec index is opened
   `mode=ro`, and the index is built only through livespec's own CLI. Absent
   and unreadable are different states and neither stops a run. The one
@@ -543,7 +547,9 @@ yields the default kind, not a guess.
   that work passes (a run, when its last step does), in one write
   transaction, onto the branch it kept (a run's last step's), or the base when
   that branch is merged into it; its plan says which, and nothing is merged or
-  rebased. Work that stops short releases nothing: what waits stays held and
+  rebased. Work that waited on work in another repository (numbers are global)
+  starts on its own base, is given that checkout to read (`add_dirs`), and its
+  plan names the branch kept there (`after.reads`). Work that stops short releases nothing: what waits stays held and
   says how it stopped, until a resume of it passes; `cauce dismiss` or a
   cancel takes held work off the queue, each with its `stops.Stop`. A chain
   is released one link at a time. The session that started a run hears of it once —
@@ -603,7 +609,10 @@ yields the default kind, not a guess.
   top-level folders) runs as one blind review per area, side by side, each
   given the whole request, its area's diff and the names of the other files
   changed. Their findings add up in the one ledger; refute, fix and recheck
-  run once on it. Below the threshold it is one review.
+  run once on it. Below the threshold it is one review. Generated files (marked
+  `linguist-generated` or `-diff` in `.gitattributes`, or written by a step's
+  own check) are no area and count no lines; the review is told they are
+  generated, never asked to read them.
 - A worker never starts cauce work (`run`, `resume`, `work`, `queue add`,
   `workflow run|retry`, `investigate start` refuse under `CAUCE_WORKER_TASK`),
   and forks are off inside it (`CLAUDE_CODE_FORK_SUBAGENT=0`): what is left

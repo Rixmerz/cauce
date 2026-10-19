@@ -180,6 +180,20 @@ def test_a_claimed_pass_the_check_rejects_is_a_failure(git_repo, store):
     assert "checked by running: test -f proof.txt" in prompts[0]
 
 
+def test_files_the_check_itself_writes_are_said_and_marked_on_the_commit(git_repo, store):
+    script = Script(ok(), write="src.py")
+    report = run("build it", git_repo, store, Options(verify="mkdir -p out && date +%N > out/bundle.js"),
+                 registry={}, launcher=script, classifier=kind("implement"))
+    assert report.status == "done" and report.check_output == ["out/bundle.js"]
+    assert "written by the check itself (1, committed as its output" in report.text()
+    assert store.last_event(report.task_id, "check_rewrote")["data"]["files"] == ["out/bundle.js"]
+    assert "Cauce-Check-Output: 1 file" in git(git_repo, "log", "-1", "--format=%B", report.branch)
+    # a check that writes nothing says nothing
+    quiet = run("build it again", git_repo, store, Options(verify="true"), registry={},
+                launcher=Script(ok(), write="other.py"), classifier=kind("implement"))
+    assert quiet.check_output == [] and "written by the check" not in quiet.text()
+
+
 def test_a_check_that_passes_keeps_the_pass(git_repo, store):
     script = Script(ok())
     report = run("x", git_repo, store, Options(verify="true"), registry={}, launcher=script,

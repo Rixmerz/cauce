@@ -214,7 +214,7 @@ def test_start_launches_a_detached_dispatcher_without_the_session_s_identity(tmp
     started = []
     assert dispatch.start(tmp_path, tmp_path, "r", popen=lambda argv, **kw: started.append((argv, kw)))
     argv, kw = started[0]
-    assert argv[1:] == ["-m", "cauce", "work", "--repo", str(tmp_path)] and kw["start_new_session"]
+    assert argv[1:] == ["-m", "cauce", "work", "--repo", str(tmp_path), "--detached"] and kw["start_new_session"]
     assert "CAUCE_SESSION_ID" not in kw["env"] and str(Path(dispatch.__file__).parents[1]) in kw["env"]["PYTHONPATH"]
 
     def broken(*a, **kw):
@@ -311,6 +311,18 @@ def test_a_second_dispatcher_for_the_same_repository_steps_aside(git_repo, capsy
     assert "already runs" in capsys.readouterr().out
     assert cli.main(["work", "--repo", str(git_repo)]) == 0
     assert "nothing runnable" in capsys.readouterr().out
+
+
+def test_a_detached_dispatcher_at_its_limit_hands_queued_work_to_a_fresh_one(git_repo, monkeypatch, capsys):
+    from cauce.flow import WorkReport
+
+    monkeypatch.setattr(cli.flow, "work", lambda store, **kw: WorkReport([], "started 10 tasks", at_limit=True))
+    handed = []
+    monkeypatch.setattr(dispatch, "start_lane", lambda store, root, key: handed.append(key) or True)
+    assert cli.main(["work", "--repo", str(git_repo)]) == 0
+    assert handed == []  # a person's own `cauce work` keeps its bound
+    assert cli.main(["work", "--repo", str(git_repo), "--detached"]) == 0
+    assert handed == [str(git_repo.resolve())] and "a fresh dispatcher takes the rest" in capsys.readouterr().out
 
 
 def test_a_run_or_queue_typed_in_a_session_is_that_session_s(git_repo, monkeypatch, capsys):
