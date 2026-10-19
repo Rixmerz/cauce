@@ -658,15 +658,17 @@ def _went_past(store: Store, ended: Mapping) -> list[str]:
 
 
 def _stopped_text(store: Store, tasks: list[dict]) -> str:
-    """The session's runs that stopped for a person, with why and what clears each:
-    the session can tell the person, rather than guess or rerun them."""
-    lines = ["cauce: tasks of this session that stopped for a person (tell them; do not resume unasked):"]
+    """The session's runs that stopped, with why and what continues each: the session
+    carries every one, asking the person only for what only they can grant."""
+    lines = ["cauce: tasks of this session that stopped; each is yours to carry (decide it, or ask the person "
+             "here for what only they can grant):"]
     for t in tasks:
         stop = stops.view(store, t)
         lines.append(f"#{t['id']} [{t['status']}] {t['title']}")
         if stop:
+            whose = "ask the person for it here" if stops.waits_on(store, t) == "person" else "yours to decide"
             lines.append(f"  stopped by {stop['who']}: {stop['reason'][:300]}")
-            lines.append(f"  {stop['todo']}" + (f": {stop['next']}" if stop["next"] else ""))
+            lines.append(f"  next ({whose}): {stop['todo']}" + (f": {stop['next']}" if stop["next"] else ""))
     return "\n".join(lines)
 
 
