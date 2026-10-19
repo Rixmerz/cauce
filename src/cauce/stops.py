@@ -196,7 +196,9 @@ def for_person(stop: Stop | None, *, tried: int = 0, limit: int | None = None) -
 def waits_on(store: Any, task: dict[str, Any]) -> str:
     """"person" or "orchestrator": who a task that stopped waits on."""
     attempts = store.attempts(task["id"])
-    dropped = sum(1 for e in store.events_of(task["id"], "moved") if (e["data"] or {}).get("network"))
+    # A try the network or the machine's load cost is no attempt at the work, as `cli` counts it.
+    dropped = sum(1 for e in store.events_of(task["id"], "moved")
+                  if (e["data"] or {}).get("network") or (e["data"] or {}).get("load"))
     return "person" if for_person(of(store, task), tried=len(attempts) - dropped,
                                   limit=UNATTENDED_ATTEMPTS) else "orchestrator"
 

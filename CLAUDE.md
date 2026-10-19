@@ -53,6 +53,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/runtime.py` | the Node a project declares (`.nvmrc`, `.node-version`, `engines.node`), or its installed dependencies need when it declares none, found among nvm's and put first on a worker's PATH |
 | `src/cauce/allow.py` | a refused call → the `--allow` rules that let it through, one per program; suggestions only, nothing is granted |
 | `src/cauce/stops.py` | why a task stopped, who made the call, and the command that continues it; one account on its `finished` event; light, the hooks and the UI read it |
+| `src/cauce/orchestrator.py` | which session orchestrates a project (`.cauce/orchestrator.json`): claimed by sending work, handed on by a relay, a clear in its place or going quiet, with the work the old one sent; stdlib |
 | `src/cauce/project.py` | a project's `.cauce/` folder: enrollment (only enrolled projects show in the UI) and `sessions.json`, the session names; stdlib, no git call |
 | `src/cauce/workspaces.py` | a folder of repositories that is one project (`cauce workspace`): declared in the person's cauce home, read by `repo.key` and `project.find`; a member's files are named with it in front in the notes |
 | `src/cauce/naming.py` | Haiku names a session, started detached by the Stop hook; a name a person wrote is never replaced |
@@ -311,7 +312,11 @@ yields the default kind, not a guess.
   it is judged once against the window before it (pass-first, attempts, time
   and cost per point); one that made pass-first worse by more than
   `standards.REVERT_MARGIN` is reverted one step back, as a change of its own
-  that names it, and a revert is never judged. Changes, verdicts and the daily
+  that names it, and a revert is never judged. The first settle on a store
+  sizes the tasks that ended without points (`standards.backfill`: the plan's
+  pure estimate from their text, kind and recorded risk, marked as sized after
+  the fact) and calibrates every repository with sized endings at once; a task
+  that ends with no size is sized when its ending is settled. Changes, verdicts and the daily
   snapshots are append-only: the database refuses an update or a delete.
 - The evolution history takes one snapshot a day, at the first ending of a new
   day in the person's time zone or with `cauce evolution --snapshot`, of what
@@ -395,7 +400,9 @@ yields the default kind, not a guess.
   project cauce resolved. Tests run with `CAUCE_ENGRAM=off`; a test that wants
   it passes a fake `http`.
 - An index livespec failed to build is not tried again until the checkout
-  moves (`Livespec.last_failure`); the plan says so once per task.
+  moves (`Livespec.last_failure`); the plan says so once per task. A release
+  a plugin names that uv reports missing from the registry is remembered
+  (`Livespec.unpublished`) and the pinned one runs instead.
 - Every livespec tool a hint names is in `adapters/livespec.TOOLS`, checked
   against the release in `MINIMUM_VERSION`. Check a name against livespec
   before adding it, and bump `PINNED` only after checking the new release.
@@ -421,8 +428,11 @@ yields the default kind, not a guess.
   limit, and halves, never below 1, on a rate limit or an overloaded API
   (read from the CLI's own result, `launch.api_limit`, never from a check's
   output), on a worker the machine starved (a CLI or a `run-queued` process
-  killed, a full disk) or on free memory or disk under its constant; after a
-  rate limit it does not rise before the retry-after. `max_parallel` (`auto`
+  killed, a full disk), on free memory or disk under its constant, or on a
+  load average over `LOAD_PER_CPU_HIGH` per CPU; after a rate limit it does
+  not rise before the retry-after. A level the machine lowered (memory or
+  disk readings, load, a full disk) goes back once the machine is `clear()`
+  for `RECOVER_AFTER_S` and work waits, without waiting for a round. `max_parallel` (`auto`
   or a number) is the person's ceiling, and the level adapts under it. Each
   change is a `level_changed` event, on the task that caused it or on task 0
   when the machine did. The lanes share the level by reserve and lending: with
@@ -507,6 +517,30 @@ yields the default kind, not a guess.
   written by the PostToolUse fast path.
 - Nothing in cauce writes to a settings file except `cauce habits install`,
   run by a person.
+- A check whose failures are mostly the test runners' own timeout lines
+  (`launch.check_timed_out`) after a claimed pass is `environment` with
+  `load`: the level halves on it, the same cell goes again after each of
+  `escalate.LOAD_WAITS`, and such a try counts toward no attempt ceiling and
+  is no dead end; one that persists stops as `load`, its work kept.
+- A dispatcher never dies on a full disk (`flow.disk_full`): it waits and
+  tries again with its lock and work kept. The hooks (SessionStart, Stop)
+  start a dispatcher for a lane with startable queued work and none holding
+  its lock (`dispatch.revive`, autowork on), never a GET.
+- A project names one orchestrator (`cauce.orchestrator`), in its `.cauce/`,
+  never in a repository's files: the first session that sends work, one that
+  claims it, a relay from it, the next session that starts where it ended, or
+  one that sends work after it went quiet (`STALE_HOURS`). The role brings
+  the work the old session sent (`Store.hand_over`), and the orchestrator
+  adopts what quiet sessions left in its own project only. A worker and a
+  terminal never take it. A stop waits on the person only for what only they
+  clear (`stops.PERSON_ONLY`: a refused command's rule, an approval, a gone
+  directory; or past `stops.UNATTENDED_ATTEMPTS`) and a branch to merge;
+  every other stop is the orchestrator's to decide, and the board, the status
+  line, the `tasks` tool and the endings say whose each is. The orchestrator
+  gains no power: it still resumes `--unattended`, and a dismissal it types is
+  recorded as its call, never as the person's.
+- A worker never inherits the host's session id (`CLAUDE_CODE_SESSION_ID`),
+  and an attempt never keeps the host's session as its own.
 - Problems and fixes are global; notes belong to one project and are never
   read from another (a workspace is one project). A note is written by a passing worker (`learned`), by
   Haiku from a session's conversation (every few turns, when the scribe finds
@@ -632,6 +666,9 @@ yields the default kind, not a guess.
   definition an active run uses (in any project) is held: a change becomes a
   pending revision that applies when the last such run ends or is cancelled,
   unless a person passes `--now`; removing it needs `--force`.
+- A step's `verify` gets the run's inputs as its prompt does (never a brace
+  after `$`); one left holding a `{name}` refuses the run before it starts,
+  `--dry-run` included.
 - A step's `memory` is read when the step is queued, never written. A note
   comes only from the run's own project; a run with a note or problem that
   cannot be read there does not start, a topic with no note yet is said when
@@ -649,7 +686,10 @@ yields the default kind, not a guess.
   Installed neighbours (`plugins.KNOWN`) are read from the person's Claude
   Code plugin cache or PATH, never a repository; a registry entry of the same
   name wins, and `cauce config plugins off` leaves them out. Every tool a
-  neighbour's hint names is in its `tools`. rastro runs with `--routines=off`
+  neighbour's hint names is in its `tools`. A registry entry that shadows a
+  neighbour and sets neither `touches` nor `measures` takes the neighbour's
+  (`capabilities._inherit`); what a registry shadows or fetches unpinned is
+  said once at SessionStart, never refused. rastro runs with `--routines=off`
   and behind `mcp_guard`, which enforces what its hint asks: no browser
   profile, no saved routine, writes and uploads to loopback hosts only, every
   call in its own session. A policy that matters is enforced there, never only

@@ -206,6 +206,7 @@ def test_a_pinned_start_teaches_no_cell(store: Store):
 # --- the cadence: after every few endings in a repository, from hooks or the dispatcher -------------
 
 def test_a_calibration_runs_after_every_few_endings_of_a_repository(store: Store):
+    store.set_meta(standards.BACKFILL_KEY, "done")  # a store that settled before
     many(store, standards.CALIBRATE_EVERY - 1, ("sonnet/medium", 0, "code_bug", "next_model"), ("opus/high", 1))
     many(store, 2, ("sonnet/medium", 0, "code_bug", "next_model"), ("opus/high", 1), repo="other")
     finished(store, ("sonnet/medium", 1), options={"investigation": {"project": "x"}})  # not the person's work
@@ -332,7 +333,34 @@ def test_a_task_without_points_has_no_band(store: Store):
     assert standards.calibrate(store, "r", now=NOW) == [] and store.standards() == []
 
 
+def test_the_first_settle_sizes_past_work_and_calibrates_from_it(store: Store):
+    """Standards waited for five endings with points, and tasks that ended before cauce
+    kept points never counted: a store full of history calibrated nothing."""
+    old = many(store, standards.MIN_SAMPLES + 1, ("sonnet/medium", 0, "code_bug", "next_model"), ("opus/high", 1),
+               points=None)
+    no_kind = finished(store, ("sonnet/medium", 1), points=None, kind=None)
+    planned = store.events_of(old[0], "planned")[0]
+    store._conn.execute("UPDATE events SET data = ? WHERE id = ?",
+                        (json.dumps({**planned["data"], "risk": {"tier": "high", "reasons": ["x"]}}), planned["id"]))
+    found = standards.settle(store, now=NOW)
+    assert found["ended"] == len(old) + 1 and len(found["calibrated"]) == 1
+    assert store.get_task(old[0])["points"] != store.get_task(old[1])["points"]  # the risk its plan recorded
+    sized = store.get_task(old[1])
+    assert sized["points"] and sized["points_why"].startswith(standards.AFTER_THE_FACT)
+    assert store.get_task(no_kind)["points"] is None
+    done = json.loads(store.meta(standards.BACKFILL_KEY))
+    assert done["sized"] == len(old) and done["version"] == __version__
+    # Once: the next settle neither sizes again nor calibrates without new endings.
+    assert standards.settle(store, now=NOW)["calibrated"] == []
+    # A task that ends later with no size is sized when its ending is settled.
+    late = finished(store, ("sonnet/medium", 1), points=None, at=NOW)
+    standards.settle(store, now=NOW)
+    assert store.get_task(late)["points"]
+    assert standards.backfill(store, ids=[999999]) == 0
+
+
 def test_two_settles_at_once_calibrate_once(store: Store, monkeypatch):
+    store.set_meta(standards.BACKFILL_KEY, "done")
     many(store, standards.CALIBRATE_EVERY, ("sonnet/medium", 0, "code_bug", "next_model"), ("opus/high", 1))
     other = Store(store.path)
     real = store.endings_after

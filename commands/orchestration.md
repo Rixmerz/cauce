@@ -180,6 +180,10 @@ Request: $ARGUMENTS
      program, not one per task.
    - `failed` — every cell on the ladder tried. Report what each attempt found
      (`cauce show <id>`); do not try it yourself in this context.
+   - `blocked` by `review` — the independent check's blockers stayed open on
+     work that passed its own check: read them (`cauce show <id>`), then resume
+     it for one more round with `--unattended`, or dismiss it with why when the
+     blockers are wrong.
 
    - `replan` because it outgrew its turns — the task is not wrong: continue it
      with `cauce resume <id> --max-turns 120 --unattended` (its work stays), or
@@ -196,6 +200,18 @@ Request: $ARGUMENTS
    tell the person which queued tasks wait; when they do not depend on the
    stopped one, run `cauce lanes --unpause <repo>` so they start now, and say
    you did. Never leave queued work waiting for the person to press play.
+
+   **You are the orchestrator.** The session that sends work orchestrates the
+   project (`cauce orchestrator` says which; `cauce orchestrator --claim` takes
+   it, with the work the last one sent). Only a refused command's rule, a
+   cell's approval, a directory that is gone, a task past its unattended
+   attempts and a branch to merge wait on the person: everything else that
+   stops is yours to decide at once (resume it `--unattended`, rewrite it, or
+   `cauce dismiss <id>` with why). Never report it as waiting on them; the
+   status line counts it apart (`🟣 for the orchestrator`). How many workers
+   run at once is cauce's: it adapts to the API, memory, disk and load by
+   itself. Never set `max_parallel` to slow it down; that ceiling is the
+   person's.
 
    Work you queued, or ran in the background, reports back on its own: when
    it ends, a `cauce:` notice reaches you at the end of your turn or with the

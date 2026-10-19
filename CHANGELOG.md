@@ -2,6 +2,73 @@
 
 ## [Unreleased]
 
+### Added
+
+- **A project knows its orchestrator.** `.cauce/orchestrator.json` names the
+  session that orchestrates the project: the first one that sends work, one
+  that claims it (`cauce orchestrator --claim`), a relay from it, the next
+  session that starts where it ended (a `/clear`, a terminal opened again),
+  or one that sends work once it has not been seen for 6 hours. The role
+  brings the work the old session sent, open or ended unheard, and the
+  orchestrator adopts what sessions gone quiet left in its project, so their
+  endings reach it. `cauce orchestrator` shows who holds it.
+- **What waits is the orchestrator's unless only the person can clear it.**
+  A refused command (its rule), a cell's approval, a directory that is gone,
+  a task past the unattended attempts and a branch to merge wait on the
+  person; every other stop is the orchestrator's to resume, rewrite or
+  dismiss. The status line says `🟠 N waits on you · 🟣 N for the
+  orchestrator`, the board puts the orchestrator's under its own heading,
+  the `tasks` tool and the endings notice say whose each one is, and
+  `cauce dismiss` typed in a session is recorded as the orchestrator's call.
+- **The standards calibrate from the work already done.** Tasks that ended
+  before cauce kept points counted for nothing, so a store full of history
+  calibrated nothing. The first settle sizes them with the same pure estimate
+  a plan makes (from their text, kind and the risk their plan recorded,
+  marked as sized after the fact) and calibrates every repository with sized
+  endings at once; later, a task that ends with no size is sized when its
+  ending is settled.
+
+### Fixed
+
+- **Workers no longer take the host's session as their own.** In the app's
+  cloud sessions every worker inherited `CLAUDE_CODE_SESSION_ID`, wrote its
+  transcript under the person's session id and recorded it on each attempt;
+  the variable is dropped from a worker's environment, and a session id equal
+  to the host's is never kept.
+- **A workflow step's own check gets the run's inputs.** `verify: "{check}"`
+  ran as `/bin/sh: {check}` (exit 127) and stopped work that had passed. The
+  inputs are filled in as in the prompt; `${VAR}`, `{a,b}` and `{}` stay the
+  shell's. A check still holding a `{name}` refuses the run at start and in
+  `--dry-run`, naming the input to pass.
+- **The dispatcher survives a full disk.** A full store or disk makes it wait
+  and try again with its work and lock kept; the level halves once it can
+  write. The SessionStart and Stop hooks start a dispatcher for any lane whose
+  queued work has none (`dispatch.revive`, with autowork on), so a queue no
+  longer sits still until someone runs `cauce work`.
+- **The workers come back when the machine does.** A level lowered for
+  memory, disk or load goes back to where it was once the machine has been
+  clear for a minute and work waits, without waiting for a round of tasks to
+  end. A load average over 2 per CPU halves the level like low memory.
+- **Tests that time out under load are not a code bug.** When most of what
+  failed in cauce's check, after the worker's own run passed, are the test
+  runner's timeout lines, the attempt is the machine's: the level halves, the
+  same cell goes again after 60 s and 180 s with no attempt spent, and it
+  stops as `load` with its work kept if the timeouts persist.
+- **A capabilities.json entry named after a neighbour no longer hides 0.24's
+  capabilities by touch.** An entry that sets neither `touches` nor
+  `measures` takes the neighbour's. SessionStart says once what the registry
+  shadows and which servers it fetches with no fixed version
+  (`npx pkg@latest`); the example pins `@playwright/mcp`.
+- **A livespec plugin naming an unpublished release no longer fails every
+  index.** cauce remembers the release uv cannot find, and the index and
+  workers run the pinned release; the refresh says so.
+- **A resume after a full disk mends its branch.** A kept branch whose newest
+  commit cannot be read goes back to the newest readable commit in its
+  reflog, the lost commit's files staying in the worktree. With none, the
+  resume stops as `environment` with the cause in one line, the branch kept.
+- `cauce config max_parallel N` says it is a ceiling over a level that adapts
+  by itself.
+
 ## [0.24.1] - 2026-10-19
 
 ### Fixed

@@ -62,6 +62,11 @@ GOES_ON = frozenset({"retry", "more_turns"})
 FIELDS = ("start_cell", "start_turns")
 #: The last ending a settle read, and each repository's endings since its last calibration.
 SEEN_KEY = "standards:seen"
+#: Set once every task that ended before it had points was sized and every repository with
+#: history calibrated: the standards start from the work already done, not from zero.
+BACKFILL_KEY = "standards:backfilled"
+#: How a size given after the fact says so.
+AFTER_THE_FACT = "sized after it ended, from its text"
 
 
 @dataclass(frozen=True)
@@ -290,6 +295,38 @@ def calibrate(store: Store, repo: str, *, now: datetime | None = None) -> list[d
     return changes
 
 
+def backfill(store: Store, ids: Sequence[int] | None = None) -> int:
+    """Give a size to tasks that ended without one (planned before cauce kept points, or by
+    a plan that failed before it sized them): the same pure estimate a plan makes
+    (`points.of_request`), from the task's text, kind and the risk its plan recorded (read
+    again from its text when it recorded none), marked as given after the fact. A task with
+    no kind stays out. How many were sized."""
+    from cauce import points as points_mod
+    from cauce import risk as risk_mod
+
+    if ids is None:
+        rows = store.ended_tasks(limit=100000)
+    else:
+        rows = []
+        for task_id in ids:
+            task = store.get_task(task_id)
+            planned = store.events_of(task_id, "planned") if task else []
+            if task:
+                rows.append({**task, "planned_data": (planned[0]["data"] or {}) if planned else {}})
+    sized = 0
+    for row in rows:
+        if row.get("points") or not row.get("kind") or row.get("source") not in ("cauce", "queue"):
+            continue
+        recorded = (row["planned_data"] or {}).get("risk") or {}
+        risk = (risk_mod.Risk(str(recorded.get("tier") or "medium"), list(recorded.get("reasons") or []))
+                if recorded else risk_mod.of_request(row.get("body") or "", row["kind"]))
+        score = points_mod.of_request(row.get("body") or row.get("title") or "", row["kind"], risk)
+        store.update_task(int(row["id"]), points=score.points,
+                          points_why=", ".join([AFTER_THE_FACT, *score.reasons]))
+        sized += 1
+    return sized
+
+
 def _cell(label: str | None) -> Cell | None:
     return Cell.parse(label) if _label(label) else None
 
@@ -340,6 +377,17 @@ def settle(store: Store, *, now: datetime | None = None) -> dict[str, Any]:
     calibrate twice. Runs in the hooks and the dispatcher, never in a GET."""
     calibrated: list[dict[str, Any]] = []
     judged: list[dict[str, Any]] = []
+    if not store.meta(BACKFILL_KEY):
+        # The first settle on a store with history: what ended before points existed is
+        # sized, and every repository with sized endings calibrates now, not after five more.
+        with store.immediate():
+            if not store.meta(BACKFILL_KEY):
+                sized = backfill(store)
+                for repo in sorted({t.repo for t in ended(store) if t.repo and t.band}):
+                    calibrated += calibrate(store, repo, now=now)
+                    store.set_meta(f"standards:since:{repo}", "0")
+                store.set_meta(BACKFILL_KEY, json.dumps({"at": _stamp(now), "sized": sized,
+                                                         "version": __version__}))
     if not store.endings_after(int(store.meta(SEEN_KEY) or 0)):
         # Nothing ended since: a turn's end takes no write lock for nothing.
         return {"ended": 0, "calibrated": calibrated, "judged": judged}
@@ -352,6 +400,8 @@ def settle(store: Store, *, now: datetime | None = None) -> dict[str, Any]:
         for e in endings:
             if e["repo"] and '"investigation"' not in (e["options"] or ""):
                 repos[e["repo"]].add(int(e["task_id"]))
+        # One that ended with no size (a plan that failed before it sized it) is sized now.
+        backfill(store, ids=[int(e["task_id"]) for e in endings])
         for repo, ids in sorted(repos.items()):
             judged += judge(store, repo, now=now)
             count = int(store.meta(f"standards:since:{repo}") or 0) + len(ids)
