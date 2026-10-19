@@ -430,8 +430,96 @@ def _commit(ws: Workspace, message: str, *extra: str) -> None:
     _git(ws.path, *_identity(ws.path), "commit", "-q", "--no-verify", *extra, "-m", message)
 
 
+def join(ws: Workspace, branches: Sequence[str], *, message: Callable[[str], str]) -> dict[str, Any]:
+    """Merge `branches` into the task's worktree one by one, in order, each a merge commit
+    (`message(branch)`), until one conflicts: that merge is undone, and its conflicting
+    files named. {merged, conflict, files, left}: what is left starts with the one that
+    conflicted. Raises when a merge fails for another reason (a branch that is gone)."""
+    merged: list[str] = []
+    for n, branch in enumerate(branches):
+        proc = subprocess.run(["git", *_identity(ws.path), "merge", "--no-ff", "--no-verify", "--no-edit", "-m",
+                               message(branch), f"refs/heads/{branch}"],
+                              cwd=str(ws.path), capture_output=True, text=True, check=False)
+        if proc.returncode == 0:
+            merged.append(branch)
+            continue
+        files = _git(ws.path, "diff", "--name-only", "--diff-filter=U", check=False).splitlines()
+        _git(ws.path, "merge", "--abort", check=False)
+        if not files:
+            said = " ".join((proc.stderr or proc.stdout).split())[:300]
+            raise IsolationError(f"git merge {branch} failed: {said}")
+        return {"merged": merged, "conflict": branch, "files": sorted(files), "left": list(branches[n:])}
+    return {"merged": merged, "conflict": None, "files": [], "left": []}
+
+
+def numstat(repo_dir: Path, start: str, end: str) -> list[tuple[int, str]] | None:
+    """Each file changed from `start` to `end` with its changed lines (added and removed; a
+    binary file counts none), tool artifacts aside. None when git cannot say."""
+    proc = subprocess.run(["git", "diff", "--numstat", "--no-renames", start, end, "--"], cwd=str(repo_dir),
+                          capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        return None
+    rows = []
+    for line in proc.stdout.splitlines():
+        added, deleted, path = [*line.split("\t", 2), "", ""][:3]
+        if path and not is_artifact(path):
+            rows.append(((int(added) if added.isdigit() else 0) + (int(deleted) if deleted.isdigit() else 0), path))
+    return rows
+
+
 def head(repo_dir: Path, ref: str) -> str:
     return _git(repo_dir, "rev-parse", ref)
+
+
+def current_branch(repo_dir: Path) -> str | None:
+    """The branch checked out in `repo_dir`; None when HEAD is detached or git cannot say."""
+    return _git(repo_dir, "symbolic-ref", "--quiet", "--short", "HEAD", check=False) or None
+
+
+def behind(repo_dir: Path, tip: str, base: str) -> dict[str, Any] | None:
+    """How far `tip` is behind the branch `base` as it is now: the commits `base` gained
+    since they parted, and the files both changed since. Read only: nothing is merged or
+    rebased. None when git cannot say (the branch is gone, no commit in common)."""
+    now = _git(repo_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{base}^{{commit}}", check=False)
+    fork = _git(repo_dir, "merge-base", tip, now, check=False) if now else ""
+    if not fork:
+        return None
+    ours_from, theirs_from = _synced(repo_dir, fork, tip, now)
+    count = _git(repo_dir, "rev-list", "--count", f"{theirs_from}..{now}", check=False)
+    if not count.isdigit():
+        return None
+    ours = set(_git(repo_dir, "diff", "--name-only", ours_from, tip, "--", check=False).splitlines())
+    theirs = set(_git(repo_dir, "diff", "--name-only", theirs_from, now, "--", check=False).splitlines())
+    return {"base": base, "commits": int(count), "both": sorted(ours & theirs)}
+
+
+def _synced(repo_dir: Path, fork: str, tip: str, now: str) -> tuple[str, str]:
+    """Where the branch and the base last held the same content: the newest commit of the
+    base since the fork whose tree is the tree of a commit on the branch (a squash or a
+    re-commit of work the branch already has), and that commit of the branch. The fork
+    itself when there is none: commits are not content, so a base that took in the
+    branch's own work under another commit is not ahead of it."""
+    on_tip = {}
+    for line in _git(repo_dir, "log", "--format=%H %T", f"{fork}..{tip}", check=False).splitlines():
+        sha, _, tree = line.partition(" ")
+        on_tip.setdefault(tree, sha)
+    for line in _git(repo_dir, "log", "--format=%H %T", f"{fork}..{now}", check=False).splitlines():
+        sha, _, tree = line.partition(" ")
+        if tree in on_tip:
+            return on_tip[tree], sha
+    return fork, fork
+
+
+def behind_text(found: Mapping[str, Any]) -> str | None:
+    """`behind main by 2 commits; both changed: a, b; ...`, or None when the base did not move."""
+    if not found.get("commits"):
+        return None
+    n, both = int(found["commits"]), list(found.get("both") or ())
+    text = f"behind {found['base']} by {n} commit{'' if n == 1 else 's'}"
+    if both:
+        text += ("; both changed: " + ", ".join(both[:8]) + (f" and {len(both) - 8} more" if len(both) > 8 else "")
+                 + "; a merge will conflict-check them")
+    return text
 
 
 def landed(repo_dir: Path, branch: str, paths: Sequence[str] = ()) -> bool:

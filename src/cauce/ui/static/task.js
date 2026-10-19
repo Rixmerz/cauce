@@ -1,7 +1,7 @@
 import { toast } from "./main.js";
 import { get, post } from "./net.js";
 import { stopSection } from "./stop.js";
-import { cellChip, h, kindChip, repoName, statusBadge, TURNS_TITLE, usd, when } from "./util.js";
+import { cellChip, h, kindChip, pointsChip, repoName, statusBadge, TURNS_TITLE, usd, when } from "./util.js";
 
 const drawer = () => document.getElementById("drawer");
 
@@ -138,7 +138,8 @@ export async function openTask(id, quiet = false) {
         h("h1", {}, `#${t.id} ${t.title}`),
         h("div", { class: "meta row" },
           statusBadge(t.status), h("span", {}, repoName(t.repo)),
-          kindChip(t.kind), h("span", { title: "cauce's workers" }, `workers ${usd(t.cost_usd)}`),
+          kindChip(t.kind), pointsChip(t.points, t.points_why),
+          h("span", { title: "cauce's workers" }, `workers ${usd(t.cost_usd)}`),
           t.turns_usd ? h("span", { title: TURNS_TITLE }, `turns ${usd(t.turns_usd)}`) : null,
           t.pinned ? h("span", { class: "chip" }, "pinned") : null, h("span", {}, when(t.created_at)))),
       h("div", { class: "row" }, ...actions, h("button", { onclick: close, "aria-label": "close" }, "✕"))),
@@ -151,6 +152,8 @@ export async function openTask(id, quiet = false) {
     d.plan ? h("div", { class: "section" }, h("h2", {}, "Plan"),
       d.risk ? h("div", { class: "meta" }, h("span", { class: `badge risk r-${d.risk.tier}` },
         `risk ${d.risk.tier}`), (d.risk.reasons || []).join("; ")) : null,
+      t.points ? h("div", { class: "meta" }, `points ${t.points}: ${t.points_why || "nothing says it is bigger"}`
+        + (d.realized ? ` · realized ${d.realized.points}${d.realized.reasons.length ? `: ${d.realized.reasons.join(", ")}` : ""}` : "")) : null,
       ladderPath(d.plan, d.attempts),
       h("div", { class: "meta" }, `started at ${d.plan.start}, because:`),
       h("ul", {}, (d.plan.reasons || []).map((r) => h("li", {}, r))),

@@ -26,6 +26,9 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/findings.py` | findings as records: where, what, `evidence_class`, `cause`; which block a change |
 | `src/cauce/ledger.py` | a review's findings as one frozen ledger `F1..Fn`: who decides each row (refuter, fix, re-check), two rounds, then the person |
 | `src/cauce/risk.py` | a change's tier (passive, medium, high) from its request, kind and files; only raised; no model |
+| `src/cauce/points.py` | a task's size on the Fibonacci scale, no model: the estimate when it is planned (criteria, kind, risk and its areas, files named, livespec's reach, length) and the realized size when it ends (files, lines, turns, wall time, attempts) |
+| `src/cauce/standards.py` | where a repository's tasks of each kind and size start, as measured: a standard per points band, the calibration's two rules, each change's verdict and its revert; recorded, never edited |
+| `src/cauce/evolution.py` | the evolution history: a snapshot a day per repository and kind, the report (`cauce evolution`, the UI's Evolution), and `settle`, which the hooks and the dispatcher run after work ends |
 | `src/cauce/surfaces.py` | where a task may write (`--surface`, a step's `surfaces`): checked after each attempt, and whether two tasks can never touch the same file |
 | `src/cauce/phase.py` | what a running worker is doing (exploring, implementing, checking), read from the tail of the tool-call log |
 | `src/cauce/roles_internal/` | roles cauce runs itself and no team holds: the independent `verifier`, and the `surveyor` that investigates for `/cauce:init` |
@@ -33,13 +36,16 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `engram`, `engram_write`, all on/off), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
+| `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
 | `src/cauce/habits.py` | mining sequences per repository (and the ones several repositories share), recipes for the brief, and approval-gated habit hooks |
 | `src/cauce/usage.py` | tokens per model from session transcripts and their subagents' (counted to the delegation that started each), spend by model and cell, and what a task's or a session's own turns cost |
-| `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, the stale sweep |
+| `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, as many at once as the machine's level allots each lane (`pick`), the stale sweep |
+| `src/cauce/capacity.py` | how many workers this machine runs at once: the level, kept in the cauce home, that starts at what the machine holds and rises or halves on the API's and the machine's own signals, and its allotment to the lanes by reserve and lending; stdlib |
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
+| `src/cauce/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
 | `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away |
 | `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
@@ -53,9 +59,9 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step; `svg.js` draws the workflow graphs and the project map node by node |
 | `src/cauce/compact.py` | the facts of a session (requests verbatim, failed calls, changed files), written before a compaction and put back after it; no model call |
 | `src/cauce/scribe.py` | the scribe: at every turn's end, what a session's transcript gained (requests verbatim, corrections, files written, failed calls and the one that passed after), kept in the cauce home; the thread a task the session sent gets in its brief, when the notes are due, and the relay to a fresh session; no model call |
-| `src/cauce/analysis.py` | where cauce's time and money go (`cauce stats`, the UI's Analysis): runs from `planned` to `finished`, their timed phases, attempts by cell, the session's thread in briefs, a session's own turns; read only, no model |
+| `src/cauce/analysis.py` | where cauce's time and money go (`cauce stats`, the UI's Analysis): runs from `planned` to `finished`, their timed phases (and the gaps before them: advance, pickup, spawn), attempts by cell, the session's thread in briefs, a session's own turns; read only, no model |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
-| `src/cauce/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; `workflow_cli.py` is `cauce workflow …` |
+| `src/cauce/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; a step that fans out over a plan's parts, one that joins their branches, a large change's review by area; `workflow_cli.py` is `cauce workflow …` |
 | `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
 | `src/cauce/services.py` | the servers a task needs up (`--service 'cmd@port'`): started in the task's directory, waited for, stopped with their process group when the run ends |
 | `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified |
@@ -117,7 +123,8 @@ yields the default kind, not a guess.
 
 - Effort and model are different dials. Shallow work climbs effort; a wrong
   approach or a repeated answer changes model. Do not collapse them into one
-  ladder walk.
+  ladder walk. More effort on the same model keeps the approach, and so the
+  session (below); another model never inherits it.
 - A retry is for a launch that broke (a timeout before any change, no JSON,
   an errored session); it is never an escalation. An environment the worker
   named, or a check cauce could not run, blocks at once. A refused
@@ -138,6 +145,24 @@ yields the default kind, not a guess.
 - Out of turns is room, never a bug: a finding of the independent check in
   work whose worker ran out of turns before its own check earns the same cell
   more turns, never more effort or another model, and is no dead end.
+  More turns on the same cell continue the worker's own session
+  (`claude -p --resume`, its id read from the attempt's JSON and kept on the
+  attempt) in the same worktree, told only to go on under the same result
+  contract and given the output that failed its attempt; a session is kept only in a worktree, never in a person's
+  checkout. More effort on the same model continues a fork of it
+  (`--resume <id> --fork-session --effort <new>`, the session it came from
+  kept as it was), in the same worktree, told to look deeper and given what
+  failed: the check's failing output, or the independent check's blockers in
+  a correction round (`orchestrate.continuation_note`). When it cannot be
+  continued (no id, the CLI refuses it, the worktree was reset, a different
+  model, or for more turns a different cell) the attempt starts fresh and
+  says why. The `moved` event says what the next attempt does (`continued`,
+  with `forked_from` or `resumed`, else `fresh` with why) and its
+  `attempt_finished` what it did, so `cauce stats` compares continued and
+  fresh attempts. Any other move starts fresh: a new model never inherits the
+  old one's approach (it starts from the base, the work set aside), and a
+  retry, a replan and a resume a person starts are fresh. The independent
+  check never runs in a worker's session.
 - Cost is measured and shown, never a brake: every attempt keeps what it cost
   (its own and its independent check's apart, and how much of its input the
   cache served), and the report, the board, `cauce spend` and `cauce stats`
@@ -155,7 +180,16 @@ yields the default kind, not a guess.
   kind unless a tag or `--kind` says so.
 - The plan says a task needs servers when it tells the worker to start them,
   or mentions one and its check talks to one (or it has no check), and names
-  the words that set it off: a mention is no need.
+  the words that set it off: a mention is no need. A task that mentions a
+  browser is told workers have none unless a capability gives one, its check
+  runs one (Playwright through the scripts it names), or the project's own
+  tests drive a headless one (a Playwright dependency, an `e2e` script that
+  runs it): then the plan says the check drives it.
+- A check that covers less than the repository's CI is said, never a verdict
+  and never a blocker: the plan reads each job of `.github/workflows/*.yml`
+  (its `run:` commands, the services and the env the code reads) and names in
+  one warning the jobs `--verify` leaves out, on the report too. A workflow
+  file the line reader cannot read is skipped and said once.
 - Work that stopped for a person (blocked, needs approval) is kept on its
   branch, unverified, and so is work that outgrew its turns (a `replan` for
   turns resumes with more); only `failed`, a `replan` for a wrong task and
@@ -201,7 +235,10 @@ yields the default kind, not a guess.
   leaves a row without a verdict is `inconclusive`. Open rows earn one more
   round, up to `ledger.ROUNDS`; then the run stops as `review`.
 - A risk tier is only raised, never lowered; a change that cannot be read is
-  high. A high change, or a medium one a cheap cell made, is checked by the
+  high. Its reasons are true: a word is read in its sense ("checkout" in git's,
+  `payment` as one name among others is no money until the change touches that
+  code); "parallel" is never read away, since a missed concurrency request skips
+  the verifier and an extra one only costs a check. A high change, or a medium one a cheap cell made, is checked by the
   independent verifier before it passes: another cell, read-only, given the
   request verbatim and the diff, never the worker's summary; it runs at high
   effort on the work's model (never Haiku), and keeps only the neighbours that
@@ -229,7 +266,52 @@ yields the default kind, not a guess.
 - A move explains itself: `Decision.because` is the evidence chain (what the
   attempt ended with, the rule, where it goes) and `skipped` the rungs passed
   over. A new branch in `decide` gives both; the `moved` event keeps them.
-- History may raise where a task starts, never lower it below its ladder.
+- History may raise where a task starts, never lower it below its ladder,
+  and so may it the turns it starts with: when at least
+  `orchestrate.MIN_TURN_SAMPLES` recent tasks of its kind here ran out at the
+  kind's turns and passed with more, it starts at the median those passes
+  needed (capped at `escalate.MAX_TURNS_CEILING`), and the plan says so. An
+  explicit `--max-turns` wins. A calibrated standard (below) takes the place of
+  these rules for its band, and may lower the start, never below the ladder.
+- A task's points are its size on the Fibonacci scale (1, 2, 3, 5, 8, 13),
+  estimated when it is planned by a pure function of what the plan knows
+  (`points.estimate`: its criteria, kind, risk tier and the areas that raised
+  it, the files and surfaces it names, the symbols livespec says it reaches when
+  the index is readable, and its length, which weighs one at most), kept with
+  its reasons on the task and its `planned` event. Its realized size, on the
+  same scale, is read when it ends from git and its attempts (files, the lines
+  its kept branch holds, turns, wall time, attempts), never from the worker,
+  and kept on its `finished` event; what was not measured is left out. A
+  workflow run's points are its steps', each part counted.
+- A standard is per repository, kind and points band, and only a calibration
+  moves it: after every `standards.CALIBRATE_EVERY` endings in a repository,
+  in the hooks or the dispatcher (`evolution.settle`), never in a GET, by two
+  rules and no other. The start cell is the cheapest rung of the kind's ladder
+  whose first tries pass at least `standards.PASS_FIRST` over at least
+  `standards.MIN_SAMPLES` (a first try is a task's first attempt or the first
+  after a new model; more turns or a retry on the same cell goes on with it; a
+  pinned task teaches none), one rung per calibration, never below the
+  ladder's first rung and never a cell that needs an approval. The start turns
+  move toward the 75th percentile of what the band's passes needed, one
+  `standards.TURNS_STEP` per calibration, capped at
+  `escalate.MAX_TURNS_CEILING`. A band moves one field at a time, and not
+  again before that change is judged. Money moves no standard: a point's cost
+  is measured and shown, never a rule's input. `--start` and `--max-turns`
+  always win, and the plan says which standard it used and why (its `planned`
+  event keeps the changes it started on).
+- Every change of a standard is appended with when, the repository, the kind
+  and band, the field, before and after, the rule, its evidence (counts and
+  rates) and cauce's version. Once `standards.JUDGE_AFTER` tasks ran under it,
+  it is judged once against the window before it (pass-first, attempts, time
+  and cost per point); one that made pass-first worse by more than
+  `standards.REVERT_MARGIN` is reverted one step back, as a change of its own
+  that names it, and a revert is never judged. Changes, verdicts and the daily
+  snapshots are append-only: the database refuses an update or a delete.
+- The evolution history takes one snapshot a day, at the first ending of a new
+  day in the person's time zone or with `cauce evolution --snapshot`, of what
+  ended since the last one. `cauce evolution` and the UI's Evolution read it
+  beside every change and verdict, never write. Tests run on fake clocks
+  (`now=`, `tz=`) and fake finished tasks (`tests/test_standards.finished`).
 - Fable needs a person: `#fable` or `--allow-approval`. An approval is the
   person's for the run they approved: a resume nobody approved (`--unattended`)
   never uses one an earlier run stored, nor starts on a cell that needs one (a
@@ -319,6 +401,31 @@ yields the default kind, not a guess.
   line. Tests run with
   `CAUCE_PARALLEL=off`, `CAUCE_AUTOWORK=off` and `CAUCE_NAMES=off`; a test
   that wants them passes a fake `decide`, `start` or `popen`.
+- Scaling has two axes, and money moves neither. Horizontal scaling is the
+  number of workers this machine runs at once: the dispatcher's level
+  (`cauce.capacity`), kept in the person's cauce home, never a fixed number.
+  It starts at what the machine can hold (its CPUs, free memory and the free
+  disk where worktrees live, each worker counted at `WORKER_MEMORY_MB` and
+  `WORKTREE_DISK_MB`, at least 1), rises by one when work waits for a worker
+  and a round of the tasks it started (as many as the level) ended with no
+  limit, and halves, never below 1, on a rate limit or an overloaded API
+  (read from the CLI's own result, `launch.api_limit`, never from a check's
+  output), on a worker the machine starved (a CLI or a `run-queued` process
+  killed, a full disk) or on free memory or disk under its constant; after a
+  rate limit it does not rise before the retry-after. `max_parallel` (`auto`
+  or a number) is the person's ceiling, and the level adapts under it. Each
+  change is a `level_changed` event, on the task that caused it or on task 0
+  when the machine did. The lanes share the level by reserve and lending: with
+  level L and k lanes with work to run, each is reserved max(1, L // k),
+  granted in the order its oldest work was queued while L lasts; what a lane
+  does not use is lent, and a lent worker goes back to its lane as soon as that
+  lane has work and a borrowed task ends. Nothing running is stopped to give
+  it back, and a lane paused on a person reserves nothing. Every dispatcher
+  settles, allots and claims under one lock (`capacity.held`), and judges only
+  its own lane's tasks. Vertical scaling is the cell and the turns each task
+  starts with and climbs by evidence (`matrix`, `escalate`), as above. Neither
+  reads a cost. Tests run on a fake machine of three CPUs (`capacity.machine`,
+  in `tests/conftest.py`); a test that wants another passes `machine`.
 - A session belongs to the `.cauce/` in its own directory or up to the top of
   its checkout, never above it; outside a checkout, its own directory only.
   The home directory and `/` are never a project, a dotfiles checkout at home
@@ -349,7 +456,8 @@ yields the default kind, not a guess.
   a session. Claude Code's own task files are read, never written.
 - A lane pauses only on a task the dispatcher started, and never on one a
   person cancelled or on an investigator's; it opens again by itself when that task leaves the board
-  (dismissed, superseded, or resumed to a pass), and the queue starts again; a person's own `cauce run` never blocks the queue. A GET in the UI never starts work or
+  (dismissed, superseded, or resumed to a pass), and the queue starts again. A resume that reopens it, or `cauce lanes
+  --unpause`, starts its dispatcher at once (under the one-dispatcher lock), not at the resumed task's end; a person's own `cauce run` never blocks the queue. A GET in the UI never starts work or
   sweeps — housekeeping runs in hooks, the dispatcher and the server thread.
 - Color in the UI carries meaning and never alone: a state, a kind's family
   and a model's depth each have one tone (`util.js`: `statusBadge`,
@@ -407,8 +515,12 @@ yields the default kind, not a guess.
   through `cauce resume <id> --pressed`, does, and its rules are read
   from cauce's account of the stop (`stops.resume_args`), never from the
   request; `--pressed` refuses any rule or approval passed with it. The board lives in the web UI only; the mod draws no copy of it. Tool schemas carry no `enum`: the handler
-  reads a value and says what cauce takes. Only the reading tools (`recall`,
-  `tasks`, `note`) turn an `ask` into an allow; a deny stays a deny. Without the mod, everything still works through
+  reads a value and says what cauce takes. The reading tools (`recall`,
+  `tasks`, `note`, `overview`) turn an `ask` into an allow; `queue` and
+  `resume` do only while the person delegates them (`cauce config delegate`,
+  on by default, read at each check; a cauce that cannot say leaves the ask
+  with the person). A deny stays a deny, an organization's ceiling still caps
+  it, and a delegated `resume` still runs `--unattended`. Without the mod, everything still works through
   the classic hooks.
 - A watcher reads, never claims: `overview` and `events` take nothing from a
   session, and an ending is delivered only to the session that sent the work.
@@ -422,10 +534,27 @@ yields the default kind, not a guess.
   runs at the end of every run (`orchestrate.run`), queues what waited on a
   step that passed, inside one write transaction, and starts the dispatcher;
   advancing never fails the run that ended, and an error is a
-  `workflow_error` event. The session that started a run hears of it once —
+  `workflow_error` event. Work queued after other work (`cauce run|queue add
+  … --after <task>`, `cauce workflow run … --after <run>`) is held in its
+  options (`after.KEY`): the dispatcher never starts it, and every view that
+  says why work waits says "waits for #N to pass" (`dispatch.waiting`). A
+  task or run that does not exist, or whose work was dropped (failed,
+  cancelled, found wrong), is refused when queued. `advance` releases it when
+  that work passes (a run, when its last step does), in one write
+  transaction, onto the branch it kept (a run's last step's), or the base when
+  that branch is merged into it; its plan says which, and nothing is merged or
+  rebased. Work that stops short releases nothing: what waits stays held and
+  says how it stopped, until a resume of it passes; `cauce dismiss` or a
+  cancel takes held work off the queue, each with its `stops.Stop`. A chain
+  is released one link at a time. The session that started a run hears of it once —
   at its end or when a step waits on the person — and steps the engine went
   past are marked reported. A step that stops stops the run there; it goes on
   by a resume to a pass or `cauce workflow retry`.
+- A workflow step says how far its work is behind the branch its run started
+  from, as that branch is now (`isolate.behind`): the commits it moved and the
+  files both changed, kept as a `behind_base` event when the step starts and
+  when the run ends, and shown in `cauce workflow status`, the ending notice
+  and the board. It is said, never acted on: nothing is merged or rebased.
 - A workflow definition grants nothing and caps nothing: no rule, no
   approval, no capability, no dollar limit; rules, approvals and a run's check
   (`--verify`, for every step that writes and names none) are the person's
@@ -441,7 +570,40 @@ yields the default kind, not a guess.
   steps get the findings of the steps they wait on as records, beside their
   summaries. The bundled templates follow this; their review chain fixes only
   what the ledger confirms, and costs nothing more when the review is clean.
-  A refuter is told whether one review or two found its rows.
+  A refuter is told whether one review or two found its rows. What the steps
+  before said reaches a step quoted, as context, never as its criteria.
+- A step can run in parts. A `fanout` step names a plan step before it that it
+  waits on; that plan (`kind plan`, read-only) is asked for `parts` (1 to
+  `launch.MAX_PARTS`, each an id, a prompt and surfaces no other part reaches)
+  and their `contract`, read strictly (`launch.read_parts`: no parts, more than
+  six, a part without surfaces beside another, or surfaces that may touch are
+  `inconclusive`, never a guess). When the plan passes, `advance` queues one
+  task per part in its transaction: the step's prompt, its inputs quoted as
+  context (a part's criteria are its own prompt's; the review judges the whole
+  request), the part's prompt, the contract verbatim and quoted, the part's
+  surfaces, and the step's other fields. A plan of one part is the step run
+  whole, as without one. Parts whose surfaces may touch (`surfaces.disjoint`,
+  checked again by the engine) take the plan's pass back as `parts`: the run
+  stops at the plan with the paths named. What needs a step run in parts waits
+  for every part; a part that stops stops the run there, and `cauce workflow
+  retry` queues only the parts that did not pass. `status` and the board show
+  each part under its step.
+- An `integrate` step joins the branches the parts kept, on the commit they
+  started from, in the plan's order, before any worker (`isolate.join`): a
+  clean join whose check (the run's `--verify`) passes, or that has none,
+  passes with no worker; a conflict, or a check that fails on the joined work,
+  goes to a worker told which files, whose branch to merge, and the contract;
+  one branch or none passes at once, and what follows starts from it. The
+  review chain after it reads the combined diff, blind, as the verifier does.
+  Only an integrate step waits on a step run in parts: a step starts from one
+  branch, and the parts keep one each, so a definition where another step
+  waits on it directly is refused.
+- A blind review of a change over `workflows.AREA_REVIEW_LINES` changed lines
+  that touches two or more areas (the surfaces the parts declared, else the
+  top-level folders) runs as one blind review per area, side by side, each
+  given the whole request, its area's diff and the names of the other files
+  changed. Their findings add up in the one ledger; refute, fix and recheck
+  run once on it. Below the threshold it is one review.
 - A worker never starts cauce work (`run`, `resume`, `work`, `queue add`,
   `workflow run|retry`, `investigate start` refuse under `CAUCE_WORKER_TASK`),
   and forks are off inside it (`CLAUDE_CODE_FORK_SUBAGENT=0`): what is left
@@ -485,7 +647,11 @@ yields the default kind, not a guess.
 - The analysis is read, never written, and never by a model. A run's phases
   are kept on its events as it runs (`plan_s`, `queued_s`, `since_start_s`,
   each attempt's `wall_s`, `check_s`, `verifier_s`, the waits for a network
-  `wait_s`, the run's `wall_s`); a phase
+  `wait_s`, the run's `wall_s`), and on its ending what came before it:
+  `advance_s` (from the step it waited on passing to its being queued, an
+  `advanced` event), `pickup_s` (from queued, or released, to the dispatcher
+  starting it, a `dispatched` event) and `spawn_s` (from that to its plan),
+  which split `queued_s` where they were measured; a phase
   a run never measured is left out of the breakdown, never guessed. The session
   thread comparison is observed, never presented as a trial.
 - Insights and the survey are read, never written, and never by a model: one

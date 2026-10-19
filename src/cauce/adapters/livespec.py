@@ -310,8 +310,9 @@ class Livespec:
                 entries = [_describe(conn, sid) for sid in symbols]
         except sqlite3.Error as exc:
             return Briefing(reasons=(f"livespec index unreadable while briefing: {exc}",))
+        reached = len({*symbols, *(c for e in entries for c in e["caller_ids"])})
         if not entries:
-            return Briefing()
+            return Briefing(reached=reached)
         lines = [f"Code map from livespec ({status.detail}). Read it before searching:"]
         raise_rungs, critical, reasons = 0, False, []
         for e in entries:
@@ -329,7 +330,7 @@ class Livespec:
                 reasons.append(f"livespec: {e['qname']} has {e['callers']} callers")
         if reasons:
             raise_rungs = 1
-        return Briefing(tuple(lines), raise_rungs, critical, tuple(dict.fromkeys(reasons)))
+        return Briefing(tuple(lines), raise_rungs, critical, tuple(dict.fromkeys(reasons)), reached)
 
     def symbols_named(self, text: str, status: Status) -> list[tuple[str, str]]:
         """The symbols a text names outright, as (qualified name, path): what a
@@ -496,6 +497,7 @@ def _describe(conn: sqlite3.Connection, symbol_id: int) -> dict[str, Any]:
     return {
         "qname": row["qualified_name"], "kind": row["kind"], "line": row["start_line"], "path": row["path"],
         "callers": len({r["id"] for r in callers}),
+        "caller_ids": sorted({r["id"] for r in callers}),
         "specs": [dict(s) for s in specs],
         "tests": tests,
     }

@@ -228,3 +228,14 @@ def test_a_failed_index_is_not_tried_again_until_the_checkout_moves(tmp_path, gi
     assert working.last_failure(git_repo) is None
     failing._failure_path(git_repo).write_text("not json")
     assert failing.last_failure(git_repo) is None
+
+
+def test_the_briefing_says_how_many_symbols_the_request_reaches(tmp_path, git_repo):
+    build(git_repo)
+    a = adapter(tmp_path)
+    status = a.inspect(git_repo)
+    # parse_amount and its 22 callers
+    assert a.brief("parse_amount rounds wrong", git_repo, status).reached == 23
+    assert a.brief("nothing here matches zzzz", git_repo, status).reached == 0
+    # no index to read says nothing, rather than zero
+    assert a.brief("x", git_repo, a.inspect(tmp_path)).reached is None

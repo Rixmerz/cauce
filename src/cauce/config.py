@@ -55,6 +55,14 @@ DEFAULTS: dict[str, Any] = {
     # `suggest` shows the person the line at a good moment, `auto` has the mod submit
     # it (only on a Claude Code build seen to run it), `off` leaves it alone.
     "compact": "suggest",
+    # The mod turns Claude Code's `ask` for `queue` and `resume` into an allow: the
+    # person delegated starting cauce work to the session. A deny stays a deny, and a
+    # resume still runs `--unattended`. Off: each call is the person's.
+    "delegate": True,
+    # The most workers this machine runs at once (`cauce.capacity`): `auto` puts no
+    # ceiling over the level the dispatcher adapts to the API and the machine; a number
+    # is the person's ceiling, and the level still adapts under it.
+    "max_parallel": "auto",
 }
 
 #: Settings that take one of a few words rather than on or off.
@@ -114,13 +122,26 @@ def choice(key: str, env: Mapping[str, str]) -> str:
     return word(key, env.get(f"CAUCE_{key.upper()}")) or word(key, load(env).get(key)) or DEFAULTS[key]
 
 
+def ceiling_word(raw: Any) -> str | None:
+    """`raw` as `max_parallel` takes it: `auto`, or a whole number from 1 as text; None otherwise."""
+    value = str(raw).strip().lower() if isinstance(raw, str | int) and not isinstance(raw, bool) else ""
+    return value if value == "auto" or (value.isdigit() and int(value) >= 1) else None
+
+
+def max_parallel(env: Mapping[str, str]) -> int | None:
+    """The person's ceiling on the workers this machine runs at once; None for `auto`. The
+    `CAUCE_MAX_PARALLEL` variable, else the file; a value it does not take reads as unset."""
+    picked = ceiling_word(env.get("CAUCE_MAX_PARALLEL")) or ceiling_word(load(env).get("max_parallel")) or "auto"
+    return None if picked == "auto" else int(picked)
+
+
 def sync_plugin_options(env: Mapping[str, str]) -> None:
     """Copy `CLAUDE_PLUGIN_OPTION_<KEY>` values into the file, for the commands
     that never see them."""
     updates: dict[str, Any] = {}
     for key in DEFAULTS:
         raw = env.get(f"CLAUDE_PLUGIN_OPTION_{key.upper()}")
-        value = word(key, raw) if key in CHOICES else _bool(raw)
+        value = ceiling_word(raw) if key == "max_parallel" else word(key, raw) if key in CHOICES else _bool(raw)
         if value is not None:
             updates[key] = value
     if updates and any(load(env).get(k) != v for k, v in updates.items()):

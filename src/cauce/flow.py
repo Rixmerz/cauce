@@ -12,6 +12,11 @@ the lane, so nothing new starts on a state it may have left broken — unless a
 person cancelled it, which is their call on that task, not on the queue. A
 person unpauses it.
 
+How many run at once is no number fixed here: it is the machine's level
+(`cauce.capacity`), which adapts to the API and the machine and is shared between
+the lanes by reserve and lending. Every dispatcher settles it, allots it and
+claims what it starts under one lock.
+
 Each dispatched task runs as its own `cauce run-queued` process: its pid is its
 own, so the sweep and `cauce cancel` treat it like any other run, and the
 dispatcher only watches.
@@ -29,13 +34,13 @@ import re
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
-from cauce import classify, config, dispatch, isolate, stops, surfaces
+from cauce import after, capacity, classify, config, dispatch, isolate, launch, stops, surfaces
 from cauce.matrix import READ_ONLY_KINDS, Cell
 from cauce.orchestrate import Options, Report, declares_read_only
 from cauce.store import Store, home
@@ -44,8 +49,6 @@ from cauce.store import Store, home
 #: taken for abandoned. Claude Code fires no Stop for an interrupted turn.
 SESSION_TASK_TIMEOUT = timedelta(hours=12)
 DEFAULT_MAX_TASKS = 10
-#: Tasks the dispatcher runs at once in one repository.
-MAX_PARALLEL = 3
 #: How often a dispatcher with work out checks on it and on new arrivals.
 POLL_S = 2.0
 
@@ -176,6 +179,8 @@ def queued_options(task: dict, defaults: Options) -> Options:
         add_dirs=tuple(raw.get("add_dirs") or defaults.add_dirs),
         services=tuple(raw.get("services") or defaults.services),
         run_verify=raw.get("run_verify") or defaults.run_verify,
+        parts=bool(raw.get("parts", defaults.parts)),
+        integrate=raw.get("integrate") or defaults.integrate,
     )
 
 
@@ -272,39 +277,108 @@ def _judged(store: Store, task: dict, ahead: list[dict], decide: Decide,
     return {**task, "parallel": int(decision.parallel)}
 
 
-def runnable(store: Store, repo: str | None, *, parallel: bool, decide: Decide) -> list[dict]:
-    """What may start now. Per open lane: the first task when nothing runs; after
-    that, tasks that will not write, and tasks judged independent of the writing
-    work running and queued ahead, up to `MAX_PARALLEL` at once. A task not
-    judged yet is judged here, once."""
-    picked = []
+def _walk(store: Store, repo: str | None, *, parallel: bool, decide: Decide) -> Iterator[dict]:
+    """A lane's tasks that may start now, in queue order, each judged only when it is
+    reached: the first when nothing runs; after that, tasks that will not write, and
+    tasks judged independent of the writing work running and queued ahead. Work held
+    behind other work (`after`) is never picked, and nothing waits behind it."""
+    running = store.dispatched_running(repo)
+    ahead, mine, read = list(running), 0, False
+
+    def read_changes() -> None:
+        nonlocal read
+        if not read:
+            # Git is read only when a task is to be judged, and once a pass.
+            ahead[:len(running)] = [with_changes(store, t) for t in running]
+            read = True
+
+    for task in store.queued_in(repo):
+        if after.held(task):
+            continue  # it waits for other work to pass, not for a place in the lane
+        if running or mine:
+            if not parallel:
+                return
+            task = _judged(store, task, ahead, decide, read_changes)
+            if not task["parallel"]:
+                ahead.append(task)
+                continue
+        ahead.append(task)
+        mine += 1
+        yield task
+
+
+def _demand(queued: list[dict], running: int, *, parallel: bool) -> int:
+    """What another dispatcher's lane could start now, read without judging anything: its
+    first task when nothing runs there, and beside running work every task that starts
+    without a decision (it will not write) or that a decision already let start. One not
+    judged yet is no demand: a worker kept for it would sit idle if it is judged to wait."""
+    idle = running == 0
+    if not parallel:
+        return 1 if idle and queued else 0
+    return sum(1 for n, t in enumerate(queued) if (idle and n == 0) or t.get("parallel") or reads_only(t))
+
+
+def _lanes(store: Store) -> tuple[list[capacity.Lane], dict[str | None, list[dict]]]:
+    """Every lane as the allotment reads it, and the queued work of each that may run
+    (none held behind other work). A lane whose work all runs has no queue row, yet holds
+    its workers: it is read too."""
+    counts = store.dispatched_counts()
+    lanes, queued = [], {}
     for lane in store.lanes():
-        if lane["paused"] or not lane["queued"] or (repo is not None and lane["repo"] != repo):
-            continue
-        running = store.dispatched_running(lane["repo"])
-        ahead, mine, read = list(running), 0, False
+        key = lane["repo"] or None
+        queued[key] = [t for t in store.queued_in(key) if not after.held(t)] if lane["queued"] else []
+        lanes.append(capacity.Lane(key, counts.get(key, 0), bool(queued[key]),
+                                   queued[key][0]["id"] if queued[key] else 0, bool(lane["paused"])))
+    listed = {x.repo for x in lanes}
+    lanes += [capacity.Lane(key, n, False, 0) for key, n in counts.items() if key not in listed]
+    return lanes, queued
 
-        def read_changes(running: list[dict] = running, ahead: list[dict] = ahead) -> None:
-            nonlocal read
-            if not read:
-                # Git is read only when a task is to be judged, and once a pass.
-                ahead[:len(running)] = [with_changes(store, t) for t in running]
-                read = True
 
-        for task in store.queued_in(lane["repo"]):
-            if len(running) + mine >= MAX_PARALLEL:
-                break
-            if running or mine:
-                if not parallel:
-                    break
-                task = _judged(store, task, ahead, decide, read_changes)
-                if not task["parallel"]:
-                    ahead.append(task)
-                    continue
+def shares(store: Store, level: int) -> dict[str | None, capacity.Share]:
+    """Each lane's share of the level as it stands: what it reserves and runs, and what it
+    lends or borrows. Nothing is judged or started."""
+    return capacity.allot(level, _lanes(store)[0], lambda key: False)
+
+
+def pick(store: Store, repo: str | None, *, parallel: bool, decide: Decide,
+         level: int | None = None) -> tuple[list[dict], dict[str | None, capacity.Share]]:
+    """What may start now within the machine's level, and each lane's share of it
+    (`capacity.allot`): reserves first, in the order each lane's oldest work was queued,
+    then what is lent. The lanes of `repo` (every lane, with None) are walked and judged
+    (`_walk`); another dispatcher's are read as they stand, never judged here."""
+    level = level if level is not None else capacity.current(home()).value
+    lanes, queued = _lanes(store)
+    walks: dict[str | None, Iterator[dict]] = {}
+    demand: dict[str | None, int] = {}
+    for lane in lanes:
+        if lane.waiting and not lane.paused:
+            if repo is None or lane.repo == repo:
+                walks[lane.repo] = _walk(store, lane.repo, parallel=parallel, decide=decide)
+            else:
+                demand[lane.repo] = _demand(queued[lane.repo], lane.running, parallel=parallel)
+    picked: list[dict] = []
+
+    def take(key: str | None) -> bool:
+        if key in walks:
+            task = next(walks[key], None)
+            if task is None:
+                del walks[key]
+                return False
             picked.append(task)
-            ahead.append(task)
-            mine += 1
-    return picked
+            return True
+        if demand.get(key, 0) > 0:
+            demand[key] -= 1
+            return True
+        return False
+
+    shares = capacity.allot(level, lanes, take)
+    return picked, shares
+
+
+def runnable(store: Store, repo: str | None, *, parallel: bool, decide: Decide,
+             level: int | None = None) -> list[dict]:
+    """What may start now (`pick`), within the machine's level: the one kept, unless given."""
+    return pick(store, repo, parallel=parallel, decide=decide, level=level)[0]
 
 
 class Handle(Protocol):
@@ -345,16 +419,30 @@ class _Process:
         if task is None:
             return "failed"
         if task["status"] in ("running", "queued"):
-            # It exited without saying how it ended: it died.
+            # It exited without saying how it ended: it died. Killed outright, the kernel's
+            # out-of-memory killer is the likely hand, and the machine's level halves on it.
+            killed = self.proc.returncode in launch.KILLED
             stops.record(self.store, self.task_id, stops.Stop(
-                "died", f"its process exited with {self.proc.returncode} without saying how the task ended"),
-                pid=None, current_cell=None)
+                "died", f"its process exited with {self.proc.returncode} without saying how the task ended"
+                + (" (killed: the kernel does so when memory runs out)" if killed else ""),
+                extra={"starved": "memory"} if killed else {}), pid=None, current_cell=None)
             self.store.pause_lane(task["repo"], f"task #{self.task_id}: its process exited unexpectedly")
             return "interrupted"
         return task["status"]
 
 
 Start = Callable[[dict, Path], Handle]
+
+
+def _settle(store: Store) -> None:
+    """What ended settles the standards and the evolution history (`cauce.evolution`).
+    Its failure is an event on task 0 and never stops the queue."""
+    from cauce import evolution
+
+    try:
+        evolution.settle(store)
+    except Exception as exc:  # the dispatcher goes on; the error is kept, never silent
+        store.add_event(0, "evolution_error", error=f"{type(exc).__name__}: {exc}"[:300])
 
 
 def work(
@@ -368,10 +456,13 @@ def work(
     decide: Decide | None = None,
     start: Start | None = None,
     pause: Callable[[], None] | None = None,
+    machine: Callable[[], capacity.Machine] | None = None,
     **run_kwargs,
 ) -> WorkReport:
     """Run queued work until nothing is runnable and nothing is out, or
-    `max_tasks` started — the bound on how long an unattended run goes on.
+    `max_tasks` started — the bound on how long an unattended run goes on. Each
+    pass settles the machine's level (`capacity.settle`, on `machine()`) first;
+    a lane whose work waits only for a worker another lane holds keeps waiting.
 
     `runner` runs a task in this process, one after another (tests); without it,
     each task is its own process and several may run at once.
@@ -389,33 +480,50 @@ def work(
         else:
             def start(task: dict, where: Path) -> Handle:
                 return _Process(task, where, store, defaults)
-    report, out, started = WorkReport(), [], 0
+    machine = machine or (lambda: capacity.machine(home()))
+    ceiling = config.max_parallel(os.environ)
+    report, out, started, wanting, waits = WorkReport(), [], 0, False, False
     sweep(store)
     while True:
+        ended = False
         for handle in list(out):
             status = handle.poll()
             if status is not None:
                 out.remove(handle)
                 report.ran.append(Ran(handle.task_id, status))
-        launched = 0
+                ended = True
+        if ended:
+            _settle(store)
+        launched: list[tuple[dict, Path]] = []
         if started < max_tasks:
-            for task in runnable(store, repo, parallel=parallel, decide=decide)[:max_tasks - started]:
-                if not store.claim(task["id"]):
-                    continue  # another dispatcher took it
-                where = Path(task["cwd"]) if task["cwd"] and Path(task["cwd"]).is_dir() else None
-                if where is None:
-                    stops.record(store, task["id"], stops.Stop(
-                        "missing_dir", f"its directory no longer exists: {task['cwd'] or '(none recorded)'}"))
-                    store.pause_lane(task["repo"], f"task #{task['id']}: its directory no longer exists")
-                    continue
-                started += 1
-                launched += 1
-                out.append(start(task, where))
+            with capacity.held(home()):
+                level = capacity.settle(store, home(), machine=machine(), ceiling=ceiling, wanting=wanting)
+                picked, shares = pick(store, repo, parallel=parallel, decide=decide, level=level.value)
+                wanting = capacity.full(level.value, shares)
+                # Its own work waits for a worker another lane holds: it waits too, rather than stop.
+                waits = wanting and any(s.waiting for k, s in shares.items() if repo is None or k == repo)
+                for task in picked[:max_tasks - started]:
+                    if not store.claim(task["id"]):
+                        continue  # another dispatcher took it
+                    where = Path(task["cwd"]) if task["cwd"] and Path(task["cwd"]).is_dir() else None
+                    if where is None:
+                        stops.record(store, task["id"], stops.Stop(
+                            "missing_dir", f"its directory no longer exists: {task['cwd'] or '(none recorded)'}"))
+                        store.pause_lane(task["repo"], f"task #{task['id']}: its directory no longer exists")
+                        continue
+                    started += 1
+                    # When the dispatcher started it, to the millisecond: the run measures its
+                    # pickup (from queued) and its spawn (to its plan) from here.
+                    store.add_event(task["id"], "dispatched", at=round(time.time(), 3))
+                    launched.append((task, where))
+        for task, where in launched:
+            out.append(start(task, where))
         if launched:
             continue  # look again at once: a finished run may have opened a lane
-        if not out:
+        if not out and (not waits or started >= max_tasks):
             report.stopped_because = (
                 f"started {max_tasks} tasks, the unattended limit; run again to continue" if started >= max_tasks
-                else "nothing runnable is queued (empty, every lane paused, or waiting on work in flight)")
+                else "nothing runnable is queued (empty, every lane paused, waiting on work in flight, or held "
+                     "until other work passes)")
             return report
         pause()

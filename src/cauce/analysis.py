@@ -28,8 +28,14 @@ from typing import Any
 from cauce import usage
 from cauce.store import Store
 
-#: The phases of a run, in the order they happen.
-PHASES = ("queued_s", "plan_s", "setup_s", "worker_s", "check_s", "verifier_s", "wait_s", "other_s")
+#: The phases of a run, in the order they happen. The first four come before its own wall
+#: time: the engine queueing it after the step it waited on passed (`advance_s`), its wait
+#: for the dispatcher (`pickup_s`) and the process starting (`spawn_s`), which split the
+#: older `queued_s` where they were measured.
+PHASES = ("advance_s", "pickup_s", "spawn_s", "queued_s", "plan_s", "setup_s", "worker_s", "check_s", "verifier_s",
+          "wait_s", "other_s")
+#: The phases before a run's own start: never part of its wall time, so never taken from "other".
+BEFORE_RUN = frozenset({"advance_s", "pickup_s", "spawn_s", "queued_s"})
 #: The events a compaction decision leaves (`cauce.compaction`).
 COMPACTION_EVENTS = ("compaction_decided", "compaction_delivered", "compaction_settled", "compaction_seen")
 #: How many compaction decisions the text lists, newest last.
@@ -114,6 +120,7 @@ def _start(task: Mapping[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
         "has_session": bool(task.get("session_id")),
         "start_cell": data.get("start"), "final_cell": None, "status": None, "stop": None,
         "started_at": event["ts"], "ended_at": None, "wall_s": None,
+        "advance_s": None, "pickup_s": None, "spawn_s": None,
         "queued_s": _number(data.get("queued_s")), "plan_s": _number(data.get("plan_s")), "setup_s": None,
         "worker_s": None, "check_s": None, "verifier_s": None, "wait_s": None, "hold_s": None,
         "attempts": 0, "first_try": None, "verified": 0, "verifier_blocked": 0, "moves": [], "cells": [],
@@ -154,7 +161,7 @@ def _end(run: dict[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
     run["wall_s"] = _number(data.get("wall_s")) or _between(run["started_at"], run["ended_at"])
     # The run's own account of its cost wins: it holds the classification and the checks.
     run["cost_usd"] = round(_number(data.get("cost_usd")) or run["cost_usd"], 4)
-    for phase in ("worker_s", "check_s", "verifier_s", "wait_s", "hold_s"):
+    for phase in ("worker_s", "check_s", "verifier_s", "wait_s", "hold_s", "advance_s", "pickup_s", "spawn_s"):
         run[phase] = _number(data.get(phase))
     # A run from before the phases were timed: what its attempts measured, the CLI's
     # own duration for the work, and nothing for what was never measured.
@@ -173,10 +180,12 @@ def phases(found: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     totals = dict.fromkeys(PHASES, 0.0)
     for r in timed:
         known = 0.0
+        # A run whose queue time was split into pickup and spawn is not counted twice.
+        split = r.get("pickup_s") is not None or r.get("spawn_s") is not None
         for phase in PHASES[:-1]:
-            value = r.get(phase) or 0.0
+            value = 0.0 if phase == "queued_s" and split else r.get(phase) or 0.0
             totals[phase] += value
-            known += value if phase != "queued_s" else 0.0
+            known += value if phase not in BEFORE_RUN else 0.0
         totals["other_s"] += max((r["wall_s"] or 0) - known, 0.0)
     whole = sum(totals.values())
     return {"runs": len(timed), "seconds": {k: round(v, 1) for k, v in totals.items()},
@@ -258,6 +267,42 @@ def cells(events: Sequence[Mapping[str, Any]], task_ids: set[int]) -> list[dict[
             "failures": dict(Counter(d.get("failure") for d in rows if not d.get("passed") and d.get("failure"))),
         })
     return sorted(out, key=lambda row: -row["attempts"])
+
+
+#: The moves whose next attempt may go on in the last one's session.
+CONTINUING_MOVES = ("more_effort", "more_turns")
+
+
+def continuations(events: Sequence[Mapping[str, Any]], task_ids: set[int]) -> list[dict[str, Any]]:
+    """The attempts after more effort or more turns, by whether they went on in the attempt
+    before's session or started fresh: how often each passed, its turns and its own cost.
+    An attempt says it went on (`continued`, or `resumed` on its start, as cauce first kept
+    it); one that says neither started fresh, as every one did before sessions were kept."""
+    last_move: dict[int, str | None] = {}
+    resumed: set[tuple[int, Any]] = set()
+    checks: dict[int, float] = defaultdict(float)
+    groups: dict[tuple[str, bool], list[tuple[Mapping[str, Any], float]]] = defaultdict(list)
+    for e in events:
+        task, data = int(e["task_id"]), e["data"] or {}
+        if task not in task_ids:
+            continue
+        if e["kind"] in ("planned", "moved"):
+            last_move[task] = data.get("move")  # a new run's first attempt follows no move
+        elif e["kind"] == "attempt_started" and data.get("resumed"):
+            resumed.add((task, data.get("seq")))
+        elif e["kind"] == "verified":
+            checks[task] += _number(data.get("cost_usd")) or 0
+        elif e["kind"] == "attempt_finished":
+            own = _split(data, checks.pop(task, 0.0))[0]
+            move = last_move.pop(task, None)
+            if move in CONTINUING_MOVES:
+                went_on = data["continued"] if "continued" in data else (task, data.get("seq")) in resumed
+                groups[(str(move), bool(went_on))].append((data, own))
+    return [{"move": move, "continued": went_on, "attempts": len(rows),
+             "passed": sum(bool(d.get("passed")) for d, _ in rows),
+             "turns_p50": pct((_number(d.get("turns")) for d, _ in rows), 0.5),
+             "cost_p50_usd": pct((own for _, own in rows), 0.5), "cost_usd": round(sum(own for _, own in rows), 2)}
+            for (move, went_on), rows in sorted(groups.items(), key=lambda kv: (kv[0][0], not kv[0][1]))]
 
 
 def context(found: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -355,6 +400,7 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "by_source": _grouped(found, "source"),
         "by_workflow": _grouped([r for r in found if r["workflow"]], "workflow"),
         "cells": cells(events, {r["task"] for r in found}), "context": context(found),
+        "continuations": continuations(events, {r["task"] for r in found}),
         "stops": dict(stops.most_common()), "moves": dict(moves.most_common()),
         "turns": {k: v for k, v in turn_rows.items() if k != "by_day"},
         "daily": daily(found, turn_rows["by_day"]),
@@ -425,6 +471,13 @@ def text(report: Mapping[str, Any]) -> str:
             for row in report["context"]:
                 lines.append(f"  {row['group']:<26} runs {row['runs']:>4}  pass {_rate(row['pass_rate']):>4}  first "
                              f"{_rate(row['first_try_rate']):>4}  attempts {row['attempts_avg']}")
+        if report.get("continuations"):
+            lines += ["", "after more effort or more turns, the attempt went on in the last one's session or "
+                          "started fresh:"]
+            for row in report["continuations"]:
+                lines.append(f"  {row['move']:<12} {'continued' if row['continued'] else 'fresh':<9} attempts "
+                             f"{row['attempts']:>4}  passed {row['passed']:>4}  turns p50 {row['turns_p50'] or '—'}"
+                             f"  cost p50 {_usd(row['cost_p50_usd'])}")
         if report["stops"]:
             lines += ["", "stopped by: " + ", ".join(f"{k} {v}" for k, v in report["stops"].items())]
     t = report["turns"]["turns"]

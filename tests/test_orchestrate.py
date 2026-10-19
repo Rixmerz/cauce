@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -800,6 +801,62 @@ def test_a_run_says_its_task_number_warnings_and_attempts_as_they_happen(git_rep
     assert not any("ladder" in line for line in lines)
 
 
+@pytest.mark.parametrize(("files", "verify", "driven"), [
+    ({}, "npx playwright test", "its check runs playwright (`npx playwright test`)"),
+    ({"deno.json": {"tasks": {"e2e": "npx playwright test"}}}, "deno task e2e", "its check runs playwright"),
+    ({"package.json": {"devDependencies": {"playwright-core": "1.56.1"}}}, None,
+     "the project's own tests drive a headless browser (playwright-core in package.json)"),
+    ({"package.json": {"scripts": {"e2e": "playwright test"}}}, "npm test",
+     "the project's own tests drive a headless browser (its e2e script runs playwright)"),
+])
+def test_a_task_whose_check_drives_the_browser_is_not_warned_it_needs_one(git_repo, store, files, verify, driven):
+    for name, content in files.items():
+        (git_repo / name).write_text(json.dumps(content))
+    the_plan = orchestrate.plan("check the checkout page in the browser and fix the total", git_repo, store,
+                                Options(verify=verify, use_model_classifier=False), {}, adapters=())
+    assert not any("needs a browser" in r for r in the_plan.reasons)
+    said = [r for r in the_plan.reasons if r.startswith("the browser this task needs")]
+    assert len(said) == 1 and driven in said[0] and orchestrate.warnings(the_plan.reasons) == []
+
+
+def test_a_task_with_neither_a_browser_check_nor_browser_tests_is_still_warned(git_repo, store):
+    (git_repo / "package.json").write_text(json.dumps({"scripts": {"test": "vitest", "e2e": "vitest e2e"}}))
+    the_plan = orchestrate.plan("check the checkout page in the browser and fix the total", git_repo, store,
+                                Options(verify="npm test", use_model_classifier=False), {}, adapters=())
+    said = orchestrate.warnings(the_plan.reasons)
+    assert len(said) == 1 and said[0].startswith("this task needs a browser and workers have none")
+
+
+def test_a_check_that_covers_less_than_ci_is_said_in_the_plan_and_on_the_report(git_repo, store, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    (git_repo / ".github" / "workflows").mkdir(parents=True)
+    (git_repo / ".github" / "workflows" / "ci.yml").write_text(
+        "jobs:\n  db:\n    services:\n      postgres:\n        image: postgres:16\n    steps:\n"
+        "      - run: npm ci\n      - run: npm test\n        env:\n          DATABASE_URL: postgres://localhost/t\n")
+    (git_repo / "db.js").write_text("const url = process.env.DATABASE_URL\n")
+    git(git_repo, "add", "-A")
+    git(git_repo, "commit", "-q", "-m", "ci")
+    lines = []
+    report = run("fix the total", git_repo, store, Options(verify="true"), registry={}, launcher=Script(ok()),
+                 classifier=kind("implement"), progress=lines.append)
+    note = "CI also runs: db (`npm test`, a postgres service, DATABASE_URL), which this check does not"
+    assert note in report.plan.reasons and note in report.text()
+    assert f"cauce: #{report.task_id} warning: {note}" in lines
+    assert store.last_event(report.task_id, "planned")["data"]["warnings"] == [note]
+    # a check that runs it with what it sets covers it; a task without a check is not compared
+    covered = orchestrate.plan("fix the total", git_repo, store, Options(
+        verify="DATABASE_URL=postgres://localhost/t npm test", use_model_classifier=False), {}, adapters=())
+    unchecked = orchestrate.plan("fix the total", git_repo, store, Options(use_model_classifier=False), {},
+                                 adapters=())
+    assert not any("CI" in r for r in [*covered.reasons, *unchecked.reasons])
+    # a workflow that cannot be read is said once, and is no warning
+    (git_repo / ".github" / "workflows" / "odd.yml").write_text("jobs:\n  a: b\n c: d\n")
+    odd = orchestrate.plan("fix the total", git_repo, store, Options(verify="npm test", use_model_classifier=False),
+                           {}, adapters=())
+    assert [r for r in odd.reasons if r.startswith("CI:")] == [
+        "CI: .github/workflows/odd.yml could not be read; it is left out of what this check is compared with"]
+
+
 def test_a_dry_run_and_a_run_without_a_listener_say_nothing(git_repo, store, capsys):
     run("check it in the browser", git_repo, store, Options(dry_run=True), registry={},
         classifier=kind("implement"), progress=lambda line: pytest.fail(line))
@@ -886,6 +943,197 @@ def test_a_feature_starts_with_more_turns_and_a_pin_still_wins(git_repo, store):
                  classifier=kind("feature"))
     assert pinned.specs[0].max_turns == 45
     assert not any("starts with 60 turns" in r for r in report.plan.reasons)
+
+
+def test_more_turns_continue_the_worker_s_own_session_in_its_worktree(git_repo, store):
+    out = WorkerResult(False, Failure.TURNS_EXHAUSTED, "used all 30 turns", cost_usd=0.1, session_id="sess-1")
+    lines = []
+    script = Script(out, ok(), write="half.py")
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+                 progress=lines.append)
+    assert report.status == "done" and report.moves[0].startswith("more_turns")
+    first, second = script.specs
+    assert first.persist_session and first.resume_session == ""
+    assert second.resume_session == "sess-1" and second.max_turns == 60 and second.cell == first.cell
+    assert second.launch_dir == first.launch_dir and not second.fork_session
+    assert second.resume_prompt == launch.CONTINUE_PROMPT
+    moved = store.last_event(report.task_id, "moved")["data"]
+    assert moved["continued"] is True and moved["resumed"] == "sess-1" and "forked_from" not in moved
+    assert store.attempts(report.task_id)[0]["session_id"] == "sess-1"
+    started = [e["data"] for e in store.events(task_id=report.task_id) if e["kind"] == "attempt_started"]
+    assert "resumed" not in started[0] and started[1]["resumed"] == "sess-1"
+    assert f"cauce: #{report.task_id} attempt 2 continues attempt 1's session (sess-1)" in lines
+
+
+def test_a_continued_session_is_told_the_check_that_failed_after_it_ran_out(git_repo, store):
+    out = WorkerResult(False, Failure.TURNS_EXHAUSTED, "used all 30 turns", cost_usd=0.1, session_id="sess-1")
+    script = Script(out, ok(), write="half.py")
+    check = "grep -q 'attempt 2' half.py || (echo 'AssertionError: total is 3'; false)"
+    run("fix the export", git_repo, store, Options(verify=check), registry={}, launcher=script,
+        classifier=kind("implement"))
+    first, second = script.specs
+    assert second.resume_session == "sess-1"
+    # the red check cauce ran after the worker stopped is in the brief a fresh start gets, and in the continuation
+    assert "AssertionError: total is 3" in second.resume_note and "AssertionError: total is 3" in second.prompt
+    assert first.resume_note == ""
+
+
+def test_more_turns_without_a_session_start_fresh_and_say_why(git_repo, store):
+    out = WorkerResult(False, Failure.TURNS_EXHAUSTED, "ran past its time", cost_usd=0.1)
+    lines = []
+    script = Script(out, ok(), write="half.py")
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+                 progress=lines.append)
+    assert script.specs[1].resume_session == "" and report.status == "done"
+    started = [e["data"] for e in store.events(task_id=report.task_id) if e["kind"] == "attempt_started"]
+    assert started[1]["fresh"] == "attempt 1 kept no session to continue"
+    assert f"cauce: #{report.task_id} attempt 2 starts fresh: attempt 1 kept no session to continue" in lines
+
+
+def test_more_effort_on_the_same_model_continues_its_session_as_a_fork(git_repo, store):
+    shallow = WorkerResult(False, Failure.CODE_BUG, "2 tests fail", evidence="FAIL test_total: 3 != 4",
+                           cost_usd=0.1, session_id="sess-1")
+    lines = []
+    script = Script(shallow, WorkerResult(True, None, "fixed", "1 passed", cost_usd=0.1, session_id="sess-2"),
+                    write="half.py")
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+                 progress=lines.append)
+    assert report.status == "done" and report.moves[0].startswith("more_effort to sonnet/high")
+    first, second = script.specs
+    assert not first.fork_session and first.resume_session == ""
+    assert second.resume_session == "sess-1" and second.fork_session and second.cell == Cell("sonnet", "high")
+    assert second.launch_dir == first.launch_dir and second.max_turns == first.max_turns
+    assert second.resume_prompt == launch.DEEPER_PROMPT and "FAIL test_total: 3 != 4" in second.resume_note
+    argv = launch.build_argv(second)
+    assert argv[argv.index("--resume") + 1] == "sess-1" and "--fork-session" in argv
+    assert argv[argv.index("--effort") + 1] == "high"
+    # the move says it continued, and from which session; the attempt says what it did
+    moved = store.last_event(report.task_id, "moved")["data"]
+    assert moved["continued"] is True and moved["forked_from"] == "sess-1" and "fresh" not in moved
+    finished = [e["data"] for e in store.events_of(report.task_id, "attempt_finished")]
+    assert [f["continued"] for f in finished] == [False, True]
+    assert [a["session_id"] for a in store.attempts(report.task_id)] == ["sess-1", "sess-2"]
+    assert f"cauce: #{report.task_id} attempt 2 continues attempt 1's session (sess-1) at sonnet/high" in lines
+
+
+def test_a_fork_the_cli_refuses_starts_fresh_and_says_so(git_repo, store):
+    shallow = WorkerResult(False, Failure.CODE_BUG, "2 tests fail", cost_usd=0.1, session_id="sess-1")
+    refused = WorkerResult(True, None, "fixed", "1 passed", cost_usd=0.1, session_id="sess-2",
+                           fresh="the CLI could not resume session sess-1: No conversation found")
+    lines = []
+    script = Script(shallow, refused, write="half.py")
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+                 progress=lines.append)
+    assert report.status == "done" and script.specs[1].resume_session == "sess-1"
+    finished = [e["data"] for e in store.events_of(report.task_id, "attempt_finished")]
+    assert [f["continued"] for f in finished] == [False, False]
+    assert finished[1]["fresh"] == "the CLI could not resume session sess-1: No conversation found"
+    assert (f"cauce: #{report.task_id} attempt 2 started fresh: the CLI could not resume session sess-1: "
+            "No conversation found") in lines
+
+
+def test_a_move_to_another_model_or_a_retry_never_inherits_the_session(git_repo, store):
+    wrong = WorkerResult(False, Failure.APPROACH, "rewrote the wrong module", cost_usd=0.1, session_id="sess-1")
+    broke = WorkerResult(False, Failure.ENVIRONMENT, "no JSON", transient=True, session_id="sess-2")
+    script = Script(wrong, broke, ok(), write="wrong.py")
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert [m.split(" ")[0] for m in report.moves] == ["next_model", "retry"]
+    assert [s.resume_session for s in script.specs] == ["", "", ""] and not any(s.fork_session for s in script.specs)
+    # a new model starts from the base, with the work set aside named in its brief
+    assert "reset to the base commit" in script.specs[1].prompt
+    moved = [e["data"] for e in store.events_of(report.task_id, "moved")]
+    assert [m["continued"] for m in moved] == [False, False] and not any("fresh" in m for m in moved)
+
+
+def test_more_effort_without_a_session_starts_fresh_and_the_move_says_why(git_repo, store):
+    lines = []
+    script = Script(bad(Failure.CODE_BUG, "2 tests fail"), ok())
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+                 progress=lines.append)
+    assert script.specs[1].resume_session == "" and report.status == "done"
+    moved = store.last_event(report.task_id, "moved")["data"]
+    assert moved["continued"] is False and moved["fresh"] == "attempt 1 kept no session to continue"
+    assert f"cauce: #{report.task_id} attempt 2 starts fresh: attempt 1 kept no session to continue" in lines
+
+
+def test_a_resume_a_person_starts_starts_fresh_whatever_its_last_attempt_kept(git_repo, store):
+    from cauce.escalate import Attempt
+
+    shallow = WorkerResult(False, Failure.CODE_BUG, "2 tests fail", cost_usd=0.1, session_id="sess-1")
+    first = run("fix the export", git_repo, store, Options(max_attempts=1), registry={}, launcher=Script(shallow),
+                classifier=kind("implement"))
+    assert first.status == "failed" and store.attempts(first.task_id)[0]["session_id"] == "sess-1"
+    script = Script(ok())
+    run("fix the export", git_repo, store, Options(start=Cell("sonnet", "high")), registry={}, launcher=script,
+        classifier=kind("implement"), task_id=first.task_id,
+        history=[Attempt(Cell("sonnet", "medium"), 30, False, Failure.CODE_BUG, "2 tests fail")])
+    assert script.specs[0].resume_session == "" and not script.specs[0].fork_session
+
+
+def test_a_session_is_continued_only_where_the_cell_and_the_model_still_match_it(monkeypatch):
+    from cauce import models
+    from cauce.escalate import Decision, Move
+    from cauce.orchestrate import WorkerSession, _continues
+
+    high, medium = Cell("sonnet", "high"), Cell("sonnet", "medium")
+    kept = WorkerSession("sess-1", "sonnet", medium, 1)
+    effort, turns = Decision(Move.MORE_EFFORT, high, 30), Decision(Move.MORE_TURNS, medium, 60)
+    assert _continues(effort, kept) == ("sess-1", "") and _continues(turns, kept) == ("sess-1", "")
+    assert _continues(Decision(Move.MORE_TURNS, high, 60), kept) == (
+        "", "attempt 1 ran at sonnet/medium, this one at sonnet/high")
+    for move in (Move.NEXT_MODEL, Move.RETRY, Move.REPLAN):
+        assert _continues(Decision(move, Cell("opus", "high"), 30), kept) == ("", "")
+    models.pin("sonnet", "claude-sonnet-5-5")  # pinned since: another model runs it
+    assert _continues(effort, kept) == ("", "attempt 1 ran on sonnet, this one runs on claude-sonnet-5-5")
+
+
+def test_a_run_in_the_person_s_checkout_keeps_no_session(tmp_path, store):
+    folder = tmp_path / "plain"
+    folder.mkdir()
+    script = Script(ok())
+    run("fix the export", folder, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert not script.specs[0].persist_session
+
+
+def _ran(store, key, kind_name, *attempts):
+    task = store.create_task(f"{kind_name} work", status="done", source="cauce", repo=key, kind=kind_name)
+    for turns, failure in attempts:
+        store.add_attempt(task["id"], cell="sonnet/high", max_turns=turns, passed=int(failure is None),
+                          failure=failure)
+
+
+def test_history_of_tasks_that_outgrew_their_turns_raises_where_turns_start(git_repo, store):
+    from cauce import repo as repos
+
+    key = repos.key(git_repo)
+    _ran(store, key, "implement", (30, None))
+    _ran(store, key, "implement", (30, "turns_exhausted"), (60, None))
+    _ran(store, key, "implement", (30, "turns_exhausted"), (120, None))
+    _ran(store, key, "implement", (30, "turns_exhausted"), (60, None))
+    _ran(store, key, "refactor", (30, "turns_exhausted"), (60, None))  # another kind: not this one's
+    script = Script(ok())
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert script.specs[0].max_turns == 60
+    assert "starts with 60 turns: 3 of the last 4 implement tasks here needed more than 30" in report.plan.reasons
+    # an explicit --max-turns wins, and history never lowers the kind's own
+    pinned = Script(ok())
+    run("fix the import", git_repo, store, Options(max_turns=30), registry={}, launcher=pinned,
+        classifier=kind("implement"))
+    assert pinned.specs[0].max_turns == 30
+    feature = Script(ok())
+    report = run("add the export", git_repo, store, registry={}, launcher=feature, classifier=kind("feature"))
+    assert feature.specs[0].max_turns == 60 and not any("needed more than" in r for r in report.plan.reasons)
+
+
+def test_one_task_that_needed_more_turns_is_no_history(git_repo, store):
+    from cauce import repo as repos
+
+    key = repos.key(git_repo)
+    _ran(store, key, "implement", (30, "turns_exhausted"), (60, None))
+    _ran(store, key, "implement", (30, None))
+    script = Script(ok())
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert script.specs[0].max_turns == 30 and not any("needed more than" in r for r in report.plan.reasons)
 
 
 def test_a_dead_end_that_shares_only_a_word_or_two_stays_out_of_the_brief(git_repo, store):
@@ -1296,3 +1544,142 @@ def test_a_task_that_changed_many_files_counts_them_all_on_its_ending(git_repo, 
     assert len(report.changed) == 106 and finished["changed_n"] == 106
     assert finished["changed"] == report.changed
     assert git(git_repo, "diff", "--name-only", "main", finished["branch"]).count("\n") + 1 == 106
+
+
+def _two_branches(repo, *, conflict: bool) -> str:
+    """Two part branches from the base: both change app.py (a conflict), or each its own file."""
+    from .conftest import git
+
+    base = git(repo, "rev-parse", "HEAD")
+    for n, text in ((901, "api"), (902, "web")):
+        git(repo, "branch", f"cauce/task-{n}", base)
+        git(repo, "checkout", "-q", f"cauce/task-{n}")
+        (repo / ("app.py" if conflict else f"{text}.py")).write_text(f"print('{text}')\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", f"{text} part")
+        git(repo, "checkout", "-q", "main")
+    return base
+
+
+JOIN = {"branches": [{"part": "api", "task": 901, "branch": "cauce/task-901"},
+                     {"part": "web", "task": 902, "branch": "cauce/task-902"}],
+        "contract": "- main() prints one line"}
+
+
+def test_a_conflict_makes_the_integrate_step_a_worker_told_the_files_the_branch_and_the_contract(git_repo, store):
+    from .conftest import git
+
+    base = _two_branches(git_repo, conflict=True)
+    told = []
+
+    def resolve(spec):
+        told.append(spec.prompt)
+        work = spec.target_dir
+        subprocess.run(["git", "merge", "--no-edit", "cauce/task-902"], cwd=work, capture_output=True)
+        (work / "app.py").write_text("print('api and web')\n")
+        git(work, "add", "app.py")
+        git(work, "commit", "-q", "--no-edit")
+        return ok("resolved app.py")
+
+    report = run("Join the parts", git_repo, store, Options(kind="implement", base=base, integrate=JOIN),
+                 registry={}, launcher=resolve, classifier=kind("implement"), adapters=[])
+    assert report.status == "done" and len(told) == 1
+    brief = told[0]
+    assert "api merged cleanly" in brief and "Merging `cauce/task-902` (the web part) conflicts in: app.py" in brief
+    assert "`git merge --no-edit cauce/task-902`" in brief and "> - main() prints one line" in brief
+    joined = store.last_event(report.task_id, "integrated")["data"]
+    assert joined["merged"] == ["cauce/task-901"] and joined["conflict"] == "cauce/task-902"
+    assert joined["files"] == ["app.py"]
+    assert git(git_repo, "show", f"{report.branch}:app.py") == "print('api and web')"
+
+
+def test_a_new_model_on_a_conflicting_join_starts_from_the_parts_that_joined_cleanly(git_repo, store):
+    from .conftest import git
+
+    base = _two_branches(git_repo, conflict=True)
+    seen = []
+
+    def launcher(spec):
+        work = spec.target_dir
+        seen.append(((work / "app.py").read_text(), spec.cell.model))
+        if len(seen) == 1:
+            (work / "app.py").write_text("print('a wrong guess')\n")
+            return bad(Failure.APPROACH, "rewrote the wrong module")
+        subprocess.run(["git", "merge", "--no-edit", "cauce/task-902"], cwd=work, capture_output=True)
+        (work / "app.py").write_text("print('api and web')\n")
+        git(work, "add", "app.py")
+        git(work, "commit", "-q", "--no-edit")
+        return ok("resolved app.py")
+
+    report = run("Join the parts", git_repo, store, Options(kind="implement", base=base, integrate=JOIN),
+                 registry={}, launcher=launcher, classifier=kind("implement"), adapters=[])
+    assert report.status == "done" and len(seen) == 2 and seen[0][1] != seen[1][1]
+    # The worktree went back to the base, and the api part, which joined cleanly, was joined again.
+    assert seen[1][0] == "print('api')\n"
+    assert "Join the api part" in git(git_repo, "log", "--format=%s", report.branch)
+
+
+def test_a_clean_join_whose_check_fails_goes_to_a_worker_with_the_output(git_repo, store):
+    base = _two_branches(git_repo, conflict=False)
+    told = []
+
+    def fix(spec):
+        told.append(spec.prompt)
+        (spec.target_dir / "glue.py").write_text("import api, web\n")
+        return ok("glued")
+
+    report = run("Join the parts", git_repo, store,
+                 Options(kind="implement", base=base, integrate=JOIN, verify="test -f glue.py && echo joined"),
+                 registry={}, launcher=fix, classifier=kind("implement"), adapters=[])
+    assert report.status == "done" and len(told) == 1
+    assert "merged cleanly (api, web), but the run's check `test -f glue.py && echo joined` fails" in told[0]
+    # A clean join whose check passes needs no worker at all.
+    clean = run("Join the parts again", git_repo, store,
+                Options(kind="implement", base=base, integrate=JOIN, verify="test -f api.py && test -f web.py"),
+                registry={}, launcher=lambda spec: pytest.fail("no worker for a clean join"),
+                classifier=kind("implement"), adapters=[])
+    assert clean.status == "done" and "joined 2 parts cleanly (api, web)" in clean.summary
+    assert "`test -f api.py && test -f web.py` passed on the joined work" in clean.summary
+    assert sorted(clean.changed) == ["api.py", "web.py"] and clean.branch
+
+
+def test_an_integrate_step_with_a_branch_that_is_gone_stops_for_the_environment(git_repo, store):
+    from .conftest import git
+
+    base = git(git_repo, "rev-parse", "HEAD")
+    report = run("Join the parts", git_repo, store, Options(kind="implement", base=base, integrate=JOIN),
+                 registry={}, launcher=lambda spec: pytest.fail("no worker"), classifier=kind("implement"),
+                 adapters=[])
+    assert report.status == "blocked" and report.stop.cause == "environment"
+    assert "could not join the parts" in report.stop.reason
+
+
+# --- points: a task's size, estimated when planned and measured when it ends -------------------
+
+def test_a_task_is_scored_when_planned_and_measured_when_it_ends(git_repo, store):
+    text = "Add the export:\n- a CSV writer\n- a header row\n- an --out flag\n- a test for it"
+    report = run(text, git_repo, store, registry={}, launcher=Script(bad(Failure.CODE_BUG), ok(), write="export.py"),
+                 classifier=kind("implement"), adapters=[])
+    task = store.get_task(report.task_id)
+    assert (task["points"], task["points_why"]) == (3, "4 criteria")
+    planned = store.last_event(report.task_id, "planned")["data"]
+    assert planned["points"] == 3 and planned["points_why"] == ["4 criteria"]
+    assert report.plan.points.line() == "3: 4 criteria"
+    assert "points 3: 4 criteria" in report.text()
+    finished = store.final_event(report.task_id)["data"]
+    # one file, one line, two attempts: git and the attempts say it, never the worker
+    assert finished["points"] == 3 and finished["realized"] == 2 and finished["realized_why"] == ["2 attempts"]
+    dry = run(text, git_repo, store, Options(dry_run=True), registry={}, classifier=kind("feature"), adapters=[])
+    assert "points 5: 4 criteria, kind feature" in dry.text()
+
+
+def test_the_symbols_livespec_reaches_weigh_on_the_points(git_repo, store, tmp_path):
+    from .livespec_fixture import build
+
+    build(git_repo)
+    dry = run("parse_amount rounds wrong", git_repo, store, Options(dry_run=True), registry={},
+              classifier=kind("implement"), adapters=[_livespec(tmp_path)])
+    assert dry.plan.points.reasons == ("reaches 23 symbols",) and dry.plan.points.points == 3
+    unread = run("parse_amount rounds wrong", git_repo, store, Options(dry_run=True), registry={},
+                 classifier=kind("implement"), adapters=[])
+    assert unread.plan.points.points == 1

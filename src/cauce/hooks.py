@@ -212,6 +212,7 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
         usage.ingest(store, event["transcript_path"], **counted)
         usage.ingest_subagents(store, event["transcript_path"], **counted)
     _scribe(event, home(), os.environ)
+    _evolve(store, home())
     from cauce import naming
 
     naming.maybe_start(store, session_id, home(), os.environ)
@@ -268,6 +269,17 @@ def _scribe(event: Mapping[str, Any], root: Path, env: Mapping[str, str]) -> Non
             scribe.notes_started(root, state)
     except Exception:  # the turn's endings still go out
         note_error(root, "Stop (scribe)")
+
+
+def _evolve(store: Store, root: Path) -> None:
+    """What ended settles the standards and, on a new day, the evolution history
+    (`cauce.evolution`). Its failure is noted, and never costs the turn its endings."""
+    try:
+        from cauce import evolution
+
+        evolution.settle(store)
+    except Exception:  # the turn's endings still go out
+        note_error(root, "Stop (evolution)")
 
 
 def _relay(store: Store, root: Path, session_id: str, cwd: str, transcript: str | None) -> str | None:
@@ -507,6 +519,7 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
         # Said when it started, to a caller that may be gone by now: a queued step's above all.
         lines += [f"  it ran with a warning: {warning}" for warning in _warned(store, t["id"])]
         lines += _went_past(store, t)
+        lines += _behind(store, t)
         if t["status"] == "done":
             branch = data.get("branch")
             where = (f"; branch {branch}: show `git diff HEAD...{branch}` and merge only when they say so"
@@ -534,6 +547,22 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
                          "opens the lane; when the queued work does not depend on it, tell the person and "
                          f"run `cauce lanes --unpause {t.get('repo')}` to let them start now")
     return "\n".join(lines), [t["id"] for t in ended]
+
+
+def _behind(store: Store, ended: Mapping) -> list[str]:
+    """How far each step of the ended task's workflow run is behind the branch the run
+    started from, as last measured (its start, or the run's end)."""
+    if not ended.get("workflow_run"):
+        return []
+    from cauce import isolate
+
+    lines = []
+    for step in store.run_tasks(int(ended["workflow_run"])):
+        kept = store.last_event(step["id"], "behind_base")
+        said = isolate.behind_text(kept["data"]) if kept else None
+        if said:
+            lines.append(f"  step {step['workflow_step']} (#{step['id']}): {said}")
+    return lines
 
 
 def _warned(store: Store, task_id: int) -> list[str]:

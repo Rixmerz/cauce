@@ -22,7 +22,9 @@ There are three scopes, and the nearest one wins:
 
 - `project`: `.cauce/workflows/` in this checkout, shared through the repository.
 - `user`: the person's cauce home.
-- `bundled`: the templates `feature`, `bugfix`, `review-fix` and `dual-review`.
+- `bundled`: the templates `feature`, `feature-parallel`, `bugfix`, `review-fix`
+  and `dual-review`. `feature-parallel` is for a feature that touches several
+  areas; with a plan of one part it is `feature`.
 
 A workflow in a nearer scope hides one of the same name further away.
 
@@ -70,6 +72,12 @@ How to write the steps:
 - **Surfaces:** `--surfaces` bounds where a writing step may change files. A
   change outside them fails the attempt and is undone. Steps with disjoint
   surfaces run side by side.
+- **Parts:** `--fanout <plan step>` runs a step once per part of that plan
+  (a `plan` step before it that it waits on), side by side, each in its own
+  surfaces; `--integrate` makes a later step join the parts' branches, with a
+  worker only for a conflict or a check that fails on the joined work. A
+  review of a large change that touches several areas runs once per area, into
+  one ledger.
 - **Review ledger:** after review steps, `--ledger refute` decides the
   findings only one review saw, `--ledger fix` fixes only the confirmed ones,
   and `--ledger recheck` checks each one. Reviews never vote. A row still open
@@ -127,7 +135,7 @@ missing, so the first real start is the one that runs:
 ```bash
 cauce workflow run <name> --input goal="..." --input check="..." --dry-run
 cauce workflow run <name> "<value of the one input not named>"
-cauce workflow run <name> --input goal="..." --input area="..." [--verify "<check>"] [--allow RULE] [--allow-approval]
+cauce workflow run <name> --input goal="..." --input area="..." [--verify "<check>"] [--allow RULE] [--allow-approval] [--after <run>]
 ```
 
 `--verify` is the check of every step that writes and names none of its own;
@@ -135,7 +143,8 @@ a reading step never gets it, and a step with no kind gets it once it is
 classified into one that writes. A memory topic a step names that holds no
 note yet in this project is said when the run starts, with the command that
 fills it, and the step goes without it; run that command when the person has
-the fact.
+the fact. `--after <run>` holds the new run's first steps until that run
+passes, then starts them on the commit its last step kept.
 
 The run starts the repository's dispatcher. Then, without you:
 

@@ -31,11 +31,12 @@ import json
 import os
 import re
 import signal
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from cauce import dispatch, isolate, ledger, project, repo, surfaces
+from cauce import after, dispatch, isolate, ledger, project, repo, surfaces
 from cauce import findings as findings_mod
 from cauce.escalate import MAX_TURNS_CEILING
 from cauce.matrix import KINDS, READ_ONLY_KINDS, Cell
@@ -50,7 +51,7 @@ TOP_KEYS = frozenset({"name", "description", "inputs", "steps", "version"})
 #: What a step may say. Nothing here widens what a worker may do: rules,
 #: approvals and capabilities are the person's flags on `run`, never a file's.
 STEP_KEYS = frozenset({"id", "title", "prompt", "kind", "needs", "verify", "start", "max_turns",
-                       "memory", "role", "surfaces", "ledger"})
+                       "memory", "role", "surfaces", "ledger", "fanout", "integrate"})
 #: Keys an older cauce took in a step and nothing reads any more: a definition or
 #: a run's frozen copy that still holds one loads, and the key is dropped. A step
 #: has no dollar limit: its room is its turns.
@@ -64,6 +65,11 @@ FINDINGS_HANDED = 30
 FINDINGS_CHARS = 4000
 PROMPT_CHARS = 8000
 RESULT_CHARS = 1500
+#: A review of a change this large (changed lines, added and removed) that touches two or
+#: more areas runs as one blind review per area, side by side, into one ledger.
+AREA_REVIEW_LINES = 600
+#: The most other files an area's review is told the change touched.
+AREA_OTHERS = 40
 
 #: Step states as `status` shows them.
 NEEDS_YOU = frozenset({"failed", "blocked", "replan", "needs_approval", "interrupted"})
@@ -240,6 +246,10 @@ def normalize(defn: Mapping[str, Any], name: str | None = None) -> dict[str, Any
                 errors.append(f"{where}: a ledger step comes after the reviews whose findings it takes")
             elif role == "recheck" and not any(isinstance(s, dict) and s.get("ledger") == "fix" for s in steps[:n]):
                 errors.append(f"{where}: a recheck comes after the fix it checks")
+        if step.get("fanout") is not None and not isinstance(step["fanout"], str):
+            errors.append(f"{where}: fanout is the id of the plan step whose parts it runs")
+        if step.get("integrate") is not None and not isinstance(step["integrate"], bool):
+            errors.append(f"{where}: integrate is true or false")
         if step.get("verify") is not None and not isinstance(step["verify"], str):
             errors.append(f"{where}: verify is a command, as text")
         turns = step.get("max_turns")
@@ -268,10 +278,60 @@ def normalize(defn: Mapping[str, Any], name: str | None = None) -> dict[str, Any
                 errors.append(f"{where} needs {dep!r}, which is not a step before it")
         step["title"] = str(step.get("title") or sid)
         ids.append(sid)
+    errors += _parts_problems([s for s in steps if isinstance(s, dict)], ids)
     if errors:
         raise WorkflowError("; ".join(errors))
     data["steps"] = steps
     return data
+
+
+def _parts_problems(steps: list[dict[str, Any]], ids: list[str]) -> list[str]:
+    """What is wrong with the steps that run in parts: a `fanout` names a plan step
+    before it that it waits on, and an `integrate` step joins the parts of one."""
+    by_id = {s["id"]: s for s in steps if isinstance(s.get("id"), str)}
+    out = []
+    for step in steps:
+        sid = step.get("id")
+        if not isinstance(sid, str) or sid not in ids:
+            continue
+        where, waits = f"step {sid!r}", _waits_on(by_id, sid)
+        target = step.get("fanout")
+        if isinstance(target, str):
+            if target not in ids[:ids.index(sid)] or target not in by_id:
+                out.append(f"{where}: fanout names {target!r}, which is no step before it")
+            elif by_id[target].get("kind") != "plan":
+                out.append(f"{where}: fanout names {target!r}, a {by_id[target].get('kind') or 'kindless'} step: "
+                           "the parts come from a plan step's result (kind plan)")
+            elif target not in waits:
+                out.append(f"{where} fans out over {target!r} but does not wait on it: add it to its needs")
+            if step.get("ledger") or step.get("integrate"):
+                out.append(f"{where}: a fanout step is no ledger step and no integrate step")
+        if step.get("integrate") is True:
+            if not any(by_id[w].get("fanout") for w in waits if w in by_id):
+                out.append(f"{where}: an integrate step joins the parts of a fanout step it waits on, and none "
+                           "comes before it")
+            if step.get("ledger") or step.get("kind") in READ_ONLY_KINDS:
+                out.append(f"{where}: an integrate step merges, so it writes: no ledger and no reading kind")
+        else:
+            # A step starts from one branch (`_base`) and a step run in parts keeps one per part:
+            # only the integrate step that joins them may wait on it.
+            for dep in step.get("needs") or ():
+                if isinstance(dep, str) and (by_id.get(dep) or {}).get("fanout"):
+                    out.append(f"{where} waits on {dep!r}, a step run in parts: wait on an integrate step that "
+                               "joins its parts instead")
+    return out
+
+
+def _waits_on(by_id: Mapping[str, Mapping[str, Any]], sid: str) -> set[str]:
+    """Every step `sid` waits on, directly or not; ids that name no step are left out."""
+    seen: set[str] = set()
+    todo = [d for d in by_id[sid].get("needs") or () if d in by_id]
+    while todo:
+        dep = todo.pop()
+        if dep not in seen:
+            seen.add(dep)
+            todo += [d for d in by_id[dep].get("needs") or () if d in by_id]
+    return seen
 
 
 def _memory_ref(ref: str | int) -> str:
@@ -620,9 +680,11 @@ def prepare(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] 
 
 def start(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] | None = None, *,
           scope: str | None = None, session_id: str | None = None, options: Mapping[str, Any] | None = None,
-          kick: Kick | None = None) -> dict[str, Any]:
+          kick: Kick | None = None, after_run: int | None = None) -> dict[str, Any]:
     """A run of a saved workflow in a directory: its first steps queued, the dispatcher started.
-    `options` are the person's (`allow_tools`, `allow_approval`, `verify`)."""
+    `options` are the person's (`allow_tools`, `allow_approval`, `verify`). `after_run`
+    holds its first steps behind that run until it passes (`cauce.after`), checked first."""
+    held = after.target(store, run_id=after_run) if after_run is not None else None
     promote(locate(name, cwd, scope)[1], store)
     ready = prepare(store, name, cwd, inputs, scope=scope)
     defn, where, given, key = ready["defn"], ready["where"], ready["given"], ready["key"]
@@ -630,11 +692,20 @@ def start(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] | 
         # Where the run started: every step's brief can say what the run changed since.
         with contextlib.suppress(isolate.IsolationError):
             options = {**dict(options or {}), "origin": isolate.head(where, "HEAD")}
+        # The branch it started from: each step is compared with it as it moves on.
+        if branch := isolate.current_branch(where):
+            options = {**dict(options or {}), "origin_branch": branch}
+    if held is not None:
+        options = {**dict(options or {}), after.KEY: held}
     run = store.create_run(name=defn["name"], scope=defn["scope"], source=defn["path"],
                            definition=json.dumps(_stored(defn), ensure_ascii=False),
                            inputs=json.dumps(given, ensure_ascii=False), options=json.dumps(dict(options or {})),
                            repo=key, cwd=str(where), session_id=session_id)
     queued = _queue_ready(store, run)
+    if held is not None:
+        # Queued after a run that passed already: it starts now, on what that run kept.
+        for task_id in queued:
+            after.settle(store, store.get_task(task_id))
     (kick or _kick)(str(where), key)
     return {**run, "queued": queued, "gaps": ready["gaps"]}
 
@@ -644,11 +715,46 @@ def _definition(run: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _latest(store: Store, run_id: int) -> dict[str, dict]:
-    """Each step's newest task: a retried step's last try is the one that counts."""
+    """Each step's newest task: a retried step's last try is the one that counts. A step
+    run in parts is its parts' newest tries together (`_together`)."""
     out: dict[str, dict] = {}
+    parts: dict[str, dict[str, dict]] = {}
     for task in store.run_tasks(run_id):
-        out[task["workflow_step"]] = task
+        part = _part(task)
+        if part is None:
+            out[task["workflow_step"]] = task
+            parts.pop(task["workflow_step"], None)
+        else:
+            parts.setdefault(task["workflow_step"], {})[part["id"]] = task
+    for step, found in parts.items():
+        out[step] = _together(list(found.values()))
     return out
+
+
+def _part(task: Mapping[str, Any] | None) -> dict | None:
+    """The part of its step a task runs (a plan's part, or one area of a review); None for a whole step."""
+    try:
+        found = json.loads((task or {}).get("options") or "{}").get("part")
+    except ValueError:
+        return None
+    return found if isinstance(found, dict) and found.get("id") else None
+
+
+def _together(tasks: list[dict]) -> dict:
+    """A step run in parts, as one: its newest part's row with the step's state (the first
+    part that stopped, else running while one runs, else queued, else done) and its parts in order."""
+    ordered = sorted(tasks, key=lambda t: (int((_part(t) or {}).get("n") or 0), t["id"]))
+    states = [t["status"] for t in ordered]
+    stopped = next((state for state in states if state not in ("queued", "running", "done")), None)
+    state = stopped or ("running" if "running" in states else "queued" if "queued" in states else "done")
+    return {**max(ordered, key=lambda t: t["id"]), "status": state, "parts": ordered}
+
+
+def _tasks_of(entry: Mapping[str, Any] | None) -> list[dict]:
+    """The tasks a step's entry in `_latest` stands for: its parts, or itself."""
+    if not entry:
+        return []
+    return list(entry.get("parts") or [entry])
 
 
 def _queue_ready(store: Store, run: Mapping[str, Any]) -> list[int]:
@@ -664,10 +770,12 @@ def _queue_ready(store: Store, run: Mapping[str, Any]) -> list[int]:
         if not ready:
             return queued
         for step in ready:
-            task = _queue_step(store, run, defn, step, inputs, options, latest)
-            latest[step["id"]] = task
-            if task["status"] == "queued":
-                queued.append(task["id"])
+            fanned = _fan(store, run, defn, step, inputs, options, latest)
+            if fanned == []:
+                return queued  # the plan's pass was taken back: the run stops there
+            tasks = fanned or [_queue_step(store, run, defn, step, inputs, options, latest)]
+            latest[step["id"]] = _together(tasks) if _part(tasks[0]) else tasks[0]
+            queued += [t["id"] for t in tasks if t["status"] == "queued"]
         # A ledger step with nothing to decide passed at once: what waits on it may be ready now.
         if all(latest[s["id"]]["status"] == "queued" for s in ready):
             return queued
@@ -680,9 +788,144 @@ def _rerun(step: Mapping[str, Any], latest: Mapping[str, dict]) -> bool:
         (latest.get(d) or {}).get("id", 0) > mine["id"] for d in step["needs"])
 
 
+def _fan(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Mapping[str, Any],
+         inputs: Mapping[str, str], options: Mapping[str, Any], latest: Mapping[str, dict], *,
+         only: set[str] | None = None) -> list[dict] | None:
+    """The tasks of a step that runs in parts, queued: one per part of the plan it fans
+    out over (`only`: those parts). None for a step that runs whole; [] when the plan's
+    parts cannot run side by side, which takes its pass back. A plan of one part is the
+    step run whole, as it is without one."""
+    if not step.get("fanout"):
+        areas = _areas(store, run, defn, step, latest, options)
+        if areas is None:
+            return None
+        return [_queue_step(store, run, defn, step, inputs, options, latest,
+                            part={**area, "n": n, "of": len(areas)})
+                for n, area in enumerate(areas, 1) if only is None or area["id"] in only]
+    plan = latest.get(step["fanout"])
+    data = ((store.final_event(plan["id"]) or {}).get("data") or {}) if plan else {}
+    parts = [p for p in data.get("parts") or () if isinstance(p, dict) and p.get("id")]
+    contract = str(data.get("contract") or "")
+    if len(parts) <= 1:
+        one = {**parts[0], "n": 1, "of": 1, "plan": plan["id"], "contract": contract} if parts and plan else None
+        return [_queue_step(store, run, defn, step, inputs, options, latest, part=one)]
+    bare = [p["id"] for p in parts if not p.get("surfaces")]
+    overlaps = [f"{pid} declares no surfaces" for pid in bare] + surfaces.overlapping(
+        {p["id"]: list(p.get("surfaces") or ()) for p in parts})
+    if overlaps:
+        assert plan is not None
+        why = ("its parts' surfaces overlap, so they cannot run side by side: " + "; ".join(overlaps))[:500]
+        _take_back(store, run, plan, why)
+        return []
+    return [_queue_step(store, run, defn, step, inputs, options, latest,
+                        part={**p, "n": n, "of": len(parts), "plan": plan["id"], "contract": contract})
+            for n, p in enumerate(parts, 1) if only is None or p["id"] in only]
+
+
+def _areas(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Mapping[str, Any],
+           latest: Mapping[str, dict], options: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+    """The areas a blind review of a large change reads apart, side by side: the surfaces
+    the parts before it declared (`rest` for what none of them holds), else the change's
+    top-level folders (`top` for the files at the top). None for a review that runs
+    whole: no change to read, one area, or at most `AREA_REVIEW_LINES` changed lines."""
+    if not str(step.get("kind") or "").startswith("review") or step.get("ledger") or not options.get("origin"):
+        return None
+    base = _base(store, run, defn, step["id"], latest)
+    if not base or base == options["origin"] or not run["cwd"] or not Path(run["cwd"]).is_dir():
+        return None
+    changed = isolate.numstat(Path(run["cwd"]), options["origin"], base)
+    if not changed or sum(n for n, _ in changed) <= AREA_REVIEW_LINES:
+        return None
+    declared = {(_part(t) or {}).get("id"): list(json.loads(t.get("options") or "{}").get("surfaces") or ())
+                for s in defn["steps"] if s.get("fanout") and s["id"] in _before(defn, step["id"])
+                for t in _tasks_of(latest.get(s["id"])) if _part(t)}
+    groups: dict[str, dict[str, Any]] = {}
+    for _, path in changed:
+        pid = next((pid for pid, bound in declared.items() if pid and bound and surfaces.allows(bound, path)), None)
+        if pid is not None:
+            spec = [f":(glob){x}" if any(c in x for c in "*?[") else x for x in declared[pid]]
+        elif declared:
+            pid, spec = "rest", None
+        elif "/" in path:
+            pid, spec = path.split("/", 1)[0], [path.split("/", 1)[0] + "/"]
+        else:
+            pid, spec = "top", None
+        area = groups.setdefault(pid, {"id": pid, "paths": [], "spec": spec})
+        area["paths"].append(path)
+    if len(groups) < 2:
+        return None
+    lines = sum(n for n, _ in changed)
+    every = [path for _, path in changed]
+    return [{**area, "spec": area["spec"] or area["paths"], "lines": lines,
+             "others": [p for p in every if p not in area["paths"]]} for area in groups.values()]
+
+
+def _area_brief(area: Mapping[str, Any], origin: str) -> str:
+    """What one area's review reads: its part of the diff, and the other files the change touched."""
+    others = list(area.get("others") or ())
+    more = f" and {len(others) - AREA_OTHERS} more" if len(others) > AREA_OTHERS else ""
+    return (f"This change is large ({area['lines']} changed lines), so it is reviewed by area, side by side, each "
+            f"review blind and on its own; yours is `{area['id']}` ({area['n']} of {area['of']}). Its part of the "
+            f"change is in this checkout: `git diff {origin[:12]} -- {' '.join(area['spec'])}` shows it. The other "
+            f"files the change touched, which the other reviews read: {', '.join(others[:AREA_OTHERS])}{more}. "
+            "Judge the whole request where this area answers it; what lies only in another area is its review's.")
+
+
+def _take_back(store: Store, run: Mapping[str, Any], plan: Mapping[str, Any], why: str) -> None:
+    """A plan's pass the engine cannot use, taken back: it stops as `parts`, a replan, and
+    the run stops there, its lane paused as a step's stop pauses it; the session is told."""
+    from cauce import stops
+
+    stops.record(store, plan["id"], stops.Stop("parts", why))
+    if plan.get("dispatched"):
+        store.pause_lane(run["repo"], f"task #{plan['id']} ended replan: {why[:200]}")
+
+
+def _quoted(text: str) -> str:
+    """Text as a quoted block: context to read, never items a worker answers as criteria."""
+    return "\n".join(f"> {line}" if line.strip() else ">" for line in str(text).strip().splitlines())
+
+
+def _render(prompt: str, inputs: Mapping[str, str], *, quoted: bool = False) -> str:
+    """A step's prompt with its inputs in it. `quoted`: each input as a quoted block, the
+    request as context, for a step whose own criteria are a part's (its prompt), never
+    the whole request's: the review that follows judges the whole."""
+    if not quoted:
+        return INPUT.sub(lambda m: inputs.get(m.group(1), m.group(0)), prompt).strip()
+    out = INPUT.sub(lambda m: "\n" + _quoted(inputs[m.group(1)]) + "\n" if m.group(1) in inputs else m.group(0),
+                    prompt)
+    return re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t]+\n", "\n", out)).strip()
+
+
+def _part_brief(part: Mapping[str, Any]) -> str:
+    """What a part's worker is told of its part, and the contract every part keeps, quoted as context."""
+    if int(part.get("of") or 1) > 1:
+        lines = [f"Your part: {part['id']} ({part['n']} of {part['of']}), as the plan (task #{part['plan']}) split "
+                 "the work. Build this part only: the other parts are built beside you, each in surfaces of its "
+                 f"own, and joined after.\n{part['prompt']}"]
+    else:
+        lines = [f"The plan for it (task #{part['plan']}):\n{part['prompt']}"]
+    if part.get("contract"):
+        lines.append("The contract every part keeps, from the plan, verbatim. It is context, not a task of its own: "
+                     "keep these names, types and interfaces exactly as written, so the parts join:\n"
+                     + _quoted(part["contract"]))
+    return "\n\n".join(lines)
+
+
 def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Mapping[str, Any],
-                inputs: Mapping[str, str], options: Mapping[str, Any], latest: Mapping[str, dict]) -> dict:
-    body = INPUT.sub(lambda m: inputs.get(m.group(1), m.group(0)), step["prompt"]).strip()
+                inputs: Mapping[str, str], options: Mapping[str, Any], latest: Mapping[str, dict], *,
+                part: Mapping[str, Any] | None = None) -> dict:
+    """Queue one step (or one `part` of it) as a task."""
+    split = part is not None and int(part.get("of") or 1) > 1 and "spec" not in part
+    area = part if part is not None and "spec" in part else None
+    joining = _joining(store, run, defn, step, latest) if step.get("integrate") else None
+    joins = joining is not None and len(joining["branches"]) > 1
+    body = _render(step["prompt"], inputs, quoted=split or joins)
+    if part is not None and area is None:
+        body += "\n\n" + _part_brief(part)
+    if joins:
+        assert joining is not None
+        body += "\n\n" + _join_brief(joining)
     earlier = _before(defn, step["id"])
     notes = []
     held: dict[str, Any] | None = None
@@ -698,27 +941,31 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         # work. With no change to read (a plan to critique), it gets what came before.
         earlier = []
     for sid in earlier:
-        task = latest.get(sid)
-        if not task:
-            continue
-        said = []
-        if task.get("result"):
-            said.append(task["result"] if len(task["result"]) <= RESULT_CHARS else task["result"][:RESULT_CHARS] + "…")
-        # A step it waits on hands over its findings as records, not only its summary.
-        found = findings_mod.read({"findings": _findings_of(store, task)}) if sid in step["needs"] else ()
-        if found:
-            said.append("Its findings:\n" + findings_mod.text(found[:FINDINGS_HANDED])[:FINDINGS_CHARS])
-        if said:
-            notes.append(f"- {sid} (task #{task['id']}): " + "\n".join(said))
+        for task in _tasks_of(latest.get(sid)):
+            said = []
+            if task.get("result"):
+                said.append(task["result"] if len(task["result"]) <= RESULT_CHARS
+                            else task["result"][:RESULT_CHARS] + "…")
+            # A step it waits on hands over its findings as records, not only its summary.
+            found = findings_mod.read({"findings": _findings_of(store, task)}) if sid in step["needs"] else ()
+            if found:
+                said.append("Its findings:\n" + findings_mod.text(found[:FINDINGS_HANDED])[:FINDINGS_CHARS])
+            if said:
+                label = f"{sid}/{_part(task)['id']}" if _part(task) else sid
+                notes.append(f"- {label} (task #{task['id']}): " + "\n".join(said))
     if notes:
+        # Quoted: context, never items a worker answers as the request's criteria.
         body += (f"\n\nThis is step {step['id']!r} of the workflow {defn['name']!r}. What the steps before it "
-                 "found and did (their changes are already in this checkout):\n" + "\n".join(notes))
+                 "found and did (their changes are already in this checkout):\n" + _quoted("\n".join(notes)))
     if step.get("memory"):
         attached = memory_text(store, run["repo"], step["memory"])
         if attached:
             body += "\n\n" + attached
-    base = _base(store, run, defn, step["id"], latest)
-    if base and options.get("origin"):
+    # An integrate step starts where its parts started, and joins their branches there.
+    base = (joining or {}).get("base") or _base(store, run, defn, step["id"], latest)
+    if area is not None:
+        body += "\n\n" + _area_brief(area, options["origin"])
+    elif base and options.get("origin") and base != options["origin"]:
         body += ("\n\nEverything this workflow changed so far is in this checkout: "
                  f"`git diff {options['origin'][:12]}` shows it.")
     opts = {k: v for k, v in {
@@ -729,27 +976,72 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         and step.get("ledger") in (None, "fix") else None,
         "max_turns": step.get("max_turns"),
         "allow_tools": options.get("allow_tools") or None, "allow_approval": options.get("allow_approval") or None,
-        "base": base, "step_role": step.get("role"), "surfaces": step.get("surfaces"),
-        "ledger": held}.items() if v is not None}
-    empty = held is not None and not held["ids"]
+        "base": base, "step_role": step.get("role"),
+        "surfaces": list(part["surfaces"]) if split and part else step.get("surfaces"),
+        "part": ({k: part[k] for k in ("id", "n", "of", "plan")} if split and part else
+                 {"id": area["id"], "n": area["n"], "of": area["of"], "area": True} if area else None),
+        # A plan a later step fans out over: its pass carries the parts and their contract.
+        "parts": True if any(s.get("fanout") == step["id"] for s in defn["steps"]) else None,
+        "ledger": held,
+        "integrate": {k: joining[k] for k in ("branches", "contract")} if joins and joining else None,
+        # A run queued after other work: its steps wait for that work to pass, as it does.
+        after.KEY: options.get(after.KEY)}.items() if v is not None}
+    empty = (held is not None and not held["ids"]) or (joining is not None and not joins)
     task = store.create_task(body, status="done" if empty else "queued", source="queue", author="workflow",
                              repo=run["repo"], cwd=run["cwd"], session_id=run["session_id"],
                              options=json.dumps(opts),
-                             title=f"[{defn['name']}#{run['id']} {step['id']}] {step['title']}"[:200],
+                             title=f"[{defn['name']}#{run['id']} {step['id']}"
+                                   f"{'/' + part['id'] if part and (split or area) else ''}] {step['title']}"[:200],
                              workflow_run=run["id"], workflow_step=step["id"])
     if empty:
-        # Nothing to decide or fix: the step passes without a worker, and no session is told of it.
-        assert held is not None
-        nothing = {"refute": "no finding needed a refuter", "fix": "no confirmed finding to fix",
-                   "recheck": "no fix to check"}[held["role"]]
+        # Nothing to decide, fix or join: the step passes without a worker, and no session is told of it.
+        if held is not None:
+            nothing = {"refute": "no finding needed a refuter", "fix": "no confirmed finding to fix",
+                       "recheck": "no fix to check"}[held["role"]]
+            decided = {"ledger": ledger.Outcome(held["role"], held["round"], confirmed=list(held.get("agreed") or ()),
+                                                held=list(held.get("held") or ())).data()}
+        else:
+            assert joining is not None
+            nothing = ("one part kept a branch: nothing to join, and what follows starts from it"
+                       if joining["branches"] else "no part changed anything: nothing to join")
+            decided = {}
         store.update_task(task["id"], result=nothing)
-        settled = ledger.Outcome(held["role"], held["round"], confirmed=list(held.get("agreed") or ()),
-                                 held=list(held.get("held") or ()))
         store.add_event(task["id"], "finished", status="done", final_cell=None, cost_usd=0, branch=None,
-                        changed=[], stop=None, findings=[], ledger=settled.data(), skipped=True)
+                        changed=[], stop=None, findings=[], skipped=True, **decided)
         store.add_event(task["id"], "reported", via="workflow")
         task = store.get_task(task["id"])
     return task
+
+
+def _joining(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Mapping[str, Any],
+             latest: Mapping[str, dict]) -> dict[str, Any]:
+    """What an integrate step joins: the branch each part of the fanout steps it waits on
+    kept, in the plan's order, the contract they keep, and the commit they started from."""
+    fanned = [s for s in defn["steps"] if s.get("fanout") and s["id"] in _before(defn, step["id"])]
+    branches, contracts, base = [], [], None
+    for s in fanned:
+        plan = latest.get(s["fanout"])
+        said = (((store.final_event(plan["id"]) or {}).get("data") or {}).get("contract") or "") if plan else ""
+        if said and said not in contracts:
+            contracts.append(said)
+        for t in _tasks_of(latest.get(s["id"])):
+            branch = ((store.final_event(t["id"]) or {}).get("data") or {}).get("branch")
+            if branch:
+                branches.append({"part": (_part(t) or {}).get("id") or s["id"], "task": t["id"], "branch": branch})
+            started = store.last_event(t["id"], "attempt_started")
+            base = base or ((started or {}).get("data") or {}).get("base")
+        base = base or _base(store, run, defn, s["id"], latest)
+    return {"branches": branches, "contract": "\n\n".join(contracts), "base": base}
+
+
+def _join_brief(joining: Mapping[str, Any]) -> str:
+    """What an integrate step's brief says it joins (no list items: they are no criteria)."""
+    lines = [f"  {b['part']} — {b['branch']} (task #{b['task']})" for b in joining["branches"]]
+    return ("The parts to join, in the plan's order, each kept on its own branch from "
+            f"{str(joining.get('base') or 'the same commit')[:12]}. cauce merges them before any worker runs; a "
+            "worker is needed only where they conflict or the check fails on the joined work:\n" + "\n".join(lines)
+            + ("\n\nThe contract every part keeps, from the plan, verbatim (context: keep it):\n"
+               + _quoted(joining["contract"]) if joining.get("contract") else ""))
 
 
 def writes(step: Mapping[str, Any]) -> bool:
@@ -764,8 +1056,12 @@ def step_check(step: Mapping[str, Any], options: Mapping[str, Any]) -> str | Non
 
 
 def _findings_of(store: Store, task: Mapping[str, Any] | None) -> list[dict]:
-    finished = store.final_event(task["id"]) if task and task.get("status") == "done" else None
-    return list((finished or {}).get("data", {}).get("findings") or [])
+    """The findings a step's task passed with; a step run in parts, every part's."""
+    out: list[dict] = []
+    for t in _tasks_of(task):
+        finished = store.final_event(t["id"]) if t.get("status") == "done" else None
+        out += list((finished or {}).get("data", {}).get("findings") or [])
+    return out
 
 
 def _decided(store: Store, task: Mapping[str, Any] | None) -> dict:
@@ -840,28 +1136,70 @@ def _base(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step_id
           latest: Mapping[str, dict]) -> str | None:
     """The commit a step starts from: the tip the nearest step before it kept,
     read when it passed. A reading step keeps no branch, so the search goes on
-    past it. None: the checkout's HEAD."""
+    past it; with none before it, the commit a run queued after other work was
+    released onto (`cauce.after`). None: the checkout's HEAD."""
     for sid in reversed(_before(defn, step_id)):
-        task = latest.get(sid)
-        finished = store.final_event(task["id"]) if task else None
-        branch = (finished or {}).get("data", {}).get("branch")
-        if branch and run["cwd"] and Path(run["cwd"]).is_dir():
+        # A step run in parts keeps a branch per part: what comes after starts from the
+        # integrate step that joins them, unless only one part kept one.
+        kept = [b for b in (((store.final_event(t["id"]) or {}).get("data") or {}).get("branch")
+                            for t in _tasks_of(latest.get(sid))) if b]
+        if len(kept) == 1 and run["cwd"] and Path(run["cwd"]).is_dir():
             try:
-                return isolate.head(Path(run["cwd"]), branch)
+                return isolate.head(Path(run["cwd"]), kept[0])
             except isolate.IsolationError:
                 continue
-    return None
+    return json.loads(run.get("options") or "{}").get("base")
+
+
+def drift(store: Store, task: Mapping[str, Any], tip: str, when: str) -> dict[str, Any] | None:
+    """How far a step's work (`tip`: the commit it starts from, or its branch) is behind
+    the branch its run started from, as that branch is now, kept as a `behind_base`
+    event (`when`: start or end). Said, never acted on: nothing is merged or rebased."""
+    run = store.get_run(int(task["workflow_run"])) if task.get("workflow_run") else None
+    base = json.loads(run["options"] or "{}").get("origin_branch") if run else None
+    if not base or not run or not run["cwd"] or not Path(run["cwd"]).is_dir():
+        return None
+    found = isolate.behind(Path(run["cwd"]), tip, base)
+    if found is not None:
+        store.add_event(task["id"], "behind_base", when=when, **found)
+    return found
+
+
+def _behind(store: Store, run: Mapping[str, Any], task: Mapping[str, Any], finished: Mapping[str, Any] | None,
+            *, live: bool) -> str | None:
+    """A step's distance from its run's base branch: read from git now (`live`), else as last kept."""
+    base = json.loads(run["options"] or "{}").get("origin_branch")
+    if not base:
+        return None
+    if live and run["cwd"] and Path(run["cwd"]).is_dir():
+        branch = ((finished or {}).get("data") or {}).get("branch")
+        started = store.last_event(task["id"], "attempt_started")
+        tip = f"refs/heads/{branch}" if branch else ((started or {}).get("data") or {}).get("base")
+        found = isolate.behind(Path(run["cwd"]), tip, base) if tip else None
+        if found is not None:
+            return isolate.behind_text(found)
+    kept = store.last_event(task["id"], "behind_base")
+    return isolate.behind_text(kept["data"]) if kept else None
 
 
 def advance(store: Store, task: Mapping[str, Any] | None, env: Mapping[str, str] | None = None,
             kick: Kick | None = None) -> list[int]:
-    """After a step's run ended: when it passed, queue what waited on it and
-    start the dispatcher. The session that started the run is told at its end,
-    or when a step waits on the person, never of each step the engine went past."""
-    if not task or not task.get("workflow_run"):
+    """After a task's run ended: when it passed, release the work queued after it
+    (`cauce.after`) and, for a step, queue what waited on it; then start the
+    dispatcher. A run whose last step passed releases the work queued after the
+    run. The session that started the run is told at its end, or when a step waits
+    on the person, never of each step the engine went past. The ids queued or released."""
+    if not task:
         return []
+    released = _release(store, kick, task=task)
+    if not task.get("workflow_run"):
+        return released
     run = store.get_run(int(task["workflow_run"]))
-    if run is None or run["status"] != "active" or task["status"] != "done":
+    if run is None or run["status"] != "active":
+        return released
+    if task["status"] != "done":
+        # A step that stops stops the run there: the run ends now, as far as its branches go.
+        _drift_at_end(store, run)
         return []
     # Two steps a third waits on may pass at the same moment: one of them queues it.
     with store.immediate():
@@ -869,6 +1207,11 @@ def advance(store: Store, task: Mapping[str, Any] | None, env: Mapping[str, str]
         if queued:
             store.add_event(task["id"], "reported", via="workflow")
             store.add_event(task["id"], "workflow_advanced", run=run["id"], queued=queued)
+            _advanced(store, task, queued)
+    if (store.get_task(task["id"]) or {}).get("status") != "done":
+        # Its pass was taken back (a plan whose parts cannot run side by side): the run stops there.
+        _drift_at_end(store, run)
+        return released
     if not queued:
         queued = _next_round(store, run, task)
     if queued:
@@ -876,14 +1219,46 @@ def advance(store: Store, task: Mapping[str, Any] | None, env: Mapping[str, str]
         store.update_run(run["id"])
     elif all(t["status"] == "done" for t in _latest(store, run["id"]).values()) and \
             len(_latest(store, run["id"])) == len(_definition(run)["steps"]):
-        # The run is over: its definition is free, and a change that waited for it applies.
+        # The run is over: its definition is free, a change that waited for it applies,
+        # and the work queued after it starts on what its last step kept.
         store.update_run(run["id"], status="done")
+        _drift_at_end(store, run)
         promote(run["source"], store)
+        released += _release(store, kick, run=store.get_run(run["id"]))
     else:
         # A step that passed while a sibling still runs: the engine went past it, and the session is not told.
         store.add_event(task["id"], "reported", via="workflow")
         store.update_run(run["id"])
-    return queued
+    return [*queued, *released]
+
+
+def _advanced(store: Store, task: Mapping[str, Any], queued: list[int]) -> None:
+    """On each task the engine queued after `task` passed: how long that took, from its
+    ending (`advance_s`), kept for the run of each to put on its own ending."""
+    passed = (((store.final_event(task["id"]) or {}).get("data") or {}).get("at"))
+    if not isinstance(passed, int | float) or isinstance(passed, bool):
+        return
+    took = round(max(time.time() - passed, 0.0), 3)
+    for task_id in queued:
+        store.add_event(task_id, "advanced", after=task["id"], advance_s=took)
+
+
+def _release(store: Store, kick: Kick | None, *, task: Mapping[str, Any] | None = None,
+             run: Mapping[str, Any] | None = None) -> list[int]:
+    """The work queued after a task or a run that passed, released, and each of its lanes started."""
+    freed = after.release(store, task=task, run=run)
+    for t in freed:
+        (kick or _kick)(t["cwd"], t["repo"])
+    return [t["id"] for t in freed]
+
+
+def _drift_at_end(store: Store, run: Mapping[str, Any]) -> None:
+    """At a run's end, done or stopped at a step: each kept branch against the base as it is then."""
+    for entry in _latest(store, run["id"]).values():
+        for step in _tasks_of(entry):
+            branch = ((store.final_event(step["id"]) or {}).get("data") or {}).get("branch")
+            if branch:
+                drift(store, step, f"refs/heads/{branch}", "end")
 
 
 def _next_round(store: Store, run: Mapping[str, Any], task: Mapping[str, Any]) -> list[int]:
@@ -902,6 +1277,7 @@ def _next_round(store: Store, run: Mapping[str, Any], task: Mapping[str, Any]) -
         queued = _queue_step(store, run, defn, fix, json.loads(run["inputs"]), json.loads(run["options"]), latest)
         store.add_event(task["id"], "reported", via="workflow")
         store.add_event(task["id"], "workflow_advanced", run=run["id"], queued=[queued["id"]], round=True)
+        _advanced(store, task, [queued["id"]])
     return [queued["id"]] if queued["status"] == "queued" else []
 
 
@@ -939,28 +1315,39 @@ def status(store: Store, run_id: int, *, detail: bool = False) -> dict[str, Any]
     if run is None:
         raise WorkflowError(f"no workflow run #{run_id}")
     defn, latest = _definition(run), _latest(store, run_id)
+    every = store.run_tasks(run_id)
     steps = []
     for step in defn["steps"]:
         task = latest.get(step["id"])
         state = "pending" if task is None else task["status"]
         entry: dict[str, Any] = {"id": step["id"], "title": step["title"], "needs": step["needs"], "state": state}
-        if task:
-            finished = store.final_event(task["id"])
-            entry.update(task=task["id"], cell=task.get("final_cell") or task.get("current_cell"),
-                         cost_usd=round(task.get("cost_usd") or 0, 2), result=task.get("result"),
-                         branch=(finished or {}).get("data", {}).get("branch") if state == "done" else None,
-                         tries=sum(1 for t in store.run_tasks(run_id) if t["workflow_step"] == step["id"]),
-                         waits=dispatch.waiting(store, task))
-            if detail:
-                entry.update(progress(store, run, task))
+        if task and task.get("parts"):
+            # A step run in parts: each part under it, the step's state theirs together.
+            parts = [{"id": _part(t)["id"], "state": t["status"],
+                      **_task_entry(store, run, t, detail, tries=sum(
+                          1 for o in every if o["workflow_step"] == step["id"] and _part(o)
+                          and _part(o)["id"] == _part(t)["id"]))} for t in task["parts"]]
+            at = next((p for p in parts if p["state"] == state), parts[-1])
+            entry.update(task=at["task"], cell=at.get("cell"), cost_usd=round(sum(p["cost_usd"] for p in parts), 2),
+                         points=sum(p["points"] or 0 for p in parts) or None,
+                         result=None, branch=None, tries=max(p["tries"] for p in parts), waits=at.get("waits"),
+                         parts=parts)
+        elif task:
+            entry.update(_task_entry(store, run, task, detail,
+                                     tries=sum(1 for t in every if t["workflow_step"] == step["id"])))
         steps.append(entry)
     states = {s["state"] for s in steps}
+    # Queued after other work (`cauce.after`): every step that is open waits for that work to pass.
+    holding = [s for s in steps if s["state"] in ("queued", "running")]
+    holding = holding if holding and all(after.held(latest[s["id"]]) for s in holding) else []
     if run["status"] == "cancelled":
         state = "cancelled"
     elif run["status"] == "done" or states == {"done"}:
         state = "done"
     elif states & NEEDS_YOU or (states & STOPPED and not states & {"queued", "running"}):
         state = "waits on you"
+    elif holding:
+        state = "queued"
     elif states & {"queued", "running"}:
         state = "running"
     else:
@@ -972,8 +1359,26 @@ def status(store: Store, run_id: int, *, detail: bool = False) -> dict[str, Any]
             "now": [s["id"] for s in steps if s["state"] in ("queued", "running")],
             "waiting": [s["id"] for s in steps if s["state"] in NEEDS_YOU | STOPPED],
             "branch": branch, "cost_usd": round(sum(s.get("cost_usd") or 0 for s in steps), 2),
+            # Its size: its steps' points, each part of a step run in parts counted.
+            "points": sum(s.get("points") or 0 for s in steps),
             "created_at": run["created_at"], "updated_at": run["updated_at"], "reason": run["reason"],
-            "steps": steps}
+            "waits": holding[0]["waits"] if holding else None, "steps": steps}
+
+
+def _task_entry(store: Store, run: Mapping[str, Any], task: Mapping[str, Any], detail: bool, *,
+                tries: int) -> dict[str, Any]:
+    """One step's (or part's) task as `status` shows it: its cell, cost, result, branch, tries and wait."""
+    finished = store.final_event(task["id"])
+    entry: dict[str, Any] = dict(
+        task=task["id"], cell=task.get("final_cell") or task.get("current_cell"),
+        cost_usd=round(task.get("cost_usd") or 0, 2), points=task.get("points"), result=task.get("result"),
+        branch=(finished or {}).get("data", {}).get("branch") if task["status"] == "done" else None,
+        tries=tries, waits=dispatch.waiting(store, task))
+    if behind := _behind(store, run, task, finished, live=detail):
+        entry["behind"] = behind
+    if detail:
+        entry.update(progress(store, run, task))
+    return entry
 
 
 def runs(store: Store, *, repos: set[str] | None = None, limit: int = 20) -> list[dict[str, Any]]:
@@ -991,7 +1396,7 @@ def cancel(store: Store, run_id: int, *, via: str = "cli") -> list[int]:
     store.update_run(run_id, status="cancelled", reason=f"cancelled {via}")
     promote(run["source"], store)
     stopped = []
-    for task in _latest(store, run_id).values():
+    for task in (t for entry in _latest(store, run_id).values() for t in _tasks_of(entry)):
         if task["status"] == "queued":
             stops.record(store, task["id"], stops.Stop("cancelled", "its workflow run was cancelled", by="you",
                                                        extra={"via": via}))
@@ -1019,7 +1424,21 @@ def retry(store: Store, run_id: int, step_id: str, kick: Kick | None = None) -> 
         raise WorkflowError(f"step {step_id!r} is {last['status']} (task #{last['id']}): nothing to retry")
     if any((latest.get(d) or {}).get("status") != "done" for d in step["needs"]):
         raise WorkflowError(f"step {step_id!r} waits on {step['needs']}, which have not all passed")
-    task = _queue_step(store, run, defn, step, json.loads(run["inputs"]), json.loads(run["options"]), latest)
+    inputs, options = json.loads(run["inputs"]), json.loads(run["options"])
+    if last is not None and last.get("parts"):
+        # A step run in parts: only the parts that did not pass go again; the ones that passed stand.
+        stopped = [t for t in last["parts"] if t["status"] not in ("queued", "running", "done")]
+        tasks = _fan(store, run, defn, step, inputs, options, latest, only={_part(t)["id"] for t in stopped}) or []
+        for t in stopped:
+            store.release_lane(run["repo"], t["id"])
+        if not tasks:
+            raise WorkflowError(f"step {step_id!r}: its parts could not be queued again")
+        (kick or _kick)(run["cwd"], run["repo"])
+        return {**tasks[0], "parts_retried": [(_part(t)["id"], t["id"]) for t in tasks]}
+    fanned = _fan(store, run, defn, step, inputs, options, latest)
+    if fanned == []:
+        raise WorkflowError(f"step {step_id!r}: the plan it fans out over was taken back; retry the plan")
+    task = fanned[0] if fanned else _queue_step(store, run, defn, step, inputs, options, latest)
     if last is not None:
         # The try that stopped paused the lane; a retry is the person saying go on.
         store.release_lane(run["repo"], last["id"])

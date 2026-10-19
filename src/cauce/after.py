@@ -1,0 +1,282 @@
+"""Work queued after other work: held until that work passes, then started on what it kept.
+
+`cauce run … --after <task>`, `cauce queue add … --after <task>` and `cauce
+workflow run … --after <run>` queue work held behind a task or a workflow run.
+The hold is kept in the queued task's options (`after`), and the dispatcher never
+starts a task that holds one. A task or run that does not exist, or whose work
+was dropped (it failed, it was cancelled, it was found wrong), is refused when
+the work is queued, with its reason.
+
+When the work it waits for passes, the engine releases what waits on it, where
+it already advances a workflow (`workflows.advance`, at the end of
+`orchestrate.run`; for a run, when its last step passes), in one write
+transaction: each held task starts on the branch that work kept (a run's, its
+last step's), or on the base when that branch is already merged into it, and its
+plan says which. Nothing is merged or rebased. Work that stops short of a pass
+releases nothing: what waits on it stays held and says why, until a resume of it
+passes, or the person dismisses or cancels what waits. A chain is released one
+link at a time: each link waits on the one before it, and on nothing else.
+
+Light: the dispatcher, its views and `stops` read it.
+"""
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+from cauce import isolate
+from cauce.store import Store
+
+#: The key in a queued task's options (and a held workflow run's) that holds it.
+KEY = "after"
+#: Statuses whose work was dropped: nothing passed to start from, and nothing to wait for.
+DROPPED = frozenset({"failed", "cancelled"})
+
+
+class AfterError(ValueError):
+    """The work named with `--after` cannot be waited for: said when the work is queued."""
+
+
+def hold(task: Mapping[str, Any]) -> dict[str, int] | None:
+    """What a task (or a run, by its options) waits for: `{"task": N}` or `{"run": N}`; None."""
+    try:
+        found = json.loads(task.get("options") or "{}").get(KEY)
+    except (ValueError, AttributeError):
+        return None
+    return found if isinstance(found, dict) and found else None
+
+
+def held(task: Mapping[str, Any]) -> bool:
+    """A queued task that waits for other work to pass: the dispatcher never starts it."""
+    return task.get("status") == "queued" and hold(task) is not None
+
+
+def target(store: Store, *, task_id: int | None = None, run_id: int | None = None) -> dict[str, int]:
+    """The hold for work queued after a task or a workflow run, checked. Raises
+    `AfterError` with the reason when it does not exist, is no work cauce runs, or
+    already failed (its work dropped, so nothing would ever release what waits)."""
+    if run_id is not None:
+        run = store.get_run(run_id)
+        if run is None:
+            raise AfterError(f"there is no workflow run #{run_id}")
+        if run["status"] == "cancelled":
+            raise AfterError(f"run #{run_id} was cancelled: nothing it does will pass")
+        for task in _latest(store, run_id).values():
+            if _work_dropped(store, task):
+                # A part is retried by its step's id: a retry runs again the parts that did not pass.
+                raise AfterError(f"run #{run_id} stopped at {_at(task, 'task #')}, which "
+                                 f"{_ended(store, task)}: `cauce workflow retry {run_id} {task['workflow_step']}` "
+                                 "first, or queue this without --after")
+        return {"run": int(run_id)}
+    assert task_id is not None
+    task = store.get_task(task_id)
+    if task is None:
+        raise AfterError(f"there is no task #{task_id}")
+    if task["source"] not in ("cauce", "queue"):
+        raise AfterError(f"#{task_id} is a session's turn, not work cauce runs: nothing passes there to wait for")
+    if _work_dropped(store, task):
+        raise AfterError(f"#{task_id} {_ended(store, task)}, and its work was dropped: resume it first "
+                         f"(`cauce resume {task_id}`), or queue this without --after")
+    return {"task": int(task_id)}
+
+
+def _work_dropped(store: Store, task: Mapping[str, Any]) -> bool:
+    """Its work was dropped, as a run drops it: it failed, it was cancelled, or it was found
+    wrong. A replan for turns keeps its work, and resumes."""
+    if task["status"] in DROPPED:
+        return True
+    if task["status"] != "replan":
+        return False
+    from cauce import stops  # stops reads holds: imported here, not at the top
+
+    stop = stops.of(store, dict(task))
+    return stop is None or stop.cause != "turns"
+
+
+def _ended(store: Store, task: Mapping[str, Any]) -> str:
+    """How a task that stopped short of a pass ended, in the words a wait line uses."""
+    from cauce import stops  # stops reads holds: imported here, not at the top
+
+    stop = stops.of(store, dict(task))
+    return f"stopped as {stop.cause if stop else task['status']}"
+
+
+def _latest(store: Store, run_id: int) -> dict[str, dict]:
+    """Each step's newest task in a run (a retried step's last try is the one that counts);
+    a step run in parts, each part's, as `step/part`."""
+    out: dict[str, dict] = {}
+    for task in store.run_tasks(run_id):
+        part = _part_id(task)
+        out[f"{task['workflow_step']}/{part}" if part else task["workflow_step"]] = task
+    return out
+
+
+def _part_id(task: Mapping[str, Any]) -> str | None:
+    """The part of its step a run's task is, None for a step run whole."""
+    try:
+        return (json.loads(task.get("options") or "{}").get("part") or {}).get("id")
+    except (ValueError, AttributeError):
+        return None
+
+
+def _at(task: Mapping[str, Any], label: str) -> str:
+    """Where in its run a task is, as a person names it: "step 'build' (part web, #12)",
+    `label` before its number."""
+    part = _part_id(task)
+    return f"step {task['workflow_step']!r} ({f'part {part}, ' if part else ''}{label}{task['id']})"
+
+
+def waiting(store: Store, task: Mapping[str, Any]) -> str | None:
+    """What a held task waits for, in one line: "waits for #17 to pass", or why it
+    still waits when that work stopped short ("waits for #17, which stopped as
+    review"). None for a task that holds nothing."""
+    if not held(task):
+        return None
+    wanted = hold(task) or {}
+    if "run" in wanted:
+        run_id = int(wanted["run"])
+        run = store.get_run(run_id)
+        if run is None:
+            return f"waits for run #{run_id}, which no longer exists: `cauce dismiss {task['id']}` drops this"
+        if run["status"] == "cancelled":
+            return f"waits for run #{run_id}, which stopped as cancelled: `cauce dismiss {task['id']}` drops this"
+        stopped = next((t for t in _latest(store, run_id).values()
+                        if t["status"] not in ("queued", "running", "done")), None)
+        if stopped is not None:
+            t = stopped
+            return (f"waits for run #{run_id}, which stopped at {_at(t, '#')} as "
+                    f"{_ended(store, t).removeprefix('stopped as ')}: a resume of it to a pass releases this")
+        return f"waits for run #{run_id} to pass"
+    task_id = int(wanted.get("task") or 0)
+    other = store.get_task(task_id)
+    if other is None:
+        return f"waits for #{task_id}, which no longer exists: `cauce dismiss {task['id']}` drops this"
+    if other["status"] in ("queued", "running", "done"):
+        return f"waits for #{task_id} to pass"
+    return f"waits for #{task_id}, which {_ended(store, other)}: a resume of it to a pass releases this"
+
+
+def _kept(store: Store, wanted: Mapping[str, int]) -> tuple[str | None, list[str], str]:
+    """What the work a hold names kept when it passed: its branch, the files it changed,
+    and how it is named. A run's is its last step's, the one that holds every step's work."""
+    if "run" in wanted:
+        run_id = int(wanted["run"])
+        run = store.get_run(run_id) or {}
+        order = [s["id"] for s in json.loads(run.get("definition") or "{}").get("steps") or ()]
+        latest = _latest(store, run_id)
+        paths: list[str] = []
+        branch = None
+        for step in reversed(order):
+            finished = ((store.final_event(latest[step]["id"]) or {}).get("data") or {}) if step in latest else {}
+            paths += list(finished.get("changed") or ())
+            branch = branch or finished.get("branch")
+        return branch, sorted(set(paths)), f"run #{run_id}'s last step"
+    task_id = int(wanted["task"])
+    finished = (store.final_event(task_id) or {}).get("data") or {}
+    return finished.get("branch"), list(finished.get("changed") or ()), f"#{task_id}"
+
+
+def _start(kept: tuple[str | None, list[str], str], where: Path | None) -> tuple[str | None, str]:
+    """The commit held work starts on in its checkout (None: the base, its HEAD) and the
+    line its plan says. Read only: nothing is merged or rebased."""
+    branch, paths, who = kept
+    if not branch:
+        return None, f"queued after {who}, which passed and kept no branch: this starts on the base"
+    if where is None or not where.is_dir():
+        return None, f"queued after {who}, which passed on {branch}: this starts where it was queued"
+    try:
+        tip = isolate.head(where, f"refs/heads/{branch}")
+    except isolate.IsolationError:
+        return None, (f"queued after {who}, which passed on {branch}: that branch is not in this checkout "
+                      "(deleted, or in another repository), so this starts on the base")
+    if isolate.landed(where, branch, paths):
+        return None, (f"queued after {who}, which passed on {branch}: that branch is already merged into the base, "
+                      "so this starts on the base")
+    return tip, (f"queued after {who}, which passed: this starts on {branch} ({tip[:12]}), the branch it kept; "
+                 "nothing is merged or rebased")
+
+
+def release(store: Store, *, task: Mapping[str, Any] | None = None,
+            run: Mapping[str, Any] | None = None) -> list[dict]:
+    """After `task` or workflow `run` ended: when it passed, every queued task held behind
+    it is released onto what it kept, in one write transaction (a task released twice at
+    once is released once). The tasks released, for the caller to start their lanes."""
+    ended, passed = (({"task": int(task["id"])}, task.get("status") == "done") if task is not None
+                     else ({"run": int(run["id"])}, (run or {}).get("status") == "done"))
+    if not passed:
+        return []
+    waiting_on = [t for t in store.list_tasks(status=["queued"], limit=1000) if hold(t) == ended]
+    if not waiting_on:
+        return []
+    kept = _kept(store, ended)
+    # Git is read before the transaction: the write lock is held for the writes alone.
+    starts = {t["id"]: _start(kept, Path(t["cwd"]) if t.get("cwd") else None) for t in waiting_on}
+    heads = {t["id"]: None if starts[t["id"]][0] else _now(t) for t in waiting_on}
+    released = []
+    with store.immediate():
+        for t in waiting_on:
+            now = store.get_task(t["id"])
+            if now is None or not held(now) or hold(now) != ended:
+                continue
+            _free(store, now, ended, *starts[t["id"]], head=heads[t["id"]])
+            released.append(now)
+    return released
+
+
+def settle(store: Store, task: Mapping[str, Any]) -> bool:
+    """Work just queued after work that has passed already: released at once, onto what
+    it kept. False while that work has not passed."""
+    wanted = hold(task) or {}
+    other = (store.get_run(int(wanted["run"])) if "run" in wanted
+             else store.get_task(int(wanted["task"])) if "task" in wanted else None)
+    if other is None or other["status"] != "done":
+        return False
+    commit, why = _start(_kept(store, wanted), Path(task["cwd"]) if task.get("cwd") else None)
+    head = None if commit else _now(task)
+    with store.immediate():
+        _free(store, task, wanted, commit, why, head=head)
+    return True
+
+
+def _now(task: Mapping[str, Any]) -> str | None:
+    """The HEAD a held workflow step's checkout is at now, for a run released with nothing
+    kept to start on; None for a task in no run, or where git cannot say."""
+    where = Path(task["cwd"]) if task.get("cwd") else None
+    if not task.get("workflow_run") or where is None or not where.is_dir():
+        return None
+    try:
+        return isolate.head(where, "HEAD")
+    except isolate.IsolationError:
+        return None
+
+
+def _free(store: Store, task: Mapping[str, Any], waited: Mapping[str, int], commit: str | None, why: str, *,
+          head: str | None = None) -> None:
+    """One held task, released: its hold dropped, its start set, and a `released` event the
+    plan reads. A step of a held workflow run frees its run too, so the steps after it
+    build on the same start; with no commit to start on, what the run changed is read from
+    `head`, the checkout as it is now, not as it was when the run was queued."""
+    options = json.loads(task.get("options") or "{}")
+    options.pop(KEY, None)
+    if commit:
+        options["base"] = commit
+    store.update_task(task["id"], options=json.dumps(options))
+    store.add_event(task["id"], "released", after=dict(waited), base=commit, why=why)
+    run = store.get_run(int(task["workflow_run"])) if task.get("workflow_run") else None
+    if run is not None and hold(run) is not None:
+        kept = json.loads(run["options"] or "{}")
+        kept.pop(KEY, None)
+        if commit:
+            # What the run changed is read from here on, and a step with nothing kept before it starts here.
+            kept.update(base=commit, origin=commit)
+        elif head:
+            kept["origin"] = head
+        store.update_run(run["id"], options=json.dumps(kept))
+
+
+def released_line(store: Store, task_id: int) -> str | None:
+    """What a held task's release said of where it starts, for its first plan."""
+    found = store.last_event(task_id, "released")
+    return str(found["data"].get("why") or "") or None if found else None

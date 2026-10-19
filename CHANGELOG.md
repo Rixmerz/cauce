@@ -2,6 +2,178 @@
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-19
+
+### Fixed
+
+- **A base that took in a branch's own work under another commit is not
+  ahead of it.** A run started on another run's kept branch said "behind by 1
+  commit; both changed: 33 files" once that run was squashed into the base.
+  `isolate.behind` now measures from where the branch and the base last held
+  the same tree, so a squash or a re-commit of work the branch already has
+  brings nothing, and what the base gains after it is still counted.
+- **A workflow step's kept commit is named by its goal.** A build that ran out
+  of turns with no `commit` line kept "[feature#19 build] Build it, with its
+  tests": the step's title and the run's tag. The fallback for a step is now
+  the first line of its goal, without the step's lead-in.
+
+### Added
+
+- **Every task has points.** When a task is planned, a pure function scores
+  it on the Fibonacci scale (1, 2, 3, 5, 8, 13) from what the plan already
+  knows: its criteria, its kind, its risk tier and the areas that raised it,
+  the files and surfaces it names, the symbols livespec says it reaches when
+  the index is readable, and its length, the weakest signal. The score and its
+  reasons ("5: 4 criteria, touches schema, risk high") are kept on the task and
+  its `planned` event and shown on the board, the task's page, `cauce show`,
+  `cauce tasks` and `cauce route`. When it ends, the size it turned out to be,
+  on the same scale, is read from git and its attempts (files and lines
+  changed, turns, wall time, attempts) and kept on its `finished` event. A
+  workflow run's points are its steps', each part of a step run in parts
+  counted.
+- **Standards, calibrated from what was measured.** For each repository, kind
+  and points band cauce keeps a standard: the start cell, the start turns, and
+  what the last 20 finished tasks of the band measured (how often each cell
+  passed its first try, cost and time per point). After every 5 endings in a
+  repository, from the hooks or the dispatcher and never from a page, a
+  calibration applies two rules: the start cell is the cheapest rung of the
+  ladder whose first tries pass at least 70% over at least 5 (one rung per
+  calibration, never below the ladder, never a cell that needs an approval),
+  and the start turns move toward the 75th percentile of what passes needed
+  (10 turns per calibration, at most 200). Money moves none of it. `--start`
+  and `--max-turns` always win, and the plan says which standard it used and
+  why.
+- **Every change is recorded and judged.** A change is appended with its
+  repository, kind, band, field, before and after, the rule that fired, its
+  evidence and cauce's version. After 5 tasks under it, the window before and
+  after are compared (pass-first, attempts, time and cost per point), the
+  verdict is recorded, and a change that made pass-first worse by more than 20
+  percentage points is reverted, one step back, as a change of its own. The store refuses
+  an edit or a deletion of any of these records.
+- **`cauce evolution`.** A snapshot a day (at the first ending of a new day in
+  your time zone, or `cauce evolution --snapshot`) per repository and kind:
+  tasks and points done, velocity in points per hour, cost and time per point,
+  pass-first and climb rates, points estimated against realized, and cauce's
+  version. `cauce evolution [--days 30] [--repo DIR] [--json]` prints each
+  metric's trend and every calibration change with its reason and verdict in
+  plain sentences ("feature in mecha, 5 points: starts at opus/high since Oct
+  20 because 2 of 8 passed first at sonnet/xhigh and 4 of 5 at opus/high;
+  pass-first since then 80 %, kept"). The UI gets an **Evolution** screen that
+  reads the same, for one project or every one.
+- **A workflow step can run in parts.** A step with `"fanout": "<plan step>"`
+  runs one task per part of that plan, side by side as the dispatcher allows:
+  a read-only `plan` step is asked for `parts` (2 to 6, or 1 when splitting
+  does not pay), each with surfaces no other part reaches, and the `contract`
+  they all keep, read strictly (no parts, overlapping surfaces or more than six
+  is `inconclusive`). Each part gets the step's prompt (the request quoted as
+  context: its criteria are its own prompt's), its own prompt, the contract
+  verbatim and quoted, and its surfaces. What needs the step waits for every
+  part; a part that stops stops the run there, and `cauce workflow retry`
+  queues only the parts that did not pass. Parts whose surfaces may touch stop
+  the run at the plan with the paths named. A plan of one part is the step run
+  whole. `cauce workflow status` and the board show the parts under their step;
+  `cauce workflow step add|set` takes `--fanout STEP` and `--integrate`.
+- **An integrate step joins the parts.** A step with `"integrate": true` merges
+  each part's branch, in the plan's order, on the commit they started from,
+  with no worker when they merge cleanly and the run's `--verify` passes; a
+  conflict, or a check that fails on the joined work, goes to a worker told
+  which files conflict, whose branch to merge and the contract. The review
+  chain after it reads the combined diff. Only an integrate step may wait on a
+  step run in parts; a definition where another one does is refused.
+- **`feature-parallel`**, a bundled template for a feature that touches several
+  areas: plan → build (fanout over the plan's parts) → integrate → review →
+  refute → fix → recheck. The plan starts where plans pass in the repository
+  (never Haiku); a plan of one part is today's `feature`.
+- **A large change is reviewed by area.** A blind review of a change over 600
+  changed lines that touches two or more areas (the parts' surfaces, else the
+  top-level folders) runs as one review per area, side by side, each with the
+  whole request, its area's diff and the other files' names; their findings go
+  into the one ledger, and refute, fix and recheck run once.
+- **The workers at once adapt instead of being fixed.** The dispatcher's three
+  per repository became a level per machine, every repository's together
+  (`cauce.capacity`): it starts at what the machine holds (CPUs, free memory,
+  free disk where worktrees live), rises by one when work waits and a round of
+  tasks ended with no limit, and halves on a rate limit or an overloaded API
+  (read from the CLI's own result, waiting out its retry-after), on a worker
+  the machine starved, or on low memory or disk. `cauce config max_parallel
+  auto|N` (a plugin option, `auto` by default) sets a ceiling over it. The
+  repositories with work share it by reserve and lending: each is reserved
+  max(1, level / lanes) in the order its oldest work was queued, lends what it
+  does not use, and gets a lent worker back when its borrowed task ends.
+  `cauce lanes` and the board show the level and its reason, and each lane's
+  reserve, use and loans; every change is a `level_changed` event. Cost never
+  moves it.
+- **The time between steps is measured.** A run's `finished` event gains
+  `advance_s` (from the step it waited on passing to its being queued),
+  `pickup_s` (from queued to the dispatcher starting it) and `spawn_s` (from
+  that to its plan), and `cauce stats` and the board's Analysis show them as
+  phases. A run that never measured one leaves it out.
+- **More effort continues the same model's session.** A `more_effort` move
+  whose next cell has the same model resumes the last attempt's Claude Code
+  session as a fork at the new effort (`claude -p --resume <id> --fork-session
+  --effort <new>`), in the same worktree, with a short prompt that says what
+  failed (the check's failing output, or the independent check's blockers in a
+  correction round) and to look deeper, and the result contract. Measured
+  here, five of six such moves passed, and each second attempt repeated
+  nearly the whole first one from a cold start. Another model, a replan, a
+  retry of a launch that broke and a resume a person starts still start
+  fresh. When the session cannot be continued (no id, the CLI refuses it, the
+  worktree was reset) it starts fresh and the `moved` event says why; it says
+  `continued` and the session it forked from otherwise, and `cauce stats`
+  compares continued and fresh attempts by pass, turns and cost.
+- **Work queued after other work.** `cauce run … --after <task>`, `cauce queue
+  add … --after <task>` and `cauce workflow run … --after <run>` queue work
+  held behind that task or run: the dispatcher never starts it, and `cauce
+  queue`, `cauce tasks`, `cauce show`, `cauce workflow status` and the board
+  say "waits for #N to pass". When that work passes, the engine releases it
+  where it advances a workflow, onto the branch it kept (a run's last step's),
+  or the base when that branch is merged; its plan says which, and nothing is
+  merged or rebased. Work that stops short releases nothing: what waits stays
+  held and says how it stopped ("waits for #17, which stopped as review")
+  until a resume of it passes; `cauce dismiss` or a cancel takes it off the
+  queue. A missing task or run, or one that failed, is refused when queued.
+- **More turns continue the same session.** A `more_turns` move on the same
+  cell resumes the worker's own Claude Code session (`claude -p --resume`) in
+  its worktree with a short continuation prompt, so its context and prompt
+  cache carry over instead of a cold start that re-reads the code and the
+  brief; it is told the output that failed its attempt (cauce's own check
+  after it stopped), which its context does not hold. The session id is read from the attempt's JSON and kept on the
+  attempt (`attempts.session_id`); a session is kept only in a worktree. When
+  it cannot be continued it starts fresh and says why; any other move starts
+  fresh. Where a task's turns start may be raised by history: when recent
+  tasks of its kind here ran out at the kind's turns and passed with more, it
+  starts at the median they needed, and the plan says so.
+- **`delegate` setting** (`cauce config delegate on|off`, a plugin option, on
+  by default): the mod turns Claude Code's `ask` for `queue` and `resume` into
+  an allow, so the orchestrator hands out work without waiting on the person.
+  A deny stays a deny, and a resume still runs `--unattended`.
+- **A check that covers less than CI is said.** The plan reads the jobs of
+  `.github/workflows/*.yml` (commands, services, env the code reads) and names
+  the ones `--verify` leaves out, in one warning and on the report. A job is
+  covered only when the check runs every command of it that checks the work
+  (each one a line chains with `&&` or `;`; installs and the shell's
+  bookkeeping aside); the warning names the ones left out.
+- **A workflow step says how far it is behind its base.** When a step starts
+  and when the run ends (done, or stopped at a step), its work is compared with the branch the run started
+  from: commits it moved and files both changed, in `cauce workflow status`,
+  the ending notice and the board. Nothing is merged.
+
+### Fixed
+
+- What the steps before a workflow step said reached its brief as list items,
+  so a step after two others was asked to answer each one as a criterion of its
+  own; it is quoted as context now.
+- The independent check after an attempt that continued a session ran in the
+  worker's session instead of its own; it never inherits one now.
+- A task whose check runs Playwright, or whose project's tests drive a
+  headless browser, is no longer warned that workers have no browser.
+- Resuming a task that reopens a paused lane starts its dispatcher at once,
+  so queued work that may run beside it starts now.
+- Risk reasons read words in context: "checkout" in git's sense and `payment`
+  as one event name among others no longer raise a change to money.
+  "Parallel" still always counts as concurrency: reading it away dropped real
+  concurrency requests to medium and skipped the verifier.
+
 ## [0.20.0] - 2026-10-18
 
 ### Added

@@ -15,7 +15,9 @@ from pathlib import Path
 
 from cauce import (
     __version__,
+    after,
     capabilities,
+    capacity,
     config,
     dispatch,
     flow,
@@ -146,6 +148,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         add_dirs=tuple(str(Path(d).expanduser().resolve()) for d in args.add_dir or ()),
         services=tuple(args.service or ()),
     )
+    if args.after is not None and not args.dry_run:
+        return _queue_after(args, options)
     store = Store.open()
     previous = _cancel_on_sigterm()
     try:
@@ -158,6 +162,51 @@ def cmd_run(args: argparse.Namespace) -> int:
         store.close()
     print(report.text())
     return 0 if report.status in ("done", "dry run") else 1
+
+
+def _queue_after(args: argparse.Namespace, options: orchestrate.Options) -> int:
+    """`cauce run … --after N`: the task is queued, held until #N passes (`cauce.after`),
+    for the dispatcher to run; its ending reaches the session that sent it, as every
+    queued task's does."""
+    if args.launch_dir:
+        print("--after queues the task, and a queued task starts in its own directory: drop --launch-dir",
+              file=sys.stderr)
+        return 2
+    where = Path(args.repo or os.getcwd()).resolve()
+    store = Store.open()
+    try:
+        try:
+            held = after.target(store, task_id=args.after)
+        except after.AfterError as exc:
+            print(f"cauce: not queued: {exc}", file=sys.stderr)
+            return 2
+        stored = {**options.stored(), after.KEY: held, **{k: v for k, v in {
+            "start": args.start, "max_turns": args.max_turns, "carry": args.carry or None,
+            "max_attempts": args.max_attempts if args.max_attempts != orchestrate.Options().max_attempts else None,
+        }.items() if v is not None}}
+        task = _enqueue_after(store, _text(args.text), where, stored)
+        then = dispatch.kick(where, repo.key(where), os.environ)
+        said = _held_line(store, task["id"])
+    finally:
+        store.close()
+    print(f"queued #{task['id']} — {task['title']}: {said}. {then}")
+    return 0
+
+
+def _held_line(store: Store, task_id: int) -> str:
+    """What work just queued after other work does: waits for it, or starts on what it kept."""
+    return dispatch.waiting(store, store.get_task(task_id)) or after.released_line(store, task_id) or "queued"
+
+
+def _enqueue_after(store: Store, text: str, where: Path, options: dict) -> dict:
+    """Queue held work, released at once when what it waits for passed already."""
+    task = store.enqueue(text, repo=repo.key(where), cwd=str(where), options=options,
+                         author="orchestrator" if os.environ.get("CAUCE_SESSION_ID") else "person",
+                         session_id=os.environ.get("CAUCE_SESSION_ID"))
+    after.settle(store, task)
+    with contextlib.suppress(OSError, project.NotAProject):
+        project.enroll(where)
+    return task
 
 
 #: Endings a task can be resumed from: it stopped, and was not judged wrong.
@@ -281,8 +330,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
         kept = (options.stored() | {k: prior[k] for k in ("investigation",) if k in prior}
                 | ({"allow_approval": True} if inherited else {}))
         store.update_task(args.id, options=json.dumps(kept), dispatched=0, cancel_requested=0)
-        # It runs again: a lane paused on its stopping no longer waits on anyone.
-        store.release_lane(task["repo"], args.id)
+        # It runs again: a lane paused on its stopping no longer waits on anyone, and
+        # the queue behind it starts now, beside it where it may, not at its end.
+        if store.release_lane(task["repo"], args.id):
+            _go_on(store, task["repo"])
         try:
             report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=args.id,
                                      history=history, progress=_say, known_findings=known)
@@ -443,11 +494,14 @@ def cmd_dismiss(args: argparse.Namespace) -> int:
             if task is None:
                 print(f"no task #{task_id}", file=sys.stderr)
                 return 1
+            waited = dispatch.waiting(store, task) if after.held(task) else None
             if stops.dismiss(store, task, via=args.via) is None:
                 print(f"task #{task_id} is {task['status']}; only a task that waits on you "
-                      f"({', '.join(stops.DISMISSABLE)}) is dismissed", file=sys.stderr)
+                      f"({', '.join(stops.DISMISSABLE)}) or on other work (`--after`) is dismissed",
+                      file=sys.stderr)
                 return 1
-            print(f"dismissed task #{task_id}; `cauce resume {task_id}` brings it back")
+            print(f"took task #{task_id} off the queue (it {waited})" if waited
+                  else f"dismissed task #{task_id}; `cauce resume {task_id}` brings it back")
             dispatch.reopened(task, os.environ)
     finally:
         store.close()
@@ -498,7 +552,7 @@ def cmd_events(args: argparse.Namespace) -> int:
 
 
 def cmd_route(args: argparse.Namespace) -> int:
-    args.dry_run = True
+    args.dry_run, args.after = True, None
     return cmd_run(args)
 
 
@@ -526,7 +580,8 @@ def cmd_tasks(args: argparse.Namespace) -> int:
     for t in tasks:
         cell = t["final_cell"] or t["start_cell"] or ""
         mark = {"hook": " (turn)", "delegation": " (subagent)"}.get(t["source"], "")
-        print(f"#{t['id']:<5} {t['status']:<14} {t['kind'] or '-':<16} {cell:<14} {t['title']}{mark}")
+        size = str(t.get("points") or "-")
+        print(f"#{t['id']:<5} {t['status']:<14} {t['kind'] or '-':<16} {cell:<14} {size:>2} {t['title']}{mark}")
         if waits[t["id"]]:
             print(f"       {waits[t['id']]}")
     return 0
@@ -547,6 +602,11 @@ def cmd_show(args: argparse.Namespace) -> int:
         print(f"#{task['id']} [{task['status']}] {task['title']}")
         print(f"repo {task['repo']}  kind {task['kind']} ({task['class_source']}: {task['class_reason']})")
         print(f"cost ${task['cost_usd']:.2f}  start {task['start_cell']}  final {task['final_cell']}")
+        if task.get("points"):
+            print(f"points {task['points']}: {task.get('points_why') or 'nothing says it is bigger'}")
+        ended = (store.final_event(args.id) or {}).get("data") or {}
+        if ended.get("realized"):
+            print(f"realized {ended['realized']}: {', '.join(ended.get('realized_why') or ()) or 'a small change'}")
         if waits := dispatch.waiting(store, task):
             print(waits)
         refused = store.denials(args.id)
@@ -831,6 +891,15 @@ def cmd_config(args: argparse.Namespace) -> int:
     if args.value is None:
         print(json.dumps(config.load()[args.key]))
         return 0
+    if args.key == "max_parallel":
+        picked = config.ceiling_word(args.value)
+        if picked is None:
+            print("expected auto or a whole number from 1: the most workers this machine runs at once",
+                  file=sys.stderr)
+            return 1
+        config.save({args.key: picked})
+        print(f"{args.key} = {json.dumps(picked)}")
+        return 0
     if args.key in config.CHOICES:
         picked = config.word(args.key, args.value)
         if picked is None:
@@ -975,17 +1044,20 @@ def cmd_queue(args: argparse.Namespace) -> int:
                                          "add_dirs": [str(Path(d).expanduser().resolve()) for d in args.add_dir]
                                          if args.add_dir else None,
                                          "services": args.service or None}.items() if v is not None}
-            task = store.enqueue(_text(args.text), repo=repo.key(where), cwd=str(where), options=options,
-                                 author="orchestrator" if os.environ.get("CAUCE_SESSION_ID") else "person",
-                                 session_id=os.environ.get("CAUCE_SESSION_ID"))
-            with contextlib.suppress(OSError, project.NotAProject):
-                project.enroll(where)
+            if args.after is not None:
+                try:
+                    options[after.KEY] = after.target(store, task_id=args.after)
+                except after.AfterError as exc:
+                    print(f"cauce: not queued: {exc}", file=sys.stderr)
+                    return 2
+            task = _enqueue_after(store, _text(args.text), where, options)
             then = dispatch.kick(where, repo.key(where), os.environ)
+            said = _held_line(store, task["id"]) if args.after is not None else None
             if args.json:
-                print(json.dumps({**{k: task[k] for k in ("id", "title", "status", "repo", "cwd")}, "then": then},
-                                 ensure_ascii=False))
+                print(json.dumps({**{k: task[k] for k in ("id", "title", "status", "repo", "cwd")}, "then": then,
+                                  **({"waits": said} if said else {})}, ensure_ascii=False))
             else:
-                print(f"queued #{task['id']} — {task['title']}. {then}")
+                print(f"queued #{task['id']} — {task['title']}" + (f": {said}" if said else "") + f". {then}")
             return 0
         if args.queue_command == "rm":
             task = store.get_task(args.id)
@@ -1012,9 +1084,17 @@ def cmd_lanes(args: argparse.Namespace) -> int:
             store.unpause_lane(key)
             print(f"unpaused {key}" + (", started its dispatcher" if _go_on(store, key) else ""))
             return 0
-        for lane in store.lanes():
+        # The workers this machine runs at once, and each lane's share of them (`cauce.capacity`).
+        ceiling = config.max_parallel(os.environ)
+        level = capacity.current(home(), ceiling=ceiling)
+        print(f"workers: {capacity.line(level)} · max_parallel {ceiling or 'auto'}")
+        shared = flow.shares(store, level.value)
+        rows = {lane["repo"] or None: lane for lane in store.lanes()}
+        for key in [*rows, *(k for k in shared if k not in rows)]:
+            lane = rows.get(key) or {"queued": 0, "paused": 0}
             state = f"paused: {lane['reason']}" if lane["paused"] else "open"
-            print(f"{lane['repo'] or '-'}  {lane['queued']} queued  {state}")
+            share = f" · {shared[key].text()}" if key in shared else ""
+            print(f"{key or '-'}  {lane['queued']} queued  {state}{share}")
         return 0
     finally:
         store.close()
@@ -1090,6 +1170,24 @@ def cmd_stats(args: argparse.Namespace) -> int:
         sys.stdout.write(analysis.runs_csv(report["runs"]) if args.csv else analysis.as_json(report["runs"]) + "\n")
     else:
         print(analysis.as_json(report) if args.json else analysis.text(report))
+    return 0
+
+
+def cmd_evolution(args: argparse.Namespace) -> int:
+    """How cauce evolves and why, read from the store: no model. `--snapshot` takes one now."""
+    from cauce import evolution
+
+    key = repo.key(Path(args.repo).resolve()) if args.repo else None
+    store = Store.open()
+    try:
+        if args.snapshot:
+            taken = evolution.snapshot(store, until_now=True)
+            print(f"snapshot: {len(taken)} row{'' if len(taken) == 1 else 's'}",
+                  file=sys.stderr if args.json else sys.stdout)
+        found = evolution.report(store, days=args.days, repo=key)
+    finally:
+        store.close()
+    print(evolution.as_json(found) if args.json else evolution.text(found))
     return 0
 
 
@@ -1676,6 +1774,8 @@ def cmd_hook(args: argparse.Namespace) -> int:
 ALLOW_HELP = ("a permission rule the workers get, e.g. 'Bash(npm run build:*)' or 'Bash(node:*)', and "
               "'Read(//abs/path)' with two slashes for an absolute path; repeatable. A one-shot worker is "
               "refused whatever its settings do not allow; a blocked task's report prints the rules it needs")
+AFTER_HELP = ("queue it held until task TASK passes, then start it on the branch that task kept (on the base "
+              "when that branch is merged); nothing is merged or rebased")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1718,6 +1818,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("run", help="run a task: classify, attempt, escalate, remember")
     run_args(p)
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--after", type=int, metavar="TASK", help=AFTER_HELP)
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("resume", help="run a task that stopped again: from its kept work and the cell it stopped at")
@@ -1779,6 +1880,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="a directory beside the work the workers may use (repeatable)")
     p.add_argument("--service", action="append", metavar="CMD@PORT", type=_service,
                    help="a server the task needs up, started before the work and stopped after (repeatable)")
+    p.add_argument("--after", type=int, metavar="TASK", help=AFTER_HELP)
     p.add_argument("--json", action="store_true", help="print the queued task as JSON")
     p.set_defaults(func=cmd_queue)
     p = qsub.add_parser("list", help="what is waiting (this repository; --all for every one)")
@@ -1829,6 +1931,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--runs", action="store_true", help="one record per run instead of the summary (JSON)")
     p.add_argument("--csv", action="store_true", help="with --runs: CSV, for a spreadsheet")
     p.set_defaults(func=cmd_stats)
+    p = sub.add_parser("evolution", help="how cauce evolves and why: each metric's trend, and every change of a "
+                                         "standard with its reason and verdict")
+    p.add_argument("--days", type=int, default=30, help="the window (default 30; 0 for all time)")
+    p.add_argument("--repo", help="one repository (default: every one)")
+    p.add_argument("--json", action="store_true", help="the same, as data")
+    p.add_argument("--snapshot", action="store_true", help="take a snapshot now, from where the last one ended")
+    p.set_defaults(func=cmd_evolution)
     p = sub.add_parser("relay", help="hand this session's thread to a fresh one: the next session that starts "
                        "here (after /clear) begins from its requests verbatim, what landed and what is open")
     p.add_argument("--session", help="the session to hand over (default: the one this runs in)")

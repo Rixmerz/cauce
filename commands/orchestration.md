@@ -148,7 +148,9 @@ Request: $ARGUMENTS
 
    For work that can wait, queue it instead — `cauce queue add "<task>"`. A
    worker picks it up at once, in its own process that outlives this session;
-   its output says so. Only when it says `cauce work` runs the queue (the
+   its output says so. Work that needs another task's result first is queued
+   with `--after <task>`: it starts when that task passes, on the branch it
+   kept; never sleep or poll to start it yourself. Only when it says `cauce work` runs the queue (the
    person turned `autowork` off) start `cauce work` in the background. Whether
    a queued task runs beside the others or waits its turn is decided there,
    not here.

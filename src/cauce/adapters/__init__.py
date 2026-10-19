@@ -63,6 +63,9 @@ class Briefing:
     raise_rungs: int = 0
     critical: bool = False
     reasons: tuple[str, ...] = ()
+    #: The symbols the request reaches (the ones it names and their callers), when an index
+    #: could be read; None when none said it. A task's points weigh it (`cauce.points`).
+    reached: int | None = None
 
 
 class Adapter(Protocol):

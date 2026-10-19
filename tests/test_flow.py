@@ -83,7 +83,8 @@ def test_a_busy_lane_waits_and_a_claim_happens_once(store: Store):
     b = store.enqueue("b", repo="r", cwd="/x")
     other = store.enqueue("c", repo="other", cwd="/x")
     ids = lambda **kw: [t["id"] for t in flow.runnable(store, parallel=False, decide=_never, **kw)]  # noqa: E731
-    assert ids(repo=None) == [other["id"], a["id"]]
+    # Lanes are served in the order their oldest work was queued: r's a before other's c.
+    assert ids(repo=None) == [a["id"], other["id"]]
     assert store.claim(a["id"]) and not store.claim(a["id"])
     assert ids(repo="r") == []  # serial: a is running from the dispatcher
     assert ids(repo=None) == [other["id"]]
@@ -261,7 +262,7 @@ def test_reading_work_runs_beside_writing_work_without_asking_haiku(store: Store
         raise AssertionError(f"Haiku must not be asked about #{task['id']}: it reads only")
 
     picked = flow.runnable(store, "r", parallel=True, decide=no)
-    # Within MAX_PARALLEL: the build plus two readers; the rest wait for a slot, undecided.
+    # Within the machine's level (3 here): the build plus two readers; the rest wait for a slot, undecided.
     assert [t["id"] for t in picked] == [reads["review"]["id"], reads["refute"]["id"]]
     for name in ("review", "refute"):
         row = store.get_task(reads[name]["id"])
@@ -382,12 +383,13 @@ def test_behind_nothing_but_reading_work_a_writing_task_has_nothing_to_conflict_
     assert row["parallel"] == 1 and row["parallel_reason"] == "nothing that writes runs or waits ahead of it"
 
 
-def test_never_more_than_the_parallel_cap(store: Store, monkeypatch):
-    monkeypatch.setattr(flow, "MAX_PARALLEL", 2)
+def test_never_more_than_the_machine_s_level(store: Store):
     for i in range(4):
         store.enqueue(f"read file {i}", repo="r", cwd="/x")
     yes = lambda task, ahead: dispatch.Decision(True, "read only")  # noqa: E731
-    assert len(flow.runnable(store, "r", parallel=True, decide=yes)) == 2
+    assert len(flow.runnable(store, "r", parallel=True, decide=yes, level=2)) == 2
+    # Without one given, the level this machine keeps (three, on the suite's fake machine).
+    assert len(flow.runnable(store, "r", parallel=True, decide=yes)) == 3
 
 
 def test_the_dispatcher_runs_parallel_work_and_waits_for_it(git_repo, store: Store):
@@ -555,3 +557,46 @@ def test_a_task_asked_again_points_at_the_one_that_keeps_its_work(git_repo, stor
         classifier=kind("implement"), progress=said.append)
     assert any(f"task #{first.task_id} asked the same and keeps its work" in s and f"cauce resume {first.task_id}" in s
                for s in said)
+
+
+def test_the_unattended_limit_ends_the_dispatcher_even_when_every_worker_was_busy(store: Store):
+    """The pass that reached the limit found every worker busy and the lane with work left:
+    once its tasks end, the dispatcher reports the limit instead of waiting on."""
+    for i in range(4):
+        store.enqueue(f"read file {i}", repo="r", cwd="/")
+
+    class Ends:
+        def __init__(self, task_id):
+            self.task_id = task_id
+
+        def poll(self):
+            store.update_task(self.task_id, status="done")
+            return "done"
+
+    pauses = []
+
+    def pause():
+        pauses.append(1)
+        if len(pauses) > 50:
+            raise RuntimeError("the dispatcher never returned")
+
+    report = flow.work(store, max_tasks=1, parallel=True, start=lambda task, where: Ends(task["id"]), pause=pause,
+                       decide=lambda task, ahead: dispatch.Decision(True, "independent"))
+    assert len(report.ran) == 1 and "unattended limit" in report.stopped_because
+
+
+def test_another_dispatcher_s_unjudged_writing_work_borrows_no_worker(store: Store):
+    """Beside its running work, another lane's writing task no decision has let start yet is
+    no demand: the worker it would borrow sits idle while this lane has work to run."""
+    store.claim(store.enqueue("rewrite the importer", repo="other", cwd="/x")["id"])
+    for text in ("add migration 3 to the schema", "add migration 4 to the schema"):
+        store.enqueue(text, repo="other", cwd="/x")
+    mine = [store.enqueue(f"read file {i}", repo="mine", cwd="/x")["id"] for i in range(3)]
+    yes = lambda task, ahead: dispatch.Decision(True, "independent")  # noqa: E731
+    picked, shares = flow.pick(store, "mine", parallel=True, decide=yes, level=3)
+    assert [t["id"] for t in picked] == mine[:2]
+    assert shares["other"].started == 0 and shares["mine"].borrowed == 1
+    # One its own dispatcher let start beside the running work is demand, and takes its loan.
+    store.set_parallel(store.queued_in("other")[0]["id"], True, "independent")
+    picked, shares = flow.pick(store, "mine", parallel=True, decide=yes, level=3)
+    assert len(picked) == 1 and shares["other"].started == 1

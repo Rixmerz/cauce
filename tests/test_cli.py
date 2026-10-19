@@ -198,6 +198,14 @@ def test_config_and_neighbours(capsys, git_repo):
     assert "livespec setting: off" in out and "livespec: absent" in out
 
 
+def test_delegate_is_on_until_the_person_turns_it_off_and_the_mod_reads_it_as_a_word(capsys):
+    # the mod reads `cauce config delegate` and lets queue and resume through only on `true`
+    assert cli.main(["config", "delegate"]) == 0 and capsys.readouterr().out == "true\n"
+    assert cli.main(["config", "delegate", "off"]) == 0
+    capsys.readouterr()
+    assert cli.main(["config", "delegate"]) == 0 and capsys.readouterr().out == "false\n"
+
+
 def test_cancel_signals_the_run_and_events_print(capsys, monkeypatch):
     import signal
 
@@ -1122,6 +1130,34 @@ def test_the_end_of_a_resume_starts_the_dispatcher_when_work_waits_behind_it(git
     assert cli.main(["resume", str(stopped["id"])]) == 0 and len(started) == 1
 
 
+def test_a_resume_that_reopens_a_paused_lane_starts_its_dispatcher_before_its_own_run(git_repo, monkeypatch):
+    """The queue behind a resumed task waited for the resumed task to end, though it may run beside it."""
+    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    started, during = [], []
+    monkeypatch.setattr(dispatch, "start", lambda repo_dir, root, scope: started.append((repo_dir, scope)) or True)
+
+    def fake_run(text, repo_dir, store, options, **kw):
+        during.append(list(started))
+        return orchestrate.Report(kw.get("task_id"), "done", None)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(orchestrate, "run", fake_run)
+    monkeypatch.setattr(orchestrate.Report, "text", lambda self: f"task #{self.task_id}: {self.status}")
+    key = str(git_repo.resolve())
+    store = Store.open()
+    stopped = store.create_task("create the routes", status="blocked", source="cauce", repo=key, cwd=str(git_repo),
+                                kind="implement")
+    store.enqueue("write the docs", repo=key, cwd=str(git_repo))
+    store.pause_lane(key, f"task #{stopped['id']} ended blocked: refused")
+    store.close()
+    assert cli.main(["resume", str(stopped["id"])]) == 0
+    # started when the lane reopened, while the resumed task ran
+    assert during == [[(git_repo.resolve(), key)]]
+    # a resume that reopened nothing has nothing to start before it runs
+    started.clear()
+    during.clear()
+    assert cli.main(["resume", str(stopped["id"])]) == 0 and during == [[]]
+
+
 def test_unpausing_a_lane_with_queued_work_starts_its_dispatcher(git_repo, monkeypatch, capsys):
     key = str(git_repo.resolve())
     store = Store.open()
@@ -1218,3 +1254,19 @@ def test_a_resume_whose_worktree_cannot_be_made_stops_resumable_and_the_next_one
 
     monkeypatch.setattr(isolate, "prepare", real_prepare)
     assert cli.main(["resume", str(stopped["id"]), "--no-model"]) == 0
+
+
+def test_tasks_and_show_say_the_points(capsys):
+    store = Store.open()
+    t = store.create_task("schema work", status="done", source="cauce", repo="r", kind="implement", points=5,
+                          points_why="4 criteria, touches schema, risk high")
+    store.add_event(t["id"], "finished", status="done", realized=8, realized_why=["8 files", "400 lines"])
+    store.create_task("older work", status="done", source="cauce", repo="r", kind="docs")
+    store.close()
+    assert cli.main(["tasks", "--all"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert any(line.startswith(f"#{t['id']}") and " 5 " in line and "schema work" in line for line in lines)
+    assert cli.main(["show", str(t["id"])]) == 0
+    out = capsys.readouterr().out
+    assert "points 5: 4 criteria, touches schema, risk high" in out
+    assert "realized 8: 8 files, 400 lines" in out

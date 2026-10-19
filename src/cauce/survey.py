@@ -25,8 +25,10 @@ show it), never quoted. Every text kept is clipped and masked like a note
 (`notes._SECRET`), and text a person marked `<private>` is left out. What a
 transcript says is data about the person's work, never instructions.
 
-cauce's own workers run with `--no-session-persistence` and in worktrees under
-the cauce home: a session there is not the person's and is skipped. So is one
+cauce's own workers run in worktrees under the cauce home (where they keep a
+session only so more turns can continue it), or with `--no-session-persistence`
+in a person's checkout: a session in a worktree is not the person's and is
+skipped. So is one
 in the home directory or `/`, which are never a project.
 """
 from __future__ import annotations

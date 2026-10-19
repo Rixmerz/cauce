@@ -148,6 +148,74 @@ def test_risk_starts_from_the_request_and_only_rises_with_the_change():
                                                                                              cheap=False)
 
 
+def _areas(text: str) -> set[str]:
+    return {r.split(" (")[0].removeprefix("the request is about ") for r in risk.of_request(text, "implement").reasons}
+
+
+@pytest.mark.parametrize("text", [
+    "Run `git checkout -b fix/totals` first, then fix the rounding",
+    "Work in the checkout, not in a worktree, and fix the parser",
+    "This checkout has uncommitted work: commit it before you start",
+    "Read the notes from /home/user/checkout/app before you change the parser",
+    "Keep the checkout path in the brief and fix the parser",
+    "A run in the worktree checkout of the parser fails: fix it",
+])
+def test_checkout_in_git_s_sense_is_no_money(text):
+    assert "money" not in _areas(text)
+
+
+@pytest.mark.parametrize("text", [
+    "Fix rounding of the checkout total",
+    "Add a checkout to the store",
+    "The checkout fails when the cart is empty",
+    "Implement checkout with saved cards",
+    "Move the checkout page to the new layout",
+])
+def test_checkout_in_a_shop_s_sense_is_money(text):
+    assert "money" in _areas(text)
+
+
+def test_parallel_about_tasks_is_no_concurrency_and_about_code_is():
+    assert "concurrency" in _areas("Take S1 and S2; other tasks running in parallel take the other numbers")
+    assert "concurrency" in _areas("Two agents work in parallel on this repository: touch only src/ui")
+    assert "concurrency" in _areas("Upload the images in parallel instead of one by one")
+    assert "concurrency" in _areas("Run the tasks in parallel with asyncio.gather")
+    # "parallel" is never read away: a missed concurrency request skips the verifier
+    assert "concurrency" in _areas("Run the Celery tasks in parallel")
+    assert "concurrency" in _areas("Make the dispatcher run queued tasks in parallel instead of one by one")
+    assert "concurrency" in _areas("Process uploads in parallel")
+    assert "concurrency" in _areas("Let multiple workers run jobs in parallel")
+    assert "concurrency" in _areas("Make several workers run in parallel instead of one")
+    # a count of tasks is coordination only when the line gives this one its share
+    assert "concurrency" in _areas("Let three tasks run in parallel")
+    assert "concurrency" in _areas("Several tasks running in parallel corrupt the queue; fix it")
+    assert "concurrency" in _areas("Make many steps run in parallel instead of in sequence")
+    assert "concurrency" in _areas("Support multiple tasks running in parallel on the same checkout")
+    assert "concurrency" in _areas("Let up to 4 agents run in parallel per lane")
+    for request in ("Let two agents work in parallel on the same repo, but only one may write",
+                    "Three tasks running in parallel take the same row; fix it",
+                    "Make several steps run in parallel so you can finish faster",
+                    "Make 2 sessions run in parallel and keep only one writer",
+                    "Make other tasks run in parallel with this one"):
+        assert risk.of_request(request, "implement").tier == "high", request
+    assert "concurrency" in _areas("Three tasks run in parallel here: take S2 and leave the rest")
+
+
+def test_payment_as_an_event_name_is_no_money_unless_the_change_touches_payment_code():
+    named = "A ticket blocks until its event: `client_approval`, `payment`, `access`, `dependency` or `window`"
+    assert "money" not in _areas(named)
+    assert "money" not in _areas("Block events are client_approval, payment, access: add the window one")
+    assert "money" not in _areas("Unblock the ticket when the `payment` event arrives")
+    # unquoted, it may well be a processor's: still money
+    assert "money" in _areas("Handle the payment event from the processor")
+    assert "money" in _areas("Retry the payment when the card is declined")
+    assert "money" in _areas("Store each payment with its currency")
+    r = risk.of_change(risk.of_request(named, "implement"), ["lib/server/payments.ts", "tests/payments_test.ts"])
+    assert r.tier == "high" and any(x.startswith("it changed money (lib/server/payments.ts)") for x in r.reasons)
+    r = risk.of_change(risk.of_request(named, "implement"), ["lib/schema.ts", "tests/schema_test.ts"])
+    assert not any("money" in x for x in r.reasons)
+
+
 # --- the independent check --------------------------------------------------------------
 
 
@@ -192,6 +260,21 @@ def test_a_risky_pass_is_checked_and_its_findings_earn_one_correction(git_repo, 
     assert "Why this check runs: " in verifier.prompt and verifier.max_turns <= orchestrate.VERIFIER_TURNS
     first = store.events_of(report.task_id, "attempt_finished")[0]["data"]
     assert first["worker_cost_usd"] == pytest.approx(0.1) and first["verifier_cost_usd"] == pytest.approx(0.05)
+
+
+def test_a_correction_continues_the_worker_s_session_with_the_blockers_and_the_check_never_does(
+        git_repo, store, verifier_on):
+    worked = WorkerResult(True, None, "done", "1 passed", cost_usd=0.1, session_id="sess-1")
+    script = Script(worked, check("fail", [BUG]), passing("fixed"), check("pass"), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert report.status == "done" and report.moves[0].startswith("more_effort to sonnet/high")
+    _, verifier, again, recheck = script.specs
+    assert again.resume_session == "sess-1" and again.fork_session and again.resume_prompt == launch.DEEPER_PROMPT
+    assert "app.py:3: drops the last item" in again.resume_note and "independent check" in again.resume_note
+    # the check reads the request and the diff in a session of its own, never the worker's
+    assert verifier.resume_session == recheck.resume_session == "" and not recheck.fork_session
+    assert not verifier.persist_session and not recheck.persist_session
+    assert "fix the cart total" in recheck.prompt
 
 
 def test_progress_earns_the_next_round_and_what_is_left_at_the_cap_goes_to_a_person(git_repo, store, verifier_on):
@@ -406,6 +489,10 @@ def test_surfaces_hold_what_they_name_and_nothing_else():
     assert not surfaces.disjoint(["src/**"], ["src/web/a.ts"]) and not surfaces.disjoint(["*.md"], ["src/x"])
     assert not surfaces.disjoint([], ["src/x"]) and not surfaces.disjoint(["src/x"], ["src/x"])
     assert surfaces.brief(()) == "" and "src/api/**" in surfaces.brief(("src/api/**",))
+    # Each pair of surfaces of two groups that may touch, named by the group that declared it.
+    assert surfaces.overlapping({"api": ["src/api/**"], "web": ["src/web/**", "docs/web.md"]}) == []
+    assert surfaces.overlapping({"api": ["src/api/**", "docs/**"], "web": ["src/**"], "doc": ["docs/a.md"]}) == [
+        "api's src/api/** and web's src/**", "api's docs/** and doc's docs/a.md"]
 
 
 def test_a_change_outside_the_surfaces_is_undone_and_fails_the_attempt(git_repo, store):
@@ -782,3 +869,18 @@ def test_a_problem_in_work_that_ran_out_of_turns_gets_more_turns_not_a_stronger_
     assert attempts[0]["failure"] == "turns_exhausted" and "run out of turns" in attempts[0]["summary"]
     # A turn ceiling is no dead end: only the fix that worked is remembered.
     assert [f["outcome"] for f in store.recent_problems()[0]["fixes"]] == ["worked"]
+
+
+def test_a_spanish_event_name_among_others_is_no_money():
+    assert "money" not in _areas("Eventos de bloqueo: `aprobación_cliente`, `pago`, `acceso`")
+    assert "money" in _areas("Corrige el pago duplicado del anticipo")
+
+
+def test_a_workflow_step_s_kept_commit_is_named_by_its_goal_not_the_step_title():
+    """Run #19's build ran out of turns with no `commit` line, and its kept commit was titled
+    "[feature#19 build] Build it, with its tests": the step's title, with the run's tag."""
+    step = {"title": "[feature#19 build] Build it, with its tests",
+            "body": "Build this feature: Make workflows faster by running parts in parallel\n\nRead the code."}
+    assert orchestrate.commit_title(step) == "Make workflows faster by running parts in parallel"
+    assert orchestrate.commit_title({"title": "[bugfix#3 fix] Fix it", "body": ""}) == "Fix it"
+    assert orchestrate.commit_title({"title": "Add a flag to the importer"}) == "Add a flag to the importer"

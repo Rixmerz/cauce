@@ -24,6 +24,7 @@ remembers what failed — across every repository on the machine.
 | **Chains work** | Workflows cut where context changes hands: build with its tests → blind review → refute → fix → recheck, advanced by the engine, each step on the commit the one before kept. Reviewers never vote: a refuter decides what only one saw. |
 | **Learns how you work** | `/cauce:init` sends cauce's own read-only workers through every project and plugin on your machine, in parallel, and builds your team, your workflows and your memory from what they find. |
 | **Measures itself** | Every run's phases are timed (queued, planning, setting up, working, checking, verifying); `cauce stats` and the UI's Analysis screen show pass rates, time and cost per pass by kind and cell, and whether the session's thread in a brief changes how runs go. |
+| **Calibrates itself** | Every task gets points on the Fibonacci scale when it is planned and is measured when it ends; each repository's kinds and sizes keep a standard (where they start, how many turns) that moves by two stated rules, one step at a time, each change judged and reverted when it made things worse. `cauce evolution` and the UI's Evolution screen say how cauce changed and why. No model takes any of these decisions. |
 | **Shows it all** | `cauce ui`: the board, every task's ladder and moves, workflow graphs, a mind map of what each project knows, routing evidence, analysis, spend. |
 
 <p>
@@ -84,12 +85,12 @@ docs             haiku/medium → haiku/high → sonnet/medium
 
 | The evidence says | Move |
 |---|---|
-| shallow: a bug left, a case missed, no verification | **more effort**, same model |
+| shallow: a bug left, a case missed, no verification | **more effort**, same model, in a fork of its own session |
 | wrong approach, or two cells gave the same answer | **next model**, worktree reset |
 | timeout, missing tool | **retry** once at the same cell |
 | the network dropped (`ENOTFOUND`, a connection error) | **retry** at the same cell after 30s, 90s, 270s, from the work it kept; `network` stop only if it stays down |
 | a command the permission settings refused | **blocked** at once — a stronger model gets the same refusal |
-| hit its turn ceiling | `--verify` run by cauce; **more turns**, again while the work keeps moving (cap 200), then split |
+| hit its turn ceiling | `--verify` run by cauce; **more turns** in its own session, again while the work keeps moving (cap 200), then split |
 | the task contradicts itself or its check | **replan** — no model fixes a wrong task |
 
 A worker's claim of success is not evidence: a pass needs verbatim output, and
@@ -359,6 +360,30 @@ one, with an export of all of it as JSON.
 
 <p><img alt="Analysis: pass rates, median run and cost per pass, where the time of the runs went by phase, and each kind's first-try rate, time and cost" src="docs/images/analysis.png"></p>
 
+### How cauce calibrates itself
+
+The model is the one MECHA uses for people (standard hours per ticket type, the
+real hours, and a calibration that moves the standards), here for workers.
+Every task is scored when it is planned, on the scale people give tickets (1,
+2, 3, 5, 8, 13), from its criteria, kind, risk, the files it names, what
+livespec says it reaches and its length; when it ends, the size it turned out
+to be is read from git and its attempts. For each repository, kind and points
+band, cauce keeps a standard: the cell and the turns its tasks start with, and
+how often each cell passed its first try, what a point cost and how long it
+took. After every few endings in a repository a calibration moves a standard
+by two rules only, one step at a time: the start cell is the cheapest rung that
+passes first at least 70% of at least five tries, and the start turns go toward
+what three passes in four needed. Every change is recorded with its evidence,
+judged after five tasks ran under it, and reverted when it made the first try
+pass less often. Money moves nothing; `--start` and `--max-turns` always win.
+
+```bash
+cauce evolution                  # every repository, last 30 days
+cauce evolution --repo . --days 7
+cauce evolution --json           # the same, as data
+cauce evolution --snapshot       # take today's snapshot now
+```
+
 ### Fixes that stop working
 
 A fix that worked is recorded with the time it was trusted from and, when the
@@ -549,16 +574,34 @@ A `++` or a `cauce queue add` also starts the repository's dispatcher
 the session's context; `cauce work` starts it by hand. One dispatcher runs per
 repository, and each task it starts is its own `cauce run` process.
 
+Work that builds on other work waits for it: `cauce queue add "<task>"
+--after <task>` (or `cauce run … --after`, or `cauce workflow run … --after
+<run>`) holds it until that work passes, then starts it on the branch that work
+kept, or on the base once that branch is merged. Until then every view says
+"waits for #N to pass", or how that work stopped; `cauce dismiss` drops it.
+
 Whether a task waits is **Haiku's call** (`parallel`, on by default). The first
 task of an idle repository starts. One queued behind running work starts beside
 it only when Haiku, reading it against everything running and queued ahead,
 finds it independent — it needs nothing those produce and is unlikely to change
 the same code. Each task can run in its own worktree, so this decision is about
 whether the results will merge, not about sharing a checkout. The decision and
-its reason stay on the task, it is made once, and up to three tasks run at once
-per repository. When Haiku cannot be asked, the task waits: waiting costs
-time, a wrong "parallel" costs a broken merge. `cauce config parallel off`
-makes every repository one serial lane.
+its reason stay on the task, and it is made once. When Haiku cannot be asked,
+the task waits: waiting costs time, a wrong "parallel" costs a broken merge.
+`cauce config parallel off` makes every repository one serial lane.
+
+How many workers run at once is **the machine's level**, every repository's
+together, and it adapts: it starts at what the machine holds (its CPUs, free
+memory and free disk), rises by one when work waits and the last round of tasks
+ended with no limit, and halves on a rate limit or an overloaded API (waiting
+out its retry-after), on a worker the machine starved, or on low memory or
+disk. `cauce config max_parallel 4` sets a ceiling over it (`auto`, the
+default, sets none). Each repository with work is reserved its share, in the
+order its work was queued, and lends what it does not use; a lent worker comes
+back when the borrowed task ends. `cauce lanes` says where the level is and
+why ("2: halved, the API answered 429 3 minutes ago"), and each lane's reserve,
+use and loans. Cost never moves it: horizontal scaling is the number of
+workers, vertical scaling is the cell and turns each task climbs by evidence.
 
 A task that ends in anything but a pass **pauses its repository's lane**, so
 nothing new starts on a state it may have left broken. `cauce lanes` shows
@@ -584,7 +627,10 @@ everything above works without it.
 - **Tools the model calls by name**: `recall`, `note`, `queue`, `tasks`,
   `resume` and `overview` (as `mcp__cauce__<name>`). There is no `cauce` on
   PATH to find, no permission rule per command, and the reading tools
-  (`recall`, `tasks`, `note`, `overview`) never ask. A value cauce does not take (a kind, a topic, a malformed
+  (`recall`, `tasks`, `note`, `overview`) never ask. Nor do `queue` and
+  `resume` while you delegate them to the session (`cauce config delegate`,
+  on by default; `off` puts each call back to you); a rule that denies them
+  still does. A value cauce does not take (a kind, a topic, a malformed
   link) is answered with what it takes, never refused as invalid parameters.
   `queue` returns at once: the ending comes back on its own. `resume`
   continues work in the background, and refuses what only a person may clear:
@@ -640,12 +686,17 @@ Definitions are JSON files:
 - `project`: `.cauce/workflows/<name>.json`, shared through the repository.
 - `user`: in the cauce home.
 - `bundled`: the templates `feature` (build with its tests → blind review →
-  refute → fix → recheck), `bugfix` (reproduce and fix in one worker, then the
-  same review chain), `review-fix` and `dual-review`. The ledger steps are
-  skipped when the review found nothing, so a clean change costs two workers.
+  refute → fix → recheck), `feature-parallel` (for a feature that touches
+  several areas: a plan splits it into parts with surfaces of their own and a
+  contract they keep → the parts built side by side → joined → the same review
+  chain; one part is `feature`), `bugfix` (reproduce and fix in one worker,
+  then the same review chain), `review-fix` and `dual-review`. The ledger steps
+  are skipped when the review found nothing, so a clean change costs two
+  workers, and a join that merges cleanly costs none.
 
 A definition holds steps (`id`, `prompt` with `{input}` names, `needs`,
-`kind`, `verify`, `start`, `max_turns`, `memory`) and never a permission rule,
+`kind`, `verify`, `start`, `max_turns`, `memory`, `surfaces`, `ledger`,
+`fanout`, `integrate`) and never a permission rule,
 an approval, a capability or a dollar limit. Rules, approvals and a run-wide
 check (`--verify`, for every step that writes and names none) are the person's
 flags on `run`. A step's `memory` topic with no note yet is said, never a

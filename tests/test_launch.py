@@ -363,3 +363,138 @@ def test_a_network_that_dropped_is_named_wherever_it_shows(tmp_path):
     local = '{"verdict": "fail", "failure": "environment", "summary": "the e2e check could not reach the app", ' \
             '"evidence": "TypeError: fetch failed (connect ECONNREFUSED 127.0.0.1:3000)"}'
     assert parse(proc(json.dumps({"result": f"```cauce-result\n{local}\n```"})), spec(tmp_path)).network == ""
+
+
+# --- more turns continue the worker's own session ---------------------------------------
+
+
+def test_a_resume_continues_the_session_with_a_short_prompt_and_keeps_the_contract(tmp_path):
+    s = spec(tmp_path, resume_session="sess-1", persist_session=True)
+    argv = build_argv(s)
+    assert argv[argv.index("--resume") + 1] == "sess-1" and "--no-session-persistence" not in argv
+    seen = []
+
+    def runner(argv, **kw):
+        seen.append((argv, kw["input"]))
+        return proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed"), session_id="sess-1"))
+
+    out = launch.run(s, runner=runner)
+    assert out.passed and out.session_id == "sess-1" and out.resumed and out.fresh == ""
+    said = seen[0][1]
+    assert said.startswith("You ran out of turns") and "do it" not in said and launch.RESULT_FENCE in said
+    # a fresh attempt is given its brief and keeps no session unless asked to
+    fresh = build_argv(spec(tmp_path))
+    assert "--resume" not in fresh and "--no-session-persistence" in fresh
+
+
+def test_a_resume_is_told_the_output_that_failed_its_attempt(tmp_path):
+    seen = []
+
+    def runner(argv, **kw):
+        seen.append(kw["input"])
+        return proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed"), session_id="sess-1"))
+
+    note = "The output that failed the last attempt, last lines:\nFAIL total is 3"
+    launch.run(spec(tmp_path, resume_session="sess-1", persist_session=True, resume_note=note), runner=runner)
+    said = seen[0]
+    assert said.startswith(launch.CONTINUE_PROMPT) and note in said and launch.RESULT_FENCE in said
+    assert said.index(note) < said.index(launch.RESULT_FENCE) and "do it" not in said
+
+
+def test_a_session_the_cli_cannot_resume_starts_fresh_and_says_why(tmp_path):
+    seen = []
+
+    def runner(argv, **kw):
+        seen.append(("--resume" in argv, kw["input"]))
+        if "--resume" in argv:
+            return proc("", 1, "No conversation found with session ID: sess-1")
+        return proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed"), session_id="sess-2"))
+
+    out = launch.run(spec(tmp_path, resume_session="sess-1", persist_session=True), runner=runner)
+    assert [r for r, _ in seen] == [True, False] and seen[1][1].startswith("do it")
+    assert out.passed and not out.resumed and out.session_id == "sess-2"
+    assert out.fresh.startswith("the CLI could not resume session sess-1: No conversation found")
+
+
+def test_more_effort_forks_the_session_at_its_new_effort_and_is_told_to_look_deeper(tmp_path):
+    note = "The independent check found:\n- [introduced, deterministic] app.py:3: drops the last item"
+    s = spec(tmp_path, resume_session="sess-1", persist_session=True, fork_session=True,
+             resume_prompt=launch.DEEPER_PROMPT, resume_note=note, cell=Cell("sonnet", "xhigh"))
+    argv = build_argv(s)
+    assert argv[argv.index("--resume") + 1] == "sess-1" and "--fork-session" in argv
+    assert argv[argv.index("--effort") + 1] == "xhigh"
+    seen = []
+
+    def runner(argv, **kw):
+        seen.append((argv, kw["input"]))
+        if "--resume" in argv:
+            return proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed"), session_id="fork-1"))
+        return proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed"), session_id="fresh-1"))
+
+    out = launch.run(s, runner=runner)
+    said = seen[0][1]
+    assert said.startswith(launch.DEEPER_PROMPT) and note in said and launch.RESULT_FENCE in said
+    assert "do it" not in said and out.resumed and out.session_id == "fork-1"
+    # without --fork-session a resume continues the session itself (more turns)
+    assert "--fork-session" not in build_argv(spec(tmp_path, resume_session="sess-1", persist_session=True))
+    assert "--fork-session" not in build_argv(spec(tmp_path, fork_session=True))  # nothing to fork
+
+
+def test_a_fork_the_cli_cannot_resume_starts_fresh_and_says_why(tmp_path):
+    seen = []
+
+    def runner(argv, **kw):
+        seen.append("--fork-session" in argv)
+        if "--resume" in argv:
+            return proc("", 1, "No conversation found with session ID: sess-1")
+        return proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed"), session_id="sess-2"))
+
+    out = launch.run(spec(tmp_path, resume_session="sess-1", persist_session=True, fork_session=True,
+                          resume_prompt=launch.DEEPER_PROMPT), runner=runner)
+    assert seen == [True, False] and not out.resumed and out.session_id == "sess-2"
+    assert out.fresh.startswith("the CLI could not resume session sess-1: No conversation found")
+
+
+PARTS = [{"id": "api", "prompt": "Build the endpoint", "surfaces": ["src/api/**"]},
+         {"id": "web", "prompt": "Build the page", "surfaces": ["src/web/**"]}]
+
+
+def test_a_plan_that_runs_in_parts_is_read_strictly(tmp_path):
+    asked = spec(tmp_path, parts=True)
+    # The contract a plan step is given asks for its parts and their contract.
+    assert "`parts`" in launch.instructions(asked) and "`contract`" in launch.instructions(asked)
+    assert "`parts`" not in launch.instructions(spec(tmp_path))
+    out = parse(proc(envelope(block(verdict="pass", summary="two parts", evidence="read the code", parts=PARTS,
+                                    contract="GET /orders returns {id, total}"))), asked)
+    assert out.passed and [p["id"] for p in out.parts] == ["api", "web"]
+    assert out.parts[1]["surfaces"] == ["src/web/**"] and out.contract == "GET /orders returns {id, total}"
+    # One part, when splitting does not pay: no surfaces or contract needed.
+    one = parse(proc(envelope(block(verdict="pass", summary="one", evidence="e",
+                                    parts=[{"id": "all", "prompt": "Build it"}]))), asked)
+    assert one.passed and one.parts == ({"id": "all", "prompt": "Build it", "surfaces": []},) and one.contract == ""
+    # A step not asked for parts ignores them.
+    assert parse(proc(envelope(block(verdict="pass", summary="s", evidence="e", parts=PARTS))),
+                 spec(tmp_path)).parts == ()
+
+
+@pytest.mark.parametrize("parts, contract, said", [
+    (None, "c", "it gave no parts"),
+    ([], "c", "it gave no parts"),
+    ([*PARTS, *({"id": f"p{i}", "prompt": "x", "surfaces": [f"p{i}/**"]} for i in range(5))], "c",
+     "7 parts; a plan splits into at most 6"),
+    ([PARTS[0], {**PARTS[1], "surfaces": ["src/**"]}], "c",
+     "its parts' surfaces overlap: api's src/api/** and web's src/**"),
+    ([PARTS[0], {**PARTS[1], "surfaces": []}], "c", "part 'web' declares no surfaces"),
+    ([PARTS[0], {**PARTS[1], "id": "api"}], "c", "two parts are called 'api'"),
+    ([PARTS[0], {**PARTS[1], "prompt": " "}], "c", "part 'web' has no prompt"),
+    ([PARTS[0], {**PARTS[1], "id": "Web Page"}], "c", "part 2 has no id"),
+    ([PARTS[0], {**PARTS[1], "surfaces": ["../up"]}], "c", "part 'web': a surface stays inside the project"),
+    ([PARTS[0], "web"], "c", "part 2 is not an object"),
+    (PARTS, None, "it gave no contract"),
+])
+def test_a_plan_with_no_parts_overlapping_ones_or_too_many_is_inconclusive(tmp_path, parts, contract, said):
+    fields = {k: v for k, v in {"parts": parts, "contract": contract}.items() if v is not None}
+    out = parse(proc(envelope(block(verdict="pass", summary="planned", evidence="read it", **fields))),
+                spec(tmp_path, parts=True))
+    assert not out.passed and out.failure is Failure.INCONCLUSIVE and out.parts == ()
+    assert said in out.summary and out.summary.startswith("claimed a pass, but its plan cannot run in parts")

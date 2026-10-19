@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from cauce import allow, grants, models
+from cauce import allow, grants, models, surfaces
 from cauce import criteria as criteria_mod
 from cauce import findings as findings_mod
 from cauce import ledger as ledger_mod
@@ -68,6 +68,19 @@ NETWORK_DOWN = re.compile(
 NETWORK_FLAKY = re.compile(
     r"\b(ECONNRESET|ETIMEDOUT|socket hang up|fetch failed|connection error|connection reset|overloaded_error|"
     r"API Error: 5\d\d|bad gateway|service unavailable|gateway timeout|request timed out)", re.IGNORECASE)
+
+#: The API turning a session's calls away for a while: a rate or usage limit (429), or an
+#: overload (529). Read only from the session's own failed call (the CLI's result, or its
+#: own error output when it gave none), never from a check's output, where a test may print it.
+RATE_LIMITED = re.compile(r"\b(?:429|rate[_ ]limit(?:ed|_error)?|too many requests|usage limit reached)\b",
+                          re.IGNORECASE)
+OVERLOADED = re.compile(r"\b(?:529|overloaded(?:_error)?)\b", re.IGNORECASE)
+_RETRY_AFTER = re.compile(r"retry[-_ ]after\W{0,3}(\d{1,6})", re.IGNORECASE)
+_RESETS_AT = re.compile(r"usage limit reached\|(\d{10})", re.IGNORECASE)
+#: A disk with no room left, as the CLI or the OS says it.
+NO_SPACE = re.compile(r"\bENOSPC\b|no space left on device", re.IGNORECASE)
+#: The exit of a CLI the kernel killed (SIGKILL), as its out-of-memory killer does.
+KILLED = frozenset({-9, 137})
 
 DEFAULT_MAX_TURNS = 30
 #: Past this a system prompt goes in a file: one argument is capped at 128 KiB
@@ -171,9 +184,50 @@ for what you found wrong.
 """.strip()
 
 
+#: The most parts a plan splits into, and how long a part's prompt and the contract may be.
+MAX_PARTS = 6
+PART_CHARS = 6000
+CONTRACT_CHARS = 8000
+#: A part's id: short, as a branch, a title and a status line show it.
+PART_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+
+#: Added to the contract of a plan step a workflow fans out over (`fanout`).
+PARTS_INSTRUCTIONS = """
+Your plan runs in parts, side by side, each built by a worker of its own and
+joined after. Beside the fields above, your result block carries:
+
+- `parts`: 2 to 6 parts (1 when splitting does not pay), in the order they are
+  joined, each `{"id": "short-name", "prompt": "what this part builds",
+  "surfaces": ["src/area/**", "tests/test_area.py"]}`. A part's surfaces are the
+  only files its worker may change, and no other part's surfaces may reach them:
+  never one file, folder or glob in two parts. Its prompt stands on its own (its
+  worker reads it, not your reasoning) and lists, verbatim, the request's
+  criteria that part answers.
+- `contract`: what every part must keep the same (the names, types, interfaces,
+  schemas or endpoints they share), as text; each part is given it verbatim.
+""".strip()
+
+
 def instructions(spec: LaunchSpec) -> str:
-    """The result contract a worker is given, with the judging note for a step that judges."""
-    return RESULT_INSTRUCTIONS + ("\n\n" + JUDGING_INSTRUCTIONS if spec.judging else "")
+    """The result contract a worker is given, with the judging note for a step that judges
+    and what a plan a workflow fans out over must add."""
+    return RESULT_INSTRUCTIONS + ("\n\n" + JUDGING_INSTRUCTIONS if spec.judging else "") + (
+        "\n\n" + PARTS_INSTRUCTIONS if spec.parts else "")
+
+
+#: What a session given more turns is told: its brief, its context and its prompt
+#: cache are its own already, so only the contract is said again.
+CONTINUE_PROMPT = ("You ran out of turns before you finished. Continue from where you are: your work so far is in "
+                   "this directory, and the task is the one you were given. Check it before you answer.")
+#: What a session given more effort on the same model is told: its approach stands
+#: and its context is its own; what it lacked was depth, and what failed is said below.
+DEEPER_PROMPT = ("Your last answer to this task did not pass; what failed it is below. Your work so far is in this "
+                 "directory and the task is the one you were given. You now think at a higher effort: look deeper "
+                 "than before, find why it failed and what else the same cause breaks, fix it, and check it "
+                 "before you answer.")
+#: The CLI's words when a session it was asked to resume is not there to resume.
+_NO_SESSION = re.compile(r"no conversation found|session[^\n]{0,60}(?:not found|does not exist|could not be "
+                         r"(?:found|loaded|resumed))|invalid session", re.IGNORECASE)
 
 
 Runner = Callable[..., subprocess.CompletedProcess]
@@ -216,7 +270,20 @@ class LaunchSpec:
     #: The ledger rows the task decides, and the words a verdict may use (`cauce.ledger`).
     verdicts: tuple[str, ...] = ()
     verdict_words: tuple[str, ...] = ()
+    #: A plan a workflow fans out over: a pass carries its `parts` and their `contract` (`read_parts`).
+    parts: bool = False
     persist_session: bool = False
+    #: The worker session this attempt continues (`--resume`), told to go on:
+    #: an attempt given more turns on the same cell, in the same directory. "" starts fresh.
+    resume_session: str = ""
+    #: What that session is told first: `CONTINUE_PROMPT` for more turns, `DEEPER_PROMPT` for more effort.
+    resume_prompt: str = CONTINUE_PROMPT
+    #: What it is told beside that: the output that failed its attempt (cauce's own
+    #: check after it stopped), or the independent check's blockers, which its context does not hold.
+    resume_note: str = ""
+    #: The continued session is a fork (`--fork-session`), the one it came from kept as it was:
+    #: more effort on the same model, at the new effort the cell gives.
+    fork_session: bool = False
     #: Extra environment for the worker: which task and attempt it is, so its
     #: tool calls are recorded against them.
     env: Mapping[str, str] = field(default_factory=dict)
@@ -265,6 +332,9 @@ class WorkerResult:
     findings: tuple[dict[str, str], ...] = ()
     #: Its answer for each ledger row it was given.
     verdicts: tuple[dict[str, str], ...] = ()
+    #: A plan's parts (id, prompt, surfaces) and the contract they keep: on a pass of a plan asked for them.
+    parts: tuple[dict[str, Any], ...] = ()
+    contract: str = ""
     #: Refused writes to files the attempt changed anyway, per git: no block.
     overcome: tuple[str, ...] = ()
     #: The launch broke (a timeout, no JSON, an errored session), not the work:
@@ -273,6 +343,18 @@ class WorkerResult:
     #: What says the network dropped under it (`ENOTFOUND`, a connection error):
     #: the same cell again after a wait, its work kept, never a block at once.
     network: str = ""
+    #: The Claude Code session the attempt ran in, from the CLI's JSON; "" when it gave none.
+    session_id: str = ""
+    #: The API turned the session away: `rate_limit` or `overloaded`, and the wait it named
+    #: (seconds); "" and None otherwise (`cauce.capacity` halves the machine's level on it).
+    limited: str = ""
+    retry_after_s: float | None = None
+    #: The machine starved the worker: `memory` (its CLI was killed) or `disk` (no room left).
+    starved: str = ""
+    #: It continued an earlier attempt's session instead of starting from its brief.
+    resumed: bool = False
+    #: Why a session it was asked to continue started fresh instead; "" when it did not.
+    fresh: str = ""
 
 
 def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path: Path | None = None,
@@ -303,6 +385,8 @@ def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path:
         argv += ["--append-system-prompt-file", str(prompt_path)]
     elif spec.append_system_prompt:
         argv += ["--append-system-prompt", spec.append_system_prompt]
+    if spec.resume_session:
+        argv += ["--resume", spec.resume_session, *(["--fork-session"] if spec.fork_session else [])]
     if not spec.persist_session:
         argv.append("--no-session-persistence")
     return argv
@@ -335,7 +419,8 @@ def run(
     try:
         proc = runner(
             argv,
-            input=spec.prompt + "\n\n" + instructions(spec),
+            input=(("\n\n".join(p for p in (spec.resume_prompt, spec.resume_note) if p) if spec.resume_session
+                    else spec.prompt) + "\n\n" + instructions(spec)),
             cwd=str(spec.launch_dir),
             capture_output=True,
             text=True,
@@ -369,9 +454,15 @@ def run(
         # the account): the attempt runs again, as it would have before.
         return run(dataclasses.replace(spec, permission_mode=grants.FALLBACK_MODE), runner=runner,
                    claude_bin=claude_bin)
+    if spec.resume_session and not _json(proc.stdout) and (refused := _NO_SESSION.search(proc.stderr or "")):
+        # The session is not there to continue: the attempt starts from its brief, as before, and says why.
+        line = next((x.strip() for x in (proc.stderr or "").splitlines() if refused.group(0) in x), refused.group(0))
+        fresh = run(dataclasses.replace(spec, resume_session=""), runner=runner, claude_bin=claude_bin)
+        return dataclasses.replace(
+            fresh, fresh=f"the CLI could not resume session {spec.resume_session}: {line[:200]}")
     changed = changed_paths(before, tracked_state(spec.target_dir), spec.target_dir)
     return dataclasses.replace(parse(proc, spec, changed, duration_s=time.monotonic() - started),
-                               permission_mode=spec.permission_mode)
+                               permission_mode=spec.permission_mode, resumed=bool(spec.resume_session))
 
 
 def _mode_refused(proc: subprocess.CompletedProcess, spec: LaunchSpec) -> bool:
@@ -397,13 +488,20 @@ def parse(
     usage = _usage(envelope)
     envelope, overcome = _overcome(envelope, changed, spec.target_dir)
     denied = denials(envelope)
+    session = envelope.get("session_id") if envelope else None
     common = dict(changed_paths=changed, duration_s=duration_s, denied=denied, allow=allow_rules(envelope),
-                  overcome=overcome, **usage)
+                  overcome=overcome, session_id=session if isinstance(session, str) else "", **usage)
     if envelope is None:
         detail = (proc.stderr or "").strip()[:300]
+        killed = proc.returncode in KILLED
+        limited, wait = api_limit(proc.stderr or "")
         return WorkerResult(False, Failure.ENVIRONMENT,
-                            f"the CLI produced no JSON (exit {proc.returncode}): {detail}", transient=True,
-                            network=network_trouble(proc.stderr or "", proc.stdout or "", flaky=True), **common)
+                            f"the CLI produced no JSON (exit {proc.returncode}"
+                            + (", killed: the kernel does so when memory runs out" if killed else "") + f"): {detail}",
+                            transient=True, network=network_trouble(proc.stderr or "", proc.stdout or "", flaky=True),
+                            limited=limited, retry_after_s=wait,
+                            starved="memory" if killed else "disk" if NO_SPACE.search(proc.stderr or "") else "",
+                            **common)
     text = str(envelope.get("result") or "")
     if envelope.get("is_error"):
         subtype = str(envelope.get("subtype") or "")
@@ -413,8 +511,10 @@ def parse(
         # An API error (a usage limit, an overload) arrives as `is_error` with
         # subtype "success": the reason is in the result text, never the subtype.
         why = text.strip()[:200] if subtype in ("", "success") and text.strip() else subtype or "no reason given"
+        limited, wait = api_limit(text)
         return WorkerResult(False, Failure.ENVIRONMENT, f"the session errored: {why}", raw=text, transient=True,
-                            network=network_trouble(text, flaky=True), **common)
+                            network=network_trouble(text, flaky=True), limited=limited, retry_after_s=wait,
+                            starved="disk" if NO_SPACE.search(text) else "", **common)
     block = result_block(text)
     if block is None:
         return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
@@ -446,6 +546,13 @@ def parse(
             return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
                                 f"claimed a pass without a verdict on {', '.join(undecided)}: " + summary,
                                 evidence, raw=text, verdict=verdict, **common)
+        if spec.parts:
+            parts, contract, problem = read_parts(block)
+            if problem:
+                return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
+                                    f"claimed a pass, but its plan cannot run in parts: {problem}: " + summary,
+                                    evidence, raw=text, verdict=verdict, **common)
+            common.update(parts=parts, contract=contract)
         return WorkerResult(True, None, summary, evidence, raw=text, verdict=verdict, **common)
     failure = _refused(_failure(block.get("failure"), verdict), denied)
     # The worker found the network down (a name that does not resolve): the
@@ -473,6 +580,22 @@ def check_offline(output: str) -> str:
     return found.group(0).strip()[:120] if found else ""
 
 
+def api_limit(text: str) -> tuple[str, float | None]:
+    """What a session's own failed call says of the API turning it away: (`rate_limit` or
+    `overloaded`, the seconds it said to wait), or ("", None)."""
+    if OVERLOADED.search(text or ""):
+        kind = "overloaded"
+    elif RATE_LIMITED.search(text or ""):
+        kind = "rate_limit"
+    else:
+        return "", None
+    if found := _RETRY_AFTER.search(text):
+        return kind, float(found.group(1))
+    if found := _RESETS_AT.search(text):
+        return kind, max(float(found.group(1)) - time.time(), 0.0)
+    return kind, None
+
+
 def network_trouble(*texts: str, flaky: bool = False) -> str:
     """What in `texts` says the network dropped, or "". `flaky` also reads what
     only a session's own failed call says (a reset, an overload)."""
@@ -481,6 +604,48 @@ def network_trouble(*texts: str, flaky: bool = False) -> str:
         if found:
             return found.group(0).strip()[:80]
     return ""
+
+
+def read_parts(block: Mapping[str, Any]) -> tuple[tuple[dict[str, Any], ...], str, str]:
+    """A plan's parts and their contract, read strictly: (parts, contract, problem). A
+    problem (no parts, more than `MAX_PARTS`, a part without its id, prompt or surfaces,
+    surfaces two parts share) leaves nothing read: a plan is never guessed at."""
+    raw = block.get("parts")
+    if not isinstance(raw, list) or not raw:
+        return (), "", "it gave no parts"
+    if len(raw) > MAX_PARTS:
+        return (), "", f"it gave {len(raw)} parts; a plan splits into at most {MAX_PARTS}"
+    parts: list[dict[str, Any]] = []
+    for n, part in enumerate(raw, 1):
+        if not isinstance(part, dict):
+            return (), "", f"part {n} is not an object"
+        pid = part.get("id")
+        if not isinstance(pid, str) or not PART_ID.match(pid):
+            return (), "", f"part {n} has no id (lowercase letters, digits, '-', '_')"
+        if any(p["id"] == pid for p in parts):
+            return (), "", f"two parts are called {pid!r}"
+        prompt = part.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > PART_CHARS:
+            return (), "", f"part {pid!r} has no prompt (text, at most {PART_CHARS} characters)"
+        given = part.get("surfaces") or []
+        try:
+            if not isinstance(given, list):
+                raise surfaces.SurfaceError("its surfaces are a list of paths or globs")
+            bound = list(surfaces.check(given))
+        except surfaces.SurfaceError as exc:
+            return (), "", f"part {pid!r}: {exc}"
+        if len(raw) > 1 and not bound:
+            return (), "", f"part {pid!r} declares no surfaces: the parts run side by side only within their own"
+        parts.append({"id": pid, "prompt": prompt.strip(), "surfaces": bound})
+    contract = block.get("contract")
+    if len(parts) > 1 and (not isinstance(contract, str) or not contract.strip()):
+        return (), "", "it gave no contract: the names, types and interfaces its parts share"
+    if isinstance(contract, str) and len(contract) > CONTRACT_CHARS:
+        return (), "", f"its contract is over {CONTRACT_CHARS} characters"
+    overlaps = surfaces.overlapping({p["id"]: p["surfaces"] for p in parts})
+    if overlaps:
+        return (), "", "its parts' surfaces overlap: " + "; ".join(overlaps)
+    return tuple(parts), contract.strip() if isinstance(contract, str) else "", ""
 
 
 #: How many facts one attempt may add to the notes, and how long each may be.

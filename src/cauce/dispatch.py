@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from cauce import config
+from cauce import after, config
 from cauce.classify import ask_haiku
 from cauce.isolate import PATHLIKE
 from cauce.store import Store, home
@@ -195,11 +195,14 @@ def waiting(store: Store, task: Mapping) -> str | None:
     ("waits for #46: <reason>"); None for one it has not held back, or with
     nothing left ahead of it. The decision is made once, but the work it waits
     for moves on: it is read from the lane as `flow.runnable` holds the task,
-    until nothing the dispatcher started runs there and nothing queued is ahead."""
+    until nothing the dispatcher started runs there and nothing queued is ahead.
+    Work queued after other work says that first ("waits for #17 to pass", `after`)."""
+    if (held := after.waiting(store, task)) is not None:
+        return held
     if task.get("status") != "queued" or task.get("parallel") != 0:
         return None
     ahead = [t["id"] for t in store.dispatched_running(task.get("repo"))]
-    ahead += [t["id"] for t in store.queued_in(task.get("repo")) if t["id"] < task["id"]]
+    ahead += [t["id"] for t in store.queued_in(task.get("repo")) if t["id"] < task["id"] and not after.held(t)]
     if not ahead:
         return None
     decided = (store.last_event(task["id"], "dispatch_decided") or {}).get("data") or {}

@@ -15,7 +15,7 @@ judgment decides.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import PurePosixPath
 
 _GLOB = re.compile(r"[*?\[]")
@@ -96,6 +96,16 @@ def disjoint(a: Sequence[str], b: Sequence[str]) -> bool:
             if px == py or px.startswith(py + "/") or py.startswith(px + "/"):
                 return False
     return True
+
+
+def overlapping(groups: Mapping[str, Sequence[str]]) -> list[str]:
+    """Each pair of surfaces of two groups (a plan's parts) that may touch the same file,
+    as `api's src/** and web's src/web/**`; empty when every group is disjoint from the rest."""
+    names, out = list(groups), []
+    for n, a in enumerate(names):
+        for b in names[n + 1:]:
+            out += [f"{a}'s {x} and {b}'s {y}" for x in groups[a] for y in groups[b] if not disjoint([x], [y])]
+    return out
 
 
 def brief(surfaces: Sequence[str]) -> str:

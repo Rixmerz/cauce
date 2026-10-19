@@ -5,7 +5,10 @@ import { cellChip, h, kindChip, repoName, usd } from "./util.js";
 // for changing the router, the briefs and the defaults. Read only; no model.
 
 const PHASES = [
-  ["queued_s", "queued", "waiting in its lane before it ran"],
+  ["advance_s", "advance", "from the step it waited on passing to its being queued"],
+  ["pickup_s", "pickup", "from queued to the dispatcher starting it"],
+  ["spawn_s", "spawn", "from the dispatcher starting it to its plan"],
+  ["queued_s", "queued", "waiting in its lane before it ran (runs that did not split it into pickup and spawn)"],
   ["plan_s", "plan", "classifying and choosing the cell"],
   ["setup_s", "setup", "worktree, waiting for the checkout, servers"],
   ["worker_s", "worker", "the workers' own time"],
@@ -51,7 +54,7 @@ function phaseBar(phases) {
     bar,
     h("div", { class: "legend" }, PHASES.filter(([key]) => phases.seconds[key]).map(([key, label, what]) =>
       h("span", { title: what }, h("i", { class: `ph-${label}` }), `${label} ${secs(phases.seconds[key])} · ${pct(phases.share[key])}`))),
-    h("p", { class: "empty" }, `Over the ${phases.runs} run(s) whose phases were timed. Queued time is before a run starts; the rest is its wall time.`));
+    h("p", { class: "empty" }, `Over the ${phases.runs} run(s) whose phases were timed. Advance, pickup, spawn and queued time come before a run starts; the rest is its wall time.`));
 }
 
 function summaryTable(rows, key, label, render) {
