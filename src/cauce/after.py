@@ -158,9 +158,10 @@ def waiting(store: Store, task: Mapping[str, Any]) -> str | None:
     return f"waits for #{task_id}, which {_ended(store, other)}: a resume of it to a pass releases this"
 
 
-def _kept(store: Store, wanted: Mapping[str, int]) -> tuple[str | None, list[str], str]:
+def _kept(store: Store, wanted: Mapping[str, int]) -> tuple[str | None, list[str], str, str | None]:
     """What the work a hold names kept when it passed: its branch, the files it changed,
-    and how it is named. A run's is its last step's, the one that holds every step's work."""
+    how it is named, and the directory it ran in. A run's is its last step's, the one that
+    holds every step's work."""
     if "run" in wanted:
         run_id = int(wanted["run"])
         run = store.get_run(run_id) or {}
@@ -172,20 +173,53 @@ def _kept(store: Store, wanted: Mapping[str, int]) -> tuple[str | None, list[str
             finished = ((store.final_event(latest[step]["id"]) or {}).get("data") or {}) if step in latest else {}
             paths += list(finished.get("changed") or ())
             branch = branch or finished.get("branch")
-        return branch, sorted(set(paths)), f"run #{run_id}'s last step"
+        return branch, sorted(set(paths)), f"run #{run_id}'s last step", run.get("cwd")
     task_id = int(wanted["task"])
     finished = (store.final_event(task_id) or {}).get("data") or {}
-    return finished.get("branch"), list(finished.get("changed") or ()), f"#{task_id}"
+    return (finished.get("branch"), list(finished.get("changed") or ()), f"#{task_id}",
+            (store.get_task(task_id) or {}).get("cwd"))
 
 
-def _start(kept: tuple[str | None, list[str], str], where: Path | None) -> tuple[str | None, str]:
+def _elsewhere(source: str | None, where: Path | None) -> Path | None:
+    """The checkout the awaited work ran in, when it is another repository than the
+    held work's: None when they are the same one, or git cannot say."""
+    from cauce import repo
+
+    if not source or where is None or not where.is_dir() or not Path(source).is_dir():
+        return None
+    theirs, mine = repo.toplevel(Path(source)), repo.toplevel(where)
+    if theirs is None or mine is None or theirs == mine:
+        return None
+    # A worktree of the same repository is the same repository.
+    if repo.key(theirs) == repo.key(mine):
+        return None
+    return theirs
+
+
+def reads(kept: tuple[str | None, list[str], str, str | None], where: Path | None) -> str | None:
+    """The other repository held work is given to read (`--add-dir`), when the work it
+    waited for kept a branch there; None when it is this repository's."""
+    if not kept[0]:
+        return None
+    other = _elsewhere(kept[3], where)
+    return str(other) if other is not None else None
+
+
+def _start(kept: tuple[str | None, list[str], str, str | None], where: Path | None) -> tuple[str | None, str]:
     """The commit held work starts on in its checkout (None: the base, its HEAD) and the
     line its plan says. Read only: nothing is merged or rebased."""
-    branch, paths, who = kept
+    branch, paths, who, source = kept
     if not branch:
         return None, f"queued after {who}, which passed and kept no branch: this starts on the base"
     if where is None or not where.is_dir():
         return None, f"queued after {who}, which passed on {branch}: this starts where it was queued"
+    if (other := _elsewhere(source, where)) is not None:
+        # Another repository: nothing of it crosses into this one; its branch is read where it lives.
+        changed = (f"; it changed {', '.join(paths[:20])}" + (" and more" if len(paths) > 20 else "")) if paths else ""
+        return None, (f"queued after {who}, which passed in another repository, {other}, on {branch}: this starts "
+                      "on this repository's base, and nothing of it is merged here. Read what it built there, "
+                      f"without changing that checkout: `git -C {other} log --oneline HEAD..{branch}`, "
+                      f"`git -C {other} diff HEAD...{branch}` and `git -C {other} show {branch}:<path>`{changed}")
     try:
         tip = isolate.head(where, f"refs/heads/{branch}")
     except isolate.IsolationError:
@@ -213,6 +247,7 @@ def release(store: Store, *, task: Mapping[str, Any] | None = None,
     kept = _kept(store, ended)
     # Git is read before the transaction: the write lock is held for the writes alone.
     starts = {t["id"]: _start(kept, Path(t["cwd"]) if t.get("cwd") else None) for t in waiting_on}
+    read = {t["id"]: reads(kept, Path(t["cwd"]) if t.get("cwd") else None) for t in waiting_on}
     heads = {t["id"]: None if starts[t["id"]][0] else _now(t) for t in waiting_on}
     released = []
     with store.immediate():
@@ -220,7 +255,7 @@ def release(store: Store, *, task: Mapping[str, Any] | None = None,
             now = store.get_task(t["id"])
             if now is None or not held(now) or hold(now) != ended:
                 continue
-            _free(store, now, ended, *starts[t["id"]], head=heads[t["id"]])
+            _free(store, now, ended, *starts[t["id"]], head=heads[t["id"]], read=read[t["id"]])
             released.append(now)
     return released
 
@@ -233,10 +268,12 @@ def settle(store: Store, task: Mapping[str, Any]) -> bool:
              else store.get_task(int(wanted["task"])) if "task" in wanted else None)
     if other is None or other["status"] != "done":
         return False
-    commit, why = _start(_kept(store, wanted), Path(task["cwd"]) if task.get("cwd") else None)
+    kept = _kept(store, wanted)
+    where = Path(task["cwd"]) if task.get("cwd") else None
+    commit, why = _start(kept, where)
     head = None if commit else _now(task)
     with store.immediate():
-        _free(store, task, wanted, commit, why, head=head)
+        _free(store, task, wanted, commit, why, head=head, read=reads(kept, where))
     return True
 
 
@@ -253,7 +290,7 @@ def _now(task: Mapping[str, Any]) -> str | None:
 
 
 def _free(store: Store, task: Mapping[str, Any], waited: Mapping[str, int], commit: str | None, why: str, *,
-          head: str | None = None) -> None:
+          head: str | None = None, read: str | None = None) -> None:
     """One held task, released: its hold dropped, its start set, and a `released` event the
     plan reads. A step of a held workflow run frees its run too, so the steps after it
     build on the same start; with no commit to start on, what the run changed is read from
@@ -262,12 +299,17 @@ def _free(store: Store, task: Mapping[str, Any], waited: Mapping[str, int], comm
     options.pop(KEY, None)
     if commit:
         options["base"] = commit
+    if read and read not in (options.get("add_dirs") or ()):
+        # The other repository the awaited work kept its branch in: given to read, as `--add-dir` gives it.
+        options["add_dirs"] = [*(options.get("add_dirs") or ()), read]
     store.update_task(task["id"], options=json.dumps(options))
     store.add_event(task["id"], "released", after=dict(waited), base=commit, why=why)
     run = store.get_run(int(task["workflow_run"])) if task.get("workflow_run") else None
     if run is not None and hold(run) is not None:
         kept = json.loads(run["options"] or "{}")
         kept.pop(KEY, None)
+        if read and read not in (kept.get("add_dirs") or ()):
+            kept["add_dirs"] = [*(kept.get("add_dirs") or ()), read]
         if commit:
             # What the run changed is read from here on, and a step with nothing kept before it starts here.
             kept.update(base=commit, origin=commit)

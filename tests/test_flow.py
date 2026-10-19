@@ -64,7 +64,8 @@ def test_the_unattended_limit_and_a_vanished_directory(git_repo, store: Store, t
     for i in range(3):
         store.enqueue(f"t{i}", repo=key, cwd=str(git_repo))
     report = flow.work(store, max_tasks=2, runner=_runner([ok(), ok()]))
-    assert len(report.ran) == 2 and "unattended limit" in report.stopped_because
+    assert len(report.ran) == 2 and "unattended limit" in report.stopped_because and report.at_limit
+    assert not flow.work(store, max_tasks=2, runner=_runner([ok()])).at_limit  # nothing left queued
 
     gone = store.enqueue("x", repo="elsewhere", cwd=str(tmp_path / "deleted"))
     flow.work(store, repo="elsewhere", runner=_runner([]))

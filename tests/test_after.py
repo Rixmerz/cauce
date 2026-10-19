@@ -195,6 +195,29 @@ def test_work_queued_after_work_that_passed_starts_at_once_on_its_branch_or_the_
         after.released_line(store, gone["id"]))
 
 
+def test_work_in_another_repository_waits_and_starts_on_its_own_base_reading_the_other(
+        git_repo, store, kicks, tmp_path):
+    other = tmp_path / "library"
+    other.mkdir()
+    git(other, "init", "-q", "-b", "main")
+    (other / "lib.py").write_text("x = 1\n")
+    git(other, "add", "-A")
+    git(other, "commit", "-q", "-m", "init")
+    first = _queue(store, other, "build the shared library")
+    second = _queue(store, git_repo, "adapt the library here", after_task=first["id"])
+    assert after.held(second)
+    report = _ran(store, first, other, ok("built"), write="shared.py")
+    assert report.status == "done"
+    freed = store.get_task(second["id"])
+    options = json.loads(freed["options"])
+    # Nothing of the other repository crosses: this one's base, the other given to read.
+    assert not after.held(freed) and "base" not in options and options["add_dirs"] == [str(other.resolve())]
+    line = after.released_line(store, second["id"])
+    assert f"passed in another repository, {other.resolve()}, on {report.branch}" in line
+    assert f"git -C {other.resolve()} diff HEAD...{report.branch}" in line and "shared.py" in line
+    assert flow.queued_options(freed, Options()).add_dirs == (str(other.resolve()),)
+
+
 def test_a_task_that_kept_no_branch_releases_onto_the_base(git_repo, store, kicks):
     first = _queue(store, git_repo, "explain the totals, without changing any file")
     second = _queue(store, git_repo, "then fix the totals", after_task=first["id"])

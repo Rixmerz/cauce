@@ -1114,6 +1114,19 @@ def cmd_work(args: argparse.Namespace) -> int:
                                defaults=orchestrate.Options(use_model_classifier=not args.no_model))
         finally:
             store.close()
+    if report.at_limit and getattr(args, "detached", False):
+        # The bound is per process: a detached dispatcher that reached it with work
+        # still queued starts a fresh one after its lock is released, since nothing
+        # else would (a step's parts all queue at once, and the step waits for them).
+        store = Store.open()
+        try:
+            keys = [key] if key is not None else [
+                lane["repo"] for lane in store.lanes() if lane["queued"] and not lane["paused"]]
+            handed = [k for k in keys if dispatch.start_lane(store, home(), k)]
+        finally:
+            store.close()
+        if handed:
+            report.stopped_because += "; a fresh dispatcher takes the rest"
     print(report.text())
     return 0 if all(r.status == "done" for r in report.ran) else 1
 
@@ -1906,6 +1919,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true", help="every repository's lane")
     p.add_argument("--max", type=int, default=flow.DEFAULT_MAX_TASKS, help="stop after this many tasks")
     p.add_argument("--no-model", action="store_true")
+    p.add_argument("--detached", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_work)
 
     p = sub.add_parser("init", help="enroll a project: its .cauce/ folder, so it and its sessions show in the UI")

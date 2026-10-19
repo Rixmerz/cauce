@@ -147,6 +147,9 @@ class Ran:
 class WorkReport:
     ran: list[Ran] = field(default_factory=list)
     stopped_because: str = ""
+    # It stopped on `max_tasks` with work still queued in its lane: a detached
+    # dispatcher hands that work to a fresh one (`cli.cmd_work`), never leaves it.
+    at_limit: bool = False
 
     def text(self) -> str:
         lines = [f"task #{r.task_id}: {r.status}" for r in self.ran]
@@ -521,6 +524,8 @@ def work(
         if launched:
             continue  # look again at once: a finished run may have opened a lane
         if not out and (not waits or started >= max_tasks):
+            report.at_limit = started >= max_tasks and bool(
+                store.queued_in(repo) if repo is not None else any(lane["queued"] for lane in store.lanes()))
             report.stopped_because = (
                 f"started {max_tasks} tasks, the unattended limit; run again to continue" if started >= max_tasks
                 else "nothing runnable is queued (empty, every lane paused, waiting on work in flight, or held "
