@@ -278,3 +278,76 @@ def test_the_dispatcher_settles_the_level_each_pass_and_starts_no_more_than_it(g
 @pytest.fixture(autouse=True)
 def _no_ceiling(monkeypatch):
     monkeypatch.delenv("CAUCE_MAX_PARALLEL", raising=False)
+
+
+# --- load, recovery and a full disk -------------------------------------------------------
+
+
+def test_a_loaded_machine_halves_the_level_like_low_memory_and_a_calm_one_reads_nothing():
+    calm = Machine(10, None, None, load=8.0)
+    assert capacity.starved(calm) is None and not capacity.loaded(calm) and capacity.clear(calm)
+    busy = Machine(10, None, None, load=12.0)
+    assert capacity.starved(busy) is None and capacity.loaded(busy) and not capacity.clear(busy)
+    hot = Machine(10, None, None, load=41.0)
+    assert capacity.starved(hot).startswith("the load average is 41.0 on 10 CPUs")
+    assert "load 41.0" in capacity._described(hot)
+    read = capacity._read(home())
+    assert read.load is None or read.load >= 0
+
+
+def test_a_level_the_machine_lowered_goes_back_once_it_is_clear_without_waiting_for_tasks(store):
+    capacity.settle(store, home(), machine=Machine(8, None, None), ceiling=None, wanting=False, now=NOW)
+    full = Machine(8, None, capacity.LOW_DISK_MB - 1)
+    level = capacity.settle(store, home(), machine=full, ceiling=None, wanting=True, now=NOW)
+    assert level.value == 4 and level.dropped_from == 8
+    level = capacity.settle(store, home(), machine=full, ceiling=None, wanting=True,
+                            now=NOW + timedelta(seconds=capacity.HALVE_EVERY_S))
+    assert level.value == 2 and level.dropped_from == 8
+    # Freed, but only just over the line: no rise, no flapping.
+    edge = Machine(8, None, capacity.LOW_DISK_MB + 1)
+    at = NOW + timedelta(minutes=5)
+    assert capacity.settle(store, home(), machine=edge, ceiling=None, wanting=True, now=at).value == 2
+    roomy = Machine(8, None, 500_000)
+    first = capacity.settle(store, home(), machine=roomy, ceiling=None, wanting=True, now=at)
+    assert first.value == 2 and first.clear_since is not None  # clear from now on
+    # A relapse resets the spell.
+    hot = Machine(8, None, 500_000, load=13.0)
+    assert capacity.settle(store, home(), machine=hot, ceiling=None, wanting=True,
+                           now=at + timedelta(seconds=10)).clear_since is None
+    capacity.settle(store, home(), machine=roomy, ceiling=None, wanting=True, now=at + timedelta(seconds=20))
+    # Clear for long enough, but nothing waits: it stays where it is.
+    later = at + timedelta(seconds=20 + capacity.RECOVER_AFTER_S)
+    assert capacity.settle(store, home(), machine=roomy, ceiling=None, wanting=False, now=later).value == 2
+    back = capacity.settle(store, home(), machine=roomy, ceiling=3, wanting=True, now=later)
+    assert back.value == 3 and back.dropped_from is None  # back, under the person's ceiling
+    assert back.reason.startswith("rose back to 3, the machine is clear again")
+    assert store.events_of(0, "level_changed")[-1]["data"]["before"] == 2
+
+
+def test_a_worker_killed_for_memory_climbs_back_by_rounds_not_by_a_reading(store):
+    capacity.settle(store, home(), machine=Machine(4, None, None), ceiling=None, wanting=False, now=NOW)
+    _ended(store, 1, stop={"cause": "died", "reason": "killed", "starved": "memory"})
+    level = capacity.settle(store, home(), machine=Machine(4, None, None), ceiling=None, wanting=True, now=NOW)
+    assert level.value == 2 and level.dropped_from is None
+    task = store.enqueue("work", repo="r", cwd="/x")
+    store.claim(task["id"])
+    store.add_event(task["id"], "attempt_finished", seq=1, passed=False, starved="load")
+    level = capacity.settle(store, home(), machine=Machine(4, None, None), ceiling=None, wanting=True, now=NOW)
+    assert level.value == 1 and level.reason == "halved, a check's tests timed out under load"
+    assert level.dropped_from == 2
+
+
+def test_a_full_disk_halves_the_level_once_the_store_takes_writes_again(store):
+    capacity.settle(store, home(), machine=Machine(4, None, None), ceiling=None, wanting=False, now=NOW)
+    level = capacity.disk_filled(store, home(), waited_s=95.4, ceiling=None, now=NOW)
+    assert level.value == 2 and level.dropped_from == 4
+    assert level.reason == "halved, the disk filled up (the dispatcher waited 95s for space)"
+    assert capacity.load(home()).value == 2
+
+
+def test_max_parallel_says_it_is_a_ceiling_over_a_level_that_adapts(capsys):
+    assert cli.main(["config", "max_parallel", "3"]) == 0
+    out = capsys.readouterr().out
+    assert "a ceiling only: the level under it already adapts to the API, memory, disk and load" in out
+    assert cli.main(["config", "max_parallel", "auto"]) == 0
+    assert "a ceiling only" not in capsys.readouterr().out

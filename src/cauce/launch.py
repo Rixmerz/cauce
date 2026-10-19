@@ -349,8 +349,12 @@ class WorkerResult:
     #: (seconds); "" and None otherwise (`cauce.capacity` halves the machine's level on it).
     limited: str = ""
     retry_after_s: float | None = None
-    #: The machine starved the worker: `memory` (its CLI was killed) or `disk` (no room left).
+    #: The machine starved the worker: `memory` (its CLI was killed), `disk` (no room left)
+    #: or `load` (its tests timed out on a machine busier than its CPUs).
     starved: str = ""
+    #: The line where cauce's check says its tests timed out, when timeouts are most of what
+    #: failed it after a claimed pass (`check_timed_out`): the machine's load, not the code.
+    load: str = ""
     #: It continued an earlier attempt's session instead of starting from its brief.
     resumed: bool = False
     #: Why a session it was asked to continue started fresh instead; "" when it did not.
@@ -580,6 +584,34 @@ def check_offline(output: str) -> str:
     """The line where a check says it could not reach the network, or ""."""
     found = CHECK_OFFLINE.search(output or "")
     return found.group(0).strip()[:120] if found else ""
+
+
+#: A test runner's own line for a test that ran out of time: jest, vitest, mocha, pytest-timeout.
+#: Only these lines count, never a word a test logs.
+LOAD_TIMEOUT = re.compile(
+    r"(?:\bExceeded timeout of \d+ ?ms for a (?:test|hook)\b|\bTimeout - Async callback was not invoked\b"
+    r"|\bTest timed out in \d+ ?ms\b|\bHook timed out in \d+ ?ms\b|\bError: Timeout of \d+ ?ms exceeded\b"
+    r"|^E?\s*Failed: Timeout >\s*[\d.]+s\b|^\+{5,} Timeout \+{5,}$).*$",
+    re.MULTILINE)
+#: A runner's line for one failed test: jest's `●` heading, vitest's `×`/`FAIL … >`, mocha's
+#: numbered failure, pytest's `FAILED` summary line.
+FAILED_TEST = re.compile(
+    r"^\s*(?:● (?!Console\b).+|(?:×|✕) .+|FAIL .+ > .+|\d+\) .+|FAILED \S+.*)$", re.MULTILINE)
+#: Share of the failed tests that must be timeouts for the failure to be the load's.
+LOAD_SHARE = 2 / 3
+
+
+def check_timed_out(output: str) -> str:
+    """The first timeout line of a check whose failures are mostly tests that ran out of
+    time (`LOAD_SHARE` of them; any when no failed test is listed), or "". On a loaded
+    machine a suite that passes alone times out: that is the load, not the work."""
+    timeouts = LOAD_TIMEOUT.findall(output or "")
+    if not timeouts:
+        return ""
+    failed = len(FAILED_TEST.findall(output or ""))
+    if failed and len(timeouts) < failed * LOAD_SHARE:
+        return ""
+    return LOAD_TIMEOUT.search(output).group(0).strip()[:120]
 
 
 def api_limit(text: str) -> tuple[str, float | None]:

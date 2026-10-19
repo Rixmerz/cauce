@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -302,13 +303,46 @@ def start(repo_dir: Path, root: Path, scope: str, *, popen: Callable[..., object
         return False
 
 
-def start_lane(store: Store, root: Path, key: str | None) -> bool:
+def start_lane(store: Store, root: Path, key: str | None, *,
+               popen: Callable[..., object] | None = None) -> bool:
     """Start the dispatcher of a lane that has queued work, unless one holds it: the
-    first queued task says where, by its directory. False when nothing is queued with a
-    directory to start in, or a dispatcher already runs. A restart leaves queued work
-    with no `cauce work` to run it; this is how a person's unpause or a resume starts one."""
-    queued = store.queued_in(key or None)
+    first queued task that may run (none held behind other work) says where, by its
+    directory. False when nothing is queued with a directory to start in, or a
+    dispatcher already runs. A restart leaves queued work with no `cauce work` to run
+    it; this is how a person's unpause or a resume starts one."""
+    queued = [t for t in store.queued_in(key or None) if not after.held(t)]
     where = Path(queued[0]["cwd"]) if queued and queued[0]["cwd"] else None
     if where is None or not where.is_dir():
         return False
-    return start(where, root, key or "*")
+    return start(where, root, key or "*", **({"popen": popen} if popen is not None else {}))
+
+
+#: A lane is revived at most this often: a hook runs at every turn's end.
+REVIVE_EVERY_S = 60
+
+
+def revive(store: Store, root: Path, env: Mapping[str, str], *,
+           popen: Callable[..., object] | None = None, now: float | None = None) -> list[str | None]:
+    """Start a dispatcher for every lane with queued work that may run and none to run it
+    (the `autowork` setting): one that died (a full disk, a killed process) leaves its
+    queue still until somebody types `cauce work`. The hooks call it; never a GET. A lane
+    paused on a person, or whose work is all held behind other work, is left alone, and
+    each lane is tried at most every `REVIVE_EVERY_S`. The lanes it started a dispatcher for."""
+    if not config.enabled("autowork", env) or held(root, "*"):
+        return []
+    now = time.time() if now is None else now
+    revived: list[str | None] = []
+    for lane in store.lanes():
+        key = lane["repo"] or None
+        if not lane["queued"] or lane["paused"] or held(root, key or "*"):
+            continue
+        stamp = lock_path(root, key or "*").with_suffix(".revived")
+        with contextlib.suppress(OSError):
+            if now - stamp.stat().st_mtime < REVIVE_EVERY_S:
+                continue
+        if start_lane(store, root, key, popen=popen):
+            with contextlib.suppress(OSError):
+                stamp.touch()
+                os.utime(stamp, (now, now))
+            revived.append(key)
+    return revived

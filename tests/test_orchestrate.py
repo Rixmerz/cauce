@@ -1568,6 +1568,68 @@ def test_a_check_that_lost_the_network_is_no_bug_in_the_work(tmp_path):
     assert logged.failure is Failure.CODE_BUG and logged.network == ""
 
 
+JEST_TIMEOUTS = """FAIL src/api.test.ts
+  ● recruitment api › lists candidates
+
+    thrown: "Exceeded timeout of 5000 ms for a test.
+    Add a timeout value to this test to increase the timeout, if this is a long-running test."
+
+  ● recruitment api › saves a candidate
+
+    thrown: "Exceeded timeout of 5000 ms for a test."
+
+  ● Console
+
+    console.log Exceeded timeout of 5000 ms for a test. (a line a test logs)
+"""
+
+
+def test_a_check_whose_tests_timed_out_after_a_claimed_pass_is_the_load_not_the_work(tmp_path):
+    from cauce import launch, orchestrate
+
+    (tmp_path / "out.txt").write_text(JEST_TIMEOUTS)
+    slow = orchestrate._verified(ok(), "cat out.txt; exit 1", tmp_path)
+    assert slow.failure is Failure.ENVIRONMENT and slow.starved == "load"
+    assert slow.load.startswith("Exceeded timeout of 5000 ms for a test") and "loaded machine" in slow.summary
+    # Mostly real failures, one timeout: the work's.
+    mixed = JEST_TIMEOUTS.split("  ● Console")[0] + "  ● cart › total\n\n    Expected 10.8 Received 10\n" * 3
+    assert launch.check_timed_out(mixed) == ""
+    # Other runners' own lines; never a word a test logs on a line of its own.
+    assert launch.check_timed_out("Error: Test timed out in 5000ms.\n × cart > total")
+    assert launch.check_timed_out("  1) cart\n     Error: Timeout of 2000ms exceeded. For async tests")
+    assert launch.check_timed_out("E   Failed: Timeout >10.0s\nFAILED tests/test_cart.py::test_total - Failed")
+    assert launch.check_timed_out("FAILED tests/test_cart.py::test_total - AssertionError: timeout") == ""
+    assert launch.check_timed_out("") == ""
+
+
+def test_tests_that_keep_timing_out_under_load_stop_with_the_work_kept_and_no_attempt_spent(
+        git_repo, store, monkeypatch):
+    from cauce import capacity, orchestrate, stops
+    from cauce.escalate import LOAD_WAITS
+    from cauce.store import home
+
+    slept = []
+    monkeypatch.setattr(orchestrate, "_sleep", slept.append)
+    capacity.settle(store, home(), machine=capacity.Machine(4, None, None), ceiling=None, wanting=False)
+    out = git_repo.parent / "out.txt"  # outside the checkout: the check runs in the task's worktree
+    out.write_text(JEST_TIMEOUTS)
+    tries = len(LOAD_WAITS) + 1
+    script = Script(*[ok("467/467 passed") for _ in range(tries)], write="app.py")
+    # More tries than the attempt ceiling allows attempts: a try timed out by the load is no attempt.
+    report = run("fix the cart total", git_repo, store, Options(max_attempts=2, verify=f"cat {out}; exit 1"),
+                 registry={}, launcher=script, classifier=kind("implement"))
+    assert len(script.specs) == tries and {s.cell for s in script.specs} == {script.specs[0].cell}
+    assert report.status == "blocked" and report.stop.cause == "load" and report.branch
+    assert stops.WHO[report.stop.who] == "the environment" and "machine is quieter" in stops.what_to_do(report.stop)
+    assert sum(slept) == sum(LOAD_WAITS)
+    moved = store.events_of(report.task_id, "moved")[0]["data"]
+    assert moved["load"].startswith("Exceeded timeout") and moved["wait_s"] == LOAD_WAITS[0]
+    assert not store.dead_ends(limit=5)  # a machine's load is no dead end
+    # The machine's level halves on it.
+    level = capacity.settle(store, home(), machine=capacity.Machine(4, None, None), ceiling=None, wanting=False)
+    assert level.value == 2 and level.reason == "halved, a check's tests timed out under load"
+
+
 def test_a_task_that_changed_many_files_counts_them_all_on_its_ending(git_repo, store):
     def launcher(spec):
         for i in range(106):

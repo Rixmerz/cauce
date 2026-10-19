@@ -601,3 +601,89 @@ def test_another_dispatcher_s_unjudged_writing_work_borrows_no_worker(store: Sto
     store.set_parallel(store.queued_in("other")[0]["id"], True, "independent")
     picked, shares = flow.pick(store, "mine", parallel=True, decide=yes, level=3)
     assert len(picked) == 1 and shares["other"].started == 1
+
+
+def test_what_reads_as_a_full_disk_and_what_is_cauce_s_own_error():
+    import errno
+    import sqlite3
+
+    assert flow.disk_full(sqlite3.OperationalError("database or disk is full"))
+    assert flow.disk_full(sqlite3.OperationalError("disk I/O error"))
+    assert flow.disk_full(OSError(errno.ENOSPC, "No space left on device"))
+    assert not flow.disk_full(sqlite3.OperationalError("no such table: tasks"))
+    assert not flow.disk_full(OSError(errno.ENOENT, "gone"))
+    assert not flow.disk_full(ValueError("disk is full"))
+
+
+def test_a_full_disk_does_not_end_the_dispatcher_it_waits_and_goes_on(store: Store, monkeypatch):
+    import sqlite3
+
+    from cauce import capacity
+    from cauce.store import home
+
+    capacity.settle(store, home(), machine=capacity.Machine(4, None, None), ceiling=None, wanting=False)
+    task = store.enqueue("read the docs", repo="r", cwd="/")
+    real, failures = flow.pick, [sqlite3.OperationalError("database or disk is full")] * 2
+
+    def pick(*a, **kw):
+        if failures:
+            raise failures.pop()
+        return real(*a, **kw)
+
+    monkeypatch.setattr(flow, "pick", pick)
+    waits = []
+
+    class Ends:
+        def __init__(self, task_id):
+            self.task_id = task_id
+
+        def poll(self):
+            store.update_task(self.task_id, status="done")
+            return "done"
+
+    report = flow.work(store, start=lambda t, where: Ends(t["id"]), pause=lambda: None, backoff=waits.append)
+    assert [r.task_id for r in report.ran] == [task["id"]] and waits == list(flow.DISK_WAITS_S[:2])
+    changed = store.events_of(0, "level_changed")[-1]["data"]
+    assert changed["level"] == 2 and changed["reason"].startswith("halved, the disk filled up (the dispatcher "
+                                                                   "waited 20s")
+
+
+def test_a_disk_that_stays_full_stops_the_dispatcher_and_any_other_error_is_raised(store: Store, monkeypatch):
+    import sqlite3
+
+    import pytest
+
+    store.enqueue("read the docs", repo="r", cwd="/")
+    monkeypatch.setattr(flow, "pick", lambda *a, **kw: (_ for _ in ()).throw(
+        sqlite3.OperationalError("database or disk is full")))
+    waits = []
+    report = flow.work(store, pause=lambda: None, backoff=waits.append)
+    assert sum(waits) >= flow.DISK_GIVE_UP_S and waits[-1] == flow.DISK_WAITS_S[-1]
+    assert report.stopped_because.startswith("the disk stayed full for") and not report.ran
+    monkeypatch.setattr(flow, "pick", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("cauce's own")))
+    with pytest.raises(RuntimeError):
+        flow.work(store, pause=lambda: None, backoff=waits.append)
+
+
+def test_a_task_whose_process_could_not_start_for_the_disk_goes_back_to_the_queue(store: Store):
+    import errno
+
+    task = store.enqueue("read the docs", repo="r", cwd="/")
+    tries = []
+
+    class Ends:
+        def __init__(self, task_id):
+            self.task_id = task_id
+
+        def poll(self):
+            store.update_task(self.task_id, status="done")
+            return "done"
+
+    def start(t, where):
+        tries.append(t["id"])
+        if len(tries) == 1:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return Ends(t["id"])
+
+    report = flow.work(store, start=start, pause=lambda: None, backoff=lambda s: None)
+    assert tries == [task["id"], task["id"]] and [r.status for r in report.ran] == ["done"]

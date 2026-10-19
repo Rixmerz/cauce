@@ -389,8 +389,10 @@ def _needs_a_person(store: Store, task: dict, args: argparse.Namespace) -> str |
 
     stop = stops.of(store, task)
     attempts = store.attempts(task["id"])
-    # A try the network dropped under is no attempt at the work (its `moved` event says so).
-    dropped = sum(1 for e in store.events_of(task["id"], "moved") if (e["data"] or {}).get("network"))
+    # A try the network dropped under, or the load timed out, is no attempt at the work
+    # (its `moved` event says so).
+    dropped = sum(1 for e in store.events_of(task["id"], "moved")
+                  if (e["data"] or {}).get("network") or (e["data"] or {}).get("load"))
     tried = len(attempts) - dropped
     if tried >= UNATTENDED_ATTEMPTS:
         # No dollar cap stops work any more: a model resuming a task that keeps
@@ -908,6 +910,10 @@ def cmd_config(args: argparse.Namespace) -> int:
             return 1
         config.save({args.key: picked})
         print(f"{args.key} = {json.dumps(picked)}")
+        if picked != "auto":
+            # A number is only a ceiling: what runs under it already moves by itself.
+            print("a ceiling only: the level under it already adapts to the API, memory, disk and load "
+                  "(`cauce lanes` says where it is and why); `auto` puts no ceiling over it")
         return 0
     if args.key in config.CHOICES:
         picked = config.word(args.key, args.value)
