@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-19
+
 ### Fixed
 
 - **A base that took in a branch's own work under another commit is not
