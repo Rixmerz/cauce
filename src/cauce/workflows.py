@@ -1440,7 +1440,7 @@ def status(store: Store, run_id: int, *, detail: bool = False) -> dict[str, Any]
     elif run["status"] == "done" or states == {"done"}:
         state = "done"
     elif states & NEEDS_YOU or (states & STOPPED and not states & {"queued", "running"}):
-        state = "waits on you"
+        state = "waits on the orchestrator"
     elif holding:
         state = "queued"
     elif states & {"queued", "running"}:

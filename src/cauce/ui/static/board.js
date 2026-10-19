@@ -75,11 +75,13 @@ export async function renderBoard(ctx) {
   return h("div", {},
     h("div", { class: "toolbar" }, picker),
     h("div", { class: "columns" },
-      column("Needs you", needs.length, [
-        ...needs.map((t) => card(t, ctx.openTask, [statusBadge(t.status)])),
-        ...(deciding.length ? [h("div", { class: "lane-head" }, `the orchestrator decides (${deciding.length})`),
+      // Nothing waits on the person here: the orchestrating session decides, or asks them in its conversation.
+      column("For the orchestrator", needs.length + deciding.length, [
+        ...(needs.length ? [h("div", { class: "lane-head" }, `it asks you (${needs.length})`),
+          ...needs.map((t) => card(t, ctx.openTask, [statusBadge(t.status)]))] : []),
+        ...(deciding.length ? [h("div", { class: "lane-head" }, `it decides (${deciding.length})`),
           ...deciding.map((t) => card(t, ctx.openTask, [statusBadge(t.status)]))] : [])],
-        needs.length ? "needs" : ""),
+        needs.length + deciding.length ? "needs" : ""),
       column("Running", running.length, [
         ...running.map((t) => card(t, ctx.openTask, [statusBadge("running"),
           t.phase ? h("span", { class: `chip phase p-${t.phase}` }, t.phase) : null, h("span", {}, `attempt ${t.attempt ?? 1}`),

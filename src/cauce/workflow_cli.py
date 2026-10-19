@@ -142,8 +142,8 @@ def _print_run(run: dict[str, Any], *, full: bool = False) -> None:
         for part in step.get("parts") or ():
             print(f"    {MARK.get(part['state'], '!')} {part['id']:<12} {_step_line(part)}")
     if run["waiting"]:
-        print(f"  waits on you: {', '.join(run['waiting'])} — `cauce show <task>`, then `cauce resume <task>` "
-              f"or `cauce workflow retry {run['id']} <step>`")
+        print(f"  waits on the orchestrator: {', '.join(run['waiting'])} — `cauce show <task>`, then "
+              f"`cauce resume <task>` or `cauce workflow retry {run['id']} <step>`")
     if run["branch"]:
         print(f"  work so far: branch {run['branch']}")
 

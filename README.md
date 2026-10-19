@@ -613,7 +613,7 @@ unattended `cauce work` starts.
 A run whose process died leaves no task stuck in `running`: a sweep (at session
 start and before every `cauce work`) marks it interrupted and pauses its lane.
 `cauce cancel <id>` stops a run; `cauce events --follow` shows runs as they go.
-`cauce dismiss <id>` takes a task that waits on you off the board (a resume
+`cauce dismiss <id>` takes a task that waits off the board (a resume
 brings it back), and a task that passes takes its stopped copies with it.
 
 A turn that delegated to a subagent is not done while the subagent still runs,
@@ -642,7 +642,7 @@ everything above works without it.
   tells you and goes on. Work that ends during a turn is still delivered by
   the Stop hook. Delivery is claimed atomically, so an ending is never handed
   over twice. Turn this off with the `wake` plugin setting.
-- **A status line** (`cauce · 2 waits on you · 1 running · 0 queued`).
+- **A status line** (`cauce · 🟣 2 for the orchestrator · 🔵 1 running`): nothing waits on you; the orchestrating session decides each stop, or asks you in its conversation for what only you can grant.
 - **`/cauce`** opens the web board, where each stopped task has the button that
   continues it with exactly the rule cauce suggests (*Allow & resume*,
   *Approve & resume*, *Resume*, *Always allow here*). The press is yours; the
@@ -740,7 +740,7 @@ missing problem) does not start.
 One session per project, and one more that watches them all: run
 `/cauce:watch` in it. It reads every session cauce saw lately and how its work
 stands, with `overview` (`cauce overview` in a terminal: per session, what
-waits on you and why, what runs on which model and since when, what is queued,
+waits on the orchestrator and why, what runs on which model and since when, what is queued,
 what ended). It hears every ending as it happens through
 `cauce events --follow --new --kind finished`, and sends a session work with
 Claude Code's own `ListAgents` and `SendMessage`. It reads; it claims no

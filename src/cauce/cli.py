@@ -505,7 +505,7 @@ def cmd_dismiss(args: argparse.Namespace) -> int:
                 return 1
             waited = dispatch.waiting(store, task) if after.held(task) else None
             if stops.dismiss(store, task, via=via) is None:
-                print(f"task #{task_id} is {task['status']}; only a task that waits on you "
+                print(f"task #{task_id} is {task['status']}; only a task that waits "
                       f"({', '.join(stops.DISMISSABLE)}) or on other work (`--after`) is dismissed",
                       file=sys.stderr)
                 return 1
@@ -1781,7 +1781,7 @@ def cmd_board(args: argparse.Namespace) -> int:
         print(json.dumps(board["counts"]))
     else:
         c = board["counts"]
-        print(f"cauce ⚠{c['needs_you']} ◆{c['orchestrator']} ▶{c['running']} ⏸{c['queued']}")
+        print(f"cauce ◆{c['needs_you'] + c['orchestrator']} ▶{c['running']} ⏸{c['queued']}")
     return 0
 
 

@@ -279,7 +279,7 @@ def test_a_step_that_stops_waits_for_the_person_then_the_run_goes_on(git_repo, s
     seen: list[dict] = []
     flow.work(store, runner=_runner([ok(), bad(Failure.SPEC_BUG, "cannot be read")], seen))
     status = workflows.status(store, started["id"])
-    assert status["state"] == "waits on you" and status["waiting"] == ["check"]
+    assert status["state"] == "waits on the orchestrator" and status["waiting"] == ["check"]
     assert [s["state"] for s in status["steps"]] == ["done", "replan", "pending"]
     # The session hears of the stop.
     assert status["steps"][1]["task"] in [t["id"] for t in store.unreported("s1")]
@@ -390,13 +390,13 @@ def test_the_cli_reads_writes_files_and_says_where_a_stopped_run_waits(git_repo,
     flow.work(store, runner=_runner([ok(), bad(Failure.SPEC_BUG, "cannot")], []))
     assert cli.main(["workflow", "status", str(run_id)]) == 0
     out = capsys.readouterr().out
-    assert "waits on you" in out and "✓ build" in out and f"retry {run_id} <step>" in out
+    assert "waits on the orchestrator" in out and "✓ build" in out and f"retry {run_id} <step>" in out
     assert "work so far: branch cauce/task-" in out
     assert cli.main(["workflow", "status", "--all", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)[0]["state"] == "waits on you"
+    assert json.loads(capsys.readouterr().out)[0]["state"] == "waits on the orchestrator"
     assert cli.main(["overview"]) == 0
     out = capsys.readouterr().out
-    assert f"run #{run_id} chained — waits on you" in out and "(workflow run #" in out
+    assert f"run #{run_id} chained — waits on the orchestrator" in out and "(workflow run #" in out
     assert cli.main(["workflow", "retry", str(run_id), "check"]) == 0
     assert cli.main(["workflow", "status", "999"]) == 1
 
@@ -798,7 +798,7 @@ def test_a_kindless_step_carries_the_run_check_and_the_dry_run_says_so(git_repo,
 def test_the_line_of_a_run_names_the_step_that_waits_on_the_person():
     from cauce import workflow_cli
 
-    line = workflow_cli._run_line({"id": 7, "name": "dual", "state": "waits on you", "cost_usd": 1.0,
+    line = workflow_cli._run_line({"id": 7, "name": "dual", "state": "waits on the orchestrator", "cost_usd": 1.0,
                                    "waiting": ["a"], "steps": [
                                        {"id": "a", "state": "failed", "task": 10},
                                        {"id": "b", "state": "running", "task": 11, "attempt": 1}]})
@@ -1073,7 +1073,8 @@ def test_a_part_that_stops_stops_the_run_and_a_retry_runs_only_the_parts_that_di
                                            bad(Failure.SPEC_BUG, "the page has no route")], seen))
     status = workflows.status(store, started["id"], detail=True)
     build = status["steps"][1]
-    assert status["state"] == "waits on you" and status["waiting"] == ["build"] and build["state"] == "replan"
+    assert status["state"] == "waits on the orchestrator" and status["waiting"] == ["build"]
+    assert build["state"] == "replan"
     # The parts show under their step, each with its own task and state.
     assert [(p["id"], p["state"]) for p in build["parts"]] == [("api", "done"), ("web", "replan")]
     assert status["steps"][2]["state"] == "pending"
@@ -1150,7 +1151,7 @@ def test_parts_whose_surfaces_overlap_stop_the_run_at_the_plan_with_the_paths_na
     stop = stops.of(store, plan_task)
     assert stop.cause == "parts" and "api's api/** and web's api/web/**" in stop.reason
     status = workflows.status(store, started["id"])
-    assert status["state"] == "waits on you" and status["waiting"] == ["plan"]
+    assert status["state"] == "waits on the orchestrator" and status["waiting"] == ["plan"]
     # The session hears of it; a retry plans again.
     assert plan_task["id"] in [t["id"] for t in store.unreported("s1")]
     assert workflows.retry(store, started["id"], "plan")["workflow_step"] == "plan"

@@ -379,7 +379,7 @@ def test_board_counts_for_a_status_line(capsys):
     assert json.loads(capsys.readouterr().out) == {"needs_you": 1, "orchestrator": 1, "running": 0, "workers": 0,
                                                    "queued": 1, "done": 0, "answering": 0}
     assert cli.main(["board"]) == 0
-    assert capsys.readouterr().out.strip() == "cauce ⚠1 ◆1 ▶0 ⏸1"
+    assert capsys.readouterr().out.strip() == "cauce ◆2 ▶0 ⏸1"
 
 
 def test_the_json_surface_a_page_reads(capsys, git_repo):

@@ -221,7 +221,7 @@ def overview(store: Store, hours: float = 24, limit: int = 20, repos: set[str] |
     from cauce import workflows
 
     flows = [w for w in workflows.runs(store, repos=repos, limit=limit)
-             if w["state"] in ("running", "waits on you", "stalled") or (w["updated_at"] or "") >= since]
+             if w["state"] in ("running", "waits on the orchestrator", "stalled") or (w["updated_at"] or "") >= since]
     return {"since": since, "sessions": out, "other": sorted(rest, key=lambda t: t["id"], reverse=True),
             "workflows": flows}
 

@@ -351,9 +351,10 @@ def _orchestrates(store: Store, session_id: str, cwd: str) -> str | None:
         moved += orchestrator.adopt(store, [key], session_id) if key else 0
     except OSError:
         return None
-    text = ("cauce: this session orchestrates this project. What only the person clears (a refused command's "
-            "rule, a cell's approval, a merge) you tell them; every other stop is yours to decide: resume it, "
-            "rewrite it, or dismiss it with why (`cauce dismiss N`), never leave it waiting on the person.")
+    text = ("cauce: this session orchestrates this project, and every stop is yours to carry. What only the "
+            "person can grant (a refused command's rule, a cell's approval, a merge) you ask them for in this "
+            "conversation and, on their yes, run its line; every other stop you decide: resume it, rewrite it, "
+            "or dismiss it with why (`cauce dismiss N`). Nothing is left waiting on the person unasked.")
     if moved:
         text += f" {moved} task(s) sent by a session that ended or went quiet report here now."
     return text
@@ -570,10 +571,11 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
     ended = store.claim_unreported(session_id, via=claim) if claim else store.unreported(session_id)
     if not ended:
         return None, []
-    lines = [ENDINGS_HEADER + " Act on each now: tell the person what happened. A stop marked as the person's "
-             "(a refused command's rule, a cell's approval) is theirs to clear; any other stop is yours to decide "
-             "as its line says: resume it, rewrite it, or dismiss it with why (`cauce dismiss N`), never leaving "
-             "it waiting on the person (never redo a worker's task by hand)."]
+    lines = [ENDINGS_HEADER + " Act on each now: tell the person what happened. Every stop is yours to carry: "
+             "one only the person can grant (a refused command's rule, a cell's approval) you ask them for here, "
+             "and on their yes you run its line; any other you decide as its line says: resume it, rewrite it, "
+             "or dismiss it with why (`cauce dismiss N`). Nothing waits on the person unasked (never redo a "
+             "worker's task by hand)."]
     for t in ended:
         data = t["finished_data"]
         changed = data.get("changed") or []
@@ -603,7 +605,7 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
             shown = ", ".join(changed[:5]) + (f" and {total - 5} more" if total > 5 else "")
             lines.append(f"  changed so far: {shown}")
         if stop:
-            whose = "the person's to clear" if stops.waits_on(store, t) == "person" else "yours to decide"
+            whose = "ask the person for it here" if stops.waits_on(store, t) == "person" else "yours to decide"
             lines.append(f"  next ({whose}): {stop['todo']}" + (f": {stop['next']}" if stop["next"] else ""))
         waiting = store.lane_paused_on(t.get("repo"), t["id"])
         if waiting:

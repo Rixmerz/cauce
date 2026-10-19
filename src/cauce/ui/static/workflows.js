@@ -59,7 +59,7 @@ function runCard(run, ctx) {
   return h("div", { class: "card wf-run" },
     h("div", { class: "row" },
       h("b", {}, `#${run.id} ${run.name}`), h("span", { class: "chip" }, `v${run.version} · ${run.scope}`),
-      h("span", { class: `tag ${stateClass(run.state === "waits on you" ? "failed" : run.state)}` }, run.state),
+      h("span", { class: `tag ${stateClass(run.state === "waits on the orchestrator" ? "failed" : run.state)}` }, run.state),
       h("span", { class: "meta" }, `${usd(run.cost_usd)}${run.points ? ` · ${run.points} points` : ""} · ${when(run.updated_at)}`)),
     goal ? h("div", { class: "text" }, short(goal, 300)) : null,
     h("div", { class: "progress", title: `${done} of ${total} steps passed` },
@@ -71,7 +71,7 @@ function runCard(run, ctx) {
       st.parts.map((p) => h("button", { class: "chip", title: p.result || "", onclick: () => ctx.openTask(p.task) },
         `${p.id} `, statusBadge(p.state))))),
     run.waiting.length ? h("div", { class: "asks" },
-      `waits on you at ${run.waiting.join(", ")}: open the step for why; go on with cauce resume <task> `
+      `waits on the orchestrator at ${run.waiting.join(", ")}: open the step for why; go on with cauce resume <task> `
       + `or cauce workflow retry ${run.id} <step> in a session`) : null,
     // Queued after other work (`--after`): it starts when that work passes, on what it kept.
     run.waits ? h("div", { class: "reason" }, `It ${run.waits}`) : null,

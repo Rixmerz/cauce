@@ -318,7 +318,7 @@ export const register: Register = (on, options) => {
         properties: { hours: { type: ['integer', 'string'], description: 'sessions seen and tasks ended this recently; 24 when left out' } },
       },
     })
-    await $.command.register({ name: 'cauce', description: "cauce's board: what waits on you, runs and is queued" })
+    await $.command.register({ name: 'cauce', description: "cauce's board: what waits on the orchestrator, runs and is queued" })
     $.clock.every(POLL_MS, () => {
       void poll($, wakes).catch(ignore)
     })
@@ -411,7 +411,7 @@ export const register: Register = (on, options) => {
     for (const card of found.needs_you) {
       lines.push(card.waits_on === 'orchestrator'
         ? `yours to decide (resume, rewrite or dismiss with why): #${card.id} [${card.status}] ${card.title}`
-        : `waits on the person: #${card.id} [${card.status}] ${card.title}`)
+        : `ask the person in this conversation (only they can grant it), then run its line: #${card.id} [${card.status}] ${card.title}`)
       if (card.stop) {
         lines.push(`  stopped by ${card.stop.who}: ${card.stop.reason}`)
         lines.push(`  ${card.stop.todo}${card.stop.next ? `: ${card.stop.next}` : ''}`)

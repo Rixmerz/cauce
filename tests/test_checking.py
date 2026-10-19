@@ -813,7 +813,7 @@ def test_what_the_refuter_cannot_decide_goes_to_the_person(git_repo, store, monk
     assert len(seen) == 3 and steps["refute"]["status"] == "blocked"
     stop = store.last_event(steps["refute"]["id"], "finished")["data"]["stop"]
     assert stop["cause"] == "review" and "could not decide F1" in stop["reason"]
-    assert workflows.status(store, started["id"])["state"] == "waits on you"
+    assert workflows.status(store, started["id"])["state"] == "waits on the orchestrator"
 
 
 def test_rows_still_open_after_two_rounds_go_to_the_person(git_repo, store, monkeypatch):

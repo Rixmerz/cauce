@@ -535,8 +535,10 @@ yields the default kind, not a guess.
   terminal never take it. A stop waits on the person only for what only they
   clear (`stops.PERSON_ONLY`: a refused command's rule, an approval, a gone
   directory; or past `stops.UNATTENDED_ATTEMPTS`) and a branch to merge;
-  every other stop is the orchestrator's to decide, and the board, the status
-  line, the `tasks` tool and the endings say whose each is. The orchestrator
+  every other stop is the orchestrator's to decide. Nothing shows as waiting on
+  the person: the status line counts every wait as the orchestrator's, the
+  board lists the ones it must ask the person for apart, and the `tasks` tool
+  and the endings tell it to ask in its conversation and run the line on a yes. The orchestrator
   gains no power: it still resumes `--unattended`, and a dismissal it types is
   recorded as its call, never as the person's.
 - A worker never inherits the host's session id (`CLAUDE_CODE_SESSION_ID`),

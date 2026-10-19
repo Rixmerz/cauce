@@ -12,14 +12,16 @@
   brings the work the old session sent, open or ended unheard, and the
   orchestrator adopts what sessions gone quiet left in its project, so their
   endings reach it. `cauce orchestrator` shows who holds it.
-- **What waits is the orchestrator's unless only the person can clear it.**
-  A refused command (its rule), a cell's approval, a directory that is gone,
-  a task past the unattended attempts and a branch to merge wait on the
-  person; every other stop is the orchestrator's to resume, rewrite or
-  dismiss. The status line says `🟠 N waits on you · 🟣 N for the
-  orchestrator`, the board puts the orchestrator's under its own heading,
-  the `tasks` tool and the endings notice say whose each one is, and
-  `cauce dismiss` typed in a session is recorded as the orchestrator's call.
+- **Nothing waits on the person: every stop is the orchestrator's to carry.**
+  The status line no longer says "waits on you": it says `🟣 N for the
+  orchestrator`. What only the person can grant (a refused command's rule, a
+  cell's approval, a directory that is gone, a task past the unattended
+  attempts, a branch to merge) the orchestrator asks them for in its
+  conversation and, on a yes, runs; every other stop it resumes, rewrites or
+  dismisses itself. The board's "For the orchestrator" column lists what it
+  asks apart from what it decides, the `tasks` tool and the endings notice
+  say which, and `cauce dismiss` typed in a session is recorded as the
+  orchestrator's call.
 - **The standards calibrate from the work already done.** Tasks that ended
   before cauce kept points counted for nothing, so a store full of history
   calibrated nothing. The first settle sizes them with the same pure estimate

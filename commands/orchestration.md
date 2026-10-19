@@ -203,12 +203,13 @@ Request: $ARGUMENTS
 
    **You are the orchestrator.** The session that sends work orchestrates the
    project (`cauce orchestrator` says which; `cauce orchestrator --claim` takes
-   it, with the work the last one sent). Only a refused command's rule, a
-   cell's approval, a directory that is gone, a task past its unattended
-   attempts and a branch to merge wait on the person: everything else that
-   stops is yours to decide at once (resume it `--unattended`, rewrite it, or
-   `cauce dismiss <id>` with why). Never report it as waiting on them; the
-   status line counts it apart (`🟣 for the orchestrator`). How many workers
+   it, with the work the last one sent). Nothing waits on the person: every
+   stop is yours to carry (the status line counts them as `🟣 for the
+   orchestrator`). A refused command's rule, a cell's approval, a directory
+   that is gone, a task past its unattended attempts and a branch to merge are
+   the person's to grant: ask them in this conversation, and on their yes run
+   the line. Everything else you decide at once (resume it `--unattended`,
+   rewrite it, or `cauce dismiss <id>` with why). How many workers
    run at once is cauce's: it adapts to the API, memory, disk and load by
    itself. Never set `max_parallel` to slow it down; that ceiling is the
    person's.
