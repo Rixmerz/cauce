@@ -1307,6 +1307,8 @@ def test_generated_files_get_no_review_of_their_own(git_repo, store: Store, kick
     # dist/ and out/ hold only generated files: one review is left, which is told of them.
     assert len(reviews) == 1 and "part" not in json.loads(reviews[0]["options"])
     assert "2 of the changed files are generated" in reviews[0]["body"]
+    # It is handed the files its diff touches: capabilities about them join it.
+    assert "src/a.py" in json.loads(reviews[0]["options"])["touches"]
     assert "dist/app.js" in reviews[0]["body"] and "out/bundle.js" in reviews[0]["body"]
 
 

@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **A capability follows what the work touches, not only its kind** (#65).
+  A registry entry (or an installed neighbour) may declare `touches` (file
+  patterns, or `"ui"` for rendered UI) and `measures` (read-only). It joins
+  any work whose request names, whose work changed, or whose reviewed diff
+  holds such a file, from the first attempt; reading work (a workflow's
+  review, refuter and re-check, given the diff's files as `touches`) gets
+  only the ones that measure, and the independent verifier gets every
+  measuring capability its change touches, even when the work had none.
+  layout-inspector declares rendered UI and measures, and its hint says how
+  to render a page to measure (a started server, the build, a fixture).
+
 ## [0.23.0] - 2026-10-19
 
 ### Fixed

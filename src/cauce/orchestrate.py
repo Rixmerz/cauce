@@ -152,6 +152,9 @@ class Options:
     #: A workflow's integrate step: the parts' branches it joins, in the plan's order
     #: (`{part, task, branch}` each), and the contract they keep.
     integrate: dict | None = None
+    #: The files the change a step reads touches (a review's diff): capabilities about
+    #: them join it (`Capability.touches`).
+    touches: tuple[str, ...] = ()
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -162,7 +165,8 @@ class Options:
                   "livespec": self.livespec, "no_isolate": not self.isolate, "role": self.role,
                   "step_role": self.step_role, "surfaces": list(self.surfaces),
                   "ledger": self.ledger, "add_dirs": list(self.add_dirs), "services": list(self.services),
-                  "run_verify": self.run_verify, "parts": self.parts, "integrate": self.integrate}
+                  "run_verify": self.run_verify, "parts": self.parts, "integrate": self.integrate,
+                  "touches": list(self.touches)}
         kept = {k: v for k, v in values.items() if v not in (None, [], False)}
         if not self.keep_learned:
             kept["keep_learned"] = False  # a task whose findings wait on a person's word
@@ -502,11 +506,19 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
             context += notes.brief_lines(known)
             neighbour_notes.append(f"notes: {len(known)} from this project's memory ("
                                    + ", ".join(f"#{n['id']} {n['topic']}" for n in known) + ")")
-    selected = _with_role(caps.select(registry, kind, workdir=repo_dir), role, registry, repo_dir)
+    selected = _with_role(caps.select(registry, kind, workdir=repo_dir, paths=touched_paths(text, options),
+                                      reading=kind in READ_ONLY_KINDS), role, registry, repo_dir)
     names = tuple(dict.fromkeys([*selected.names, *(a.name for a, _ in active)]))
     return Plan(kind, classification, ladder, start, reasons + neighbour_notes, names,
                 tuple(context), tuple(statuses), tuple(active), tuple(known), role, team, why,
                 risk, turns, size, standard.data() if standard is not None else None)
+
+
+def touched_paths(text: str, options: Options, changed: Sequence[str] = ()) -> list[str]:
+    """What a task's work touches, for the capabilities about those files: the files and
+    folders its request names, its surfaces, the diff a workflow step reads, and what its
+    work changed so far."""
+    return list(dict.fromkeys([*points_mod.named(text, options.surfaces), *options.touches, *changed]))
 
 
 def turns_from_history(runs: Sequence[Sequence[tuple[int, bool, str | None]]], kind: str) -> tuple[int, str] | None:
@@ -819,9 +831,11 @@ def run(
                     report.status, report.summary = "failed", report.stop.reason
                 break
             _check_cancel(store, task["id"])
-            selection = _equip(_with_role(caps.select(registry, the_plan.kind, failed_before=bool(attempts),
-                                                      workdir=workdir), the_plan.role, registry, workdir),
-                               the_plan, repo_dir, workdir)
+            selection = _equip(_with_role(caps.select(
+                registry, the_plan.kind, failed_before=bool(attempts), workdir=workdir,
+                paths=touched_paths(text, options, [*changed, *(isolate.changed(workspace) if workspace else ())]),
+                reading=not writes or declared_read_only), the_plan.role, registry, workdir), the_plan, repo_dir,
+                workdir)
             # Numbered as the store numbers it: a resumed task's attempts go on from its last.
             nth = len(store.attempts(task["id"])) + 1
             fork = bool(resume) and decision is not None and decision.move is Move.MORE_EFFORT
@@ -931,7 +945,7 @@ def run(
                         result, text=text, kind=the_plan.kind, cell=cell, spec=spec, workdir=workdir,
                         base=base_commit, changed=so_far, risk=the_plan.risk, ledger=ledger,
                         corrections=corrections, launcher=launcher, store=store, task_id=task["id"], nth=nth,
-                        say=say, outgrew=outgrew)
+                        say=say, outgrew=outgrew, registry=registry)
             verifier_s = time.monotonic() - mark
             timing["worker_s"] += worker_s
             timing["check_s"] += check_s
@@ -1660,9 +1674,10 @@ def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, change
 def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec,
                        workdir: Path, base: str | None, changed: Sequence[str], risk: risk_mod.Risk,
                        ledger: dict[str, Mapping[str, str]], corrections: int, launcher: Launcher, store: Store,
-                       task_id: int, nth: int, say: Callable[[str], None], outgrew: bool = False
+                       task_id: int, nth: int, say: Callable[[str], None], outgrew: bool = False,
+                       registry: Mapping[str, caps.Capability] | None = None
                        ) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int,
-           tuple[dict[str, str], ...]]:
+                                  tuple[dict[str, str], ...]]:
     """A pass checked again by a worker that verifies the request, not the work.
 
     The first problems it finds earn one correction. A later round is earned by
@@ -1676,8 +1691,16 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     attempt gets more turns on the same cell, never a stronger model."""
     role = roles.internal("verifier")
     vcell = verify_cell(cell)
-    # It keeps only the neighbours that measure (layout-inspector): what it reports, it measures.
-    measuring = {name: server for name, server in spec.mcp_servers.items() if name in plugins.MEASURES}
+    # It keeps only the capabilities that measure, the work's and any the change touches: what it reports,
+    # it measures.
+    measures = caps.measuring(registry or {})
+    hints = {name: plugins.MEASURES.get(name) or measures[name].hint
+             for name in [*spec.mcp_servers, *measures] if name in plugins.MEASURES or name in measures}
+    measuring = {name: server for name, server in spec.mcp_servers.items() if name in hints}
+    touched = caps.select({n: c for n, c in measures.items() if n not in measuring}, kind, workdir=workdir,
+                          paths=changed, reading=True)
+    measuring.update(touched.servers)
+    hints = {name: hints[name] for name in measuring}
     check = dataclasses.replace(
         spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values()), risk.reasons),
         cell=vcell, max_turns=min(spec.max_turns, VERIFIER_TURNS),
@@ -1687,10 +1710,11 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
         model_id=models.pinned(vcell.model), permission_mode=grants.mode_for(vcell.model),
         disallowed_tools=tuple(dict.fromkeys([*spec.disallowed_tools, *launch.WRITE_TOOLS])),
         append_system_prompt="\n\n".join([roles.brief(role).system_prompt,
-                                           *(f"{name}: {plugins.MEASURES[name]}" for name in measuring)]),
+                                           *(f"{name}: {hint}" for name, hint in hints.items() if hint)]),
         mcp_servers=measuring,
         allowed_tools=tuple(r for r in spec.allowed_tools
-                            if not r.startswith("mcp__") or r.removeprefix("mcp__") in measuring))
+                            if not r.startswith("mcp__") or r.removeprefix("mcp__") in measuring)
+        + tuple(f"mcp__{name}" for name in touched.servers))
     say(f"cauce: #{task_id} attempt {nth} passed; risk {risk.tier}: an independent check at {vcell.label}")
     mark = time.monotonic()
     verdict = launcher(check)

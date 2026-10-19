@@ -247,8 +247,8 @@ yields the default kind, not a guess.
   the verifier and an extra one only costs a check. A high change, or a medium one a cheap cell made, is checked by the
   independent verifier before it passes: another cell, read-only, given the
   request verbatim and the diff, never the worker's summary; it runs at high
-  effort on the work's model (never Haiku), and keeps only the neighbours that
-  measure (`plugins.MEASURES`). A correction round is earned by a blocker that
+  effort on the work's model (never Haiku), and keeps only the capabilities
+  that measure (`plugins.MEASURES`, `Capability.measures`), plus any its change touches. A correction round is earned by a blocker that
   persists or by progress (every blocker of the round before fixed and a new
   one a probe shows), at most `MAX_CORRECTIONS`; a new finding after progress
   that is only read from the code goes with the pass, recorded, never a
@@ -637,6 +637,13 @@ yields the default kind, not a guess.
   cannot be read there does not start, a topic with no note yet is said when
   it starts (the step goes without it), and a note gone since says so in the
   brief. `cauce workflow run --dry-run` checks all of it and queues nothing.
+- A capability comes by kind (`when`), after a failure (`after_failure`), or
+  by what the work touches (`touches`: file patterns or `"ui"`): the files the
+  request names, its surfaces, what its work changed so far, and a workflow
+  reading step's diff (`Options.touches`). Reading work gets by touch only a
+  capability that `measures` (never changes anything), and the independent
+  verifier gets every measuring one its change touches, even when the work had
+  none. The plan's hint says when it came by touch.
 - The capability registry is read from the user's cauce home only. A
   repository must never be able to add an MCP server by committing a file.
   Installed neighbours (`plugins.KNOWN`) are read from the person's Claude

@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from cauce.capabilities import Capability
+from cauce.capabilities import UI_FILES, Capability
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,9 @@ class Neighbour:
     #: A policy of `cauce.mcp_guard` the server runs behind: calls it refuses
     #: never reach the server.
     guard: str = ""
+    #: The files it is about (`Capability.touches`), and whether it only measures.
+    touches: tuple[str, ...] = ()
+    measures: bool = False
 
 
 LAYOUT_TOOLS = frozenset({"check_environment", "inspect_layout", "detect_issues", "element_context",
@@ -68,8 +71,11 @@ KNOWN: tuple[Neighbour, ...] = (
         "layout-inspector", "layout-inspector", ("ui",), ("implement", "feature"),
         "measure the rendered page instead of judging it by eye: detect_issues (or compare_viewports for every "
         "breakpoint), element_context for the cause, then measure again after the fix; check_environment says "
-        "why a browser will not start",
-        "layout-inspection", on_path=("layout-inspector-mcp",), tools=LAYOUT_TOOLS),
+        "why a browser will not start. It measures a page that renders: the URL of a server this task started, "
+        "else the repository's own build served or opened from a file:// path, or a small HTML fixture of the "
+        "component",
+        "layout-inspection", on_path=("layout-inspector-mcp",), tools=LAYOUT_TOOLS, touches=UI_FILES,
+        measures=True),
     Neighbour(
         "rastro", "rastro", ("test",), ("ui",),
         "open the running app with rastro_open, act with rastro_view and rastro_act, and read what each action "
@@ -80,9 +86,9 @@ KNOWN: tuple[Neighbour, ...] = (
 )
 
 
-#: Neighbours that only measure and never change anything: the read-only
-#: independent check keeps them when the work had them, to measure what it reports.
-MEASURES: Mapping[str, str] = {n.server: n.hint for n in KNOWN if n.plugin == "layout-inspector"}
+#: Neighbours that only measure and never change anything: reading work gets them
+#: by what it touches, and the read-only independent check may have them.
+MEASURES: Mapping[str, str] = {n.server: n.hint for n in KNOWN if n.measures}
 
 
 def claude_dir(env: Mapping[str, str]) -> Path:
@@ -208,5 +214,6 @@ def capabilities(env: Mapping[str, str] | None = None) -> dict[str, Capability]:
         if found.skill_dir is not None:
             hint += f". Before the first call, read {found.skill_dir / 'SKILL.md'}"
         out[name] = Capability(name, found.server, when=n.when, after_failure=n.after_failure, hint=hint,
-                               read_dir=str(found.skill_dir) if found.skill_dir else "")
+                               read_dir=str(found.skill_dir) if found.skill_dir else "", touches=n.touches,
+                               measures=n.measures)
     return out

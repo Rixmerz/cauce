@@ -937,6 +937,23 @@ def _part_brief(part: Mapping[str, Any]) -> str:
     return "\n\n".join(lines)
 
 
+#: The most files a step is handed as what the change it reads touches.
+TOUCHES_MAX = 300
+
+
+def _touches(run: Mapping[str, Any], options: Mapping[str, Any], base: str | None,
+             area: Mapping[str, Any] | None) -> list[str]:
+    """The files of the change a reading step reads (its area's, for a review by area), for
+    the capabilities about them (`Capability.touches`): a review of rendered UI gets what
+    measures it. Empty when there is no change to read."""
+    if area is not None:
+        return list(area.get("paths") or ())[:TOUCHES_MAX]
+    origin = options.get("origin")
+    if not base or not origin or base == origin or not run["cwd"] or not Path(run["cwd"]).is_dir():
+        return []
+    return [path for _, path in isolate.numstat(Path(run["cwd"]), origin, base) or ()][:TOUCHES_MAX]
+
+
 def _headline(inputs: Mapping[str, str]) -> str:
     """What a step's task is called after its bracket: the first line of the run's goal (its
     first input when it has none), so the runs of one workflow read apart on every list; the
@@ -1005,8 +1022,12 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
     elif base and options.get("origin") and base != options["origin"]:
         body += ("\n\nEverything this workflow changed so far is in this checkout: "
                  f"`git diff {options['origin'][:12]}` shows it.")
+    touches = _touches(run, options, base, area) if (str(step.get("kind") or "").startswith("review")
+                                                     or step.get("ledger")) else None
     opts = {k: v for k, v in {
         "kind": step.get("kind"), "verify": step_check(step, options), "start": step.get("start"),
+        # The files the change it reads touches: capabilities about them join it.
+        "touches": touches or None,
         # A step with no kind is classified when it runs: the run's check goes with it, for
         # orchestrate to apply if it turns out to write.
         "run_verify": options.get("verify") if not step.get("kind") and not step.get("verify")

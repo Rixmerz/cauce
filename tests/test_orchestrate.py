@@ -149,6 +149,27 @@ def test_read_only_work_gets_no_edit_tools_and_no_worktree(git_repo, store):
     assert report.branch is None and report.final_cell == "haiku/medium"
 
 
+def test_a_capability_joins_the_work_that_touches_its_files(git_repo, store):
+    registry = {"measure": caps.Capability("measure", {"command": "m"}, when=(), touches=caps.UI_FILES,
+                                           measures=True, hint="measure it"),
+                "drive": caps.Capability("drive", {"command": "d"}, when=(), touches=caps.UI_FILES, hint="drive it")}
+    # Named in the request: from the first attempt.
+    script = Script(ok())
+    run("restyle components/Chart.tsx", git_repo, store, registry=registry, launcher=script,
+        classifier=kind("feature"))
+    assert set(script.specs[0].mcp_servers) == {"measure", "drive"}
+    # A review of a diff that touches it (a workflow step's `touches`): only what measures.
+    script = Script(ok("reads fine"))
+    run("review the change", git_repo, store, Options(touches=("assets/app.css",)), registry=registry,
+        launcher=script, classifier=kind("review-routine"))
+    assert set(script.specs[0].mcp_servers) == {"measure"}
+    # What the work changed so far counts on the next attempt.
+    script = Script(bad(Failure.CODE_BUG), ok(), write="theme.css")
+    run("fix the colours", git_repo, store, registry=registry, launcher=script, classifier=kind("implement"))
+    first, second = script.specs
+    assert first.mcp_servers == {} and set(second.mcp_servers) == {"measure", "drive"}
+
+
 def test_capabilities_are_handed_over_and_reactive_ones_join_after_a_failure(git_repo, store):
     registry = {
         "index": caps.Capability("index", {"command": "idx", "args": ["{workdir}"]}, hint="use it"),
