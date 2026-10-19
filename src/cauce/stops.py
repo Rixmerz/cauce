@@ -34,6 +34,7 @@ WHO = {
     "worker": "the worker's verdict",
     "cauce": "cauce's rules",
     "outside": "a signal from outside cauce",
+    "orchestrator": "the orchestrating session",
     "unknown": "not recorded",
 }
 
@@ -67,6 +68,16 @@ CAUSES = {
 #: them off the board but a resume.
 DISMISSABLE = ("failed", "blocked", "replan", "needs_approval", "interrupted")
 
+#: Stops only a person clears: a refused command needs their rule, a cell their
+#: approval, a directory that is gone their hands. Every other stop is the
+#: orchestrator's to decide (`cauce.orchestrator`): resume it, rewrite it, or
+#: dismiss it with why.
+PERSON_ONLY = ("permission", "approval", "missing_dir")
+
+#: The attempts after which a resume nobody approved is refused: two runs' worth
+#: (`orchestrate.Options.max_attempts`, kept equal by a test). `cli` refuses it.
+UNATTENDED_ATTEMPTS = 2 * 6
+
 #: The turns a task that outgrew its turns is resumed with.
 RESUME_TURNS = 120
 
@@ -84,6 +95,7 @@ DISMISS_VIA = {
     "cli": "with `cauce dismiss`",
     "mod": "from the session's cauce band",
     "tanka": "from Tanka's page",
+    "session": "as the orchestrating session's call",
 }
 
 
@@ -170,8 +182,27 @@ def next_step(task_id: int, stop: Stop, *, resumable: bool = True) -> str | None
     return base
 
 
+def for_person(stop: Stop | None, *, tried: int = 0, limit: int | None = None) -> bool:
+    """Whether a stop waits on the person rather than on the orchestrator: one of
+    `PERSON_ONLY`, or a task that already had the attempts after which a resume
+    nobody approved is refused (`limit`, `cli.UNATTENDED_ATTEMPTS`)."""
+    if stop is None:
+        return True
+    return stop.cause in PERSON_ONLY or (limit is not None and tried >= limit)
+
+
+def waits_on(store: Any, task: dict[str, Any]) -> str:
+    """"person" or "orchestrator": who a task that stopped waits on."""
+    attempts = store.attempts(task["id"])
+    dropped = sum(1 for e in store.events_of(task["id"], "moved") if (e["data"] or {}).get("network"))
+    return "person" if for_person(of(store, task), tried=len(attempts) - dropped,
+                                  limit=UNATTENDED_ATTEMPTS) else "orchestrator"
+
+
 def what_to_do(stop: Stop) -> str:
     """What a person does before the command, in one sentence."""
+    if stop.cause == "dismissed" and stop.who == "orchestrator":
+        return "nothing: the orchestrating session took it off the board; resume it if you want it after all"
     if stop.cause == "superseded" and stop.extra.get("retry"):
         return f"nothing: its step was queued again as #{stop.extra.get('by_task')}, which is the one that goes on"
     return {
@@ -252,7 +283,10 @@ def dismiss(store: Any, task: dict[str, Any], *, via: str) -> Stop | None:
     if task["status"] not in DISMISSABLE and not after.held(task):
         return None
     before = of(store, task)
-    stop = Stop("dismissed", f"you dismissed it {DISMISS_VIA.get(via, via)}", by="you",
+    by = "orchestrator" if via == "session" else "you"
+    said = ("the orchestrating session dismissed it" if by == "orchestrator"
+            else f"you dismissed it {DISMISS_VIA.get(via, via)}")
+    stop = Stop("dismissed", said, by=by,
                 attempt=before.attempt if before else None,
                 extra={"via": via, "was": task["status"],
                        **({"had": before.reason, "had_cause": before.cause} if before else {})})

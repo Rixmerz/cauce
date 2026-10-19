@@ -301,12 +301,12 @@ test('a cauce that cannot run is said, never a hang', async ($, on) => {
 })
 
 const BOARD = {
-  counts: { needs_you: 3, running: 1, queued: 1 },
+  counts: { needs_you: 2, orchestrator: 1, running: 1, queued: 1 },
   needs_you: [
     { id: 12, title: 'make npm test pass', status: 'blocked', stop: { cause: 'permission', who: 'your permission settings',
       reason: 'the worker was refused Bash(npm test)', todo: 'allow it', next: "cauce resume 12 --allow 'Bash(npm test:*)'",
       allow: ['Bash(npm test:*)'] } },
-    { id: 13, title: 'reduce the app', status: 'replan', stop: { cause: 'spec', who: "the worker's verdict",
+    { id: 13, title: 'reduce the app', status: 'replan', waits_on: 'orchestrator', stop: { cause: 'spec', who: "the worker's verdict",
       reason: 'the API has no such field', todo: 'rewrite it', next: null, allow: [] } },
     { id: 9, title: 'docs', status: 'done', branch: 'cauce/task-9', asks: 'review branch cauce/task-9, then merge it' },
   ],
@@ -318,6 +318,7 @@ test('tasks says what waits on the person and how it goes on', async ($, on) => 
   await started($, on, { board: { exitCode: 0, stdout: JSON.stringify(BOARD) } })
   const answer = await call($, 'tasks', {})
   expect(answer.result).toContain('waits on the person: #12 [blocked] make npm test pass')
+  expect(answer.result).toContain('yours to decide (resume, rewrite or dismiss with why): #13 [replan] reduce the app')
   expect(answer.result).toContain("allow it: cauce resume 12 --allow 'Bash(npm test:*)'")
   expect(answer.result).toContain('review branch cauce/task-9, then merge it')
   expect(answer.result).toContain('running: #14 write stats (sonnet/medium)')
@@ -593,10 +594,10 @@ test('the status entry counts the board and clears when it is empty', async ($, 
   let board = JSON.stringify(BOARD)
   const { seen, clock } = await started($, on, { board: () => ({ exitCode: 0, stdout: board }) })
   await clock.advance(15_000)
-  expect(seen.status.at(-1)).toBe('cauce · 🟠 3 waits on you · 🔵 1 running · ⚪ 1 queued')
+  expect(seen.status.at(-1)).toBe('cauce · 🟠 2 waits on you · 🟣 1 for the orchestrator · 🔵 1 running · ⚪ 1 queued')
   board = JSON.stringify({ ...BOARD, running: [{ ...BOARD.running[0], phase: 'checking' }] })
   await clock.advance(15_000)
-  expect(seen.status.at(-1)).toBe('cauce · 🟠 3 waits on you · 🔵 1 running (checking) · ⚪ 1 queued')
+  expect(seen.status.at(-1)).toBe('cauce · 🟠 2 waits on you · 🟣 1 for the orchestrator · 🔵 1 running (checking) · ⚪ 1 queued')
   board = EMPTY_BOARD
   await clock.advance(15_000)
   expect(seen.status.at(-1)).toBe(undefined)

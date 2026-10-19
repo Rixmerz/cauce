@@ -409,7 +409,9 @@ export const register: Register = (on, options) => {
     if (!found) return { deny: 'cauce could not read its board' }
     const lines: string[] = []
     for (const card of found.needs_you) {
-      lines.push(`waits on the person: #${card.id} [${card.status}] ${card.title}`)
+      lines.push(card.waits_on === 'orchestrator'
+        ? `yours to decide (resume, rewrite or dismiss with why): #${card.id} [${card.status}] ${card.title}`
+        : `waits on the person: #${card.id} [${card.status}] ${card.title}`)
       if (card.stop) {
         lines.push(`  stopped by ${card.stop.who}: ${card.stop.reason}`)
         lines.push(`  ${card.stop.todo}${card.stop.next ? `: ${card.stop.next}` : ''}`)

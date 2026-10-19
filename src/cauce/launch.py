@@ -489,6 +489,8 @@ def parse(
     envelope, overcome = _overcome(envelope, changed, spec.target_dir)
     denied = denials(envelope)
     session = envelope.get("session_id") if envelope else None
+    if session and session == os.environ.get("CLAUDE_CODE_SESSION_ID"):
+        session = None  # the person's own session, never a worker's to continue
     common = dict(changed_paths=changed, duration_s=duration_s, denied=denied, allow=allow_rules(envelope),
                   overcome=overcome, session_id=session if isinstance(session, str) else "", **usage)
     if envelope is None:
@@ -830,6 +832,10 @@ def worker_env() -> dict[str, str]:
     env = dict(os.environ)
     env["CAUCE_HOOKS_OFF"] = "1"
     env.pop("CAUCE_SESSION_ID", None)  # the worker's work is the task's, not that session's turn
+    # A host that runs the person's session (the app's cloud sessions) names it in the
+    # environment; a worker that inherits it writes its transcript under that session's
+    # id, and every attempt reads it back as its own session.
+    env.pop("CLAUDE_CODE_SESSION_ID", None)
     # A fork inside a worker re-reads its whole context outside cauce's account: off,
     # whatever the person's own sessions set.
     env["CLAUDE_CODE_FORK_SUBAGENT"] = "0"

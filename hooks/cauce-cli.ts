@@ -17,20 +17,21 @@ export const DEFAULT_TOPICS = ['business', 'code', 'decisions', 'conventions', '
 
 // A status line and a toast are plain text: their color is a marker that has
 // it, the same tone the web board gives each state, always beside its words.
-const MARK = { needs: '🟠', running: '🔵', queued: '⚪', done: '✅', failed: '❌', stopped: '⚪' } as const
+const MARK = { needs: '🟠', deciding: '🟣', running: '🔵', queued: '⚪', done: '✅', failed: '❌', stopped: '⚪' } as const
 
-/** The status entry: what waits on the person first, in words; nothing when
- * the board is empty. */
+/** The status entry: what waits on the person first, in words, then what the
+ * orchestrating session decides itself; nothing when the board is empty. */
 export function statusLine(
-  c: { needs_you: number; running: number; queued: number } | undefined,
+  c: { needs_you: number; orchestrator?: number; running: number; queued: number } | undefined,
   running: { phase?: string | null }[] = [],
 ): string | undefined {
-  if (!c || !(c.needs_you || c.running || c.queued)) return undefined
+  if (!c || !(c.needs_you || c.orchestrator || c.running || c.queued)) return undefined
   // What the running work is doing now: exploring, implementing, checking.
   const phases = [...new Set(running.map(r => r.phase).filter((p): p is string => !!p))]
   const doing = phases.length ? ` (${phases.join(', ')})` : ''
   const parts = [
     c.needs_you ? `${MARK.needs} ${c.needs_you} waits on you` : '',
+    c.orchestrator ? `${MARK.deciding} ${c.orchestrator} for the orchestrator` : '',
     c.running ? `${MARK.running} ${c.running} running${doing}` : '',
     c.queued ? `${MARK.queued} ${c.queued} queued` : '',
   ].filter(Boolean)

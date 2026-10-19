@@ -24,6 +24,7 @@ from cauce import (
     habits,
     hooks,
     orchestrate,
+    orchestrator,
     project,
     repo,
     stops,
@@ -157,6 +158,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                                  session_id=os.environ.get("CAUCE_SESSION_ID"), progress=_say)
         if getattr(report, "task_id", None):
             store.mark_reported([report.task_id], via="cli")  # its caller reads the report below
+            orchestrator.sent(store, Path(args.repo or os.getcwd()).resolve(), dict(os.environ))
     finally:
         signal.signal(signal.SIGTERM, previous)
         store.close()
@@ -208,6 +210,7 @@ def _enqueue_after(store: Store, text: str, where: Path, options: dict) -> dict:
     after.settle(store, task)
     with contextlib.suppress(OSError, project.NotAProject):
         project.enroll(where)
+    orchestrator.sent(store, where, dict(os.environ))
     return task
 
 
@@ -373,7 +376,7 @@ def _could_not_run(task_id: int, exc: Exception) -> int:
 
 
 #: The attempts after which a resume nobody approved is refused: two runs' worth.
-UNATTENDED_ATTEMPTS = 2 * orchestrate.Options().max_attempts
+UNATTENDED_ATTEMPTS = stops.UNATTENDED_ATTEMPTS
 
 
 def _needs_a_person(store: Store, task: dict, args: argparse.Namespace) -> str | None:
@@ -488,7 +491,9 @@ def cmd_cancel(args: argparse.Namespace) -> int:
 
 
 def cmd_dismiss(args: argparse.Namespace) -> int:
-    """A task that waits on a person, taken off the board on their word."""
+    """A task that waits on a person, taken off the board on their word; typed in a
+    session (its Bash), it is the orchestrating session's call and says so."""
+    via = "session" if args.via == "cli" and os.environ.get("CAUCE_SESSION_ID") else args.via
     store = Store.open()
     try:
         for task_id in args.ids:
@@ -497,7 +502,7 @@ def cmd_dismiss(args: argparse.Namespace) -> int:
                 print(f"no task #{task_id}", file=sys.stderr)
                 return 1
             waited = dispatch.waiting(store, task) if after.held(task) else None
-            if stops.dismiss(store, task, via=args.via) is None:
+            if stops.dismiss(store, task, via=via) is None:
                 print(f"task #{task_id} is {task['status']}; only a task that waits on you "
                       f"({', '.join(stops.DISMISSABLE)}) or on other work (`--after`) is dismissed",
                       file=sys.stderr)
@@ -1247,6 +1252,45 @@ def cmd_relay(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_orchestrator(args: argparse.Namespace) -> int:
+    """Show, claim or drop the session that orchestrates a project (`cauce.orchestrator`)."""
+    where = Path(args.repo or os.getcwd()).resolve()
+    folder = project.find(where)
+    if folder is None:
+        print(f"cauce: {where} is no cauce project yet (it becomes one when work is sent there)", file=sys.stderr)
+        return 1
+    session = os.environ.get("CAUCE_SESSION_ID")
+    moved = 0
+    if args.claim or args.release:
+        if not session and args.claim:
+            print("cauce: --claim runs in the session that takes the role (its Bash)", file=sys.stderr)
+            return 1
+        store = Store.open()
+        try:
+            if args.claim:
+                _, moved = orchestrator.take(store, folder, session, str(where), via="claimed", force=True)
+            elif not orchestrator.release(folder, session):
+                print("cauce: this session does not hold the role", file=sys.stderr)
+                return 1
+        finally:
+            store.close()
+    found = orchestrator.held(folder)
+    if args.json:
+        print(json.dumps({"orchestrator": found, "this_session": bool(found and found["session"] == session),
+                          "moved": moved}))
+        return 0
+    if not found:
+        print("no session orchestrates this project; the next one that sends work will")
+        return 0
+    state = (f", ended ({found.get('end_reason')}) — the next session in its place takes it"
+             if found.get("ended") else "")
+    mine = " (this session)" if found["session"] == session else ""
+    print(f"orchestrator: {found['session']}{mine}, since {found.get('since')} ({found.get('via')}){state}")
+    if moved:
+        print(f"{moved} task(s) it sent report to this session now")
+    return 0
+
+
 def cmd_name_session(args: argparse.Namespace) -> int:
     """Run detached by the Stop hook: Haiku names one session."""
     from cauce import dispatch, naming
@@ -1729,7 +1773,7 @@ def cmd_board(args: argparse.Namespace) -> int:
         print(json.dumps(board["counts"]))
     else:
         c = board["counts"]
-        print(f"cauce ⚠{c['needs_you']} ▶{c['running']} ⏸{c['queued']}")
+        print(f"cauce ⚠{c['needs_you']} ◆{c['orchestrator']} ▶{c['running']} ⏸{c['queued']}")
     return 0
 
 
@@ -1968,6 +2012,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--session", help="the session to hand over (default: the one this runs in)")
     p.add_argument("--show", action="store_true", help="also print what the fresh session will be told")
     p.set_defaults(func=cmd_relay)
+    p = sub.add_parser("orchestrator", help="which session orchestrates this project; --claim makes it this one")
+    p.add_argument("--repo", help="the project (default: here)")
+    p.add_argument("--claim", action="store_true", help="this session takes the role, and the work the last one sent")
+    p.add_argument("--release", action="store_true", help="drop the role")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_orchestrator)
     p = sub.add_parser("index-livespec", help=argparse.SUPPRESS)
     p.add_argument("dir")
     p.set_defaults(func=cmd_index_livespec)

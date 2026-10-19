@@ -106,7 +106,8 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
             item["flow"] = flow_of(store, t["id"])
         if t["status"] in NEEDS_YOU:
             # The generic ask is the fallback; the account says what stopped this one, who did, and the next step.
-            needs.append({**item, "asks": NEEDS_YOU[t["status"]], "stop": stops.view(store, t)})
+            needs.append({**item, "asks": NEEDS_YOU[t["status"]], "stop": stops.view(store, t),
+                          "waits_on": stops.waits_on(store, t)})
         elif t["status"] == "running":
             started = store.last_event(t["id"], "attempt_started")
             item["attempt"] = started["data"].get("seq") if started else None
@@ -121,7 +122,7 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
             done.append(item)
             if (branch and _holds_work(finished) and t["updated_at"] >= _days_ago_iso(REVIEW_DAYS)
                     and not _landed(t, branch, finished)):
-                needs.append({**item, "asks": f"review branch {branch}, then merge it"})
+                needs.append({**item, "asks": f"review branch {branch}, then merge it", "waits_on": "person"})
     # A prompt answered in a session is recorded as a task too (it carries the
     # session's follow-ups and result), but it is not work on the board: every
     # turn would be a card. The sessions answering right now are listed apart.
@@ -152,7 +153,8 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
     return {
         "capacity": {"level": level.value, "line": capacity.line(level), "ceiling": ceiling,
                      "lanes": {k or "": v.data() for k, v in shared.items() if repos is None or k in repos}},
-        "counts": {"needs_you": len(needs), "running": len(running),
+        "counts": {"needs_you": sum(1 for n in needs if n["waits_on"] == "person"),
+                   "orchestrator": sum(1 for n in needs if n["waits_on"] == "orchestrator"), "running": len(running),
                    "workers": sum(1 for r in running if r.get("worker")),
                    "queued": sum(len(v["tasks"]) for v in queued.values()), "done": len(done),
                    "answering": len(answering)},
@@ -177,7 +179,8 @@ def overview(store: Store, hours: float = 24, limit: int = 20, repos: set[str] |
     open_cards: dict[int, dict[str, Any]] = {}
     for card in full["needs_you"]:
         stop = card.get("stop") or {}
-        open_cards[card["id"]] = {"state": "needs_you", "asks": stop.get("todo") or card["asks"],
+        open_cards[card["id"]] = {"state": "needs_you", "waits_on": card.get("waits_on"),
+                                  "asks": stop.get("todo") or card["asks"],
                                   "cause": stop.get("cause"), "next": stop.get("next")}
     for card in full["running"]:
         worker = card.get("worker") or {}

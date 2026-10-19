@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from cauce import after, project, workflows
+from cauce import after, orchestrator, project, workflows
 from cauce.store import Store
 
 NOW_HELP = ("write the change at once even while runs use the workflow (they go on with the copy they started "
@@ -364,6 +364,7 @@ def _run(args: argparse.Namespace) -> int:
             project.enroll(where)
         run = workflows.start(store, args.name, where, inputs, scope=args.scope, options=options,
                               session_id=os.environ.get("CAUCE_SESSION_ID"), after_run=args.after)
+        orchestrator.sent(store, where, dict(os.environ))
         shown = workflows.status(store, run["id"])
         unseen = None
         try:

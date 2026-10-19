@@ -1255,20 +1255,42 @@ class Store:
                                f"AND {other} != ?", (kept, dup, kept))
         self.update_note(dup, state="replaced", replaced_by=kept, state_reason=why)
 
-    def hand_over(self, old: str, new: str) -> int:
+    def hand_over(self, old: str, new: str, *, repos: Sequence[str] | None = None) -> int:
         """A relay: the work one session sent that is still open, waits on the
         person, or ended without that session hearing of it reports to the session
-        that continues it, and so do its active workflow runs. How many tasks moved."""
+        that continues it, and so do its active workflow runs. With `repos`, only
+        the work in those projects (an orchestrator adopting its own). How many
+        tasks moved."""
         with self.immediate():
-            ids = {int(t["id"]) for t in self.unreported(old, limit=200)}
+            ids = {int(t["id"]): t["repo"] for t in self.unreported(old, limit=200)}
             marks = ", ".join("?" * len(OPEN_FOR_A_RELAY))
-            ids |= {int(r[0]) for r in self._conn.execute(
-                f"SELECT id FROM tasks WHERE session_id = ? AND source IN ('cauce', 'queue') "  # noqa: S608
+            ids |= {int(r[0]): r[1] for r in self._conn.execute(
+                f"SELECT id, repo FROM tasks WHERE session_id = ? AND source IN ('cauce', 'queue') "  # noqa: S608
                 f"AND status IN ({marks})", (old, *OPEN_FOR_A_RELAY))}
+            if repos is not None:
+                ids = {i: r for i, r in ids.items() if r in repos}
             self._conn.executemany("UPDATE tasks SET session_id = ? WHERE id = ?", [(new, i) for i in ids])
-            self._conn.execute("UPDATE workflow_runs SET session_id = ? WHERE session_id = ? AND status = 'active'",
-                               (new, old))
+            scope, params = _in("repo", repos)
+            if scope is not None:
+                self._conn.execute(
+                    "UPDATE workflow_runs SET session_id = ? WHERE session_id = ? AND status = 'active'"  # noqa: S608
+                    + (f" AND {scope.removeprefix('WHERE ')}" if scope else ""), (new, old, *params))
         return len(ids)
+
+    def quiet_senders(self, repos: Sequence[str], before: str, *, but: str) -> list[str]:
+        """Sessions not seen since `before` (or never) that sent work in these projects
+        that is still open or ended unheard: whose work an orchestrator takes."""
+        if not repos:
+            return []
+        marks = ", ".join("?" * len(repos))
+        rows = self._conn.execute(
+            f"SELECT DISTINCT t.session_id FROM tasks t LEFT JOIN sessions s ON s.id = t.session_id "  # noqa: S608
+            f"WHERE t.repo IN ({marks}) AND t.session_id IS NOT NULL AND t.session_id != ? "
+            "AND t.source IN ('cauce', 'queue') AND (s.last_seen_at IS NULL OR s.last_seen_at < ?) "
+            f"AND (t.status IN ({', '.join('?' * len(OPEN_FOR_A_RELAY))}) OR t.updated_at >= ?)",
+            (*repos, but, before, *OPEN_FOR_A_RELAY,
+             (datetime.now(UTC) - timedelta(hours=24)).isoformat(timespec="seconds")))
+        return [str(r[0]) for r in rows]
 
     def mark_reported(self, task_ids: Iterable[int], *, via: str) -> None:
         for task_id in task_ids:

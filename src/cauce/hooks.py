@@ -44,7 +44,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from cauce import config, project, repo, stops
+from cauce import config, orchestrator, project, repo, stops
 from cauce.store import OPEN_FOR_A_RELAY, Store, home
 from cauce.text import fold, words
 
@@ -128,6 +128,7 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
         task = store.enqueue(queued, repo=key, cwd=cwd, session_id=session_id, author="person")
         if cwd:
             _enroll(cwd)
+            orchestrator.sent(store, cwd, {"CAUCE_SESSION_ID": str(session_id)})
         # Blocked: queuing costs no turn. The reason is what the person sees.
         return {"decision": "block", "reason": f"cauce: queued #{task['id']} — {task['title']}. "
                 + _kick(cwd, key)}
@@ -216,6 +217,7 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
     from cauce import naming
 
     naming.maybe_start(store, session_id, home(), os.environ)
+    _adopt(store, str(session_id), event.get("cwd"))
     notice = _endings(store, session_id, via="stop")
     if notice:
         # The turn would end without the session knowing its work stopped:
@@ -223,6 +225,20 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
         return {"decision": "block", "reason": notice}
     _consider_compaction(event, store, target, home(), os.environ)
     return None
+
+
+def _adopt(store: Store, session_id: str, cwd: str | None) -> int:
+    """The orchestrator takes what sessions gone quiet left in its project, so their
+    endings reach it with its own."""
+    if not cwd:
+        return 0
+    try:
+        if not orchestrator.is_it(project.find(cwd), session_id):
+            return 0
+        key = repo.key(cwd)
+        return orchestrator.adopt(store, [key], session_id) if key else 0
+    except OSError:
+        return 0
 
 
 def _consider_compaction(event: Mapping[str, Any], store: Store, target: dict | None, root: Path,
@@ -294,6 +310,10 @@ def _relay(store: Store, root: Path, session_id: str, cwd: str, transcript: str 
     if state.get("transcript"):
         state = scribe.update(root, source, state["transcript"]) or state
     moved = store.hand_over(source, session_id)
+    folder = project.find(cwd)
+    if orchestrator.is_it(folder, source):  # the role goes with the thread
+        with contextlib.suppress(OSError):
+            orchestrator.take(store, folder, session_id, cwd, via="relay", force=True)
     tasks = store.list_tasks(session_id=session_id, status=OPEN_FOR_A_RELAY, source=("cauce", "queue"),
                              limit=15)
     text = scribe.relay_text(state, tasks=tasks, changed=compact._changed(Path(cwd)),
@@ -304,6 +324,27 @@ def _relay(store: Store, root: Path, session_id: str, cwd: str, transcript: str 
         text += (f"\n\n{moved} cauce task(s) that session sent (open, waiting on the person, or ended unheard) "
                  "report to this session now.")
     return text or None
+
+
+def _orchestrates(store: Store, session_id: str, cwd: str) -> str | None:
+    """At a session's start: whether it orchestrates this project (it is the one the
+    project names, resumed; or it starts where that one ended), the work it takes
+    from sessions gone quiet, and what the role asks of it."""
+    folder = project.find(cwd)
+    try:
+        holds, moved = orchestrator.started(store, folder, session_id, cwd)
+        if not holds and not orchestrator.is_it(folder, session_id):
+            return None
+        key = repo.key(cwd)
+        moved += orchestrator.adopt(store, [key], session_id) if key else 0
+    except OSError:
+        return None
+    text = ("cauce: this session orchestrates this project. What only the person clears (a refused command's "
+            "rule, a cell's approval, a merge) you tell them; every other stop is yours to decide: resume it, "
+            "rewrite it, or dismiss it with why (`cauce dismiss N`), never leave it waiting on the person.")
+    if moved:
+        text += f" {moved} task(s) sent by a session that ended or went quiet report here now."
+    return text
 
 
 def _enroll(cwd: str) -> None:
@@ -426,6 +467,10 @@ def session_start(
         relayed = _relay(store, root, str(session_id), str(cwd), event.get("transcript_path"))
         if relayed:
             blocks.append(relayed)
+    if cwd:
+        role = _orchestrates(store, str(session_id), str(cwd))
+        if role:
+            blocks.append(role)
     if event.get("source") == "startup":
         from cauce import scribe
 
@@ -509,8 +554,10 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
     ended = store.claim_unreported(session_id, via=claim) if claim else store.unreported(session_id)
     if not ended:
         return None, []
-    lines = [ENDINGS_HEADER + " Act on each now: tell the person "
-             "what happened, then continue as its line says (never redo a worker's task by hand)."]
+    lines = [ENDINGS_HEADER + " Act on each now: tell the person what happened. A stop marked as the person's "
+             "(a refused command's rule, a cell's approval) is theirs to clear; any other stop is yours to decide "
+             "as its line says: resume it, rewrite it, or dismiss it with why (`cauce dismiss N`), never leaving "
+             "it waiting on the person (never redo a worker's task by hand)."]
     for t in ended:
         data = t["finished_data"]
         changed = data.get("changed") or []
@@ -540,7 +587,8 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
             shown = ", ".join(changed[:5]) + (f" and {total - 5} more" if total > 5 else "")
             lines.append(f"  changed so far: {shown}")
         if stop:
-            lines.append(f"  next: {stop['todo']}" + (f": {stop['next']}" if stop["next"] else ""))
+            whose = "the person's to clear" if stops.waits_on(store, t) == "person" else "yours to decide"
+            lines.append(f"  next ({whose}): {stop['todo']}" + (f": {stop['next']}" if stop["next"] else ""))
         waiting = store.lane_paused_on(t.get("repo"), t["id"])
         if waiting:
             lines.append(f"  its lane is paused on it: {waiting} queued task(s) wait. Dismissing or resuming it "
@@ -690,6 +738,9 @@ def handle(
         # it asked for ran, and every compaction starts the cooldown.
         _compaction_seen(store, root, str(event["session_id"]), event_name, trigger=event.get("trigger"),
                          instructions=event.get("custom_instructions"))
+    if event_name == "SessionEnd" and event.get("cwd"):
+        with contextlib.suppress(OSError):
+            orchestrator.ended(project.find(str(event["cwd"])), event.get("session_id"), str(event.get("reason") or ""))
     if event_name in ("PreCompact", "SessionEnd"):
         keep_notes(event, root, dict(os.environ if env is None else env))
         return None
