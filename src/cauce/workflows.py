@@ -47,6 +47,9 @@ SCOPES = ("project", "user", "bundled")
 DEFAULT_SCOPE = "user"
 NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 INPUT = re.compile(r"\{([a-z][a-z0-9_]{0,31})\}")
+#: An input's place in a step's `verify`, a shell command: `${name}` is the shell's own
+#: variable, never an input, and `{a,b}` or `{}` never match.
+CHECK_INPUT = re.compile(r"(?<!\$)\{([a-z][a-z0-9_]{0,31})\}")
 TOP_KEYS = frozenset({"name", "description", "inputs", "steps", "version"})
 #: What a step may say. Nothing here widens what a worker may do: rules,
 #: approvals and capabilities are the person's flags on `run`, never a file's.
@@ -672,6 +675,8 @@ def prepare(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] 
                   for why in memory_problems(store, key, s.get("memory") or [])]
     if unreadable:
         problems.append("its memory cannot be read here: " + "; ".join(unreadable))
+    if not missing:
+        problems += unfilled_checks(defn, given)
     if problems:
         raise WorkflowError("; ".join(problems))
     gaps = [f"step {s['id']!r}: {gap}" for s in defn["steps"] for gap in memory_gaps(store, key, s.get("memory") or [])]
@@ -1025,7 +1030,7 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
     touches = _touches(run, options, base, area) if (str(step.get("kind") or "").startswith("review")
                                                      or step.get("ledger")) else None
     opts = {k: v for k, v in {
-        "kind": step.get("kind"), "verify": step_check(step, options), "start": step.get("start"),
+        "kind": step.get("kind"), "verify": step_check(step, options, inputs), "start": step.get("start"),
         # The files the change it reads touches: capabilities about them join it.
         "touches": touches or None,
         # A step with no kind is classified when it runs: the run's check goes with it, for
@@ -1111,9 +1116,30 @@ def writes(step: Mapping[str, Any]) -> bool:
     return bool(kind) and kind not in READ_ONLY_KINDS and step.get("ledger") in (None, "fix")
 
 
-def step_check(step: Mapping[str, Any], options: Mapping[str, Any]) -> str | None:
-    """The check a step runs: its own, else the run's `--verify` for a step that writes."""
-    return step.get("verify") or (options.get("verify") if writes(step) else None)
+def step_check(step: Mapping[str, Any], options: Mapping[str, Any],
+               inputs: Mapping[str, str] | None = None) -> str | None:
+    """The check a step runs: its own, with the run's inputs in it as its prompt has them,
+    else the run's `--verify` for a step that writes (the person's command, taken as typed)."""
+    own = step.get("verify")
+    if own:
+        given = inputs or {}
+        return CHECK_INPUT.sub(lambda m: given.get(m.group(1), m.group(0)), str(own)).strip() or None
+    return options.get("verify") if writes(step) else None
+
+
+def unfilled_checks(defn: Mapping[str, Any], inputs: Mapping[str, str]) -> list[str]:
+    """Each step whose own `verify` still holds a `{name}` once the inputs are in it: run
+    as it is, the shell would only answer `{check}: not found` (exit 127) and stop work
+    that passed. Said with the input to pass, or the shell text to write instead."""
+    out = []
+    for step in defn["steps"]:
+        check = step_check(step, {}, inputs) if step.get("verify") else None
+        for name in dict.fromkeys(CHECK_INPUT.findall(check or "")):
+            how = (f"pass it with `--input {name}='<command>'`" if name in defn["inputs"]
+                   else f"add `{name}` to the workflow's inputs and pass it with `--input {name}='<command>'`, "
+                        "or, when it is shell text, write it without the braces touching the name")
+            out.append(f"step {step['id']!r} checks with `{step['verify']}`, which leaves {{{name}}} unfilled: {how}")
+    return out
 
 
 def _findings_of(store: Store, task: Mapping[str, Any] | None) -> list[dict]:
@@ -1414,7 +1440,7 @@ def status(store: Store, run_id: int, *, detail: bool = False) -> dict[str, Any]
     elif run["status"] == "done" or states == {"done"}:
         state = "done"
     elif states & NEEDS_YOU or (states & STOPPED and not states & {"queued", "running"}):
-        state = "waits on you"
+        state = "waits on the orchestrator"
     elif holding:
         state = "queued"
     elif states & {"queued", "running"}:

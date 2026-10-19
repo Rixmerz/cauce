@@ -370,14 +370,16 @@ def test_habits_commands(capsys, tmp_path, monkeypatch):
 
 def test_board_counts_for_a_status_line(capsys):
     store = Store.open()
-    store.create_task("x", status="failed", source="cauce")
+    store.create_task("x", status="failed", source="cauce")  # the orchestrator decides it
+    refused = store.create_task("z", status="blocked", source="cauce")  # a refused command: the person's
+    stops.record(store, refused["id"], stops.Stop("permission", "refused", denied=("Bash(npm ci)",)))
     store.enqueue("y", repo="r", cwd="/x")
     store.close()
     assert cli.main(["board", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out) == {"needs_you": 1, "running": 0, "workers": 0, "queued": 1, "done": 0,
-                                                   "answering": 0}
+    assert json.loads(capsys.readouterr().out) == {"needs_you": 1, "orchestrator": 1, "running": 0, "workers": 0,
+                                                   "queued": 1, "done": 0, "answering": 0}
     assert cli.main(["board"]) == 0
-    assert capsys.readouterr().out.strip() == "cauce ⚠1 ▶0 ⏸1"
+    assert capsys.readouterr().out.strip() == "cauce ◆2 ▶0 ⏸1"
 
 
 def test_the_json_surface_a_page_reads(capsys, git_repo):
@@ -394,10 +396,11 @@ def test_the_json_surface_a_page_reads(capsys, git_repo):
     assert cli.main(["board", "--full", "--repo", str(git_repo)]) == 0
     board = json.loads(capsys.readouterr().out)
     assert board["repos"] == {str(git_repo): repo.key(git_repo.resolve())}
-    assert board["counts"] == {"needs_you": 0, "running": 0, "workers": 0, "queued": 1, "done": 0, "answering": 0}
+    assert board["counts"] == {"needs_you": 0, "orchestrator": 0, "running": 0, "workers": 0, "queued": 1,
+                               "done": 0, "answering": 0}
     assert board["queued"][0]["tasks"][0]["id"] == queued["id"]
     assert cli.main(["board", "--full"]) == 0
-    assert json.loads(capsys.readouterr().out)["counts"]["needs_you"] == 1
+    assert json.loads(capsys.readouterr().out)["counts"]["orchestrator"] == 1
 
     assert cli.main(["show", str(queued["id"]), "--json"]) == 0
     detail = json.loads(capsys.readouterr().out)

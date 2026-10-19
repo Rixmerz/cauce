@@ -67,14 +67,21 @@ export async function renderBoard(ctx) {
     days.get(day).push(card(t, ctx.openTask, t.branch ? [h("span", { class: "chip" }, t.branch)] : []));
   }
   const diary = [...days.entries()].map(([day, cards]) => [h("div", { class: "lane-head" }, day), cards]);
-  const needs = b.needs_you.filter(keep);
+  // What only the person clears, then what the orchestrating session decides itself.
+  const needs = b.needs_you.filter(keep).filter((t) => t.waits_on !== "orchestrator");
+  const deciding = b.needs_you.filter(keep).filter((t) => t.waits_on === "orchestrator");
   const running = b.running.filter(keep);
   const answering = chosen ? b.answering.filter(keep).length : b.counts.answering;
   return h("div", {},
     h("div", { class: "toolbar" }, picker),
     h("div", { class: "columns" },
-      column("Needs you", needs.length, needs.map((t) => card(t, ctx.openTask, [statusBadge(t.status)])),
-        needs.length ? "needs" : ""),
+      // Nothing waits on the person here: the orchestrating session decides, or asks them in its conversation.
+      column("For the orchestrator", needs.length + deciding.length, [
+        ...(needs.length ? [h("div", { class: "lane-head" }, `it asks you (${needs.length})`),
+          ...needs.map((t) => card(t, ctx.openTask, [statusBadge(t.status)]))] : []),
+        ...(deciding.length ? [h("div", { class: "lane-head" }, `it decides (${deciding.length})`),
+          ...deciding.map((t) => card(t, ctx.openTask, [statusBadge(t.status)]))] : [])],
+        needs.length + deciding.length ? "needs" : ""),
       column("Running", running.length, [
         ...running.map((t) => card(t, ctx.openTask, [statusBadge("running"),
           t.phase ? h("span", { class: `chip phase p-${t.phase}` }, t.phase) : null, h("span", {}, `attempt ${t.attempt ?? 1}`),

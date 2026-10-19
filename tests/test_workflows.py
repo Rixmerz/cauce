@@ -279,7 +279,7 @@ def test_a_step_that_stops_waits_for_the_person_then_the_run_goes_on(git_repo, s
     seen: list[dict] = []
     flow.work(store, runner=_runner([ok(), bad(Failure.SPEC_BUG, "cannot be read")], seen))
     status = workflows.status(store, started["id"])
-    assert status["state"] == "waits on you" and status["waiting"] == ["check"]
+    assert status["state"] == "waits on the orchestrator" and status["waiting"] == ["check"]
     assert [s["state"] for s in status["steps"]] == ["done", "replan", "pending"]
     # The session hears of the stop.
     assert status["steps"][1]["task"] in [t["id"] for t in store.unreported("s1")]
@@ -390,13 +390,13 @@ def test_the_cli_reads_writes_files_and_says_where_a_stopped_run_waits(git_repo,
     flow.work(store, runner=_runner([ok(), bad(Failure.SPEC_BUG, "cannot")], []))
     assert cli.main(["workflow", "status", str(run_id)]) == 0
     out = capsys.readouterr().out
-    assert "waits on you" in out and "✓ build" in out and f"retry {run_id} <step>" in out
+    assert "waits on the orchestrator" in out and "✓ build" in out and f"retry {run_id} <step>" in out
     assert "work so far: branch cauce/task-" in out
     assert cli.main(["workflow", "status", "--all", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)[0]["state"] == "waits on you"
+    assert json.loads(capsys.readouterr().out)[0]["state"] == "waits on the orchestrator"
     assert cli.main(["overview"]) == 0
     out = capsys.readouterr().out
-    assert f"run #{run_id} chained — waits on you" in out and "(workflow run #" in out
+    assert f"run #{run_id} chained — waits on the orchestrator" in out and "(workflow run #" in out
     assert cli.main(["workflow", "retry", str(run_id), "check"]) == 0
     assert cli.main(["workflow", "status", "999"]) == 1
 
@@ -798,7 +798,7 @@ def test_a_kindless_step_carries_the_run_check_and_the_dry_run_says_so(git_repo,
 def test_the_line_of_a_run_names_the_step_that_waits_on_the_person():
     from cauce import workflow_cli
 
-    line = workflow_cli._run_line({"id": 7, "name": "dual", "state": "waits on you", "cost_usd": 1.0,
+    line = workflow_cli._run_line({"id": 7, "name": "dual", "state": "waits on the orchestrator", "cost_usd": 1.0,
                                    "waiting": ["a"], "steps": [
                                        {"id": "a", "state": "failed", "task": 10},
                                        {"id": "b", "state": "running", "task": 11, "attempt": 1}]})
@@ -822,6 +822,42 @@ def test_a_resumed_step_counts_the_files_of_its_final_ending_not_an_attempts(git
         {"state": "done", "task": task["id"], **found})
     # Without the count (an older ending) the list is the count.
     assert "3 file(s)" in workflow_cli._step_line({"state": "done", "files": ["a", "b", "c"]})
+
+
+def test_a_steps_check_takes_the_run_inputs_and_an_unfilled_one_is_refused(git_repo, store: Store, kicks, capsys,
+                                                                            monkeypatch):
+    monkeypatch.chdir(git_repo)
+    _save({"name": "checked", "inputs": ["goal", "check"], "steps": [
+        {"id": "do", "prompt": "{goal}", "kind": "implement", "verify": "{check} && test -n \"${HOME}\" {a,b}"}]},
+        git_repo)
+    _save({"name": "loose", "inputs": ["goal"], "steps": [
+        {"id": "do", "prompt": "{goal}", "kind": "implement", "verify": "{check}"}]}, git_repo)
+    step = {"verify": "{check} && echo ${check} {x,y} {}", "kind": "implement"}
+    # The shell's own braces stay; only an input's place is filled.
+    assert workflows.step_check(step, {}, {"check": "npm test"}) == "npm test && echo ${check} {x,y} {}"
+    # The person's own --verify is taken as typed.
+    assert workflows.step_check({"kind": "implement"}, {"verify": "{check}"}, {"check": "x"}) == "{check}"
+    assert cli.main(["workflow", "run", "checked", "--input", "goal=the export", "--input", "check=npm test",
+                     "--dry-run"]) == 0
+    assert 'checked by `npm test && test -n "${HOME}" {a,b}`' in capsys.readouterr().out
+    # A check left with a placeholder never runs as `/bin/sh: {check}`: the run is refused, dry or not.
+    for dry in (["--dry-run"], []):
+        assert cli.main(["workflow", "run", "loose", "the export", *dry]) != 0
+        said = capsys.readouterr()
+        assert "leaves {check} unfilled" in said.out + said.err
+        assert "add `check` to the workflow's inputs" in said.out + said.err
+    assert not store.list_runs()
+    assert cli.main(["workflow", "run", "checked", "--input", "goal=the export", "--input", "check=npm test"]) == 0
+    (task,) = store.run_tasks(store.list_runs()[0]["id"])
+    assert json.loads(task["options"])["verify"].startswith("npm test && ")
+    capsys.readouterr()
+    # An input the workflow takes but the check is given empty is the missing input, said once.
+    with pytest.raises(workflows.WorkflowError) as err:
+        workflows.prepare(store, "checked", git_repo, {"goal": "x"})
+    assert "needs check" in str(err.value) and "unfilled" not in str(err.value)
+    assert workflows.unfilled_checks(workflows.load("checked", git_repo), {"goal": "x"}) == [
+        "step 'do' checks with `{check} && test -n \"${HOME}\" {a,b}`, which leaves {check} unfilled: "
+        "pass it with `--input check='<command>'`"]
 
 
 TWO = {"name": "two", "inputs": ["goal"], "steps": [
@@ -1037,7 +1073,8 @@ def test_a_part_that_stops_stops_the_run_and_a_retry_runs_only_the_parts_that_di
                                            bad(Failure.SPEC_BUG, "the page has no route")], seen))
     status = workflows.status(store, started["id"], detail=True)
     build = status["steps"][1]
-    assert status["state"] == "waits on you" and status["waiting"] == ["build"] and build["state"] == "replan"
+    assert status["state"] == "waits on the orchestrator" and status["waiting"] == ["build"]
+    assert build["state"] == "replan"
     # The parts show under their step, each with its own task and state.
     assert [(p["id"], p["state"]) for p in build["parts"]] == [("api", "done"), ("web", "replan")]
     assert status["steps"][2]["state"] == "pending"
@@ -1114,7 +1151,7 @@ def test_parts_whose_surfaces_overlap_stop_the_run_at_the_plan_with_the_paths_na
     stop = stops.of(store, plan_task)
     assert stop.cause == "parts" and "api's api/** and web's api/web/**" in stop.reason
     status = workflows.status(store, started["id"])
-    assert status["state"] == "waits on you" and status["waiting"] == ["plan"]
+    assert status["state"] == "waits on the orchestrator" and status["waiting"] == ["plan"]
     # The session hears of it; a retry plans again.
     assert plan_task["id"] in [t["id"] for t in store.unreported("s1")]
     assert workflows.retry(store, started["id"], "plan")["workflow_step"] == "plan"

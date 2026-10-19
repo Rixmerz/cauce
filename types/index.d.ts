@@ -20,10 +20,12 @@ export type CauceCard = {
   current_cell?: string | null
   branch?: string | null
   phase?: string | null
+  /** Who clears a card that waits: the person, or the orchestrating session. */
+  waits_on?: 'person' | 'orchestrator'
 }
 
 export type CauceBoard = {
-  counts: { needs_you: number; running: number; queued: number }
+  counts: { needs_you: number; orchestrator?: number; running: number; queued: number }
   needs_you: CauceCard[]
   running: CauceCard[]
   queued: { repo: string; paused: boolean; reason: string | null; tasks: CauceCard[] }[]

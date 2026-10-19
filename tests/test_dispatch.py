@@ -340,6 +340,45 @@ def test_a_run_or_queue_typed_in_a_session_is_that_session_s(git_repo, monkeypat
     assert seen["session_id"] == "sess-1"
 
 
+def test_a_lane_whose_dispatcher_died_gets_one_from_the_next_hook(git_repo, store: Store):
+    from cauce import after
+    from cauce.store import home
+
+    key = str(git_repo.resolve())
+    store.enqueue("write the docs", repo=key, cwd=str(git_repo))
+    store.enqueue("held work", repo="held", cwd=str(git_repo), options={after.KEY: {"task": 999}})
+    store.enqueue("paused work", repo="paused", cwd=str(git_repo))
+    store.pause_lane("paused", "task #1 stopped")
+    started = []
+    popen = lambda argv, **kw: started.append(kw["cwd"])  # noqa: E731
+    assert dispatch.revive(store, home(), {"CAUCE_AUTOWORK": "off"}, popen=popen) == []
+    on = {"CAUCE_AUTOWORK": "on"}
+    assert dispatch.revive(store, home(), on, popen=popen, now=1000.0) == [key]
+    assert started == [str(git_repo)]  # held work and a paused lane are left alone
+    # Tried again at once (its dispatcher is still starting): left alone for a while.
+    assert dispatch.revive(store, home(), on, popen=popen, now=1010.0) == []
+    assert dispatch.revive(store, home(), on, popen=popen, now=1000.0 + dispatch.REVIVE_EVERY_S) == [key]
+    # One that holds the lane, or every lane, is enough.
+    with dispatch.hold(home(), key):
+        assert dispatch.revive(store, home(), on, popen=popen, now=5000.0) == []
+    with dispatch.hold(home(), "*"):
+        assert dispatch.revive(store, home(), on, popen=popen, now=9000.0) == []
+
+
+def test_the_hooks_revive_lanes_and_a_failure_costs_the_turn_nothing(store: Store, monkeypatch, tmp_path):
+    from cauce.store import home
+
+    seen = []
+    monkeypatch.setattr(dispatch, "revive", lambda store, root, env: seen.append(env.get("X")))
+    monkeypatch.setenv("X", "1")
+    hooks.stop({"session_id": "s1"}, store)
+    hooks.session_start({"session_id": "s2", "cwd": str(tmp_path)}, store, home(), {})
+    assert seen == ["1", "1"]
+    monkeypatch.setattr(dispatch, "revive", lambda store, root, env: 1 / 0)
+    hooks._revive(store, home(), {})
+    assert "revive" in (home() / hooks.ERROR_LOG).read_text()
+
+
 def test_without_an_env_file_nothing_is_exported(tmp_path):
     assert hooks._export({}, "X", "1") is False
     assert hooks._export({"CLAUDE_ENV_FILE": str(tmp_path / "no" / "such")}, "X", "1") is False

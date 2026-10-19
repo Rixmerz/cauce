@@ -30,7 +30,10 @@ def test_the_board_sorts_work_by_what_it_needs(store: Store):
     assert b["needs_you"][1]["stop"]["recovered"] and b["needs_you"][1]["stop"]["cause"] == "exhausted"
     assert b["running"][0]["attempt"] == 2 and b["running"][0]["current_cell"] == "sonnet/high"
     assert {lane["repo"]: lane["paused"] for lane in b["queued"]} == {"other": True, "r": False}
-    assert b["counts"] == {"needs_you": 2, "running": 1, "workers": 0, "queued": 1, "done": 1, "answering": 0}
+    # The branch to merge is the person's; a task every cell failed, the orchestrator's to decide.
+    assert [t["waits_on"] for t in b["needs_you"]] == ["person", "orchestrator"]
+    assert b["counts"] == {"needs_you": 1, "orchestrator": 1, "running": 1, "workers": 0, "queued": 1, "done": 1,
+                           "answering": 0}
     assert b["last_event"] == store.last_event_id()
 
 

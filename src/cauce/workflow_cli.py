@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from cauce import after, project, workflows
+from cauce import after, orchestrator, project, workflows
 from cauce.store import Store
 
 NOW_HELP = ("write the change at once even while runs use the workflow (they go on with the copy they started "
@@ -142,8 +142,8 @@ def _print_run(run: dict[str, Any], *, full: bool = False) -> None:
         for part in step.get("parts") or ():
             print(f"    {MARK.get(part['state'], '!')} {part['id']:<12} {_step_line(part)}")
     if run["waiting"]:
-        print(f"  waits on you: {', '.join(run['waiting'])} — `cauce show <task>`, then `cauce resume <task>` "
-              f"or `cauce workflow retry {run['id']} <step>`")
+        print(f"  waits on the orchestrator: {', '.join(run['waiting'])} — `cauce show <task>`, then "
+              f"`cauce resume <task>` or `cauce workflow retry {run['id']} <step>`")
     if run["branch"]:
         print(f"  work so far: branch {run['branch']}")
 
@@ -344,7 +344,7 @@ def _run(args: argparse.Namespace) -> int:
             if args.json:
                 print(json.dumps({"name": ready["defn"]["name"], "inputs": ready["given"], "gaps": ready["gaps"],
                                   "steps": [{"id": s["id"], "kind": s.get("kind"), "needs": s["needs"],
-                                             "verify": workflows.step_check(s, options)}
+                                             "verify": workflows.step_check(s, options, ready["given"])}
                                             for s in ready["defn"]["steps"]]}, ensure_ascii=False))
                 return 0
             print(f"{ready['defn']['name']} would run here ({where}); nothing is queued:")
@@ -352,7 +352,7 @@ def _run(args: argparse.Namespace) -> int:
                 print(f"  {name}: {_clip(value)}")
             for step in ready["defn"]["steps"]:
                 needs = f" after {', '.join(step['needs'])}" if step["needs"] else ""
-                check = workflows.step_check(step, options)
+                check = workflows.step_check(step, options, ready["given"])
                 later = not check and not step.get("kind") and options.get("verify") and not step.get("verify")
                 print(f"  · {step['id']} ({step.get('kind') or 'classified when it runs'}){needs}"
                       + (f", checked by `{check}`" if check else "")
@@ -364,6 +364,7 @@ def _run(args: argparse.Namespace) -> int:
             project.enroll(where)
         run = workflows.start(store, args.name, where, inputs, scope=args.scope, options=options,
                               session_id=os.environ.get("CAUCE_SESSION_ID"), after_run=args.after)
+        orchestrator.sent(store, where, dict(os.environ))
         shown = workflows.status(store, run["id"])
         unseen = None
         try:

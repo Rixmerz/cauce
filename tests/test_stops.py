@@ -222,7 +222,7 @@ def test_a_dismissed_task_resumes_as_what_it_was(git_repo, store, capsys):
     assert "is replan" in capsys.readouterr().err
     assert cli.main(["dismiss", "999"]) == 1
     assert cli.main(["dismiss", str(replanned.task_id)]) == 1
-    assert "only a task that waits on you" in capsys.readouterr().err
+    assert "only a task that waits" in capsys.readouterr().err
 
 
 def test_a_dismissed_blocked_task_resumes(git_repo, store, monkeypatch):

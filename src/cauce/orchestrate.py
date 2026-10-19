@@ -62,7 +62,7 @@ from cauce import services as services_mod
 from cauce import surfaces as surfaces_mod
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify, narrow
-from cauce.escalate import MAX_TURNS_CEILING, Attempt, Decision, Failure, Move, decide, review_reason
+from cauce.escalate import MAX_TURNS_CEILING, Attempt, Decision, Failure, Move, decide, review_reason, waited
 from cauce.matrix import DEFAULT_TURNS, READ_ONLY_KINDS, Cell, ladder_for, turns_for
 from cauce.store import Store, home
 
@@ -816,9 +816,10 @@ def run(
             # or for a check that fails on the joined work.
             joined, ready = _integrate(store, task["id"], workspace, options, report, context, say)
         while ready:
-            # A try after the network dropped is no attempt at the work: it does not
-            # count toward the ceiling, and its own streak is bounded in `decide`.
-            if sum(not a.network for a in attempts) >= options.max_attempts:
+            # A try after the network dropped, or the load timed its tests out, is no
+            # attempt at the work: it does not count toward the ceiling, and its own
+            # streak is bounded in `decide`.
+            if sum(not waited(a) for a in attempts) >= options.max_attempts:
                 if attempts and attempts[-1].blockers:
                     # The work passed its own check; only the independent check's blockers stand.
                     report.stop = stops.Stop(
@@ -992,6 +993,7 @@ def run(
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
                               transient=result.transient, findings=result.findings, network=result.network,
+                              load=result.load,
                               blockers=open_blockers)
             attempts.append(attempt)
             subject = result.commit or subject
@@ -1028,7 +1030,8 @@ def run(
                             turns_from=turns, turns_to=decision.max_turns if decision.continues else None,
                             spent_usd=round(report.cost_usd, 4),
                             **(_continuation(decision, resume, fresh) if decision.continues else {}),
-                            **({"wait_s": decision.wait_s, "network": attempt.network} if attempt.network else {}))
+                            **({"wait_s": decision.wait_s, "network": attempt.network} if attempt.network else {}),
+                            **({"wait_s": decision.wait_s, "load": attempt.load} if attempt.load else {}))
             if not decision.continues:
                 # The worker's own account goes with the reason: "the task is
                 # wrong" is only actionable next to what it found wrong.
@@ -1058,7 +1061,9 @@ def run(
             if decision.wait_s:
                 mark = time.monotonic()
                 _pause(store, task["id"], decision.wait_s, say,
-                       f"the network dropped ({attempt.network}); trying {decision.cell.label} again")
+                       f"the network dropped ({attempt.network}); trying {decision.cell.label} again"
+                       if attempt.network else
+                       f"the check's tests timed out under load ({attempt.load}); trying {decision.cell.label} again")
                 timing["wait_s"] += time.monotonic() - mark
             cell, turns = decision.cell, decision.max_turns
     except Cancelled:
@@ -1425,7 +1430,7 @@ def _cause(decision: Decision, attempt: Attempt) -> str:
     if decision.move is Move.BLOCKED:
         if attempt.failure is Failure.PERMISSION or attempt.denied:
             return "permission"
-        return "network" if attempt.network else "environment"
+        return "network" if attempt.network else "load" if attempt.load else "environment"
     if decision.move is Move.NEEDS_APPROVAL:
         return "approval"
     if decision.move is Move.CONVERGED:
@@ -1911,6 +1916,14 @@ def _verified(result: launch.WorkerResult, command: str, workdir: Path) -> launc
         return dataclasses.replace(
             result, passed=False, failure=Failure.ENVIRONMENT, evidence=output,
             summary=f"claimed a pass, but `{command}` could not run here ({why}): {result.summary}",
+        )
+    if timed := launch.check_timed_out(output):
+        # The worker's own run passed and most of what failed here are tests out of time:
+        # a machine busier than its CPUs, not the work. The level halves on it (`starved`).
+        return dataclasses.replace(
+            result, passed=False, failure=Failure.ENVIRONMENT, evidence=output, load=timed, starved="load",
+            summary=f"claimed a pass, but `{command}` timed its tests out, as a loaded machine does ({timed}): "
+                    f"{result.summary}",
         )
     if dropped := launch.check_offline(output):
         # The check could not reach the network (an install, a fetch): its exit says

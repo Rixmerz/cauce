@@ -195,6 +195,49 @@ def test_a_resume_after_its_process_died_continues_in_the_worktree_it_left(git_r
     assert again.base == git(git_repo, "rev-parse", "HEAD").strip()
 
 
+def _commit_in(path, name, text):
+    (path / name).write_text(text)
+    git(path, "add", "-A")
+    git(path, "commit", "-q", "-m", name)
+    return git(path, "rev-parse", "HEAD")
+
+
+def _lose(repo, sha):
+    """What a git killed by a full disk leaves: a commit the branch names that cannot be read."""
+    (repo / ".git" / "objects" / sha[:2] / sha[2:]).unlink()
+
+
+@pytest.mark.parametrize("died", [True, False])
+def test_a_resume_mends_a_branch_whose_newest_commit_a_full_disk_lost(git_repo, tmp_path, died):
+    ws = isolate.prepare(git_repo, 16, tmp_path / "home")
+    good = _commit_in(ws.path, "half.py", "x = 1\n")
+    lost = _commit_in(ws.path, "more.py", "y = 2\n")
+    if not died:
+        git(git_repo, "worktree", "remove", "--force", str(ws.path))
+    _lose(git_repo, lost)
+    again = isolate.prepare(git_repo, 16, tmp_path / "home")
+    assert again.base == git(git_repo, "rev-parse", "HEAD")
+    assert git(git_repo, "rev-parse", "refs/heads/cauce/task-16") == good
+    assert (again.path / "half.py").read_text() == "x = 1\n"
+    if died:
+        # The lost commit's files stay where the run left them, as changes to commit.
+        assert (again.path / "more.py").read_text() == "y = 2\n" and isolate.has_changes(again)
+
+
+def test_a_branch_with_nothing_readable_stops_the_resume_in_a_line(git_repo, tmp_path):
+    ws = isolate.prepare(git_repo, 17, tmp_path / "home")
+    lost = _commit_in(ws.path, "half.py", "x = 1\n")
+    _lose(git_repo, lost)
+    # Its reflog's only other commit is gone too: nothing to go back to.
+    (git_repo / ".git" / "logs" / "refs" / "heads" / "cauce" / "task-17").unlink()
+    with pytest.raises(isolate.IsolationError) as err:
+        isolate.prepare(git_repo, 17, tmp_path / "home")
+    said = str(err.value)
+    assert said.startswith("the kept branch cauce/task-17 cannot be read after a git failure (")
+    assert "fsck" in said and "\n" not in said
+    assert git(git_repo, "rev-parse", "refs/heads/cauce/task-17") == lost  # kept as it was
+
+
 def test_a_base_that_took_in_the_branch_s_own_work_under_another_commit_is_not_ahead_of_it(git_repo):
     """A run started on another run's kept branch; the base then got that run squashed. The
     base's tree is one the branch already had, so it brings nothing: no commits behind, no

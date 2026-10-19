@@ -93,7 +93,7 @@ export async function openTask(id, quiet = false) {
     actions.push(cancel);
   }
   if (["failed", "blocked", "replan", "needs_approval", "interrupted"].includes(t.status)) {
-    // It waits on you; this takes it off the board. A resume brings it back.
+    // It waits on the orchestrator; this takes it off the board. A resume brings it back.
     const dismiss = h("button", { onclick: async () => {
       if (dismiss.dataset.armed !== "1") {
         dismiss.dataset.armed = "1";
