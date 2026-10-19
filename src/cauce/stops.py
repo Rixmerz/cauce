@@ -42,6 +42,8 @@ CAUSES = {
     "permission": ("blocked", "settings"),
     "environment": ("blocked", "environment"),
     "network": ("blocked", "network"),
+    # The check's tests kept timing out on a loaded machine, through cauce's waits.
+    "load": ("blocked", "environment"),
     "budget": ("blocked", "budget"),
     "missing_dir": ("blocked", "environment"),
     "approval": ("needs_approval", "cauce"),
@@ -180,6 +182,8 @@ def what_to_do(stop: Stop) -> str:
         "environment": "fix what failed to run, then resume",
         "network": "the network dropped and stayed down through cauce's waits; its work is kept: resume it once "
                    "the network is back",
+        "load": "its check's tests kept timing out while the machine was loaded, after the worker's own run "
+                "passed; its work is kept: resume it when the machine is quieter",
         "budget": "an older cauce stopped it on a dollar budget, which no longer exists: resume it",
         "missing_dir": "the task's directory is gone: restore it, or queue the task again where it now lives",
         "approval": "approve the next cell by resuming with --allow-approval",

@@ -28,9 +28,12 @@ dispatcher and the UI server — never from a page being open.
 """
 from __future__ import annotations
 
+import contextlib
+import errno
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import time
@@ -51,8 +54,25 @@ SESSION_TASK_TIMEOUT = timedelta(hours=12)
 DEFAULT_MAX_TASKS = 10
 #: How often a dispatcher with work out checks on it and on new arrivals.
 POLL_S = 2.0
+#: Its waits, one after another, while the disk is full: it keeps its lock and the work it
+#: has out, and goes on when the store takes writes again (the last wait repeats).
+DISK_WAITS_S = (5, 15, 30, 60, 120, 300)
+#: How long it waits for space in all before it stops; a hook starts a fresh one later
+#: (`dispatch.revive`).
+DISK_GIVE_UP_S = 3600
 
 Runner = Callable[..., Report]
+
+
+def disk_full(exc: BaseException) -> bool:
+    """Whether an error is the disk running out: SQLite's "database or disk is full" or
+    "disk I/O error", or an OS write refused for space. Any other error is cauce's own."""
+    if isinstance(exc, OSError) and exc.errno in (errno.ENOSPC, errno.EDQUOT):
+        return True
+    if isinstance(exc, sqlite3.OperationalError):
+        said = str(exc).lower()
+        return "disk is full" in said or "disk i/o error" in said
+    return False
 
 
 def alive(pid: int | None) -> bool:
@@ -461,6 +481,7 @@ def work(
     start: Start | None = None,
     pause: Callable[[], None] | None = None,
     machine: Callable[[], capacity.Machine] | None = None,
+    backoff: Callable[[float], None] | None = None,
     **run_kwargs,
 ) -> WorkReport:
     """Run queued work until nothing is runnable and nothing is out, or
@@ -470,6 +491,10 @@ def work(
 
     `runner` runs a task in this process, one after another (tests); without it,
     each task is its own process and several may run at once.
+
+    A full disk does not end it (`disk_full`): it waits (`DISK_WAITS_S`, by `backoff`)
+    with its work out and its lock held, tries the pass again, and once the store takes
+    writes the level halves for it (`capacity.disk_filled`); after `DISK_GIVE_UP_S` it stops.
     """
     defaults = defaults or Options()
     parallel = config.enabled("parallel", os.environ) if parallel is None else parallel
@@ -485,51 +510,88 @@ def work(
             def start(task: dict, where: Path) -> Handle:
                 return _Process(task, where, store, defaults)
     machine = machine or (lambda: capacity.machine(home()))
+    backoff = backoff or time.sleep
     ceiling = config.max_parallel(os.environ)
     report, out, started, wanting, waits = WorkReport(), [], 0, False, False
-    sweep(store)
-    while True:
-        ended = False
-        for handle in list(out):
-            status = handle.poll()
-            if status is not None:
-                out.remove(handle)
-                report.ran.append(Ran(handle.task_id, status))
-                ended = True
-        if ended:
-            _settle(store)
-        launched: list[tuple[dict, Path]] = []
-        if started < max_tasks:
+    full_for: float | None = None  # seconds waited for space, while the disk is full
+    fails = 0
+
+    def through() -> None:
+        """A whole pass went through: once a full disk is behind it, the level halves for it."""
+        nonlocal full_for, fails
+        if full_for is not None:
             with capacity.held(home()):
-                level = capacity.settle(store, home(), machine=machine(), ceiling=ceiling, wanting=wanting)
-                picked, shares = pick(store, repo, parallel=parallel, decide=decide, level=level.value)
-                wanting = capacity.full(level.value, shares)
-                # Its own work waits for a worker another lane holds: it waits too, rather than stop.
-                waits = wanting and any(s.waiting for k, s in shares.items() if repo is None or k == repo)
-                for task in picked[:max_tasks - started]:
-                    if not store.claim(task["id"]):
-                        continue  # another dispatcher took it
-                    where = Path(task["cwd"]) if task["cwd"] and Path(task["cwd"]).is_dir() else None
-                    if where is None:
-                        stops.record(store, task["id"], stops.Stop(
-                            "missing_dir", f"its directory no longer exists: {task['cwd'] or '(none recorded)'}"))
-                        store.pause_lane(task["repo"], f"task #{task['id']}: its directory no longer exists")
-                        continue
-                    started += 1
-                    # When the dispatcher started it, to the millisecond: the run measures its
-                    # pickup (from queued) and its spawn (to its plan) from here.
-                    store.add_event(task["id"], "dispatched", at=round(time.time(), 3))
-                    launched.append((task, where))
-        for task, where in launched:
-            out.append(start(task, where))
-        if launched:
-            continue  # look again at once: a finished run may have opened a lane
-        if not out and (not waits or started >= max_tasks):
-            report.at_limit = started >= max_tasks and bool(
-                store.queued_in(repo) if repo is not None else any(lane["queued"] for lane in store.lanes()))
-            report.stopped_because = (
-                f"started {max_tasks} tasks, the unattended limit; run again to continue" if started >= max_tasks
-                else "nothing runnable is queued (empty, every lane paused, waiting on work in flight, or held "
-                     "until other work passes)")
-            return report
-        pause()
+                capacity.disk_filled(store, home(), waited_s=full_for, ceiling=ceiling)
+            full_for, fails = None, 0
+
+    try:
+        sweep(store)
+    except Exception as exc:
+        if not disk_full(exc):
+            raise
+    while True:
+        try:
+            ended = False
+            for handle in list(out):
+                status = handle.poll()
+                if status is not None:
+                    out.remove(handle)
+                    report.ran.append(Ran(handle.task_id, status))
+                    ended = True
+            if ended:
+                _settle(store)
+            launched: list[tuple[dict, Path]] = []
+            if started < max_tasks:
+                with capacity.held(home()):
+                    level = capacity.settle(store, home(), machine=machine(), ceiling=ceiling, wanting=wanting)
+                    picked, shares = pick(store, repo, parallel=parallel, decide=decide, level=level.value)
+                    wanting = capacity.full(level.value, shares)
+                    # Its own work waits for a worker another lane holds: it waits too, rather than stop.
+                    waits = wanting and any(s.waiting for k, s in shares.items() if repo is None or k == repo)
+                    for task in picked[:max_tasks - started]:
+                        if not store.claim(task["id"]):
+                            continue  # another dispatcher took it
+                        where = Path(task["cwd"]) if task["cwd"] and Path(task["cwd"]).is_dir() else None
+                        if where is None:
+                            stops.record(store, task["id"], stops.Stop(
+                                "missing_dir", f"its directory no longer exists: {task['cwd'] or '(none recorded)'}"))
+                            store.pause_lane(task["repo"], f"task #{task['id']}: its directory no longer exists")
+                            continue
+                        started += 1
+                        # When the dispatcher started it, to the millisecond: the run measures its
+                        # pickup (from queued) and its spawn (to its plan) from here.
+                        store.add_event(task["id"], "dispatched", at=round(time.time(), 3))
+                        launched.append((task, where))
+            for n, (task, where) in enumerate(launched):
+                try:
+                    out.append(start(task, where))
+                except Exception as exc:
+                    if disk_full(exc):  # its process never started: it goes back to the queue, with the rest
+                        for back, _ in launched[n:]:
+                            with contextlib.suppress(Exception):
+                                store.update_task(back["id"], status="queued", dispatched=0)
+                    raise
+            through()
+            if launched:
+                continue  # look again at once: a finished run may have opened a lane
+            if not out and (not waits or started >= max_tasks):
+                report.at_limit = started >= max_tasks and bool(
+                    store.queued_in(repo) if repo is not None else any(lane["queued"] for lane in store.lanes()))
+                report.stopped_because = (
+                    f"started {max_tasks} tasks, the unattended limit; run again to continue" if started >= max_tasks
+                    else "nothing runnable is queued (empty, every lane paused, waiting on work in flight, or held "
+                         "until other work passes)")
+                return report
+            pause()
+        except Exception as exc:
+            if not disk_full(exc):
+                raise
+            waited = full_for or 0.0
+            if waited >= DISK_GIVE_UP_S:
+                report.stopped_because = (f"the disk stayed full for {int(waited)}s ({exc}); the next session's hook "
+                                          "starts a dispatcher again")
+                return report
+            delay = DISK_WAITS_S[min(fails, len(DISK_WAITS_S) - 1)]
+            fails += 1
+            backoff(delay)
+            full_for = waited + delay

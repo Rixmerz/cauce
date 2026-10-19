@@ -213,6 +213,7 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
         usage.ingest_subagents(store, event["transcript_path"], **counted)
     _scribe(event, home(), os.environ)
     _evolve(store, home())
+    _revive(store, home(), os.environ)
     from cauce import naming
 
     naming.maybe_start(store, session_id, home(), os.environ)
@@ -269,6 +270,17 @@ def _scribe(event: Mapping[str, Any], root: Path, env: Mapping[str, str]) -> Non
             scribe.notes_started(root, state)
     except Exception:  # the turn's endings still go out
         note_error(root, "Stop (scribe)")
+
+
+def _revive(store: Store, root: Path, env: Mapping[str, str]) -> None:
+    """A lane with queued work and no dispatcher (one died on a full disk, or was killed)
+    gets one again (`dispatch.revive`). Its failure is noted, and never costs the turn."""
+    try:
+        from cauce import dispatch
+
+        dispatch.revive(store, root, env)
+    except Exception:  # the turn goes on
+        note_error(root, "revive")
 
 
 def _evolve(store: Store, root: Path) -> None:
@@ -390,6 +402,7 @@ def session_start(
     from cauce import flow  # imported here: it pulls in the orchestrator
 
     flow.sweep(store)
+    _revive(store, root, {**os.environ, **env})
     cwd = event.get("cwd")
     # The branches of this checkout whose work landed since: merged ones go.
     top = repo.toplevel(Path(cwd)) if cwd and Path(cwd).is_dir() else None

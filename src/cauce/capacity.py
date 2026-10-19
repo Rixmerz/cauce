@@ -13,8 +13,13 @@ work waits for a worker and a round of tasks it started (as many as the level)
 ended with no limit. It halves, never below 1, when an attempt says the API
 turned it away (a rate limit or an overload, read from the CLI's own result,
 never from a check's output), when the machine starved a worker (killed for
-memory, a full disk), or when free memory or disk falls under its constant; after
-a rate limit it does not rise again before the API's retry-after. The person's
+memory, a full disk), or when free memory or disk falls under its constant, or
+the load average climbs over `LOAD_PER_CPU_HIGH` per CPU; after a rate limit it
+does not rise again before the API's retry-after. A level the machine itself
+lowered (memory, disk, load) goes back up as soon as the machine is clear again
+(over `RECOVER_MARGIN` times its constants, the load under `LOAD_PER_CPU_CLEAR`)
+for `RECOVER_AFTER_S` and work waits: freeing the disk brings the workers back
+without waiting for a round of tasks to end. The person's
 `max_parallel` caps it; `auto` puts no ceiling over it. Each change is a
 `level_changed` event, on the task that caused it, or on task 0 when the machine
 did.
@@ -50,11 +55,23 @@ WORKTREE_DISK_MB = 1024
 #: Free memory and free disk under which the level halves.
 LOW_MEMORY_MB = 1024
 LOW_DISK_MB = 2048
+#: A machine whose 1-minute load average is over this many per CPU is loaded: the level
+#: halves on it as on low memory, and does not rise. Under `LOAD_PER_CPU_CLEAR` it is calm
+#: again. Test suites under load time out and look like bugs (`launch.LOAD_TIMEOUT`).
+LOAD_PER_CPU_HIGH = 2.0
+LOAD_PER_CPU_CLEAR = 1.0
+#: How far over its constants free memory and disk must be, and for how long the machine
+#: must stay clear, before a level the machine lowered goes back up: no flapping.
+RECOVER_MARGIN = 2
+RECOVER_AFTER_S = 60
 #: A rate limit that names no retry-after: the level does not rise before this has passed.
 RETRY_AFTER_S = 300
 #: A machine low on memory or disk halves the level at most this often: the work it
 #: runs needs time to end and give back what it holds.
 HALVE_EVERY_S = 60
+#: What an attempt says starved it, and how the level's halving says it.
+STARVED = {"memory": "halved, a worker was killed for memory", "disk": "halved, the disk filled up",
+           "load": "halved, a check's tests timed out under load"}
 STATE = "capacity.json"
 LOCK = "capacity.lock"
 MB = 1024 * 1024
@@ -66,6 +83,8 @@ class Machine:
     #: Free memory and free disk where worktrees live, in MB; None where they cannot be read.
     memory_mb: int | None
     disk_mb: int | None
+    #: The 1-minute load average; None where it cannot be read (calm).
+    load: float | None = None
 
 
 def available_mb(meminfo: Path = Path("/proc/meminfo")) -> int | None:
@@ -91,7 +110,10 @@ def _read(root: Path) -> Machine:
     if where is not None:
         with contextlib.suppress(OSError):
             disk = shutil.disk_usage(where).free // MB
-    return Machine(max(1, cpus), available_mb(), disk)
+    load = None
+    with contextlib.suppress(AttributeError, OSError):
+        load = os.getloadavg()[0]
+    return Machine(max(1, cpus), available_mb(), disk, load)
 
 
 def machine(root: Path) -> Machine:
@@ -116,7 +138,23 @@ def starved(m: Machine) -> str | None:
         return f"free memory is {m.memory_mb} MB (under {LOW_MEMORY_MB})"
     if m.disk_mb is not None and m.disk_mb < LOW_DISK_MB:
         return f"free disk is {m.disk_mb} MB (under {LOW_DISK_MB})"
+    if m.load is not None and m.load > m.cpus * LOAD_PER_CPU_HIGH:
+        return f"the load average is {m.load:.1f} on {m.cpus} CPUs (over {LOAD_PER_CPU_HIGH:g} per CPU)"
     return None
+
+
+def loaded(m: Machine) -> bool:
+    """Whether the machine is busier than its CPUs carry: a check that timed out on it
+    may have timed out for the load, not the code."""
+    return m.load is not None and m.load > m.cpus * LOAD_PER_CPU_CLEAR
+
+
+def clear(m: Machine) -> bool:
+    """Whether the machine is clear with room to spare (`RECOVER_MARGIN`, `LOAD_PER_CPU_CLEAR`):
+    a level it lowered may go back up."""
+    return ((m.memory_mb is None or m.memory_mb >= LOW_MEMORY_MB * RECOVER_MARGIN)
+            and (m.disk_mb is None or m.disk_mb >= LOW_DISK_MB * RECOVER_MARGIN)
+            and (m.load is None or m.load <= m.cpus * LOAD_PER_CPU_CLEAR))
 
 
 def _described(m: Machine) -> str:
@@ -125,6 +163,8 @@ def _described(m: Machine) -> str:
         parts.append(f"{m.memory_mb} MB free memory")
     if m.disk_mb is not None:
         parts.append(f"{m.disk_mb} MB free disk")
+    if m.load is not None:
+        parts.append(f"load {m.load:.1f}")
     return ", ".join(parts)
 
 
@@ -145,6 +185,11 @@ class Level:
     #: No rise before this: a rate limit's retry-after.
     hold_until: str | None = None
     halved_at: str | None = None
+    #: What the level was before the machine itself lowered it (memory, disk, load): it goes
+    #: back there once the machine is clear. None when the machine lowered nothing.
+    dropped_from: int | None = None
+    #: Since when the machine has been clear while `dropped_from` waits.
+    clear_since: str | None = None
 
 
 def _path(root: Path) -> Path:
@@ -210,6 +255,27 @@ def _changed(store: Store, level: Level, task_id: int, before: int, reason: str,
     store.add_event(task_id, "level_changed", level=level.value, before=before, reason=reason, ceiling=ceiling)
 
 
+def _dropped(level: Level, before: int) -> None:
+    """The machine lowered the level from `before`: remember the highest it was."""
+    level.dropped_from = max(level.dropped_from or 0, before) or None
+    level.clear_since = None
+
+
+def disk_filled(store: Store, root: Path, *, waited_s: float, ceiling: int | None,
+                now: datetime | None = None) -> Level:
+    """The dispatcher could not write for a full disk and waited `waited_s` for space:
+    the level halves as on any full disk, recorded once the store takes writes again."""
+    now = now or datetime.now(UTC)
+    level = load(root) or current(root, ceiling=ceiling)
+    before = level.value
+    level.value, level.halved_at = max(1, level.value // 2), _iso(now)
+    _dropped(level, before)
+    _changed(store, level, 0, before, f"halved, the disk filled up (the dispatcher waited {int(waited_s)}s "
+             "for space)", now, ceiling)
+    _save(root, level)
+    return level
+
+
 def settle(store: Store, root: Path, *, machine: Machine, ceiling: int | None, wanting: bool,
            now: datetime | None = None) -> Level:
     """The level after what ended since the last pass, and what the machine has now.
@@ -225,7 +291,7 @@ def settle(store: Store, root: Path, *, machine: Machine, ceiling: int | None, w
                  now, ceiling)
         _save(root, level)
         return level
-    before, seen = level.value, level.seen
+    before, seen, kept = level.value, level.seen, asdict(level)
     limited: dict[str, Any] | None = None
     hungry: tuple[dict[str, Any], str] | None = None
     marked: set[int] = set()
@@ -237,12 +303,14 @@ def settle(store: Store, root: Path, *, machine: Machine, ceiling: int | None, w
         if event["kind"] == "attempt_finished" and data.get("limited"):
             limited = event
             marked.add(event["task_id"])
-        elif data.get("starved") in ("memory", "disk") or stop.get("starved") in ("memory", "disk"):
+        elif data.get("starved") in STARVED or stop.get("starved") in STARVED:
             hungry = (event, str(data.get("starved") or stop.get("starved")))
             marked.add(event["task_id"])
         elif event["kind"] == "finished" and event.get("dispatched"):
             ended.append(event)
     low = starved(machine)
+    # Read every pass, so a relapse resets the clear spell even while nothing moves.
+    recovered = level.dropped_from is not None and _recovered(level, machine, now)
     if limited is not None:
         kind = limited["data"]["limited"]
         reason = "halved, the API answered 429" if kind == "rate_limit" else "halved, the API was overloaded"
@@ -257,13 +325,21 @@ def settle(store: Store, root: Path, *, machine: Machine, ceiling: int | None, w
     elif hungry is not None:
         event, what = hungry
         level.value = max(1, level.value // 2)
-        _changed(store, level, int(event["task_id"]), before,
-                 "halved, a worker was killed for memory" if what == "memory" else "halved, the disk filled up",
-                 _when(event["ts"]) or now, ceiling)
+        if what != "memory":  # a disk frees and a load passes, and both can be read again; a worker
+            _dropped(level, before)  # killed for memory needs more than the reading shows: back by rounds
+        _changed(store, level, int(event["task_id"]), before, STARVED[what], _when(event["ts"]) or now, ceiling)
     elif low is not None and ((_when(level.halved_at) or datetime.min.replace(tzinfo=UTC))
                               + timedelta(seconds=HALVE_EVERY_S) <= now):
         level.value, level.halved_at = max(1, level.value // 2), _iso(now)
+        _dropped(level, before)
         _changed(store, level, 0, before, f"halved, {low}", now, ceiling)
+    elif recovered and wanting:
+        back = min(level.dropped_from, holds(machine), *(() if ceiling is None else (ceiling,)))
+        level.dropped_from, level.clear_since = None, None
+        if back > level.value:
+            level.value = back
+            _changed(store, level, 0, before, f"rose back to {back}, the machine is clear again "
+                     f"({_described(machine)})", now, ceiling)
     else:
         level.clean += sum(1 for e in ended if e["task_id"] not in marked)
         waited = level.hold_until is None or (_when(level.hold_until) or now) <= now
@@ -276,9 +352,22 @@ def settle(store: Store, root: Path, *, machine: Machine, ceiling: int | None, w
     if ceiling is not None and level.value > ceiling:
         level.value = ceiling
         _changed(store, level, 0, before, f"capped at your max_parallel {ceiling}", now, ceiling)
-    if level.value != before or level.seen != seen or level.at == _iso(now):
+    if level.value != before or level.seen != seen or level.at == _iso(now) or asdict(level) != kept:
         _save(root, level)
     return level
+
+
+def _recovered(level: Level, m: Machine, now: datetime) -> bool:
+    """Whether a level the machine lowered may go back: the machine has been clear with room
+    to spare for `RECOVER_AFTER_S`. Marks when it first was seen clear; a relapse resets it."""
+    if not clear(m):
+        level.clear_since = None
+        return False
+    since = _when(level.clear_since)
+    if since is None:
+        level.clear_since = _iso(now)
+        return False
+    return since + timedelta(seconds=RECOVER_AFTER_S) <= now
 
 
 def _ago(seconds: float) -> str:

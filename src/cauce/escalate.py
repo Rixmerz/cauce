@@ -87,6 +87,9 @@ MAX_ENV_RETRIES = 1
 #: Tries after the network dropped, and the wait before each: a network comes
 #: back, and the same cell, waited for, goes on from the work it kept.
 NETWORK_WAITS = (30, 90, 270)
+#: Tries after a check's tests timed out on a loaded machine, and the wait before each: the
+#: dispatcher's level halves on it (`cauce.capacity`), and the same cell goes again.
+LOAD_WAITS = (60, 180)
 MAX_TURNS_CEILING = 200
 
 
@@ -111,6 +114,8 @@ class Attempt:
     findings: tuple[dict[str, str], ...] = ()
     #: What says the network dropped under it (see `WorkerResult.network`).
     network: str = ""
+    #: The check's tests timed out on a loaded machine (see `WorkerResult.load`).
+    load: str = ""
     #: The independent check's blockers, when they are all that failed it: the
     #: work passed its own check (or had none to run and its own check passed).
     blockers: tuple[dict[str, str], ...] = ()
@@ -149,6 +154,22 @@ def network_streak(attempts: Sequence[Attempt]) -> int:
     return n
 
 
+def load_streak(attempts: Sequence[Attempt]) -> int:
+    """How many attempts in a row, the last ones, the check's tests timed out under load."""
+    n = 0
+    for a in reversed(attempts):
+        if a.passed or not a.load:
+            break
+        n += 1
+    return n
+
+
+def waited(a: Attempt) -> bool:
+    """A try that said nothing about the work: the network dropped, or the machine's load
+    timed its tests out. It counts toward no attempt ceiling and no repeated answer."""
+    return bool(a.network or a.load)
+
+
 def repeated_answer(attempts: Sequence[Attempt]) -> bool:
     """The last two failures, at different cells, said the same thing.
 
@@ -161,7 +182,7 @@ def repeated_answer(attempts: Sequence[Attempt]) -> bool:
 def _repeated_pair(attempts: Sequence[Attempt]) -> tuple[int, int] | None:
     """The 1-based numbers of the two failures that said the same thing."""
     # A try the network dropped under said nothing about the work.
-    failed = [(i, a) for i, a in enumerate(attempts, 1) if not a.passed and not a.network]
+    failed = [(i, a) for i, a in enumerate(attempts, 1) if not a.passed and not waited(a)]
     if len(failed) < 2:
         return None
     (i, a), (j, b) = failed[-2], failed[-1]
@@ -275,6 +296,26 @@ def decide(
         return Decision(Move.BLOCKED, reason=f"the network stayed down ({last.network}) through {dropped} tries; "
                                              "resume it once it is back",
                         because=(seen, f"it dropped {dropped} times in a row, waited for each time", kept))
+
+    if failure is Failure.ENVIRONMENT and last.load:
+        # The worker's own run passed; cauce's check timed its tests out on a machine
+        # busier than its CPUs. No fault of the work: the level halves on it, and the same
+        # cell, after a wait, checks again from what the worktree holds.
+        streak = load_streak(attempts)
+        if streak <= len(LOAD_WAITS):
+            wait = LOAD_WAITS[streak - 1]
+            return Decision(Move.RETRY, last.cell, last.max_turns,
+                            f"the check's tests timed out under load ({last.load}); the same cell again in {wait}s",
+                            because=(seen, f"most of what failed were tests out of time ({last.load}) after the "
+                                           "worker's own run passed: a loaded machine, not a bug, and no stronger "
+                                           "cell makes the machine faster",
+                                     "the machine's level halves on it, so fewer workers share it",
+                                     f"try {streak} of {len(LOAD_WAITS)} after a timeout under load, in {wait}s"),
+                            wait_s=wait)
+        return Decision(Move.BLOCKED, reason=f"the check's tests kept timing out under load ({last.load}) through "
+                                             f"{streak} tries; its work is kept: resume it when the machine is quieter",
+                        because=(seen, f"they timed out {streak} times in a row, waited for each time",
+                                 "the work stays on its branch"))
 
     if failure is Failure.ENVIRONMENT:
         retries = sum(1 for a in attempts if a.failure is Failure.ENVIRONMENT)
