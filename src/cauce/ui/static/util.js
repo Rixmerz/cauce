@@ -56,6 +56,12 @@ export function cellChip(cell) {
     effort ? h("span", { class: "effort" }, effort) : null);
 }
 
+// A task's size on the Fibonacci scale, with how it was reached as its title: a number, not a tone.
+export function pointsChip(points, why) {
+  if (!points) return null;
+  return h("span", { class: "chip points", title: why ? `${points}: ${why}` : `${points} points` }, `${points} pts`);
+}
+
 // A task's state: a tone, an icon and its word, so it reads at a glance and
 // without color.
 const STATES = { done: ["ok", "✓", "done"], running: ["run", "●", "running"], queued: ["queue", "○", "queued"],

@@ -1254,3 +1254,19 @@ def test_a_resume_whose_worktree_cannot_be_made_stops_resumable_and_the_next_one
 
     monkeypatch.setattr(isolate, "prepare", real_prepare)
     assert cli.main(["resume", str(stopped["id"]), "--no-model"]) == 0
+
+
+def test_tasks_and_show_say_the_points(capsys):
+    store = Store.open()
+    t = store.create_task("schema work", status="done", source="cauce", repo="r", kind="implement", points=5,
+                          points_why="4 criteria, touches schema, risk high")
+    store.add_event(t["id"], "finished", status="done", realized=8, realized_why=["8 files", "400 lines"])
+    store.create_task("older work", status="done", source="cauce", repo="r", kind="docs")
+    store.close()
+    assert cli.main(["tasks", "--all"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert any(line.startswith(f"#{t['id']}") and " 5 " in line and "schema work" in line for line in lines)
+    assert cli.main(["show", str(t["id"])]) == 0
+    out = capsys.readouterr().out
+    assert "points 5: 4 criteria, touches schema, risk high" in out
+    assert "realized 8: 8 files, 400 lines" in out

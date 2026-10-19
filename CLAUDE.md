@@ -26,6 +26,9 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/findings.py` | findings as records: where, what, `evidence_class`, `cause`; which block a change |
 | `src/cauce/ledger.py` | a review's findings as one frozen ledger `F1..Fn`: who decides each row (refuter, fix, re-check), two rounds, then the person |
 | `src/cauce/risk.py` | a change's tier (passive, medium, high) from its request, kind and files; only raised; no model |
+| `src/cauce/points.py` | a task's size on the Fibonacci scale, no model: the estimate when it is planned (criteria, kind, risk and its areas, files named, livespec's reach, length) and the realized size when it ends (files, lines, turns, wall time, attempts) |
+| `src/cauce/standards.py` | where a repository's tasks of each kind and size start, as measured: a standard per points band, the calibration's two rules, each change's verdict and its revert; recorded, never edited |
+| `src/cauce/evolution.py` | the evolution history: a snapshot a day per repository and kind, the report (`cauce evolution`, the UI's Evolution), and `settle`, which the hooks and the dispatcher run after work ends |
 | `src/cauce/surfaces.py` | where a task may write (`--surface`, a step's `surfaces`): checked after each attempt, and whether two tasks can never touch the same file |
 | `src/cauce/phase.py` | what a running worker is doing (exploring, implementing, checking), read from the tail of the tool-call log |
 | `src/cauce/roles_internal/` | roles cauce runs itself and no team holds: the independent `verifier`, and the `surveyor` that investigates for `/cauce:init` |
@@ -268,7 +271,47 @@ yields the default kind, not a guess.
   `orchestrate.MIN_TURN_SAMPLES` recent tasks of its kind here ran out at the
   kind's turns and passed with more, it starts at the median those passes
   needed (capped at `escalate.MAX_TURNS_CEILING`), and the plan says so. An
-  explicit `--max-turns` wins.
+  explicit `--max-turns` wins. A calibrated standard (below) takes the place of
+  these rules for its band, and may lower the start, never below the ladder.
+- A task's points are its size on the Fibonacci scale (1, 2, 3, 5, 8, 13),
+  estimated when it is planned by a pure function of what the plan knows
+  (`points.estimate`: its criteria, kind, risk tier and the areas that raised
+  it, the files and surfaces it names, the symbols livespec says it reaches when
+  the index is readable, and its length, which weighs one at most), kept with
+  its reasons on the task and its `planned` event. Its realized size, on the
+  same scale, is read when it ends from git and its attempts (files, the lines
+  its kept branch holds, turns, wall time, attempts), never from the worker,
+  and kept on its `finished` event; what was not measured is left out. A
+  workflow run's points are its steps', each part counted.
+- A standard is per repository, kind and points band, and only a calibration
+  moves it: after every `standards.CALIBRATE_EVERY` endings in a repository,
+  in the hooks or the dispatcher (`evolution.settle`), never in a GET, by two
+  rules and no other. The start cell is the cheapest rung of the kind's ladder
+  whose first tries pass at least `standards.PASS_FIRST` over at least
+  `standards.MIN_SAMPLES` (a first try is a task's first attempt or the first
+  after a new model; more turns or a retry on the same cell goes on with it; a
+  pinned task teaches none), one rung per calibration, never below the
+  ladder's first rung and never a cell that needs an approval. The start turns
+  move toward the 75th percentile of what the band's passes needed, one
+  `standards.TURNS_STEP` per calibration, capped at
+  `escalate.MAX_TURNS_CEILING`. A band moves one field at a time, and not
+  again before that change is judged. Money moves no standard: a point's cost
+  is measured and shown, never a rule's input. `--start` and `--max-turns`
+  always win, and the plan says which standard it used and why (its `planned`
+  event keeps the changes it started on).
+- Every change of a standard is appended with when, the repository, the kind
+  and band, the field, before and after, the rule, its evidence (counts and
+  rates) and cauce's version. Once `standards.JUDGE_AFTER` tasks ran under it,
+  it is judged once against the window before it (pass-first, attempts, time
+  and cost per point); one that made pass-first worse by more than
+  `standards.REVERT_MARGIN` is reverted one step back, as a change of its own
+  that names it, and a revert is never judged. Changes, verdicts and the daily
+  snapshots are append-only: the database refuses an update or a delete.
+- The evolution history takes one snapshot a day, at the first ending of a new
+  day in the person's time zone or with `cauce evolution --snapshot`, of what
+  ended since the last one. `cauce evolution` and the UI's Evolution read it
+  beside every change and verdict, never write. Tests run on fake clocks
+  (`now=`, `tz=`) and fake finished tasks (`tests/test_standards.finished`).
 - Fable needs a person: `#fable` or `--allow-approval`. An approval is the
   person's for the run they approved: a resume nobody approved (`--unattended`)
   never uses one an earlier run stored, nor starts on a cell that needs one (a

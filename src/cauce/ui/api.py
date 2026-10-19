@@ -32,7 +32,7 @@ BODY_CHARS = 800
 def _brief(task: dict[str, Any]) -> dict[str, Any]:
     keys = ("id", "title", "status", "kind", "repo", "cwd", "start_cell", "final_cell", "current_cell",
             "cost_usd", "source", "created_at", "updated_at", "result", "pinned", "session_id",
-            "parallel", "parallel_reason", "workflow_run", "workflow_step")
+            "parallel", "parallel_reason", "workflow_run", "workflow_step", "points", "points_why")
     body = task.get("body") or ""
     return {**{k: task.get(k) for k in keys},
             "body": body if len(body) <= BODY_CHARS else body[:BODY_CHARS - 1] + "…"}
@@ -279,6 +279,9 @@ def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:
         "events": store.events(task_id=task_id, limit=500),
         "checks": [e["data"] for e in store.events_of(task_id, "verified")],
         # Where the risk ended: attempts only ever raise it from the plan's.
+        # The size the work turned out to be, beside the plan's estimate on the task.
+        "realized": {"points": finished["data"]["realized"], "reasons": finished["data"].get("realized_why") or []}
+        if finished and finished["data"].get("realized") else None,
         "risk": (finished["data"].get("risk") if finished else None)
         or ((store.last_event(task_id, "planned") or {}).get("data") or {}).get("risk"),
         "phase": phase.of(task_id, attempts[-1]["seq"] + 1 if attempts else 1) if task["status"] == "running"
@@ -353,6 +356,13 @@ def analysis_view(store: Store, days: int = 30, repo_key: str | None = None) -> 
     from cauce import analysis
 
     return analysis.compute(store, days=days, repo=repo_key or None, keep_runs=12)
+
+
+def evolution_view(store: Store, days: int = 30, repo_key: str | None = None) -> dict[str, Any]:
+    """How cauce evolves and why (`cauce.evolution`): read only, as every GET is."""
+    from cauce import evolution
+
+    return evolution.report(store, days=days, repo=repo_key or None)
 
 
 def routing(store: Store, days: int = 0) -> list[dict[str, Any]]:

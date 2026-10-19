@@ -210,7 +210,8 @@ def test_pages_and_reads(ui):
     assert res.status == 200 and res.getheader("Content-Type").startswith("text/javascript")
     for path in ("/api/board?repo=r", "/api/sessions?repo=r", "/api/projects", "/api/spend?days=3",
                  "/api/routing", "/api/memory?q=x", "/api/habits", "/api/events?after=0", "/static/sessions.js",
-                 "/api/analysis", "/api/analysis?days=0&repo=r", "/static/analysis.js"):
+                 "/api/analysis", "/api/analysis?days=0&repo=r", "/static/analysis.js",
+                 "/api/evolution", "/api/evolution?days=0&repo=r", "/static/evolution.js"):
         res, data = call(ui, "GET", path)
         assert res.status == 200, path
         if path.startswith("/api/"):
@@ -692,3 +693,11 @@ def test_a_session_s_own_turns_are_priced_apart_from_its_workers(store: Store, t
     assert detail["children"][0]["turns_usd"] == one
     assert api.session_list(store, {"r"})[0]["turns_usd"] == 2 * one
     assert api.session_detail(store, "s1")["session"]["turns_usd"] == 2 * one
+
+
+def test_a_card_carries_its_points_and_why(store: Store):
+    t = store.create_task("schema work", status="running", source="cauce", repo="r", points=5,
+                          points_why="4 criteria, touches schema, risk high")
+    card = api.board(store, {"r"})["running"][0]
+    assert card["id"] == t["id"] and card["points"] == 5 and card["points_why"].startswith("4 criteria")
+    assert api.task_detail(store, t["id"])["task"]["points"] == 5

@@ -961,6 +961,11 @@ def test_a_step_fans_out_into_one_task_per_part_and_what_needs_it_waits_for_all(
     # The step after waits for every part.
     assert polish["workflow_step"] == "after" and polish["id"] > max(api["id"], web["id"])
     assert workflows.status(store, started["id"])["state"] == "done"
+    # A run's points are its steps', and a step run in parts counts each part.
+    status = workflows.status(store, started["id"])
+    each = {t["id"]: store.get_task(t["id"])["points"] for t in (plan_task, api, web, polish)}
+    assert all(each.values()) and status["steps"][1]["points"] == each[api["id"]] + each[web["id"]]
+    assert status["points"] == sum(each.values())
 
 
 def test_a_part_that_stops_stops_the_run_and_a_retry_runs_only_the_parts_that_did_not_pass(

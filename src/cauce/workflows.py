@@ -1329,6 +1329,7 @@ def status(store: Store, run_id: int, *, detail: bool = False) -> dict[str, Any]
                           and _part(o)["id"] == _part(t)["id"]))} for t in task["parts"]]
             at = next((p for p in parts if p["state"] == state), parts[-1])
             entry.update(task=at["task"], cell=at.get("cell"), cost_usd=round(sum(p["cost_usd"] for p in parts), 2),
+                         points=sum(p["points"] or 0 for p in parts) or None,
                          result=None, branch=None, tries=max(p["tries"] for p in parts), waits=at.get("waits"),
                          parts=parts)
         elif task:
@@ -1358,6 +1359,8 @@ def status(store: Store, run_id: int, *, detail: bool = False) -> dict[str, Any]
             "now": [s["id"] for s in steps if s["state"] in ("queued", "running")],
             "waiting": [s["id"] for s in steps if s["state"] in NEEDS_YOU | STOPPED],
             "branch": branch, "cost_usd": round(sum(s.get("cost_usd") or 0 for s in steps), 2),
+            # Its size: its steps' points, each part of a step run in parts counted.
+            "points": sum(s.get("points") or 0 for s in steps),
             "created_at": run["created_at"], "updated_at": run["updated_at"], "reason": run["reason"],
             "waits": holding[0]["waits"] if holding else None, "steps": steps}
 
@@ -1368,7 +1371,7 @@ def _task_entry(store: Store, run: Mapping[str, Any], task: Mapping[str, Any], d
     finished = store.final_event(task["id"])
     entry: dict[str, Any] = dict(
         task=task["id"], cell=task.get("final_cell") or task.get("current_cell"),
-        cost_usd=round(task.get("cost_usd") or 0, 2), result=task.get("result"),
+        cost_usd=round(task.get("cost_usd") or 0, 2), points=task.get("points"), result=task.get("result"),
         branch=(finished or {}).get("data", {}).get("branch") if task["status"] == "done" else None,
         tries=tries, waits=dispatch.waiting(store, task))
     if behind := _behind(store, run, task, finished, live=detail):

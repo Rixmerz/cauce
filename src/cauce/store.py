@@ -144,7 +144,38 @@ CREATE TABLE IF NOT EXISTS note_topics (
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
   kind UNINDEXED, ref_id UNINDEXED, repo UNINDEXED, text, tokenize = 'unicode61 remove_diacritics 2'
 );
+CREATE TABLE IF NOT EXISTS standards (
+  repo TEXT NOT NULL, kind TEXT NOT NULL, band INTEGER NOT NULL, start_cell TEXT, start_turns INTEGER,
+  measured TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL, PRIMARY KEY (repo, kind, band)
+);
+CREATE TABLE IF NOT EXISTS calibrations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, repo TEXT NOT NULL, kind TEXT NOT NULL,
+  band INTEGER NOT NULL, field TEXT NOT NULL, old_value TEXT, new_value TEXT, rule TEXT NOT NULL,
+  evidence TEXT NOT NULL DEFAULT '{}', version TEXT NOT NULL, reverts INTEGER
+);
+CREATE INDEX IF NOT EXISTS calibrations_band ON calibrations (repo, kind, band, field);
+CREATE TABLE IF NOT EXISTS calibration_verdicts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, change_id INTEGER NOT NULL UNIQUE, verdict TEXT NOT NULL,
+  window_before TEXT NOT NULL DEFAULT '{}', window_after TEXT NOT NULL DEFAULT '{}', reason TEXT NOT NULL DEFAULT '',
+  version TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS evolution (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, day TEXT NOT NULL, since TEXT NOT NULL,
+  until TEXT NOT NULL, repo TEXT NOT NULL, kind TEXT NOT NULL, tasks INTEGER NOT NULL, done INTEGER NOT NULL,
+  points_done INTEGER NOT NULL, points_estimated INTEGER NOT NULL, points_realized INTEGER NOT NULL,
+  hours REAL NOT NULL, cost_usd REAL NOT NULL, velocity REAL, cost_per_point REAL, time_per_point_s REAL,
+  pass_first REAL, climbed REAL, version TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS evolution_day ON evolution (day, repo, kind);
 """
+
+#: The records of how cauce evolves are append-only: a change, its verdict and a day's
+#: snapshot are written once, and what came after is a new record, never an edit.
+_APPEND_ONLY = ("calibrations", "calibration_verdicts", "evolution")
+_APPEND_ONLY_TRIGGERS = "".join(
+    f"CREATE TRIGGER IF NOT EXISTS {table}_{verb}_refused BEFORE {verb.upper()} ON {table} "
+    f"BEGIN SELECT RAISE(ABORT, '{table} is append-only'); END;\n"
+    for table in _APPEND_ONLY for verb in ("update", "delete"))
 
 #: Words a query and a problem must share for a strict match.
 STRICT_OVERLAP = 3
@@ -179,6 +210,9 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         # a session, starts the next step when this one passes.
         "workflow_run": "INTEGER",
         "workflow_step": "TEXT",
+        # Its size on the Fibonacci scale when it was planned, and the reasons (`cauce.points`).
+        "points": "INTEGER",
+        "points_why": "TEXT",
     },
     "attempts": {
         # The model the CLI says served the attempt, not the alias it was asked for.
@@ -286,7 +320,7 @@ class Store:
             for attempt in range(SETUP_RETRIES):
                 try:
                     self._conn.execute("PRAGMA journal_mode=WAL")
-                    self._conn.executescript(SCHEMA)
+                    self._conn.executescript(SCHEMA + _APPEND_ONLY_TRIGGERS)
                     self._migrate()
                     return
                 except sqlite3.OperationalError as exc:
@@ -546,6 +580,118 @@ class Store:
         for task_id, turns, passed, failure in rows:
             runs.setdefault(task_id, []).append((int(turns), bool(passed), failure))
         return list(runs.values())
+
+    def attempts_of(self, task_ids: Sequence[int]) -> dict[int, list[dict]]:
+        """The attempts of each of these tasks, in the order they ran."""
+        out: dict[int, list[dict]] = {}
+        ids = list(task_ids)
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            for row in self._conn.execute(
+                    f"SELECT * FROM attempts WHERE task_id IN ({', '.join('?' * len(chunk))}) "  # noqa: S608
+                    "ORDER BY task_id, seq", chunk):
+                out.setdefault(int(row["task_id"]), []).append(dict(row))
+        return out
+
+    def ended_tasks(self, *, repo: str | None = None, since: str = "", until: str | None = None,
+                    limit: int = 2000) -> list[dict]:
+        """cauce's tasks that ended, oldest ending first, each with when it last ended
+        (`ended_at`), that ending's data, its first plan's data (where it started and on
+        which standard), and the wall time of every run it had: what the standards and the
+        evolution read (`cauce.standards`, `cauce.evolution`). The newest `limit` endings."""
+        clauses, params = ["f.ts >= ?"], [since]
+        if until is not None:
+            clauses.append("f.ts < ?")
+            params.append(until)
+        if repo is not None:
+            clauses.append("t.repo = ?")
+            params.append(repo)
+        rows = self._conn.execute(
+            "SELECT t.*, f.id AS ended_id, f.ts AS ended_at, f.data AS ended_data, "  # noqa: S608
+            "(SELECT p.data FROM events p WHERE p.task_id = t.id AND p.kind = 'planned' ORDER BY p.id LIMIT 1) "
+            "AS planned_data, (SELECT COALESCE(SUM(json_extract(w.data, '$.wall_s')), 0) FROM events w "
+            "WHERE w.task_id = t.id AND w.kind = 'finished') AS wall_s FROM tasks t "
+            "JOIN events f ON f.id = (SELECT MAX(id) FROM events WHERE task_id = t.id AND kind = 'finished') "
+            "WHERE t.source IN ('cauce', 'queue') AND t.status NOT IN ('queued', 'running') AND "
+            + " AND ".join(clauses) + " ORDER BY f.id DESC LIMIT ?", [*params, limit]).fetchall()
+        return [{**dict(r), "ended_data": json.loads(r["ended_data"]),
+                 "planned_data": json.loads(r["planned_data"] or "{}")} for r in reversed(rows)]
+
+    def endings_after(self, event_id: int) -> list[dict]:
+        """The `finished` events after `event_id`, oldest first, each with its task's
+        repository and options."""
+        rows = self._conn.execute(
+            "SELECT e.id, e.task_id, e.ts, t.repo, t.options FROM events e JOIN tasks t ON t.id = e.task_id "
+            "WHERE e.kind = 'finished' AND e.id > ? ORDER BY e.id", (event_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    # --- standards, and the record of how they moved -----------------------------
+
+    def meta(self, key: str) -> str | None:
+        row = self._conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self._conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET "
+                           "value = excluded.value", (key, value))
+
+    def standard(self, repo: str, kind: str, band: int) -> dict | None:
+        row = self._conn.execute("SELECT * FROM standards WHERE repo = ? AND kind = ? AND band = ?",
+                                 (repo, kind, band)).fetchone()
+        return dict(row) if row else None
+
+    def standards(self, *, repo: str | None = None) -> list[dict]:
+        scope, params = ("WHERE repo = ?", [repo]) if repo is not None else ("", [])
+        return [dict(r) for r in self._conn.execute(
+            f"SELECT * FROM standards {scope} ORDER BY repo, kind, band", params)]  # noqa: S608
+
+    def set_standard(self, repo: str, kind: str, band: int, **fields: Any) -> None:
+        """Where tasks of this kind and size start here now; `measured` is kept as JSON."""
+        if "measured" in fields and not isinstance(fields["measured"], str):
+            fields["measured"] = json.dumps(fields["measured"])
+        row = {"repo": repo, "kind": kind, "band": band, "updated_at": now(), **fields}
+        sets = ", ".join(f"{k} = excluded.{k}" for k in row if k not in ("repo", "kind", "band"))
+        self._conn.execute(f"INSERT INTO standards ({', '.join(row)}) VALUES ({', '.join('?' * len(row))}) "  # noqa: S608
+                           f"ON CONFLICT(repo, kind, band) DO UPDATE SET {sets}", list(row.values()))
+
+    def add_calibration(self, **record: Any) -> int:
+        """One change of a standard, appended: never edited, never removed."""
+        if not isinstance(record.get("evidence", ""), str):
+            record["evidence"] = json.dumps(record["evidence"], ensure_ascii=False)
+        cur = self._conn.execute(f"INSERT INTO calibrations ({', '.join(record)}) "  # noqa: S608
+                                 f"VALUES ({', '.join('?' * len(record))})", list(record.values()))
+        return int(cur.lastrowid)
+
+    def calibrations(self, *, repo: str | None = None, since: str = "") -> list[dict]:
+        """The changes of the standards since `since`, oldest first."""
+        scope, params = ("AND repo = ?", [repo]) if repo is not None else ("", [])
+        return [dict(r) for r in self._conn.execute(
+            f"SELECT * FROM calibrations WHERE at >= ? {scope} ORDER BY id", [since, *params])]  # noqa: S608
+
+    def add_verdict(self, **record: Any) -> int:
+        """What a change did, judged once and appended."""
+        for key in ("window_before", "window_after"):
+            if not isinstance(record.get(key, ""), str):
+                record[key] = json.dumps(record[key])
+        cur = self._conn.execute(f"INSERT INTO calibration_verdicts ({', '.join(record)}) "  # noqa: S608
+                                 f"VALUES ({', '.join('?' * len(record))})", list(record.values()))
+        return int(cur.lastrowid)
+
+    def verdicts(self) -> dict[int, dict]:
+        """Each judged change's verdict, by the change's id."""
+        return {int(r["change_id"]): dict(r) for r in self._conn.execute("SELECT * FROM calibration_verdicts")}
+
+    def add_snapshot(self, **row: Any) -> int:
+        """One repository's and kind's row of a day's snapshot, appended."""
+        cur = self._conn.execute(f"INSERT INTO evolution ({', '.join(row)}) "  # noqa: S608
+                                 f"VALUES ({', '.join('?' * len(row))})", list(row.values()))
+        return int(cur.lastrowid)
+
+    def snapshots(self, *, since_day: str = "", repo: str | None = None) -> list[dict]:
+        """The snapshots taken on `since_day` or after, oldest first."""
+        scope, params = ("AND repo = ?", [repo]) if repo is not None else ("", [])
+        return [dict(r) for r in self._conn.execute(
+            f"SELECT * FROM evolution WHERE day >= ? {scope} ORDER BY id", [since_day, *params])]  # noqa: S608
 
     # --- the queue and its lanes ---------------------------------------------
 
@@ -1043,7 +1189,39 @@ class Store:
             if not clone:
                 self._conn.execute("DELETE FROM note_topics WHERE project = ?", (old,))
                 self._conn.execute("DELETE FROM lanes WHERE repo = ?", (old,))
+            self._rekey_standards(old, new, clone=clone)
         return {"notes": len(moved), "tasks": tasks}
+
+    def _rekey_standards(self, old: str, new: str, *, clone: bool) -> None:
+        """What calibration kept for `old` goes with its tasks to `new`: where its tasks
+        start (a standard `new` already has wins), the count toward the next calibration,
+        and each change still waiting for its verdict, carried as a new change of `new`
+        that names it (the records are append-only: the old one gets a `carried` verdict).
+        A clone that keeps the old key keeps its own copy of the standards."""
+        self._conn.execute("INSERT OR IGNORE INTO standards (repo, kind, band, start_cell, start_turns, measured, "
+                           "updated_at) SELECT ?, kind, band, start_cell, start_turns, measured, updated_at "
+                           "FROM standards WHERE repo = ?", (new, old))
+        since_old = int(self.meta(f"standards:since:{old}") or 0)
+        if since_old:
+            self.set_meta(f"standards:since:{new}", str(int(self.meta(f"standards:since:{new}") or 0) + since_old))
+        if clone:
+            return
+        self._conn.execute("DELETE FROM standards WHERE repo = ?", (old,))
+        self._conn.execute("DELETE FROM meta WHERE key = ?", (f"standards:since:{old}",))
+        judged = {int(r[0]) for r in self._conn.execute("SELECT change_id FROM calibration_verdicts")}
+        stamp = now()
+        for change in [dict(r) for r in self._conn.execute(
+                "SELECT * FROM calibrations WHERE repo = ? AND reverts IS NULL ORDER BY id", (old,))]:
+            if change["id"] in judged:
+                continue
+            evidence = {**json.loads(change["evidence"] or "{}"), "carried_from": change["id"]}
+            carried = self.add_calibration(
+                at=change["at"], repo=new, kind=change["kind"], band=change["band"], field=change["field"],
+                old_value=change["old_value"], new_value=change["new_value"],
+                rule=f"{change['rule']} (carried from #{change['id']} when {old} joined {new})",
+                evidence=evidence, version=change["version"])
+            self.add_verdict(at=stamp, change_id=change["id"], verdict="carried",
+                             reason=f"{old} joined {new}: judged as #{carried}", version=change["version"])
 
     def _copy_notes(self, ids: list[int], project: str, prefix: str) -> list[int]:
         """Copies of these notes under `project`: their anchors (named with `prefix`

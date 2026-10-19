@@ -580,7 +580,8 @@ def cmd_tasks(args: argparse.Namespace) -> int:
     for t in tasks:
         cell = t["final_cell"] or t["start_cell"] or ""
         mark = {"hook": " (turn)", "delegation": " (subagent)"}.get(t["source"], "")
-        print(f"#{t['id']:<5} {t['status']:<14} {t['kind'] or '-':<16} {cell:<14} {t['title']}{mark}")
+        size = str(t.get("points") or "-")
+        print(f"#{t['id']:<5} {t['status']:<14} {t['kind'] or '-':<16} {cell:<14} {size:>2} {t['title']}{mark}")
         if waits[t["id"]]:
             print(f"       {waits[t['id']]}")
     return 0
@@ -601,6 +602,11 @@ def cmd_show(args: argparse.Namespace) -> int:
         print(f"#{task['id']} [{task['status']}] {task['title']}")
         print(f"repo {task['repo']}  kind {task['kind']} ({task['class_source']}: {task['class_reason']})")
         print(f"cost ${task['cost_usd']:.2f}  start {task['start_cell']}  final {task['final_cell']}")
+        if task.get("points"):
+            print(f"points {task['points']}: {task.get('points_why') or 'nothing says it is bigger'}")
+        ended = (store.final_event(args.id) or {}).get("data") or {}
+        if ended.get("realized"):
+            print(f"realized {ended['realized']}: {', '.join(ended.get('realized_why') or ()) or 'a small change'}")
         if waits := dispatch.waiting(store, task):
             print(waits)
         refused = store.denials(args.id)
@@ -1164,6 +1170,24 @@ def cmd_stats(args: argparse.Namespace) -> int:
         sys.stdout.write(analysis.runs_csv(report["runs"]) if args.csv else analysis.as_json(report["runs"]) + "\n")
     else:
         print(analysis.as_json(report) if args.json else analysis.text(report))
+    return 0
+
+
+def cmd_evolution(args: argparse.Namespace) -> int:
+    """How cauce evolves and why, read from the store: no model. `--snapshot` takes one now."""
+    from cauce import evolution
+
+    key = repo.key(Path(args.repo).resolve()) if args.repo else None
+    store = Store.open()
+    try:
+        if args.snapshot:
+            taken = evolution.snapshot(store, until_now=True)
+            print(f"snapshot: {len(taken)} row{'' if len(taken) == 1 else 's'}",
+                  file=sys.stderr if args.json else sys.stdout)
+        found = evolution.report(store, days=args.days, repo=key)
+    finally:
+        store.close()
+    print(evolution.as_json(found) if args.json else evolution.text(found))
     return 0
 
 
@@ -1907,6 +1931,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--runs", action="store_true", help="one record per run instead of the summary (JSON)")
     p.add_argument("--csv", action="store_true", help="with --runs: CSV, for a spreadsheet")
     p.set_defaults(func=cmd_stats)
+    p = sub.add_parser("evolution", help="how cauce evolves and why: each metric's trend, and every change of a "
+                                         "standard with its reason and verdict")
+    p.add_argument("--days", type=int, default=30, help="the window (default 30; 0 for all time)")
+    p.add_argument("--repo", help="one repository (default: every one)")
+    p.add_argument("--json", action="store_true", help="the same, as data")
+    p.add_argument("--snapshot", action="store_true", help="take a snapshot now, from where the last one ended")
+    p.set_defaults(func=cmd_evolution)
     p = sub.add_parser("relay", help="hand this session's thread to a fresh one: the next session that starts "
                        "here (after /clear) begins from its requests verbatim, what landed and what is open")
     p.add_argument("--session", help="the session to hand over (default: the one this runs in)")

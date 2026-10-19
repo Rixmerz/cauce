@@ -1652,3 +1652,34 @@ def test_an_integrate_step_with_a_branch_that_is_gone_stops_for_the_environment(
                  adapters=[])
     assert report.status == "blocked" and report.stop.cause == "environment"
     assert "could not join the parts" in report.stop.reason
+
+
+# --- points: a task's size, estimated when planned and measured when it ends -------------------
+
+def test_a_task_is_scored_when_planned_and_measured_when_it_ends(git_repo, store):
+    text = "Add the export:\n- a CSV writer\n- a header row\n- an --out flag\n- a test for it"
+    report = run(text, git_repo, store, registry={}, launcher=Script(bad(Failure.CODE_BUG), ok(), write="export.py"),
+                 classifier=kind("implement"), adapters=[])
+    task = store.get_task(report.task_id)
+    assert (task["points"], task["points_why"]) == (3, "4 criteria")
+    planned = store.last_event(report.task_id, "planned")["data"]
+    assert planned["points"] == 3 and planned["points_why"] == ["4 criteria"]
+    assert report.plan.points.line() == "3: 4 criteria"
+    assert "points 3: 4 criteria" in report.text()
+    finished = store.final_event(report.task_id)["data"]
+    # one file, one line, two attempts: git and the attempts say it, never the worker
+    assert finished["points"] == 3 and finished["realized"] == 2 and finished["realized_why"] == ["2 attempts"]
+    dry = run(text, git_repo, store, Options(dry_run=True), registry={}, classifier=kind("feature"), adapters=[])
+    assert "points 5: 4 criteria, kind feature" in dry.text()
+
+
+def test_the_symbols_livespec_reaches_weigh_on_the_points(git_repo, store, tmp_path):
+    from .livespec_fixture import build
+
+    build(git_repo)
+    dry = run("parse_amount rounds wrong", git_repo, store, Options(dry_run=True), registry={},
+              classifier=kind("implement"), adapters=[_livespec(tmp_path)])
+    assert dry.plan.points.reasons == ("reaches 23 symbols",) and dry.plan.points.points == 3
+    unread = run("parse_amount rounds wrong", git_repo, store, Options(dry_run=True), registry={},
+                 classifier=kind("implement"), adapters=[])
+    assert unread.plan.points.points == 1

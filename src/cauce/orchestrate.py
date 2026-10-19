@@ -46,6 +46,7 @@ from cauce import (
     repo,
     roles,
     runtime,
+    standards,
     stops,
     teams,
     workflows,
@@ -55,6 +56,7 @@ from cauce import capabilities as caps
 from cauce import criteria as criteria_mod
 from cauce import findings as findings_mod
 from cauce import ledger as ledger_mod
+from cauce import points as points_mod
 from cauce import risk as risk_mod
 from cauce import services as services_mod
 from cauce import surfaces as surfaces_mod
@@ -190,6 +192,10 @@ class Plan:
     risk: risk_mod.Risk = field(default_factory=risk_mod.Risk)
     #: The turns the first attempt starts with when history raised them; None: the kind's own.
     turns: int | None = None
+    #: The task's size on the Fibonacci scale, from what the plan knows (`cauce.points`).
+    points: points_mod.Score = field(default_factory=lambda: points_mod.Score(1))
+    #: What it took from the standard of its band (`cauce.standards`): None outside a repository.
+    standard: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -246,6 +252,7 @@ class Report:
                          f"{self.plan.role_why}")
         lines.append(f"risk {self.plan.risk.tier}" + (f": {'; '.join(self.plan.risk.reasons)}"
                                                       if self.plan.risk.reasons else ""))
+        lines.append(f"points {self.plan.points.line()}")
         lines += [status.line() for status in self.plan.neighbours]
         if self.task_id is None:
             # A dry run shows what the first worker would be handed.
@@ -363,6 +370,8 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     active: list[tuple[Adapter, Status]] = []
     context: list[str] = []
     raise_rungs, critical = 0, False
+    # The symbols the request reaches, when an index could say: None when none could.
+    reached: int | None = None
     for adapter in adopted(options, adapters):
         status = adapter.inspect(repo_dir)
         runnable_absent = status.state == ABSENT and getattr(adapter, "indexes", True) and \
@@ -394,6 +403,8 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
         context += briefing.lines
         raise_rungs = max(raise_rungs, briefing.raise_rungs)
         critical = critical or briefing.critical
+        if briefing.reached is not None:
+            reached = max(reached or 0, briefing.reached)
         neighbour_notes += briefing.reasons
 
     if critical and kind == "review-routine" and (not covered or "review-critical" in covered):
@@ -401,6 +412,8 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
         neighbour_notes.append("the code under review implements a critical spec: reviewed as critical")
     role, why = roles.pick(kind, members, repo_dir)
     neighbour_notes += team_notes
+    risk = risk_mod.of_request(text, kind)
+    size = points_mod.of_request(text, kind, risk, surfaces=options.surfaces, reached=reached)
     if role is not None:
         missing = [s for s in (*role.skills, *role.on_demand) if roles.find_skill(s) is None]
         if missing:
@@ -411,22 +424,32 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
             neighbour_notes.append(f"role {role.name}: capability {', '.join(absent)} is not in your registry "
                                    "or an adopted neighbour here; the workers run without it")
     ladder = ladder_for(kind)
+    key = repo.key(repo_dir)
+    # The standard of the task's band here: where tasks of its kind and size start, as measured.
+    standard = standards.for_plan(store, key, kind, size.points, pinned=options.start is not None,
+                                  explicit_turns=bool(options.max_turns)) if key else None
     if options.start is not None:
         start, reasons = options.start, ["pinned by the caller"]
     else:
-        key = repo.key(repo_dir)
-        start, reasons = choose_start(
-            ladder, classification.complexity,
-            store.landings(kind, repo=key) if key else [],
-            store.landings(kind),
-        )
+        if standard is not None and standard.cell is not None:
+            start, reasons = standard.cell, []
+        else:
+            start, reasons = choose_start(
+                ladder, classification.complexity,
+                store.landings(kind, repo=key) if key else [],
+                store.landings(kind),
+            )
         if raise_rungs:
             raised = min(_index_of(ladder, start) + raise_rungs, len(ladder) - 1)
             if ladder[raised] != start:
                 start = ladder[raised]
                 reasons.append(f"one rung up for what the code index found ({start.label})")
+    if standard is not None:
+        reasons += standard.reasons
     turns = None
-    if not options.max_turns and (key := repo.key(repo_dir)):
+    if not options.max_turns and standard is not None and standard.turns:
+        turns = standard.turns
+    elif not options.max_turns and key:
         raised_turns = turns_from_history(store.turn_history(kind, repo=key, limit=TURN_HISTORY), kind)
         if raised_turns:
             turns, why = raised_turns
@@ -476,7 +499,7 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     names = tuple(dict.fromkeys([*selected.names, *(a.name for a, _ in active)]))
     return Plan(kind, classification, ladder, start, reasons + neighbour_notes, names,
                 tuple(context), tuple(statuses), tuple(active), tuple(known), role, team, why,
-                risk_mod.of_request(text, kind), turns)
+                risk, turns, size, standard.data() if standard is not None else None)
 
 
 def turns_from_history(runs: Sequence[Sequence[tuple[int, bool, str | None]]], kind: str) -> tuple[int, str] | None:
@@ -604,6 +627,7 @@ def run(
     fields = dict(
         repo=key, cwd=str(repo_dir), kind=the_plan.kind, complexity=c.complexity, class_source=c.source,
         class_reason=c.reason, start_cell=the_plan.start.label, pinned=int(options.start is not None),
+        points=the_plan.points.points, points_why=", ".join(the_plan.points.reasons),
     )
     queued_s = None
     # The time before this run that no phase of its own measures: from the step it waited on
@@ -649,7 +673,8 @@ def run(
         say(f"cauce: #{task['id']} warning: {reason}")
     store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label, warnings=warned,
                     role=the_plan.role.name if the_plan.role else None, team=the_plan.team,
-                    risk=the_plan.risk.data(),
+                    risk=the_plan.risk.data(), points=the_plan.points.points,
+                    points_why=list(the_plan.points.reasons), standard=the_plan.standard,
                     ladder=[x.label for x in the_plan.ladder], reasons=the_plan.reasons,
                     neighbours=[st.line() for st in the_plan.neighbours], plan_s=round(plan_s, 2),
                     queued_s=queued_s)
@@ -1064,11 +1089,13 @@ def run(
             _to_engram(store, task, report, the_plan, workspace.repo_dir if workspace else repo_dir)
         # Filing what it learned runs before the ending and the next workflow step: timed.
         timing["notes_s"] = time.monotonic() - mark
+        size = _realized(store, task["id"], report, workspace, time.monotonic() - clock)
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
                         changed=report.changed[:CHANGED_KEPT], changed_n=len(report.changed),
                         stop=report.stop.data() if report.stop else None,
-                        risk=the_plan.risk.data(),
+                        risk=the_plan.risk.data(), points=the_plan.points.points, realized=size.points,
+                        realized_why=list(size.reasons),
                         findings=list(attempts[-1].findings)[:30] if status == "done" and attempts else [],
                         wall_s=round(time.monotonic() - clock, 2), attempts=len(attempts),
                         at=round(time.time(), 3), **gaps,
@@ -1101,6 +1128,22 @@ def commit_title(task: Mapping[str, Any]) -> str:
         return title
     first = next((line.strip() for line in str(task.get("body") or "").splitlines() if line.strip()), "")
     return _LEAD.sub("", first) or _STEP_TAG.sub("", title)
+
+
+def _realized(store: Store, task_id: int, report: Report, workspace: isolate.Workspace | None,
+              wall_s: float) -> points_mod.Score:
+    """The size the task turned out to be, from what git and its attempts measured: the files it
+    changed, the lines its kept branch holds (none counted without one), every attempt's turns,
+    and the wall time of this run and the ones before it."""
+    attempts = store.attempts(task_id)
+    lines = None
+    if workspace is not None and report.branch:
+        counted = isolate.numstat(workspace.repo_dir, workspace.base, report.branch)
+        lines = sum(n for n, _ in counted) if counted is not None else None
+    before = sum(float(e["data"].get("wall_s") or 0) for e in store.events_of(task_id, "finished"))
+    return points_mod.realized(files=len(report.changed), lines=lines,
+                               turns=sum(int(a["turns"] or 0) for a in attempts),
+                               minutes=(before + wall_s) / 60, attempts=len(attempts))
 
 
 def _join_message(task_id: int, options: Options) -> Callable[[str], str]:

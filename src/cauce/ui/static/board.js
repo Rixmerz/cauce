@@ -1,6 +1,6 @@
 import { get, post } from "./net.js";
 import { stopCard } from "./stop.js";
-import { cellChip, h, kindChip, short, statusBadge, usd, when } from "./util.js";
+import { cellChip, h, kindChip, pointsChip, short, statusBadge, usd, when } from "./util.js";
 
 // Where a queued task stands with the dispatcher: Haiku's call on whether it may
 // start beside the running work, with its reason. The card's reason line names the
@@ -18,6 +18,7 @@ function card(task, openTask, extra = []) {
     h("div", { class: "meta" },
       kindChip(task.kind),
       cellChip(task.current_cell || task.final_cell || task.start_cell),
+      pointsChip(task.points, task.points_why),
       task.cost_usd ? h("span", {}, usd(task.cost_usd)) : null,
       ...extra),
     task.stop ? stopCard(task.stop) : task.asks ? h("div", { class: "asks" }, task.asks) : null,

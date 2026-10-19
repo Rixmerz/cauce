@@ -144,6 +144,16 @@ def of_request(text: str, kind: str) -> Risk:
     return risk
 
 
+#: The reason `of_request` gives for an area, read back by `areas`.
+_ABOUT = re.compile(r"^the request is about (\w+) \((['\"])(.*)\2\)$")
+
+
+def areas(risk: Risk) -> list[tuple[str, str]]:
+    """The areas the request is about, each with the word that showed it: what a task's
+    size counts (`cauce.points`)."""
+    return [(m.group(1), m.group(3)) for m in map(_ABOUT.match, risk.reasons) if m]
+
+
 def _matches(path: str, patterns: Iterable[str]) -> bool:
     name = PurePosixPath(path).name
     return any(fnmatch.fnmatch(path, p) or fnmatch.fnmatch(name, p) for p in patterns)

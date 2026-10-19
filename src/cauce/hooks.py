@@ -212,6 +212,7 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
         usage.ingest(store, event["transcript_path"], **counted)
         usage.ingest_subagents(store, event["transcript_path"], **counted)
     _scribe(event, home(), os.environ)
+    _evolve(store, home())
     from cauce import naming
 
     naming.maybe_start(store, session_id, home(), os.environ)
@@ -268,6 +269,17 @@ def _scribe(event: Mapping[str, Any], root: Path, env: Mapping[str, str]) -> Non
             scribe.notes_started(root, state)
     except Exception:  # the turn's endings still go out
         note_error(root, "Stop (scribe)")
+
+
+def _evolve(store: Store, root: Path) -> None:
+    """What ended settles the standards and, on a new day, the evolution history
+    (`cauce.evolution`). Its failure is noted, and never costs the turn its endings."""
+    try:
+        from cauce import evolution
+
+        evolution.settle(store)
+    except Exception:  # the turn's endings still go out
+        note_error(root, "Stop (evolution)")
 
 
 def _relay(store: Store, root: Path, session_id: str, cwd: str, transcript: str | None) -> str | None:

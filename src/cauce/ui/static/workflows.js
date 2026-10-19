@@ -60,7 +60,7 @@ function runCard(run, ctx) {
     h("div", { class: "row" },
       h("b", {}, `#${run.id} ${run.name}`), h("span", { class: "chip" }, `v${run.version} · ${run.scope}`),
       h("span", { class: `tag ${stateClass(run.state === "waits on you" ? "failed" : run.state)}` }, run.state),
-      h("span", { class: "meta" }, `${usd(run.cost_usd)} · ${when(run.updated_at)}`)),
+      h("span", { class: "meta" }, `${usd(run.cost_usd)}${run.points ? ` · ${run.points} points` : ""} · ${when(run.updated_at)}`)),
     goal ? h("div", { class: "text" }, short(goal, 300)) : null,
     h("div", { class: "progress", title: `${done} of ${total} steps passed` },
       bar, h("em", {}, `${done}/${total}`)),

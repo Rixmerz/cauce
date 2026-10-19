@@ -24,6 +24,7 @@ remembers what failed — across every repository on the machine.
 | **Chains work** | Workflows cut where context changes hands: build with its tests → blind review → refute → fix → recheck, advanced by the engine, each step on the commit the one before kept. Reviewers never vote: a refuter decides what only one saw. |
 | **Learns how you work** | `/cauce:init` sends cauce's own read-only workers through every project and plugin on your machine, in parallel, and builds your team, your workflows and your memory from what they find. |
 | **Measures itself** | Every run's phases are timed (queued, planning, setting up, working, checking, verifying); `cauce stats` and the UI's Analysis screen show pass rates, time and cost per pass by kind and cell, and whether the session's thread in a brief changes how runs go. |
+| **Calibrates itself** | Every task gets points on the Fibonacci scale when it is planned and is measured when it ends; each repository's kinds and sizes keep a standard (where they start, how many turns) that moves by two stated rules, one step at a time, each change judged and reverted when it made things worse. `cauce evolution` and the UI's Evolution screen say how cauce changed and why. No model takes any of these decisions. |
 | **Shows it all** | `cauce ui`: the board, every task's ladder and moves, workflow graphs, a mind map of what each project knows, routing evidence, analysis, spend. |
 
 <p>
@@ -358,6 +359,30 @@ guessed. The UI's **Analysis** screen shows the same, for one project or every
 one, with an export of all of it as JSON.
 
 <p><img alt="Analysis: pass rates, median run and cost per pass, where the time of the runs went by phase, and each kind's first-try rate, time and cost" src="docs/images/analysis.png"></p>
+
+### How cauce calibrates itself
+
+The model is the one MECHA uses for people (standard hours per ticket type, the
+real hours, and a calibration that moves the standards), here for workers.
+Every task is scored when it is planned, on the scale people give tickets (1,
+2, 3, 5, 8, 13), from its criteria, kind, risk, the files it names, what
+livespec says it reaches and its length; when it ends, the size it turned out
+to be is read from git and its attempts. For each repository, kind and points
+band, cauce keeps a standard: the cell and the turns its tasks start with, and
+how often each cell passed its first try, what a point cost and how long it
+took. After every few endings in a repository a calibration moves a standard
+by two rules only, one step at a time: the start cell is the cheapest rung that
+passes first at least 70% of at least five tries, and the start turns go toward
+what three passes in four needed. Every change is recorded with its evidence,
+judged after five tasks ran under it, and reverted when it made the first try
+pass less often. Money moves nothing; `--start` and `--max-turns` always win.
+
+```bash
+cauce evolution                  # every repository, last 30 days
+cauce evolution --repo . --days 7
+cauce evolution --json           # the same, as data
+cauce evolution --snapshot       # take today's snapshot now
+```
 
 ### Fixes that stop working
 

@@ -10,18 +10,19 @@ import { renderWorkflows } from "./workflows.js";
 import { renderMap } from "./map.js";
 import { renderTeams } from "./teams.js";
 import { renderAnalysis } from "./analysis.js";
+import { renderEvolution } from "./evolution.js";
 import { openTask } from "./task.js";
 import { h, repoName } from "./util.js";
 
 const views = { board: renderBoard, sessions: renderSessions, spend: renderSpend, routing: renderRouting,
                 notes: renderNotes, memory: renderMemory, habits: renderHabits, workflows: renderWorkflows,
-                map: renderMap, teams: renderTeams, analysis: renderAnalysis };
+                map: renderMap, teams: renderTeams, analysis: renderAnalysis, evolution: renderEvolution };
 // The board, the sessions, the notes, the workflows and the map are always one project's:
 // never every card at once.
 const scoped = new Set(["board", "sessions", "notes", "workflows", "map"]);
-// The analysis reads one project or every one: the picker chooses which, but it
-// is not redrawn on every event (it reads every run of the period).
-const pickable = new Set([...scoped, "analysis"]);
+// The analysis and the evolution read one project or every one: the picker chooses which,
+// but they are not redrawn on every event (they read every run of the period).
+const pickable = new Set([...scoped, "analysis", "evolution"]);
 const main = document.getElementById("view");
 const picker = document.getElementById("project");
 let current = "board";

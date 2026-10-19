@@ -19,6 +19,47 @@
 
 ### Added
 
+- **Every task has points.** When a task is planned, a pure function scores
+  it on the Fibonacci scale (1, 2, 3, 5, 8, 13) from what the plan already
+  knows: its criteria, its kind, its risk tier and the areas that raised it,
+  the files and surfaces it names, the symbols livespec says it reaches when
+  the index is readable, and its length, the weakest signal. The score and its
+  reasons ("5: 4 criteria, touches schema, risk high") are kept on the task and
+  its `planned` event and shown on the board, the task's page, `cauce show`,
+  `cauce tasks` and `cauce route`. When it ends, the size it turned out to be,
+  on the same scale, is read from git and its attempts (files and lines
+  changed, turns, wall time, attempts) and kept on its `finished` event. A
+  workflow run's points are its steps', each part of a step run in parts
+  counted.
+- **Standards, calibrated from what was measured.** For each repository, kind
+  and points band cauce keeps a standard: the start cell, the start turns, and
+  what the last 20 finished tasks of the band measured (how often each cell
+  passed its first try, cost and time per point). After every 5 endings in a
+  repository, from the hooks or the dispatcher and never from a page, a
+  calibration applies two rules: the start cell is the cheapest rung of the
+  ladder whose first tries pass at least 70% over at least 5 (one rung per
+  calibration, never below the ladder, never a cell that needs an approval),
+  and the start turns move toward the 75th percentile of what passes needed
+  (10 turns per calibration, at most 200). Money moves none of it. `--start`
+  and `--max-turns` always win, and the plan says which standard it used and
+  why.
+- **Every change is recorded and judged.** A change is appended with its
+  repository, kind, band, field, before and after, the rule that fired, its
+  evidence and cauce's version. After 5 tasks under it, the window before and
+  after are compared (pass-first, attempts, time and cost per point), the
+  verdict is recorded, and a change that made pass-first worse by more than 20
+  percentage points is reverted, one step back, as a change of its own. The store refuses
+  an edit or a deletion of any of these records.
+- **`cauce evolution`.** A snapshot a day (at the first ending of a new day in
+  your time zone, or `cauce evolution --snapshot`) per repository and kind:
+  tasks and points done, velocity in points per hour, cost and time per point,
+  pass-first and climb rates, points estimated against realized, and cauce's
+  version. `cauce evolution [--days 30] [--repo DIR] [--json]` prints each
+  metric's trend and every calibration change with its reason and verdict in
+  plain sentences ("feature in mecha, 5 points: starts at opus/high since Oct
+  20 because 2 of 8 passed first at sonnet/xhigh and 4 of 5 at opus/high;
+  pass-first since then 80 %, kept"). The UI gets an **Evolution** screen that
+  reads the same, for one project or every one.
 - **A workflow step can run in parts.** A step with `"fanout": "<plan step>"`
   runs one task per part of that plan, side by side as the dispatcher allows:
   a read-only `plan` step is asked for `parts` (2 to 6, or 1 when splitting

@@ -434,6 +434,17 @@ class _Process:
 Start = Callable[[dict, Path], Handle]
 
 
+def _settle(store: Store) -> None:
+    """What ended settles the standards and the evolution history (`cauce.evolution`).
+    Its failure is an event on task 0 and never stops the queue."""
+    from cauce import evolution
+
+    try:
+        evolution.settle(store)
+    except Exception as exc:  # the dispatcher goes on; the error is kept, never silent
+        store.add_event(0, "evolution_error", error=f"{type(exc).__name__}: {exc}"[:300])
+
+
 def work(
     store: Store,
     *,
@@ -474,11 +485,15 @@ def work(
     report, out, started, wanting, waits = WorkReport(), [], 0, False, False
     sweep(store)
     while True:
+        ended = False
         for handle in list(out):
             status = handle.poll()
             if status is not None:
                 out.remove(handle)
                 report.ran.append(Ran(handle.task_id, status))
+                ended = True
+        if ended:
+            _settle(store)
         launched: list[tuple[dict, Path]] = []
         if started < max_tasks:
             with capacity.held(home()):

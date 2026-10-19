@@ -110,6 +110,10 @@ def _step_line(step: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
+def _points(run: dict[str, Any]) -> str:
+    return f" · {run['points']} points" if run.get("points") else ""
+
+
 def _run_line(run: dict[str, Any]) -> str:
     """One run on one line: the step it is at, its attempt, its last commit, its files."""
     steps = run["steps"]
@@ -117,7 +121,7 @@ def _run_line(run: dict[str, Any]) -> str:
         (s for s in steps if s["state"] in ("running", "queued")), None) or next(
         (s for s in steps if s["state"] not in ("done", "pending")), None) or next(
         (s for s in reversed(steps) if s["state"] == "done"), steps[-1] if steps else None)
-    head = f"#{run['id']} {run['name']} — {run['state']} · ${run['cost_usd']:.2f}"
+    head = f"#{run['id']} {run['name']} — {run['state']} · ${run['cost_usd']:.2f}" + _points(run)
     if at is None:
         return head
     n = steps.index(at) + 1
@@ -129,7 +133,7 @@ def _run_line(run: dict[str, Any]) -> str:
 
 
 def _print_run(run: dict[str, Any], *, full: bool = False) -> None:
-    print(f"run #{run['id']} {run['name']} — {run['state']} · ${run['cost_usd']:.2f} · {run['cwd']}")
+    print(f"run #{run['id']} {run['name']} — {run['state']} · ${run['cost_usd']:.2f}{_points(run)} · {run['cwd']}")
     for name, value in run["inputs"].items():
         # An input is often a whole brief: one line of it, unless asked for in full.
         print(f"  {name}: {value if full else _clip(value)}")
