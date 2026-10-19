@@ -176,7 +176,7 @@ def _queue_after(args: argparse.Namespace, options: orchestrate.Options) -> int:
     store = Store.open()
     try:
         try:
-            held = after.target(store, task_id=args.after)
+            held = after.target_of(store, args.after)
         except after.AfterError as exc:
             print(f"cauce: not queued: {exc}", file=sys.stderr)
             return 2
@@ -187,6 +187,8 @@ def _queue_after(args: argparse.Namespace, options: orchestrate.Options) -> int:
         task = _enqueue_after(store, _text(args.text), where, stored)
         then = dispatch.kick(where, repo.key(where), os.environ)
         said = _held_line(store, task["id"])
+        if note := after.caveat(store, held, task["repo"]):
+            said += f" ({note})"
     finally:
         store.close()
     print(f"queued #{task['id']} — {task['title']}: {said}. {then}")
@@ -1046,13 +1048,15 @@ def cmd_queue(args: argparse.Namespace) -> int:
                                          "services": args.service or None}.items() if v is not None}
             if args.after is not None:
                 try:
-                    options[after.KEY] = after.target(store, task_id=args.after)
+                    options[after.KEY] = after.target_of(store, args.after)
                 except after.AfterError as exc:
                     print(f"cauce: not queued: {exc}", file=sys.stderr)
                     return 2
             task = _enqueue_after(store, _text(args.text), where, options)
             then = dispatch.kick(where, repo.key(where), os.environ)
             said = _held_line(store, task["id"]) if args.after is not None else None
+            if said and (note := after.caveat(store, options[after.KEY], task["repo"])):
+                said += f" ({note})"
             if args.json:
                 print(json.dumps({**{k: task[k] for k in ("id", "title", "status", "repo", "cwd")}, "then": then,
                                   **({"waits": said} if said else {})}, ensure_ascii=False))
@@ -1787,8 +1791,15 @@ def cmd_hook(args: argparse.Namespace) -> int:
 ALLOW_HELP = ("a permission rule the workers get, e.g. 'Bash(npm run build:*)' or 'Bash(node:*)', and "
               "'Read(//abs/path)' with two slashes for an absolute path; repeatable. A one-shot worker is "
               "refused whatever its settings do not allow; a blocked task's report prints the rules it needs")
-AFTER_HELP = ("queue it held until task TASK passes, then start it on the branch that task kept (on the base "
-              "when that branch is merged); nothing is merged or rebased")
+AFTER_HELP = ("queue it held until task N (or task:N) or workflow run run:N passes, then start it on the branch "
+              "that work kept (on the base when that branch is merged); nothing is merged or rebased")
+
+
+def _after_ref(value: str) -> dict[str, int]:
+    try:
+        return after.ref(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1831,7 +1842,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("run", help="run a task: classify, attempt, escalate, remember")
     run_args(p)
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--after", type=int, metavar="TASK", help=AFTER_HELP)
+    p.add_argument("--after", type=_after_ref, metavar="N", help=AFTER_HELP)
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("resume", help="run a task that stopped again: from its kept work and the cell it stopped at")
@@ -1893,7 +1904,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="a directory beside the work the workers may use (repeatable)")
     p.add_argument("--service", action="append", metavar="CMD@PORT", type=_service,
                    help="a server the task needs up, started before the work and stopped after (repeatable)")
-    p.add_argument("--after", type=int, metavar="TASK", help=AFTER_HELP)
+    p.add_argument("--after", type=_after_ref, metavar="N", help=AFTER_HELP)
     p.add_argument("--json", action="store_true", help="print the queued task as JSON")
     p.set_defaults(func=cmd_queue)
     p = qsub.add_parser("list", help="what is waiting (this repository; --all for every one)")

@@ -7,7 +7,7 @@ import pytest
 from cauce import cli, flow, project, workflows
 from cauce.escalate import Failure
 from cauce.launch import WorkerResult
-from cauce.orchestrate import run
+from cauce.orchestrate import Options, run
 from cauce.store import Store
 
 from .test_orchestrate import bad, kind, ok
@@ -194,6 +194,32 @@ def test_a_run_says_its_first_steps_warnings_and_an_ending_repeats_them(git_repo
     assert see["id"] in ids and edit["id"] not in ids
     ending = text[text.index(f"#{see['id']} [done]"):]
     assert ending.splitlines()[1].startswith("  it ran with a warning: this task needs a browser and workers have none")
+
+
+def test_a_run_s_add_dir_reaches_every_step_and_a_retry(git_repo, store: Store, kicks, monkeypatch, tmp_path):
+    monkeypatch.chdir(git_repo)
+    beside = tmp_path / "library"
+    beside.mkdir()
+    _save({"name": "two", "steps": [
+        {"id": "a", "prompt": "Copy the library", "kind": "implement"},
+        {"id": "b", "prompt": "Adapt it", "kind": "implement", "needs": ["a"]}]}, git_repo)
+    assert cli.main(["workflow", "run", "two", "--add-dir", str(beside)]) == 0
+    run_id = store.list_runs()[0]["id"]
+    assert json.loads(store.get_run(run_id)["options"])["add_dirs"] == [str(beside.resolve())]
+    flow.work(store, runner=_runner([ok(), bad(Failure.SPEC_BUG, "x")], []))
+    first, second = store.run_tasks(run_id)
+    for task in (first, second):
+        assert flow.queued_options(task, Options()).add_dirs == (str(beside.resolve()),)
+    again = workflows.retry(store, run_id, "b")
+    assert json.loads(again["options"])["add_dirs"] == [str(beside.resolve())]
+    # The try it replaces offers nothing to resume, and no session hears of it as an ending.
+    from cauce import stops
+
+    old = store.get_task(second["id"])
+    stop = stops.of(store, old)
+    assert old["status"] == "dismissed" and stop.cause == "superseded" and stop.extra["by_task"] == again["id"]
+    assert stops.next_step(old["id"], stop) is None and f"queued again as #{again['id']}" in stops.what_to_do(stop)
+    assert store.last_event(old["id"], "reported")["data"]["via"] == "retried"
 
 
 def test_a_plan_that_cannot_be_foreseen_never_undoes_the_start_of_a_run(git_repo, store: Store, kicks, capsys,
@@ -599,6 +625,40 @@ def test_the_bundled_feature_builds_with_its_tests_and_a_clean_review_ends_it(gi
     assert workflows.load("bugfix", git_repo, "bundled")["steps"][0]["kind"] == "debug-repro"
     # review-fix reads code with no change under review: its findings are not excused as pre-existing.
     assert "so `unknown`" in workflows.load("review-fix", git_repo, "bundled")["steps"][0]["prompt"]
+
+
+def test_a_confirmed_row_the_fix_only_wrote_down_stays_open_and_goes_to_the_person(git_repo, store: Store, kicks):
+    found = ({"where": "src/chart.py:3", "what": "the animation has no safety timeout",
+              "evidence_class": "deterministic", "cause": "introduced", "proof": "grep -n setTimeout src/chart.py"},)
+    fixed = WorkerResult(True, None, "documented it as known debt", "wrote it down",
+                         verdicts=({"id": "F1", "verdict": "fixed", "proof": "the note is in CLAUDE.md"},))
+    results = [ok("built"), WorkerResult(True, None, "one problem", "read it", findings=found),
+               ok("wrote it down"), fixed, ok("wrote it down again"), fixed]
+    seen: list[str] = []
+
+    def launch(spec):
+        seen.append(spec.prompt)
+        if "Edit" not in spec.disallowed_tools:
+            fixing = "Ledger (fix" in spec.prompt
+            target = spec.target_dir / ("CLAUDE.md" if fixing else "src/chart.py")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(target.read_text() + "known debt: F1\n" if fixing and target.exists() else "x = 1\n")
+        return results.pop(0)
+
+    def runner(text, where, store, options, **kw):
+        return run(text, where, store, options, registry={}, launcher=launch, classifier=kind("implement"),
+                   adapters=[], **kw)
+
+    started = workflows.start(store, "feature", git_repo, {"goal": "the chart"})
+    flow.work(store, runner=runner)
+    fix_brief = next(p for p in seen if "Ledger (fix" in p)
+    assert "writing it down" in fix_brief and "never edit those files unless the row is about them" in fix_brief
+    rechecks = [t for t in store.run_tasks(started["id"]) if t["workflow_step"] == "recheck"]
+    assert json.loads(rechecks[0]["options"])["ledger"]["noted_only"] == ["F1"]
+    # The re-check called it fixed twice; the fix only wrote it down, so it is still open: the person decides.
+    assert [store.last_event(t["id"], "ledger_decided")["data"]["survivors"] for t in rechecks] == [["F1"], ["F1"]]
+    assert store.get_task(rechecks[-1]["id"])["status"] == "blocked"
+    assert workflows.status(store, started["id"])["state"] != "done"
 
 
 def test_a_run_says_what_it_takes_before_the_first_try(git_repo, store: Store, kicks, capsys, monkeypatch):

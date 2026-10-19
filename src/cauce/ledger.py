@@ -91,11 +91,29 @@ def _refute(reviewers: int) -> str:
 
 _ASK = {
     "fix": ("Fix exactly the rows below, and nothing else: no other change, no new finding, no row rewritten. "
-            "Run the project's tests before you stop. A row you cannot fix, say which and why in `summary`."),
-    "recheck": ("Check, read-only, whether the fix resolved each row below: `fixed` (you can show it), "
-                "`not_fixed`, or `regression` (the fix broke something at or around it). Answer for these rows "
-                "only and add no finding."),
+            "Run the project's tests before you stop. A row is fixed in the code it is about: writing it down "
+            "(a note, a known-debt entry, a line in CLAUDE.md, AGENTS.md or another instruction file) fixes "
+            "nothing, so never edit those files unless the row is about them. A row you cannot fix, or judge "
+            "not worth fixing, leave as it is and say which and why in `summary`: the person decides it."),
+    "recheck": ("Check, read-only, whether the fix resolved each row below: `fixed` (you can show it in the "
+                "fix's diff, in the code the row is about), `not_fixed`, or `regression` (the fix broke "
+                "something at or around it). A row the fix only wrote down (a note, a known-debt entry, a line "
+                "in an instruction file) is `not_fixed`. Answer for these rows only and add no finding."),
 }
+
+#: Files a row is written down in rather than fixed: documentation and the instructions a repository keeps.
+_NOTES = (".md", ".mdx", ".rst", ".adoc")
+_INSTRUCTIONS = frozenset({".cursorrules", ".clinerules", ".windsurfrules"})
+
+
+def written_down(path: str) -> bool:
+    """A file a row can be written down in: documentation or a repository's instructions."""
+    name = path.rsplit("/", 1)[-1].lower()
+    return name.endswith(_NOTES) or name in _INSTRUCTIONS
+
+
+def about_notes(row_where: str) -> bool:
+    return written_down(row_where.split(":", 1)[0].strip())
 
 
 def brief(role: str, rows: Sequence[Mapping[str, Any]], *, round_: int, sha: str, diff: str = "",
@@ -161,7 +179,10 @@ def outcome(spec: Mapping[str, Any], verdicts: Sequence[Mapping[str, str]]) -> O
             out.stop = f"the refuter could not decide {', '.join(out.held)}: read them and fix or dismiss"
         return out
     out.held = held
-    out.survivors = [i for i in ids if said.get(i) != "fixed"]
+    # A fix whose diff only wrote things down fixed no row but the ones about those files,
+    # whatever the re-check says: a confirmed row ends fixed in code, refuted, or with the person.
+    noted = set(spec.get("noted_only") or ())
+    out.survivors = [i for i in ids if said.get(i) != "fixed" or i in noted]
     if out.survivors and round_ >= ROUNDS:
         out.stop = f"{', '.join(out.survivors)} still open after {ROUNDS} fix rounds"
     elif not out.survivors and held:

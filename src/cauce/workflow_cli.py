@@ -331,7 +331,10 @@ def _run(args: argparse.Namespace) -> int:
     where = _cwd(args)
     inputs = _inputs(args, where)
     options = {k: v for k, v in {"allow_tools": args.allow, "allow_approval": args.allow_approval or None,
-                                 "verify": args.verify}.items() if v is not None}
+                                 "verify": args.verify,
+                                 # A directory beside the work every step's workers may read, kept on the run.
+                                 "add_dirs": [str(Path(d).expanduser().resolve()) for d in args.add_dir]
+                                 if getattr(args, "add_dir", None) else None}.items() if v is not None}
     store = Store.open()
     try:
         if args.dry_run:
@@ -525,6 +528,9 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--verify", metavar="CMD", help="the check for every step that writes and names none of its own")
     p.add_argument("--allow", action="append", metavar="RULE", help="a permission rule every step's workers get")
     p.add_argument("--allow-approval", action="store_true", help="steps may reach cells that need approval (Fable)")
+    p.add_argument("--add-dir", action="append", default=[], metavar="DIR",
+                   help="a directory beside the work every step's workers may use, such as a sibling repository "
+                        "(repeatable)")
     p.add_argument("--dry-run", action="store_true", help="check the inputs and the memory, show the steps; queue "
                                                           "nothing")
     p.add_argument("--after", type=int, metavar="RUN",

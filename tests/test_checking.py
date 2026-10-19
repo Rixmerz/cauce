@@ -175,6 +175,29 @@ def test_checkout_in_a_shop_s_sense_is_money(text):
     assert "money" in _areas(text)
 
 
+@pytest.mark.parametrize(("text", "area"), [
+    ("Migrate the SVG charts away from ECharts, one component at a time", "data"),
+    ("Colors only through the design token for ink, never a hex in a component", "security"),
+    ("A read-only checkout of the library is at ../lib: copy from it", "money"),
+    ("Never truncate the month labels on the axis with an ellipsis", "data"),
+    ("CI sets MECHA_TEST_TRUNCATE=1 for the Postgres job; fix the flaky chart test", "data"),
+    ("Keep src/db/migrations/README.md as it is and fix the header", "data"),
+])
+def test_a_word_in_another_sense_raises_no_area(text, area):
+    assert area not in _areas(text)
+
+
+@pytest.mark.parametrize(("text", "area"), [
+    ("Migrate the users table to the new schema", "data"),
+    ("Migrate the chart data stored in the reports table", "data"),
+    ("Rotate the session token on every login", "security"),
+    ("The API token leaks into the design system's logs", "security"),
+    ("Truncate the audit log table after export", "data"),
+])
+def test_a_word_in_its_own_sense_still_raises_its_area(text, area):
+    assert area in _areas(text)
+
+
 def test_parallel_about_tasks_is_no_concurrency_and_about_code_is():
     assert "concurrency" in _areas("Take S1 and S2; other tasks running in parallel take the other numbers")
     assert "concurrency" in _areas("Two agents work in parallel on this repository: touch only src/ui")
@@ -715,6 +738,12 @@ def test_the_ledger_adds_reviews_together_and_sends_only_one_sided_readings_to_a
     clean = ledger.outcome({"role": "recheck", "round": 1, "ids": ["F1"], "held": ["F3"]},
                            [{"id": "F1", "verdict": "fixed"}])
     assert not clean.survivors and "could not decide F3" in clean.stop
+    # A fix that only wrote things down fixed no row about code, whatever the re-check says.
+    noted = ledger.outcome({"role": "recheck", "round": 1, "ids": ["F1", "F2"], "noted_only": ["F1"]},
+                           [{"id": "F1", "verdict": "fixed"}, {"id": "F2", "verdict": "fixed"}])
+    assert noted.survivors == ["F1"]
+    assert ledger.written_down("CLAUDE.md") and ledger.written_down("docs/AGENTS.md")
+    assert not ledger.written_down("src/chart.tsx") and ledger.about_notes("README.md:12")
     assert ledger.read({"verdicts": [{"id": "f1", "verdict": " Fixed "}, "junk", {"id": 3}]}) == (
         {"id": "F1", "verdict": "fixed", "proof": ""},)
     assert ledger.read({}) == ()

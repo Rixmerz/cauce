@@ -137,11 +137,19 @@ def by_rules(text: str) -> Classification | None:
     tokens = words(text)
     if _DOCS_ONLY.search(folded) and len(tokens) <= 12:
         return Classification("docs", "low", "rule", "a short commit, push or docs request")
-    if _TEST.search(folded):
+    if (found := _TEST.search(folded)) and _tests_lead(folded, found.start()):
         return Classification("test", "medium", "rule", "asks for tests")
     if _QUESTION.search(folded) and folded.rstrip().endswith("?") and len(tokens) <= 25:
         return Classification("chat", "low", "rule", "a short question")
     return None
+
+
+def _tests_lead(folded: str, at: int) -> bool:
+    """Tests are the deliverable only when the request's first change is about them ("write
+    tests for X", "fix the failing tests"): a fix or a feature that asks for its own tests
+    ("Fix the chart labels … add a test for each") is the fix, its tests how it proves itself."""
+    first = _CHANGE.search(folded)
+    return first is None or first.start(1) >= at
 
 
 # --- the model -------------------------------------------------------------
