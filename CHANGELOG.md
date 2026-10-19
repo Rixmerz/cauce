@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-10-19
+
 ### Fixed
 
 - **`compact auto` compacts in a headless session too.** The engine has no
