@@ -874,3 +874,13 @@ def test_a_problem_in_work_that_ran_out_of_turns_gets_more_turns_not_a_stronger_
 def test_a_spanish_event_name_among_others_is_no_money():
     assert "money" not in _areas("Eventos de bloqueo: `aprobación_cliente`, `pago`, `acceso`")
     assert "money" in _areas("Corrige el pago duplicado del anticipo")
+
+
+def test_a_workflow_step_s_kept_commit_is_named_by_its_goal_not_the_step_title():
+    """Run #19's build ran out of turns with no `commit` line, and its kept commit was titled
+    "[feature#19 build] Build it, with its tests": the step's title, with the run's tag."""
+    step = {"title": "[feature#19 build] Build it, with its tests",
+            "body": "Build this feature: Make workflows faster by running parts in parallel\n\nRead the code."}
+    assert orchestrate.commit_title(step) == "Make workflows faster by running parts in parallel"
+    assert orchestrate.commit_title({"title": "[bugfix#3 fix] Fix it", "body": ""}) == "Fix it"
+    assert orchestrate.commit_title({"title": "Add a flag to the importer"}) == "Add a flag to the importer"

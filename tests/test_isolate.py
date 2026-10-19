@@ -193,3 +193,34 @@ def test_a_resume_after_its_process_died_continues_in_the_worktree_it_left(git_r
     assert again.path == ws.path and again.branch == "cauce/task-15"
     assert (again.path / "half.py").read_text() == "x = 1\n"
     assert again.base == git(git_repo, "rev-parse", "HEAD").strip()
+
+
+def test_a_base_that_took_in_the_branch_s_own_work_under_another_commit_is_not_ahead_of_it(git_repo):
+    """A run started on another run's kept branch; the base then got that run squashed. The
+    base's tree is one the branch already had, so it brings nothing: no commits behind, no
+    file both changed, even where the branch went on changing those files."""
+    from .conftest import git
+
+    base = git(git_repo, "symbolic-ref", "--short", "HEAD")
+    git(git_repo, "checkout", "-q", "-b", "run")
+    (git_repo / "a.txt").write_text("1\n")
+    git(git_repo, "add", "-A")
+    git(git_repo, "commit", "-q", "-m", "the earlier run, unsquashed")
+    first = git(git_repo, "rev-parse", "HEAD")
+    (git_repo / "a.txt").write_text("1\n2\n")
+    (git_repo / "b.txt").write_text("b\n")
+    git(git_repo, "add", "-A")
+    git(git_repo, "commit", "-q", "-m", "this run's own work")
+    git(git_repo, "checkout", "-q", base)
+    git(git_repo, "checkout", "-q", first, "--", "a.txt")
+    git(git_repo, "commit", "-q", "-m", "the earlier run, squashed")
+    found = isolate.behind(git_repo, "run", base)
+    assert found == {"base": base, "commits": 0, "both": []}
+    assert isolate.behind_text(found) is None
+
+    # What the base gains after that is behind again, measured from where they last agreed.
+    (git_repo / "a.txt").write_text("1\nlater\n")
+    (git_repo / "c.txt").write_text("c\n")
+    git(git_repo, "add", "-A")
+    git(git_repo, "commit", "-q", "-m", "someone else's change")
+    assert isolate.behind(git_repo, "run", base) == {"base": base, "commits": 1, "both": ["a.txt"]}

@@ -482,12 +482,32 @@ def behind(repo_dir: Path, tip: str, base: str) -> dict[str, Any] | None:
     rebased. None when git cannot say (the branch is gone, no commit in common)."""
     now = _git(repo_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{base}^{{commit}}", check=False)
     fork = _git(repo_dir, "merge-base", tip, now, check=False) if now else ""
-    count = _git(repo_dir, "rev-list", "--count", f"{fork}..{now}", check=False) if fork else ""
+    if not fork:
+        return None
+    ours_from, theirs_from = _synced(repo_dir, fork, tip, now)
+    count = _git(repo_dir, "rev-list", "--count", f"{theirs_from}..{now}", check=False)
     if not count.isdigit():
         return None
-    ours = set(_git(repo_dir, "diff", "--name-only", fork, tip, "--", check=False).splitlines())
-    theirs = set(_git(repo_dir, "diff", "--name-only", fork, now, "--", check=False).splitlines())
+    ours = set(_git(repo_dir, "diff", "--name-only", ours_from, tip, "--", check=False).splitlines())
+    theirs = set(_git(repo_dir, "diff", "--name-only", theirs_from, now, "--", check=False).splitlines())
     return {"base": base, "commits": int(count), "both": sorted(ours & theirs)}
+
+
+def _synced(repo_dir: Path, fork: str, tip: str, now: str) -> tuple[str, str]:
+    """Where the branch and the base last held the same content: the newest commit of the
+    base since the fork whose tree is the tree of a commit on the branch (a squash or a
+    re-commit of work the branch already has), and that commit of the branch. The fork
+    itself when there is none: commits are not content, so a base that took in the
+    branch's own work under another commit is not ahead of it."""
+    on_tip = {}
+    for line in _git(repo_dir, "log", "--format=%H %T", f"{fork}..{tip}", check=False).splitlines():
+        sha, _, tree = line.partition(" ")
+        on_tip.setdefault(tree, sha)
+    for line in _git(repo_dir, "log", "--format=%H %T", f"{fork}..{now}", check=False).splitlines():
+        sha, _, tree = line.partition(" ")
+        if tree in on_tip:
+            return on_tip[tree], sha
+    return fork, fork
 
 
 def behind_text(found: Mapping[str, Any]) -> str | None:

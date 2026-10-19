@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A base that took in a branch's own work under another commit is not
+  ahead of it.** A run started on another run's kept branch said "behind by 1
+  commit; both changed: 33 files" once that run was squashed into the base.
+  `isolate.behind` now measures from where the branch and the base last held
+  the same tree, so a squash or a re-commit of work the branch already has
+  brings nothing, and what the base gains after it is still counted.
+- **A workflow step's kept commit is named by its goal.** A build that ran out
+  of turns with no `commit` line kept "[feature#19 build] Build it, with its
+  tests": the step's title and the run's tag. The fallback for a step is now
+  the first line of its goal, without the step's lead-in.
+
 ### Added
 
 - **A workflow step can run in parts.** A step with `"fanout": "<plan step>"`

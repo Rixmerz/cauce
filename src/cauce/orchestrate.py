@@ -1022,7 +1022,7 @@ def run(
             outgrew = report.stop is not None and report.stop.cause == "turns"
             report.branch = isolate.finish(
                 workspace, keep=report.status in KEEPS_WORK or outgrew,
-                message=isolate.message(task["id"], title=task["title"], subject=subject,
+                message=isolate.message(task["id"], title=commit_title(task), subject=subject,
                                         summary=attempts[-1].summary if attempts else "",
                                         status="done" if report.status == "done" else report.status),
             )
@@ -1085,6 +1085,22 @@ def run(
             store.add_event(task["id"], "workflow_error", error=str(exc)[:300])
             say(f"cauce: #{task['id']} could not start the work that waits on it: {exc}")
     return report
+
+
+_STEP_TAG = re.compile(r"^\[[\w.-]+#\d+ [\w.-]+\]\s*")
+_LEAD = re.compile(r"^[A-Z][^:\n]{0,40}:\s+")
+
+
+def commit_title(task: Mapping[str, Any]) -> str:
+    """The fallback subject of a kept commit when the worker proposed none: the task's
+    title, except for a workflow step, whose title is the step's ("[feature#19 build]
+    Build it, with its tests"): its change is its goal, the first line of its text
+    without the step's lead-in ("Build this feature: ")."""
+    title = str(task.get("title") or "")
+    if not _STEP_TAG.match(title):
+        return title
+    first = next((line.strip() for line in str(task.get("body") or "").splitlines() if line.strip()), "")
+    return _LEAD.sub("", first) or _STEP_TAG.sub("", title)
 
 
 def _join_message(task_id: int, options: Options) -> Callable[[str], str]:
