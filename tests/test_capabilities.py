@@ -42,3 +42,33 @@ def test_absent_registry_is_empty_and_bad_ones_are_named(tmp_path):
     (tmp_path / "capabilities.json").write_text("{nope")
     with pytest.raises(caps.RegistryError):
         caps.load(tmp_path / "capabilities.json")
+
+
+def test_a_capability_follows_what_the_work_touches(tmp_path):
+    registry = caps.load(write(tmp_path, {
+        "measure": {"server": {"command": "m"}, "when": [], "touches": "ui", "measures": True, "hint": "measure it"},
+        "drive": {"server": {"command": "d"}, "when": [], "touches": ["e2e/**"], "hint": "drive it"},
+    }))
+    assert registry["measure"].touches == caps.UI_FILES and registry["measure"].measures
+    # Nothing touched: kind alone decides, and neither belongs to a feature.
+    assert caps.select(registry, "feature").names == ()
+    # A build that touches rendered UI gets what measures it, from the first attempt, and says why.
+    built = caps.select(registry, "feature", paths=["lib/x.ts", "components/Chart.tsx"])
+    assert built.names == ("measure",) and "given because this work touches components/Chart.tsx" in built.hints[0]
+    # Reading work (a review, a re-check) gets only what measures; writing work gets both.
+    assert caps.select(registry, "review-routine", paths=["styles/app.css", "e2e/home.spec.ts"],
+                       reading=True).names == ("measure",)
+    assert caps.select(registry, "implement", paths=["styles/app.css", "e2e/home.spec.ts"]).names == (
+        "measure", "drive")
+    assert caps.measuring(registry) == {"measure": registry["measure"]}
+    with pytest.raises(caps.RegistryError, match="touches"):
+        caps.load(write(tmp_path, {"x": {"server": {}, "touches": "everything"}}))
+
+
+@pytest.mark.parametrize(("path", "ui"), [
+    ("components/charts/Bar.tsx", True), ("src/islands/Kpi.tsx", True), ("assets/styles.css", True),
+    ("web/routes/app/index.tsx", True), ("x/pages/a.ts", True), ("lib/server/db.ts", False),
+    ("README.md", False), ("tests/db_test.py", False),
+])
+def test_rendered_ui_is_read_from_folders_and_file_types(path, ui):
+    assert caps.matches(path, caps.UI_FILES) is ui

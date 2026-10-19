@@ -882,6 +882,21 @@ def test_the_check_keeps_only_the_neighbours_that_measure(git_repo, store, verif
     assert "layout-inspector: measure the rendered page" in verifier.append_system_prompt
 
 
+def test_the_check_of_a_change_to_rendered_ui_measures_it_even_when_the_work_did_not(git_repo, store, verifier_on):
+    from cauce import capabilities as caps
+
+    registry = {"measure": caps.Capability("measure", {"command": "m"}, when=(), hint="measure the page",
+                                           touches=("*.tsx",), measures=True)}
+    script = Script(passing(), check("pass"), write="app.py")
+    run("fix the cart total", git_repo, store, registry=registry, launcher=script, classifier=kind("implement"))
+    assert "measure" not in script.specs[1].mcp_servers  # app.py is no rendered UI
+    script = Script(passing(), check("pass"), write="Cart.tsx")
+    run("fix the cart colours", git_repo, store, registry=registry, launcher=script, classifier=kind("implement"))
+    work, verifier = script.specs
+    assert "measure" not in work.mcp_servers and set(verifier.mcp_servers) == {"measure"}
+    assert "mcp__measure" in verifier.allowed_tools and "measure: measure the page" in verifier.append_system_prompt
+
+
 def test_a_problem_in_work_that_ran_out_of_turns_gets_more_turns_not_a_stronger_model(git_repo, store, verifier_on):
     """The palette task: the worker ran out of turns, its check passed in its place, and the
     independent check found a problem. It failed for room: same cell, twice the turns."""

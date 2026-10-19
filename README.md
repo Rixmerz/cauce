@@ -863,13 +863,22 @@ repository, because a server entry is a command that runs on this machine:
     "server": {"command": "layout-inspector", "args": []},
     "when": ["ui"],
     "after_failure": ["implement", "feature"],
+    "touches": "ui",
+    "measures": true,
     "hint": "measure the rendered page instead of judging it by eye"
   }
 }
 ```
 
 `always` is transversal, a list of kinds is per task, `after_failure` is
-reactive: it joins the next attempt once one of those kinds failed.
+reactive: it joins the next attempt once one of those kinds failed. `touches`
+(file patterns, or `"ui"` for rendered UI: `components/`, `islands/`,
+`routes/`, `pages/`, styles and `.tsx`/`.jsx`/`.vue`/`.svelte`/`.html` files)
+brings it to any work that names or changes such a file, whatever its kind:
+a feature that builds components gets it from the first attempt. One marked
+`measures` (read-only) also goes to reading work that touches its files — a
+workflow's review, refuter and re-check of that diff, and the independent
+verifier of the change.
 
 **Installed neighbours need no entry.** Two of livespec's neighbours are found
 where Claude Code keeps plugins (or on PATH) and handed to workers like a
@@ -877,7 +886,7 @@ registry entry, each with its own skill to read first:
 
 | Plugin | When | What the worker does with it |
 |---|---|---|
-| [layout-inspector](https://github.com/Rixmerz/layout-inspector-mcp) | `ui`; after a failed `implement` or `feature` | measures the rendered page instead of judging it by eye, and measures again after the fix |
+| [layout-inspector](https://github.com/Rixmerz/layout-inspector-mcp) | `ui`; any work, review or verifier whose files are rendered UI; after a failed `implement` or `feature` | measures the rendered page instead of judging it by eye, and measures again after the fix |
 | [rastro](https://github.com/Rixmerz/rastro) | `test`; after a failed `ui` | browses the running app with a minimal view and a trace of every effect |
 
 ```bash

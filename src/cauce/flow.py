@@ -184,6 +184,7 @@ def queued_options(task: dict, defaults: Options) -> Options:
         run_verify=raw.get("run_verify") or defaults.run_verify,
         parts=bool(raw.get("parts", defaults.parts)),
         integrate=raw.get("integrate") or defaults.integrate,
+        touches=tuple(raw.get("touches") or defaults.touches),
     )
 
 
