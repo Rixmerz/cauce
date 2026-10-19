@@ -9,7 +9,9 @@
 //   with the notice, and the session tells the person and goes on.
 // - At a good moment to compact (cauce decides it at a turn's end), the `/compact`
 //   line cauce built is shown to the person, or, with `compact auto`, the engine
-//   compacts with its instructions while no turn runs, and a toast says so.
+//   compacts with its instructions while no turn runs (in a headless session,
+//   where the engine has no such call, it runs `/compact` with them), and a
+//   toast says so.
 // - A status entry that counts what waits on the person, runs and is queued,
 //   and `/cauce`, which opens the web board: the one place to look and press
 //   (resume, allow, dismiss, unpause). A terminal copy of it was a poorer one.
@@ -22,7 +24,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { CauceBoard } from '../types'
 import type { CompactionStep, Ran } from './cauce-cli'
-import { compactedToast, DEFAULT_TOPICS, endedToast, json, skippedToast, statusLine, suggestToast } from './cauce-cli'
+import { commandToast, compactedToast, DEFAULT_TOPICS, endedToast, json, skippedToast, statusLine, suggestToast } from './cauce-cli'
 
 const BOARD_URL = 'http://127.0.0.1:8790/'
 const POLL_MS = 15_000
@@ -174,10 +176,20 @@ async function compaction($: EngineInterface): Promise<void> {
       }
       return
     } catch (err) {
-      // A turn started, or the call failed for a reason the mod cannot tell from
-      // a build without it: nothing is learned of the build, and the line is the
-      // person's to paste.
-      await tell(['--rejected', String(err)])
+      // A headless session (an SDK host, the app's cloud sessions) has no
+      // compaction between turns: there `/compact` runs as the person would type
+      // it. The submit stays open, and cauce settles it from the hooks that see
+      // the compaction carry its marker, as it does a submit nobody answered.
+      try {
+        await $.command.run({ command: 'compact', args: step.instructions ?? '' })
+        $.ui.toast(commandToast(step.decision))
+        return
+      } catch (again) {
+        // A turn started, or both calls failed for a reason the mod cannot tell
+        // from a build without them: nothing is learned of the build, and the
+        // line is the person's to paste.
+        await tell(['--rejected', `${String(err)}; /compact: ${String(again)}`])
+      }
     }
   } else if (step.action === 'submit') {
     // A turn started while cauce answered: the line is the person's to paste,

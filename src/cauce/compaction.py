@@ -20,7 +20,9 @@ text that reached the model as a message says itself that it is no request.
 The mod delivers it (`next_step`, the `compact` setting): `suggest` shows the
 person the line, `auto` has the engine compact between turns with the same
 instructions (`$.session.compact`, the call `/compact` makes; a `/` text a mod
-submits is refused by the engine). What it answered is kept (`compacted`); a
+submits is refused by the engine; a headless session, which has no such call,
+gets `/compact` run with them, `$.command.run`, settled from the hooks as a
+submit nobody answered). What it answered is kept (`compacted`); a
 call that failed only shows the line (`delivered`), since a failure says nothing
 of the build. The classic hooks also record each compaction they see (`seen`),
 and `settle` decides from them a submit the mod never reported. The answer is

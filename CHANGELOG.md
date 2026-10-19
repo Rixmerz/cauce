@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-10-19
+
+### Fixed
+
+- **`compact auto` compacts in a headless session too.** The engine has no
+  compaction between turns in an SDK host or the app's cloud sessions, so
+  `$.session.compact` was refused and the person got the toast with the line
+  to paste. The mod now runs `/compact` with cauce's instructions there
+  (`$.command.run`), and cauce settles it from the hooks that see its marker.
+
 ## [0.24.0] - 2026-10-19
 
 ### Added

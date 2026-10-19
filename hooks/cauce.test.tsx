@@ -463,11 +463,38 @@ test('auto: a hook that vetoes it is said, and is no verdict on the build', asyn
   expect(seen.toasts).toEqual(['cauce: the compaction cauce asked for (#7) was skipped: blocked by a PreCompact hook'])
 })
 
+/** `/compact` as the mod runs it where the engine has no compaction between turns. */
+function runsCompact(on: On, answer: () => object) {
+  const asked: string[] = []
+  on('command.run', { command: 'compact' }, ($, e) => {
+    asked.push(e.args)
+    return answer() as never
+  })
+  return asked
+}
+
+test('auto, headless: with no compaction between turns, /compact runs with the instructions and cauce settles it',
+  async ($, on) => {
+    compacts(on, () => { throw new Error('$.session.compact: not available in a headless (-p / SDK) session yet') })
+    const ran = runsCompact(on, () => ({ text: 'Compacted' }))
+    const { seen, clock } = await started($, on, {
+      'compaction next': { exitCode: 0, stdout: SUBMIT },
+      'compaction delivered': { exitCode: 0, stdout: JSON.stringify({ kept: true }) },
+    })
+    await clock.advance(15_000)
+    expect(ran).toEqual([INSTRUCTIONS])
+    expect(seen.prompts).toEqual([])
+    // The submit stays open: the hooks that see its marker settle it.
+    expect(compactionCalls(seen)).toHaveLength(1)
+    expect(seen.toasts).toEqual(["cauce: compacting (#7): `compact auto` ran /compact with cauce's instructions"])
+  })
+
 test('auto: a call that fails is no refusal of the build: the line is shown, and nothing said before it',
   async ($, on) => {
     // A hook that throws is passed over, and the engine's own compaction, with no
     // transcript here, rejects the call: a failure the mod cannot read the build from.
     compacts(on, () => { throw new Error('a turn is running') })
+    runsCompact(on, () => { throw new Error('a turn is running') })
     const { seen, clock } = await started($, on, {
       'compaction next': { exitCode: 0, stdout: SUBMIT },
       'compaction delivered': { exitCode: 0, stdout: JSON.stringify({ kept: true }) },
