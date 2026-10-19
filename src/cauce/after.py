@@ -82,6 +82,39 @@ def target(store: Store, *, task_id: int | None = None, run_id: int | None = Non
     return {"task": int(task_id)}
 
 
+def ref(value: str) -> dict[str, int]:
+    """What `--after` names: `N` or `task:N` a task, `run:N` a workflow run. Raises
+    `ValueError` with what it takes."""
+    kind, _, number = str(value).strip().rpartition(":")
+    kind = kind or "task"
+    if kind not in ("task", "run") or not number.isdigit():
+        raise ValueError(f"--after takes a task number (N or task:N) or a workflow run (run:N), not {value!r}")
+    return {kind: int(number)}
+
+
+def target_of(store: Store, wanted: Mapping[str, int]) -> dict[str, int]:
+    """`target` for what `ref` read."""
+    return target(store, run_id=wanted["run"]) if "run" in wanted else target(store, task_id=wanted["task"])
+
+
+def caveat(store: Store, wanted: Mapping[str, int], key: str | None) -> str | None:
+    """What a person should know about the work they queued after, when it is in another
+    repository than `key`: which one it is, and the run of this repository that has the
+    same number, when one does. None when it is this repository's."""
+    if "run" in wanted:
+        other, what = store.get_run(int(wanted["run"])), f"run #{wanted['run']}"
+    else:
+        other, what = store.get_task(int(wanted["task"])), f"#{wanted['task']}"
+    if other is None or other.get("repo") == key:
+        return None
+    said = f"{what} is {'a run' if 'run' in wanted else 'a task'} in {other.get('repo') or 'no repository'}"
+    if "task" in wanted:
+        mine = store.get_run(int(wanted["task"]))
+        if mine is not None and mine.get("repo") == key:
+            said += f"; run #{wanted['task']} of this repository is `--after run:{wanted['task']}`"
+    return said + ": this starts on this repository's base, and reads what that work kept where it lives"
+
+
 def _work_dropped(store: Store, task: Mapping[str, Any]) -> bool:
     """Its work was dropped, as a run drops it: it failed, it was cancelled, or it was found
     wrong. A replan for turns keeps its work, and resumes."""
@@ -144,15 +177,24 @@ def waiting(store: Store, task: Mapping[str, Any]) -> str | None:
             return f"waits for run #{run_id}, which stopped as cancelled: `cauce dismiss {task['id']}` drops this"
         stopped = next((t for t in _latest(store, run_id).values()
                         if t["status"] not in ("queued", "running", "done")), None)
+        where = f" in {run['repo']}" if run.get("repo") != task.get("repo") else ""
         if stopped is not None:
             t = stopped
-            return (f"waits for run #{run_id}, which stopped at {_at(t, '#')} as "
+            return (f"waits for run #{run_id}{where}, which stopped at {_at(t, '#')} as "
                     f"{_ended(store, t).removeprefix('stopped as ')}: a resume of it to a pass releases this")
-        return f"waits for run #{run_id} to pass"
+        return f"waits for run #{run_id}{where} to pass"
     task_id = int(wanted.get("task") or 0)
     other = store.get_task(task_id)
     if other is None:
         return f"waits for #{task_id}, which no longer exists: `cauce dismiss {task['id']}` drops this"
+    if other.get("repo") != task.get("repo"):
+        # Numbers are global: work in another repository is named with it, and by its title.
+        title = " ".join(str(other.get("title") or "").split())
+        title = title if len(title) <= 80 else title[:79] + "…"
+        named = f"task #{task_id} in {other.get('repo') or 'no repository'} ({title})"
+        if other["status"] in ("queued", "running", "done"):
+            return f"waits for {named} to pass"
+        return f"waits for {named}, which {_ended(store, other)}: a resume of it to a pass releases this"
     if other["status"] in ("queued", "running", "done"):
         return f"waits for #{task_id} to pass"
     return f"waits for #{task_id}, which {_ended(store, other)}: a resume of it to a pass releases this"

@@ -23,6 +23,8 @@ from cauce.classify import SCHEMA, by_model, by_rules, classify
         ("¿dónde está definido el router?", "explore"),
         ("haz commit y push", "docs"),
         ("escribe los tests del parser", "test"),
+        ("fix the failing tests in the parser", "test"),
+        ("Write tests for the parser, then fix what they show", "test"),
         ("¿qué hace este módulo?", "chat"),
         ("arregla esto #ui", "ui"),
         ("mejora el modelo #fable", "frontier"),
@@ -33,6 +35,10 @@ def test_rules_that_fire_are_right(text, kind):
 
 
 def test_rules_stay_silent_when_unsure():
+    # A fix that asks for its own tests is the fix: tests are how it proves itself.
+    assert by_rules("Fix four visible defects in the server-rendered SVG charts. Add a test for each, and "
+                    "extend a browser test") is None
+    assert by_rules("Arregla el eje del gráfico y agrega pruebas") is None
     assert by_rules("el header ya no se ve como antes, hay que dejarlo como en el diseño") is None
     assert classify("algo ambiguo para hacer", use_model=False).kind == "implement"
     assert classify("algo ambiguo para hacer", use_model=False).source == "default"

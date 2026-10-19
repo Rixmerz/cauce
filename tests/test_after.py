@@ -206,6 +206,11 @@ def test_work_in_another_repository_waits_and_starts_on_its_own_base_reading_the
     first = _queue(store, other, "build the shared library")
     second = _queue(store, git_repo, "adapt the library here", after_task=first["id"])
     assert after.held(second)
+    # Numbers are global: what it waits on is named with its repository and its title.
+    assert after.waiting(store, second) == (
+        f"waits for task #{first['id']} in {first['repo']} (build the shared library) to pass")
+    assert "is a task in" in after.caveat(store, {"task": first["id"]}, second["repo"])
+    assert after.caveat(store, {"task": first["id"]}, first["repo"]) is None
     report = _ran(store, first, other, ok("built"), write="shared.py")
     assert report.status == "done"
     freed = store.get_task(second["id"])
@@ -216,6 +221,17 @@ def test_work_in_another_repository_waits_and_starts_on_its_own_base_reading_the
     assert f"passed in another repository, {other.resolve()}, on {report.branch}" in line
     assert f"git -C {other.resolve()} diff HEAD...{report.branch}" in line and "shared.py" in line
     assert flow.queued_options(freed, Options()).add_dirs == (str(other.resolve()),)
+
+
+def test_after_takes_a_task_or_a_run_by_name(git_repo, store, capsys):
+    assert after.ref("5") == {"task": 5} and after.ref("task:5") == {"task": 5} and after.ref("run:5") == {"run": 5}
+    for bad_ref in ("run:x", "step:5", ""):
+        with pytest.raises(ValueError, match="--after takes"):
+            after.ref(bad_ref)
+    with pytest.raises(SystemExit):
+        cli.main(["queue", "add", "x", "--repo", str(git_repo), "--after", "step:5"])
+    assert cli.main(["queue", "add", "x", "--repo", str(git_repo), "--after", "run:99"]) == 2
+    assert "there is no workflow run #99" in capsys.readouterr().err
 
 
 def test_a_task_that_kept_no_branch_releases_onto_the_base(git_repo, store, kicks):

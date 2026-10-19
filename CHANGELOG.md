@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-19
+
+### Fixed
+
+- **A confirmed finding is no longer closed by writing it down** (#58). The
+  fix is told a row is fixed in the code it is about, never by a note or a
+  line in CLAUDE.md / AGENTS.md, and to leave a row it will not fix for the
+  person. When a fix's diff only touches documentation or instruction files,
+  the engine keeps every row not about those files open, whatever the re-check
+  says (`noted_only`), so after its rounds the run stops for the person.
+- **Words in another sense no longer raise the risk tier** (#59): a design
+  `token`, a chart library `migrated`, a label `truncated` or "a read-only
+  checkout" raise nothing unless a word of the area's own sense is near, and a
+  word inside a path or an environment variable's name is never read.
+  "parallel" is still never read away.
+- **A fix that asks for its own tests is a fix** (#60): "asks for tests" fires
+  only when the request's first change is about tests.
+- **A workflow step that was retried offers nothing to resume** (#61): its
+  stopped try is superseded by the retry and never handed to a session.
+- **`--after` names what it waits on** (#62): work in another repository is
+  said with its repository and title, the confirmation warns when the number
+  is a run of this repository, and `--after task:N` / `run:N` say which.
+
+### Added
+
+- **`cauce workflow run --add-dir DIR`** (#63), repeatable, kept on the run:
+  every step and every retry gets it.
+
 ## [0.22.0] - 2026-10-19
 
 ### Fixed

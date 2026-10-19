@@ -11,8 +11,11 @@ lower it. A change that cannot be read (no checkout) is high: not knowing is
 not safe.
 
 A reason must be true, so a word is read in its context: "checkout" in git's
-sense (`git checkout`, "this checkout", a checkout path, a worktree) is no
-money, and "payment" as one name in a list of names (an event, an enum) is no
+sense (`git checkout`, "this checkout", "a read-only checkout", a checkout
+path, a worktree) is no money; a design "token", a chart library "migrated" or
+a label "truncated" is no security and no data, unless a word of the area's own
+sense is near (`_SENSES`); a word inside a path or an environment variable's
+name is no word of the request, and "payment" as one name in a list of names (an event, an enum) is no
 money until the change touches payment code. "Parallel" is never read away: a
 request that only mentions tasks running beside each other is still treated as
 concurrency, since a missed one skips the verifier and an extra one only costs
@@ -81,6 +84,9 @@ def _git_checkout(text: str, found: re.Match[str]) -> bool:
         return True
     if re.match(r"(?:'s)?\s+(?:paths?|dir|directory|folders?|root)\b", after, re.I):
         return True
+    if re.search(r"\b(?:read-only|local|clean|fresh|separate|sibling|second|other)\s+$", before, re.I) \
+            and not _SHOP_NOUN.match(after):
+        return True
     return bool(_DETERMINER.search(before)) and not _BUILD.search(before) and not _SHOP_NOUN.match(after) \
         and not _SHOP.search(text)
 
@@ -95,9 +101,52 @@ def _a_name(text: str, found: re.Match[str]) -> bool:
                for m in _NAMES.finditer(line))
 
 
+#: Words read in another sense when the words around them say so, and none of the
+#: area's own: (area, the word's start, its other sense, its own sense nearby).
+_SENSES = (
+    ("security", "token",
+     re.compile(r"\b(design|css|colou?rs?|themes?|styles?|styling|palettes?|tailwind|typograph\w*|spacing|"
+                r"radius|shadows?|fonts?)\b|--[a-z]", re.I),
+     re.compile(r"\b(auth\w*|sessions?|jwt|bearer|api|api[ -]?keys?|leak\w*|expir\w*|revok\w*|rotat\w*|"
+                r"secrets?|oauth|login|refresh|access|csrf|"
+                r"credentials?|passwords?|sign(?:ed|ing)?)\b", re.I)),
+    ("data", "migrat",
+     re.compile(r"\b(charts?|components?|svg|librar(?:y|ies)|frameworks?|echarts|d3|css|styles?|ui|views?|"
+                r"islands?|react|preact|vue|svelte|widgets?|icons?|pages?|routes?|templates?|apps?)\b", re.I),
+     re.compile(r"\b(databases?|schemas?|tables?|columns?|rows?|records?|sql|backfill\w*|postgres\w*|mysql|"
+                r"sqlite|prisma|alembic|tenants?|users? data|data model)\b", re.I)),
+    ("data", "truncat",
+     re.compile(r"\b(text|labels?|ellipsis|strings?|titles?|names?|characters?|chars|lines?|words?|axis|"
+                r"captions?|overflow)\b", re.I),
+     re.compile(r"\b(tables?|databases?|sql|rows|records|logs?|history|data)\b", re.I)),
+)
+#: How far around a word its sense is read.
+_SENSE_WINDOW = 80
+#: What is never a word of the request's own: a path, an environment variable's name.
+_UNREAD = re.compile(r"(?:~|\.{1,2})?/[\w.\-/]+|\b[\w.-]+(?:/[\w.-]+)+\.\w+\b|\b[\w.-]+(?:/[\w.-]+){2,}"
+                     r"|\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b")
+
+
+def _masked(text: str) -> str:
+    """The text with paths and environment variable names blanked, positions kept: a word
+    inside `MECHA_TEST_TRUNCATE` or `src/migrations/x.ts` is no word of the request."""
+    return _UNREAD.sub(lambda m: " " * len(m.group(0)), text)
+
+
+def _other_sense(area: str, text: str, found: re.Match[str]) -> bool:
+    word = found.group(0).lower()
+    for sense_area, start, other, own in _SENSES:
+        if sense_area == area and word.startswith(start):
+            near = text[max(0, found.start() - _SENSE_WINDOW):found.end() + _SENSE_WINDOW]
+            return bool(other.search(near)) and not own.search(near)
+    return False
+
+
 def _not_meant(area: str, text: str, found: re.Match[str]) -> bool:
     """Whether the word found is used in another sense than the one its area is about."""
     word = found.group(0).lower()
+    if _other_sense(area, text, found):
+        return True
     if area == "money" and word == "checkout":
         return _git_checkout(text, found)
     if area == "money":
@@ -137,8 +186,9 @@ def of_request(text: str, kind: str) -> Risk:
     risk = Risk("passive" if kind in _PASSIVE_KINDS else "medium")
     if kind in _HIGH_KINDS:
         risk.raise_to("high", f"a {kind} task")
+    read = _masked(text)
     for area, pattern in _TEXT:
-        found = next((m for m in pattern.finditer(text) if not _not_meant(area, text, m)), None)
+        found = next((m for m in pattern.finditer(read) if not _not_meant(area, read, m)), None)
         if found and kind not in _PASSIVE_KINDS:
             risk.raise_to("high", f"the request is about {area} ({found.group(0).strip()!r})")
     return risk

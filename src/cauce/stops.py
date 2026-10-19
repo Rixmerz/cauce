@@ -154,6 +154,8 @@ def next_step(task_id: int, stop: Stop, *, resumable: bool = True) -> str | None
     dismissed task resumes as what it was, so one that was replanned does not."""
     if not resumable or stop.cause in ("spec", "ladder", "missing_dir", "converged"):
         return None
+    if stop.cause == "superseded" and stop.extra.get("retry"):
+        return None  # its step was queued again: the retry is the one that goes on
     if (stop.cause in ("dismissed", "superseded") and stop.extra.get("was") == "replan"
             and stop.extra.get("had_cause") != "turns"):
         return None
@@ -170,6 +172,8 @@ def next_step(task_id: int, stop: Stop, *, resumable: bool = True) -> str | None
 
 def what_to_do(stop: Stop) -> str:
     """What a person does before the command, in one sentence."""
+    if stop.cause == "superseded" and stop.extra.get("retry"):
+        return f"nothing: its step was queued again as #{stop.extra.get('by_task')}, which is the one that goes on"
     return {
         "permission": "allow what was refused for this run, or add --keep to keep it for every task here, "
                       "then resume",
@@ -279,6 +283,20 @@ def supersede(store: Any, task: dict[str, Any]) -> list[int]:
         store.release_lane(other.get("repo"), other["id"])
         gone.append(other["id"])
     return gone
+
+
+def retried(store: Any, task: dict[str, Any], again: int) -> None:
+    """A workflow step's try that stopped, once `cauce workflow retry` queued the step
+    again as `again`: it is superseded by that retry, offers nothing to resume, and no
+    session is told of it as an ending (the retry's own ending is the one that counts)."""
+    if task["status"] in ("queued", "running", "done"):
+        return
+    before = of(store, task)
+    record(store, task["id"], Stop("superseded", f"`cauce workflow retry` queued its step again as #{again}",
+                                   by="you", extra={"by_task": again, "retry": True, "was": task["status"],
+                                                    **({"had_cause": before.cause} if before else {})}),
+           result=False)
+    store.add_event(task["id"], "reported", via="retried")
 
 
 def of(store: Any, task: dict[str, Any]) -> Stop | None:

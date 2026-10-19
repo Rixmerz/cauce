@@ -1121,7 +1121,7 @@ def _ledger(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step:
     known = {r["id"]: r for r in rows}
     nearest = {r: next((sid for sid in reversed(earlier) if by_id[sid].get("ledger") == r), None)
                for r in ledger.ROLES}
-    round_, diff, held = 1, "", []
+    round_, diff, held, noted_only = 1, "", [], []
     if role == "refute":
         mine = [r for r in rows if ledger.disputed(r)]
         agreed = [r["id"] for r in rows if not ledger.disputed(r)]
@@ -1147,13 +1147,21 @@ def _ledger(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step:
             start = spec.get("base") or options.get("origin")
             if branch and start and run["cwd"] and Path(run["cwd"]).is_dir():
                 with contextlib.suppress(isolate.IsolationError):
-                    diff = f"git diff {start[:12]} {isolate.head(Path(run['cwd']), branch)[:12]}"
+                    tip = isolate.head(Path(run["cwd"]), branch)
+                    diff = f"git diff {start[:12]} {tip[:12]}"
+                    changed = [path for _, path in isolate.numstat(Path(run["cwd"]), start, tip) or ()]
+                    if changed and all(ledger.written_down(path) for path in changed):
+                        # The fix only wrote things down: no row but one about those files is fixed by it.
+                        noted_only = [r["id"] for r in mine
+                                      if not ledger.about_notes(str(r.get("where") or ""))]
     sha = ledger.digest(mine)
     spec = {"role": role, "round": round_, "ids": [r["id"] for r in mine], "digest": sha, "held": held}
     if role == "refute":
         spec["agreed"] = agreed
     if role == "fix":
         spec["base"] = _base(store, run, defn, step["id"], latest) or options.get("origin")
+    if noted_only:
+        spec["noted_only"] = noted_only
     spec["brief"] = ledger.brief(role, mine, round_=round_, sha=sha, diff=diff,
                                  reviewers=max(1, len(reviewers))) if mine else \
         f"Ledger ({role}): nothing to do."
@@ -1452,6 +1460,8 @@ def cancel(store: Store, run_id: int, *, via: str = "cli") -> list[int]:
 
 def retry(store: Store, run_id: int, step_id: str, kick: Kick | None = None) -> dict:
     """Queue a step again as a new task, after its last try stopped: the run goes on from there."""
+    from cauce import stops
+
     run = store.get_run(run_id)
     if run is None:
         raise WorkflowError(f"no workflow run #{run_id}")
@@ -1469,10 +1479,12 @@ def retry(store: Store, run_id: int, step_id: str, kick: Kick | None = None) -> 
         # A step run in parts: only the parts that did not pass go again; the ones that passed stand.
         stopped = [t for t in last["parts"] if t["status"] not in ("queued", "running", "done")]
         tasks = _fan(store, run, defn, step, inputs, options, latest, only={_part(t)["id"] for t in stopped}) or []
-        for t in stopped:
-            store.release_lane(run["repo"], t["id"])
         if not tasks:
             raise WorkflowError(f"step {step_id!r}: its parts could not be queued again")
+        again = {_part(t)["id"]: t["id"] for t in tasks}
+        for t in stopped:
+            stops.retried(store, t, again.get(_part(t)["id"], tasks[0]["id"]))
+            store.release_lane(run["repo"], t["id"])
         (kick or _kick)(run["cwd"], run["repo"])
         return {**tasks[0], "parts_retried": [(_part(t)["id"], t["id"]) for t in tasks]}
     fanned = _fan(store, run, defn, step, inputs, options, latest)
@@ -1480,7 +1492,8 @@ def retry(store: Store, run_id: int, step_id: str, kick: Kick | None = None) -> 
         raise WorkflowError(f"step {step_id!r}: the plan it fans out over was taken back; retry the plan")
     task = fanned[0] if fanned else _queue_step(store, run, defn, step, inputs, options, latest)
     if last is not None:
-        # The try that stopped paused the lane; a retry is the person saying go on.
+        # The try that stopped is superseded by this one, and paused the lane; a retry is the person saying go on.
+        stops.retried(store, last, task["id"])
         store.release_lane(run["repo"], last["id"])
     (kick or _kick)(run["cwd"], run["repo"])
     return task

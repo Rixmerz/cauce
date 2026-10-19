@@ -177,7 +177,8 @@ yields the default kind, not a guess.
   exit says nothing about the work, and it is no dead end. npm's EBADENGINE
   warning is not such a line. Dead ends reach a brief only on a strict match.
 - A request that opens with a verb of change is never read as a read-only
-  kind unless a tag or `--kind` says so.
+  kind unless a tag or `--kind` says so, and is read as `test` only when its
+  first change is about tests: a fix that asks for its own tests is the fix.
 - The plan says a task needs servers when it tells the worker to start them,
   or mentions one and its check talks to one (or it has no check), and names
   the words that set it off: a mention is no need. A task that mentions a
@@ -232,12 +233,17 @@ yields the default kind, not a guess.
   decide goes to the person. The engine builds the ledger from the steps'
   `finished` findings, never from a worker's words: a fix gets only its rows,
   a re-check answers only for them against the fix's diff, and a pass that
-  leaves a row without a verdict is `inconclusive`. Open rows earn one more
+  leaves a row without a verdict is `inconclusive`. A row is fixed in code: a
+  fix whose diff only touches documentation or instruction files
+  (`ledger.written_down`) fixes no row but one about those files, whatever the
+  re-check says (`noted_only`). Open rows earn one more
   round, up to `ledger.ROUNDS`; then the run stops as `review`.
 - A risk tier is only raised, never lowered; a change that cannot be read is
   high. Its reasons are true: a word is read in its sense ("checkout" in git's,
   `payment` as one name among others is no money until the change touches that
-  code); "parallel" is never read away, since a missed concurrency request skips
+  code; a design `token`, a chart library `migrated` or a label `truncated` is
+  none unless a word of the area's own sense is near, `risk._SENSES`; a word
+  inside a path or an environment variable's name is never read); "parallel" is never read away, since a missed concurrency request skips
   the verifier and an extra one only costs a check. A high change, or a medium one a cheap cell made, is checked by the
   independent verifier before it passes: another cell, read-only, given the
   request verbatim and the diff, never the worker's summary; it runs at high
@@ -552,7 +558,10 @@ yields the default kind, not a guess.
   plan names the branch kept there (`after.reads`). Work that stops short releases nothing: what waits stays held and
   says how it stopped, until a resume of it passes; `cauce dismiss` or a
   cancel takes held work off the queue, each with its `stops.Stop`. A chain
-  is released one link at a time. The session that started a run hears of it once —
+  is released one link at a time. `--after N` is a task (`task:N`), `run:N` a
+  run; work in another repository is named with it and its title. A step's
+  try that `cauce workflow retry` queued again is superseded by the retry
+  (`stops.retried`): reported, nothing to resume. The session that started a run hears of it once —
   at its end or when a step waits on the person — and steps the engine went
   past are marked reported. A step that stops stops the run there; it goes on
   by a resume to a pass or `cauce workflow retry`.
@@ -562,9 +571,9 @@ yields the default kind, not a guess.
   when the run ends, and shown in `cauce workflow status`, the ending notice
   and the board. It is said, never acted on: nothing is merged or rebased.
 - A workflow definition grants nothing and caps nothing: no rule, no
-  approval, no capability, no dollar limit; rules, approvals and a run's check
-  (`--verify`, for every step that writes and names none) are the person's
-  flags on `cauce workflow run`, so a definition a repository commits
+  approval, no capability, no dollar limit; rules, approvals, a run's check
+  (`--verify`, for every step that writes and names none) and `--add-dir` are
+  the person's flags on `cauce workflow run`, so a definition a repository commits
   runs with what the person gives, and a `budget_usd` an older one holds is
   dropped. A bundled template is never written: a change copies it to the user
   scope.
