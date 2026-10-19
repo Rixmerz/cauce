@@ -7,12 +7,14 @@
 //   parameters", which tells the model nothing.
 // - Work a session queued that ends while it is idle wakes it: a turn starts
 //   with the notice, and the session tells the person and goes on.
-// - At a good moment to compact (cauce decides it at a turn's end), the `/compact`
-//   line cauce built is shown to the person, or, with `compact auto`, the engine
-//   compacts with its instructions while no turn runs (in a headless session,
-//   where the engine has no such call, it runs `/compact` with them), and a
-//   toast says so.
-// - A status entry that counts what waits on the person, runs and is queued,
+// - Compacting is the orchestrating session's call (`compact orchestrator`): at
+//   a good moment cauce sees at a turn's end, the session is told why and
+//   decides; it compacts with the `compact` tool, on that advice or on its own,
+//   and the engine compacts with cauce's instructions once its turn ends (in a
+//   headless session, where the engine has no such call, `/compact` runs with
+//   them). With `compact suggest` the line is shown to the person; with `auto`
+//   the engine compacts at cauce's moment. A toast says what ran.
+// - A status entry that counts what waits on the orchestrator, runs and is queued,
 //   and `/cauce`, which opens the web board: the one place to look and press
 //   (resume, allow, dismiss, unpause). A terminal copy of it was a poorer one.
 //
@@ -41,6 +43,7 @@ const QUEUE = 'mcp__cauce__queue'
 const TASKS = 'mcp__cauce__tasks'
 const RESUME = 'mcp__cauce__resume'
 const OVERVIEW = 'mcp__cauce__overview'
+const COMPACT = 'mcp__cauce__compact'
 /** The tools that only read the project's notes and board, every session's
  * work, or keep a note in cauce's own store: asking the person for each is a
  * prompt that protects nothing. */
@@ -49,7 +52,7 @@ const QUIET = [RECALL, TASKS, NOTE, OVERVIEW]
  * delegated it to the orchestrator (`cauce config delegate`, on by default).
  * `resume` runs `--unattended` either way, so what only a person may clear is
  * still refused. */
-const DELEGATED = [QUEUE, RESUME]
+const DELEGATED = [QUEUE, RESUME, COMPACT]
 
 /** A plugin tool's arguments, as the model gave them: loose until read. */
 function input(e: object): Record<string, unknown> {
@@ -158,6 +161,13 @@ async function compaction($: EngineInterface): Promise<void> {
   if (!step) return
   compactionDue = step.wait === true
   if (step.said) $.ui.toast(step.said, { timeoutMs: SUGGEST_MS })
+  if (step.action === 'advise' && step.advice) {
+    // `compact orchestrator`: cauce saw a moment; the session decides, and compacts
+    // with the `compact` tool if it judges so. A turn that started first keeps it
+    // for the next break.
+    if (!busy) await $.prompt.submit({ text: step.advice })
+    return
+  }
   if (!step.line || step.decision === undefined || !step.action) return
   const decision = String(step.decision)
   const tell = (outcome: string[]) => cauce($, ['compaction', 'delivered', decision, '--session', session,
@@ -318,6 +328,22 @@ export const register: Register = (on, options) => {
         properties: { hours: { type: ['integer', 'string'], description: 'sessions seen and tasks ended this recently; 24 when left out' } },
       },
     })
+    await $.tool.register({
+      name: 'compact',
+      description: 'Compact this session, on your judgment: when the work at hand no longer needs this '
+        + "conversation's detail (a break between tasks, a large context), not in the middle of work that still "
+        + "needs it. It runs when this turn ends, told to keep the person's requests verbatim, the open cauce work "
+        + 'and the branches waiting to merge; cauce puts its digest of the session back after it. cauce also tells '
+        + 'you when it sees a good moment; the call is yours.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          why: { type: 'string', description: 'why now, in one line' },
+          keep: { type: 'string', description: 'what the summary must also keep, beyond what cauce keeps itself' },
+        },
+        required: ['why'],
+      },
+    })
     await $.command.register({ name: 'cauce', description: "cauce's board: what waits on the orchestrator, runs and is queued" })
     $.clock.every(POLL_MS, () => {
       void poll($, wakes).catch(ignore)
@@ -439,6 +465,20 @@ export const register: Register = (on, options) => {
     if (!ran.ok) return { deny: ran.err || `cauce could not resume #${id}` }
     void refresh($).catch(ignore)
     return { result: ran.out }
+  }).catch(failed)
+
+  on('tool.call', { tool: COMPACT }, async ($, call) => {
+    const e = input(call)
+    const args = ['compaction', 'request', '--session', await $.session.id(), '--cwd', await $.session.cwd(),
+      '--why', text(e.why), '--json']
+    if (text(e.keep)) args.push('--keep', text(e.keep))
+    const ran = await cauce($, args)
+    const asked = json<{ id?: number; error?: string }>(ran)
+    if (!asked?.id) return { deny: asked?.error || ran.err || 'cauce could not take the compaction' }
+    // Taken when the session is idle: the next look after this turn ends.
+    compactionDue = true
+    return { result: `compaction #${asked.id} is set: it runs when this turn ends. Finish the turn with what the `
+      + 'person needs to know now; after it, cauce puts its digest of the session back.' }
   }).catch(failed)
 
   on('tool.call', { tool: OVERVIEW }, async ($, call) => {

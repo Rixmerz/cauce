@@ -221,10 +221,17 @@ that wait to be merged — on one line, bounded, secrets masked. It says what to
 keep verbatim and what may be summarized, and the digest cauce writes before a
 compaction is put back after it, as for any other.
 
-The `compact` setting (`cauce config compact suggest|auto|off`, or the plugin
-setting) says what the mod does with a decision:
+The `compact` setting (`cauce config compact orchestrator|suggest|auto|off`,
+or the plugin setting) says what the mod does with a decision:
 
-- **suggest** (the default): a toast shows the `/compact …` line to paste,
+- **orchestrator** (the default): the orchestrating session decides. cauce's
+  moment reaches it as advice, with its reasons, and it compacts by calling the
+  mod's `compact` tool (`why`, and `keep` for what must survive beyond what
+  cauce keeps itself) when it judges the conversation's detail is no longer
+  needed, on that advice or on its own. The compaction runs when its turn
+  ends, as with `auto`, with cauce's instructions and what it asked to keep
+  quoted apart as its own.
+- **suggest**: a toast shows the `/compact …` line to paste,
   once per decision. Nothing is sent to the model.
 - **auto**: between turns, never during one, the mod asks the engine to
   compact with the line's instructions (`$.session.compact`, the call

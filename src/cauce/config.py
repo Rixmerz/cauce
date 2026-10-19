@@ -52,9 +52,10 @@ DEFAULTS: dict[str, Any] = {
     # unless the person turns it on: it writes to a store that is not cauce's.
     "engram_write": False,
     # When a session should compact, and what `/compact` should keep (`cauce.compaction`):
-    # `suggest` shows the person the line at a good moment, `auto` has the mod submit
-    # it (only on a Claude Code build seen to run it), `off` leaves it alone.
-    "compact": "suggest",
+    # `orchestrator` tells the session at a good moment and it decides, compacting with
+    # the mod's `compact` tool; `suggest` shows the person the line, `auto` has the mod
+    # submit it (only on a Claude Code build seen to run it), `off` leaves it alone.
+    "compact": "orchestrator",
     # The mod turns Claude Code's `ask` for `queue` and `resume` into an allow: the
     # person delegated starting cauce work to the session. A deny stays a deny, and a
     # resume still runs `--unattended`. Off: each call is the person's.
@@ -66,7 +67,7 @@ DEFAULTS: dict[str, Any] = {
 }
 
 #: Settings that take one of a few words rather than on or off.
-CHOICES: dict[str, tuple[str, ...]] = {"compact": ("suggest", "auto", "off")}
+CHOICES: dict[str, tuple[str, ...]] = {"compact": ("orchestrator", "suggest", "auto", "off")}
 
 _TRUE = {"1", "true", "on", "yes"}
 _FALSE = {"0", "false", "off", "no"}
