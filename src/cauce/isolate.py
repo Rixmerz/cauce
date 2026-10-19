@@ -113,17 +113,50 @@ def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None
     if _attached(top, path, branch):
         # A run whose process died left its worktree, uncommitted work and all:
         # the resume continues in it instead of failing to add it again.
-        base = _git(top, "merge-base", head, branch)
+        base = _fork_point(top, head, branch, path)
     elif kept(top, task_id):
-        # A resumed task continues from the work it kept.
+        # A resumed task continues from the work it kept (its branch mended first, when
+        # its newest commit cannot be read: no worktree can be added on it).
+        base = _fork_point(top, head, branch, path)
         _git(top, "worktree", "add", str(path), branch)
-        base = _git(top, "merge-base", head, branch)
     else:
         _git(top, "worktree", "add", "-b", branch, str(path), head)
         base = head
     ws = Workspace(top, path, branch, base, _shared(top, path))
     link(ws)
     return ws
+
+
+def _fork_point(top: Path, head: str, branch: str, path: Path) -> str:
+    """Where a kept branch left `head`. A git that died mid-write (a full disk) can leave
+    the branch's newest commit unreadable, and every resume would fail on it: the branch
+    goes back to the newest commit its reflog holds that git can still read (what the
+    lost commit held stays in the worktree's files, as changes not committed). When none
+    can be read, the resume stops with the cause in a line, the branch and its worktree
+    kept as they are."""
+    proc = subprocess.run(["git", "merge-base", head, branch], cwd=str(top), capture_output=True, text=True,
+                          check=False)
+    if proc.returncode == 0 and proc.stdout.strip():
+        return proc.stdout.strip()
+    cause = " ".join((proc.stderr or "no common commit").split())[:200]
+    tip = _git(top, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False)
+    common = Path(_git(top, "rev-parse", "--path-format=absolute", "--git-common-dir", check=False) or top / ".git")
+    try:
+        lines = (common / "logs" / "refs" / "heads" / branch).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    for line in reversed(lines):
+        sha = line.split(" ", 2)[1] if len(line.split(" ", 2)) > 1 else ""
+        if not re.fullmatch(r"[0-9a-f]{40,64}", sha) or sha == tip:
+            continue
+        found = subprocess.run(["git", "merge-base", head, sha], cwd=str(top), capture_output=True, text=True,
+                               check=False)
+        if found.returncode == 0 and found.stdout.strip():
+            _git(top, "update-ref", "-m", f"cauce: {tip or 'its tip'} cannot be read ({cause})",
+                 f"refs/heads/{branch}", sha)
+            return found.stdout.strip()
+    raise IsolationError(f"the kept branch {branch} cannot be read after a git failure ({cause}); its work "
+                         f"stays on it and in {path}: `git -C {top} fsck` names what is damaged")
 
 
 def _shared(top: Path, path: Path) -> tuple[str, ...]:

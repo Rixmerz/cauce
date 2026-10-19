@@ -344,7 +344,7 @@ def _run(args: argparse.Namespace) -> int:
             if args.json:
                 print(json.dumps({"name": ready["defn"]["name"], "inputs": ready["given"], "gaps": ready["gaps"],
                                   "steps": [{"id": s["id"], "kind": s.get("kind"), "needs": s["needs"],
-                                             "verify": workflows.step_check(s, options)}
+                                             "verify": workflows.step_check(s, options, ready["given"])}
                                             for s in ready["defn"]["steps"]]}, ensure_ascii=False))
                 return 0
             print(f"{ready['defn']['name']} would run here ({where}); nothing is queued:")
@@ -352,7 +352,7 @@ def _run(args: argparse.Namespace) -> int:
                 print(f"  {name}: {_clip(value)}")
             for step in ready["defn"]["steps"]:
                 needs = f" after {', '.join(step['needs'])}" if step["needs"] else ""
-                check = workflows.step_check(step, options)
+                check = workflows.step_check(step, options, ready["given"])
                 later = not check and not step.get("kind") and options.get("verify") and not step.get("verify")
                 print(f"  · {step['id']} ({step.get('kind') or 'classified when it runs'}){needs}"
                       + (f", checked by `{check}`" if check else "")

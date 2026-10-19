@@ -72,3 +72,46 @@ def test_a_capability_follows_what_the_work_touches(tmp_path):
 ])
 def test_rendered_ui_is_read_from_folders_and_file_types(path, ui):
     assert caps.matches(path, caps.UI_FILES) is ui
+
+
+def test_an_entry_named_after_a_neighbour_takes_what_it_does_not_declare(tmp_path):
+    # Written before `touches` existed: kinds only, and an unpinned browser beside it.
+    old = write(tmp_path, {
+        "layout-inspector": {"server": {"command": "layout-inspector"}, "when": ["implement", "feature"]},
+        "browser": {"server": {"command": "npx", "args": ["-y", "@playwright/mcp@latest"]}, "when": ["test"]},
+    })
+    off = {"CAUCE_PLUGINS": "off"}
+    registry = caps.load_all(old, env=off)
+    inspector = registry["layout-inspector"]
+    assert inspector.measures and inspector.touches and inspector.when == ("implement", "feature")
+    # So a review of a page now gets it, by the files it reads.
+    assert caps.select(registry, "review-routine", paths=["islands/Card.tsx"], reading=True).names == (
+        "layout-inspector",)
+    said = caps.notices(old)
+    assert any("shadows the layout-inspector neighbour" in line
+               and "takes what it touches and that it only measures" in line
+               and "(implement, feature) still gives it" in line for line in said)
+    assert any("'browser' runs `@playwright/mcp@latest` with no fixed version" in line for line in said)
+    # What the entry declares wins, and it is said without "takes".
+    mine = write(tmp_path, {"layout-inspector": {"server": {"command": "x"}, "measures": False}})
+    assert caps.load_all(mine, env=off)["layout-inspector"].measures is False
+    assert "takes" not in caps.notices(mine)[0]
+    assert caps.notices(write(tmp_path, ["not", "an", "object"])) == []
+
+
+@pytest.mark.parametrize(("command", "args", "loose"), [
+    ("npx", ["@playwright/mcp@latest"], "@playwright/mcp@latest"),
+    ("npx", ["-y", "@playwright/mcp"], "@playwright/mcp"),
+    ("/usr/bin/npx", ["some-mcp"], "some-mcp"),
+    ("npx", ["some-mcp@next"], "some-mcp@next"),
+    ("npx", ["@playwright/mcp@0.0.83"], None),
+    ("npx", ["some-mcp@1.2.3"], None),
+    ("npx", ["-y"], None),
+    ("node", ["server.js"], None),
+])
+def test_an_unpinned_package_is_named(command, args, loose):
+    assert caps.unpinned({"command": command, "args": args}) == loose
+
+
+def test_the_example_registry_pins_what_it_fetches():
+    assert all(caps.unpinned(entry["server"]) is None for entry in caps.EXAMPLE.values())

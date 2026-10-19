@@ -33,7 +33,7 @@ from __future__ import annotations
 import fnmatch
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +73,9 @@ class Capability:
     touches: tuple[str, ...] = ()
     #: It only measures, never changes anything: reading work may have it too.
     measures: bool = False
+    #: The keys the person's registry entry set: what a neighbour of the same name may
+    #: still fill in (`_inherit`).
+    declared: frozenset[str] = field(default=frozenset(), compare=False)
 
     def touched(self, paths: Sequence[str]) -> str | None:
         """The first of `paths` this capability is about, or None."""
@@ -140,6 +143,7 @@ def load(path: Path) -> dict[str, Capability]:
             hint=str(entry.get("hint", "")),
             touches=tuple(str(t) for t in touches),
             measures=bool(entry.get("measures", False)),
+            declared=frozenset(entry),
         )
     return registry
 
@@ -154,7 +158,74 @@ def load_all(path: Path, env: Mapping[str, str] | None = None) -> dict[str, Capa
 
     env = os.environ if env is None else env
     found = plugins.capabilities(env) if config.enabled("plugins", env) else {}
-    return {**found, **load(path)}
+    return {**found, **_inherit(load(path))}
+
+
+def _neighbours() -> dict[str, Any]:
+    from cauce import plugins
+
+    return {n.server: n for n in plugins.KNOWN}
+
+
+def _inherit(registry: Mapping[str, Capability]) -> dict[str, Capability]:
+    """An entry named after a neighbour cauce knows that says nothing of what it touches
+    or whether it measures takes the neighbour's answer: written before those keys
+    existed, it would otherwise keep the neighbour from the work its files call for.
+    Whatever the entry declares still wins."""
+    known = _neighbours()
+    out = dict(registry)
+    for name, c in registry.items():
+        n = known.get(name)
+        if n is not None and not ({"touches", "measures"} & c.declared):
+            out[name] = replace(c, touches=tuple(n.touches), measures=n.measures)
+    return out
+
+
+#: Runners that fetch a package each time they start one.
+_FETCHERS = frozenset({"npx", "bunx", "pnpx"})
+
+
+def unpinned(server: Mapping[str, Any]) -> str | None:
+    """The package a server's command fetches with no fixed version (`npx pkg`,
+    `npx pkg@latest`), or None: what runs can change between two workers."""
+    if Path(str(server.get("command") or "")).name not in _FETCHERS:
+        return None
+    args = [str(a) for a in server.get("args") or [] if isinstance(a, (str, int, float))]
+    package = next((a for a in args if not a.startswith("-")), None)
+    if package is None:
+        return None
+    version = (package[1:] if package.startswith("@") else package).partition("@")[2]
+    return package if version in ("", "latest", "next") else None
+
+
+def notices(path: Path) -> list[str]:
+    """What the person's registry does that they may not mean, one line each: an entry
+    that shadows a neighbour cauce knows (and what it took from it), a server fetched
+    with no fixed version. Said, never refused; a registry that cannot be read says
+    nothing here (its error is raised where it is loaded)."""
+    try:
+        registry = load(path)
+    except RegistryError:
+        return []
+    known, lines = _neighbours(), []
+    for name, c in registry.items():
+        n = known.get(name)
+        if n is not None:
+            took = [] if {"touches", "measures"} & c.declared else [
+                word for word, has in (("what it touches", bool(n.touches)), ("that it only measures", n.measures))
+                if has]
+            lines.append(f"cauce: your capabilities.json entry {name!r} shadows the {n.plugin} neighbour cauce "
+                         "knows and wins on every key it sets"
+                         + (f"; it sets neither `touches` nor `measures`, so it takes {' and '.join(took)} "
+                            "from the neighbour" if took else "")
+                         + (f"; its `when` ({', '.join(c.when)}) still gives it to every task of those kinds, "
+                            "whatever files they touch" if isinstance(c.when, tuple) else "")
+                         + ". Remove the entry to use the neighbour as cauce ships it.")
+        package = unpinned(c.server)
+        if package:
+            lines.append(f"cauce: capability {name!r} runs `{package}` with no fixed version, so each worker may "
+                         "fetch another release; pin it (`name@1.2.3`) to keep what runs the same.")
+    return lines
 
 
 def select(
@@ -223,7 +294,8 @@ EXAMPLE = {
         "judging it by eye",
     },
     "browser": {
-        "server": {"command": "npx", "args": ["@playwright/mcp@latest"]},
+        # Pinned: `@latest` is fetched again by each worker, and two may run different releases.
+        "server": {"command": "npx", "args": ["@playwright/mcp@0.0.83"]},
         "when": ["test"],
         "after_failure": ["ui"],
         "hint": "open the running app with browser_navigate and read it with browser_snapshot; report what "

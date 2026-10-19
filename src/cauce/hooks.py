@@ -406,6 +406,9 @@ def session_start(
     if errors:
         blocks.append(f"cauce: {errors} hook error(s) since the last session were swallowed so the session "
                       f"could go on; details in {root / ERROR_LOG}.")
+    registry = _registry_notices(root)
+    if registry:
+        blocks.append(registry)
     if event.get("source") in ("resume", "compact"):
         unfinished = store.list_tasks(session_id=session_id, status=("running", "interrupted"), limit=10)
         if unfinished:
@@ -727,6 +730,28 @@ def note_error(root: Path, event_name: str) -> None:
             fh.write(f"--- {stamp} {event_name}\n{traceback.format_exc()}\n")
     except Exception:  # noqa: S110 - losing a note is acceptable, raising from here is not
         pass
+
+
+#: The registry notices a SessionStart last said, so the same ones are said once.
+REGISTRY_SAID = "capabilities.said"
+
+
+def _registry_notices(root: Path) -> str | None:
+    """What the person's capability registry does that they may not mean
+    (`capabilities.notices`), said at the first SessionStart that sees it, and again
+    only when it changes."""
+    from cauce import capabilities
+
+    lines = capabilities.notices(root / "capabilities.json")
+    said = root / REGISTRY_SAID
+    text = "\n".join(lines)
+    try:
+        if text == (said.read_text(encoding="utf-8") if said.is_file() else ""):
+            return None
+        said.write_text(text, encoding="utf-8")
+    except OSError:
+        return None
+    return text or None
 
 
 def _drain_errors(root: Path) -> int:
