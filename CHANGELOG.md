@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-19
+
 ### Added
 
 - **A capability follows what the work touches, not only its kind** (#65).
