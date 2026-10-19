@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-19
+
 ### Added
 
 - **A project knows its orchestrator.** `.cauce/orchestrator.json` names the
