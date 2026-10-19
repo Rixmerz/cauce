@@ -824,6 +824,42 @@ def test_a_resumed_step_counts_the_files_of_its_final_ending_not_an_attempts(git
     assert "3 file(s)" in workflow_cli._step_line({"state": "done", "files": ["a", "b", "c"]})
 
 
+def test_a_steps_check_takes_the_run_inputs_and_an_unfilled_one_is_refused(git_repo, store: Store, kicks, capsys,
+                                                                            monkeypatch):
+    monkeypatch.chdir(git_repo)
+    _save({"name": "checked", "inputs": ["goal", "check"], "steps": [
+        {"id": "do", "prompt": "{goal}", "kind": "implement", "verify": "{check} && test -n \"${HOME}\" {a,b}"}]},
+        git_repo)
+    _save({"name": "loose", "inputs": ["goal"], "steps": [
+        {"id": "do", "prompt": "{goal}", "kind": "implement", "verify": "{check}"}]}, git_repo)
+    step = {"verify": "{check} && echo ${check} {x,y} {}", "kind": "implement"}
+    # The shell's own braces stay; only an input's place is filled.
+    assert workflows.step_check(step, {}, {"check": "npm test"}) == "npm test && echo ${check} {x,y} {}"
+    # The person's own --verify is taken as typed.
+    assert workflows.step_check({"kind": "implement"}, {"verify": "{check}"}, {"check": "x"}) == "{check}"
+    assert cli.main(["workflow", "run", "checked", "--input", "goal=the export", "--input", "check=npm test",
+                     "--dry-run"]) == 0
+    assert 'checked by `npm test && test -n "${HOME}" {a,b}`' in capsys.readouterr().out
+    # A check left with a placeholder never runs as `/bin/sh: {check}`: the run is refused, dry or not.
+    for dry in (["--dry-run"], []):
+        assert cli.main(["workflow", "run", "loose", "the export", *dry]) != 0
+        said = capsys.readouterr()
+        assert "leaves {check} unfilled" in said.out + said.err
+        assert "add `check` to the workflow's inputs" in said.out + said.err
+    assert not store.list_runs()
+    assert cli.main(["workflow", "run", "checked", "--input", "goal=the export", "--input", "check=npm test"]) == 0
+    (task,) = store.run_tasks(store.list_runs()[0]["id"])
+    assert json.loads(task["options"])["verify"].startswith("npm test && ")
+    capsys.readouterr()
+    # An input the workflow takes but the check is given empty is the missing input, said once.
+    with pytest.raises(workflows.WorkflowError) as err:
+        workflows.prepare(store, "checked", git_repo, {"goal": "x"})
+    assert "needs check" in str(err.value) and "unfilled" not in str(err.value)
+    assert workflows.unfilled_checks(workflows.load("checked", git_repo), {"goal": "x"}) == [
+        "step 'do' checks with `{check} && test -n \"${HOME}\" {a,b}`, which leaves {check} unfilled: "
+        "pass it with `--input check='<command>'`"]
+
+
 TWO = {"name": "two", "inputs": ["goal"], "steps": [
     {"id": "build", "prompt": "Build {goal}", "kind": "implement"},
     {"id": "polish", "prompt": "Polish {goal}", "kind": "implement"},

@@ -407,3 +407,21 @@ def test_cauce_s_own_notices_are_no_turn_and_a_lost_turn_is_nothing_to_resume(st
     assert "real work" in out and "resultado" not in out
     assert cli.main(["tasks", "--all", "--turns"]) == 0
     assert "y ahora que resultado da? (turn)" in capsys.readouterr().out
+
+
+def test_session_start_says_what_the_registry_shadows_once(store, tmp_path):
+    root = tmp_path / "h"
+    root.mkdir()
+    (root / "capabilities.json").write_text(json.dumps({
+        "layout-inspector": {"server": {"command": "layout-inspector"}, "when": ["implement"]}}))
+
+    def said():
+        out = hooks.session_start({"session_id": "s"}, store, root, {}, adapters=[])
+        return (out or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
+
+    assert "shadows the layout-inspector neighbour" in said()
+    assert "shadows" not in said()
+    (root / "capabilities.json").write_text(json.dumps({
+        "layout-inspector": {"server": {"command": "npx", "args": ["li@latest"]}, "touches": "ui"}}))
+    again = said()
+    assert "with no fixed version" in again and "takes" not in again

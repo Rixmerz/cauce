@@ -98,6 +98,22 @@ def _looks_like_code(token: str) -> bool:
     return "_" in token or "." in token or (token[:1].isalpha() and any(c.isupper() for c in token[1:]))
 
 
+#: What `uv` says when a release is not on the package registry.
+_NOT_PUBLISHED = re.compile(r"not found in the package registry|no version of livespec|"
+                            r"no solution found when resolving", re.IGNORECASE)
+
+
+def _uvx_release(server: Mapping[str, Any]) -> str | None:
+    """The livespec release a `uvx livespec@X` (or `livespec==X`) entry runs, or None."""
+    if Path(str(server.get("command") or "")).name != "uvx":
+        return None
+    for arg in server.get("args") or []:
+        match = re.fullmatch(r"livespec(?:\[[^\]]*\])?(?:@|==)([0-9][\w.+-]*)", str(arg))
+        if match:
+            return match.group(1)
+    return None
+
+
 def _version_tuple(text: str | None) -> tuple[int, ...] | None:
     if not text:
         return None
@@ -135,22 +151,39 @@ class Livespec:
                 return server, cfg.parent.name
         return None
 
+    def _unpublished_path(self) -> Path:
+        return home(self.env) / "work" / "livespec-unpublished.json"
+
+    def unpublished(self) -> set[str]:
+        """The releases `uvx` found missing from the package registry: a plugin may
+        name one it was tagged with before it was published."""
+        try:
+            return {str(v) for v in json.loads(self._unpublished_path().read_text(encoding="utf-8"))}
+        except (OSError, ValueError, TypeError):
+            return set()
+
+    def _remember_unpublished(self, version: str) -> None:
+        path = self._unpublished_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(sorted(self.unpublished() | {version})), encoding="utf-8")
+
     def server(self) -> Mapping[str, Any] | None:
-        """How to run livespec: an installed plugin's own entry, then a `livespec`
-        on PATH, then the pinned release through `uvx`."""
+        """How to run livespec: an installed plugin's own entry (unless it names a
+        release `uvx` found unpublished), then a `livespec` on PATH, then the pinned
+        release through `uvx`."""
         plugin = self._plugin_config()
-        if plugin:
+        if plugin and _uvx_release(plugin[0]) not in self.unpublished():
             return plugin[0]
         path = self.env.get("PATH")
         if shutil.which("livespec", path=path):
             return {"command": "livespec", "args": []}
         if shutil.which("uvx", path=path):
             return {"command": "uvx", "args": [f"livespec@{PINNED}"]}
-        return None
+        return plugin[0] if plugin else None
 
     def _version(self) -> str | None:
         plugin = self._plugin_config()
-        if plugin:
+        if plugin and _uvx_release(plugin[0]) not in self.unpublished():
             return plugin[1]
         server = self.server()
         for arg in (server or {}).get("args", []):
@@ -273,12 +306,28 @@ class Livespec:
                                    env={**self.env, "CAUCE_HOOKS_OFF": "1"})
             except (OSError, subprocess.TimeoutExpired) as exc:
                 return f"livespec index did not run: {exc}"
+            fell_back = ""
+            missing = _uvx_release({"command": argv[0], "args": argv[1:]})
+            if proc.returncode != 0 and missing and missing != PINNED and _NOT_PUBLISHED.search(
+                    f"{proc.stderr or ''}\n{proc.stdout or ''}"):
+                # A plugin tagged with a release not on the registry yet: every index (and
+                # every worker's server) would fail until it is. The pinned one runs instead.
+                self._remember_unpublished(missing)
+                again = self._index_argv(repo_dir)
+                if again is not None and again != argv:
+                    fell_back = (f"livespec {missing} is not published, so the pinned {PINNED} ran instead "
+                                 "(and will, until the plugin names a published release)")
+                    try:
+                        proc = self.runner(again, capture_output=True, text=True, timeout=INDEX_TIMEOUT_S,
+                                           check=False, env={**self.env, "CAUCE_HOOKS_OFF": "1"})
+                    except (OSError, subprocess.TimeoutExpired) as exc:
+                        return f"{fell_back}; livespec index did not run: {exc}"
         if proc.returncode != 0:
             error = (proc.stderr or proc.stdout or "").strip()[:200]
             self._remember_failure(repo_dir, error)
-            return f"livespec index failed: {error}"
+            return (f"{fell_back}; " if fell_back else "") + f"livespec index failed: {error}"
         self._remember_failure(repo_dir, None)
-        return "livespec index refreshed"
+        return f"livespec index refreshed ({fell_back})" if fell_back else "livespec index refreshed"
 
     def refresh_in_background(self, repo_dir: Path, log: Path) -> bool:
         """Start an index refresh and return at once — for a hook, which must not

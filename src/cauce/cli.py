@@ -880,6 +880,8 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
         print(f"{c.name:<20} {when}{extra}  ({source})")
     if not config.enabled("plugins", os.environ):
         print("installed plugins are left out: `cauce config plugins on` hands them to workers")
+    for line in capabilities.notices(path):
+        print(line.removeprefix("cauce: "))
     return 0
 
 

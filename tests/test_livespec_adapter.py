@@ -126,6 +126,41 @@ def test_refresh_uses_livespecs_own_cli(tmp_path, git_repo):
     assert "cannot run" in adapter(tmp_path).refresh(git_repo)
 
 
+def test_a_plugin_naming_an_unpublished_release_falls_back_to_the_pinned_one(tmp_path, git_repo):
+    cfg = tmp_path / "cc" / "plugins" / "cache" / "rixmerz" / "livespec" / "0.33.0" / ".mcp.json"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(json.dumps({"mcpServers": {"livespec": {"command": "uvx", "args": ["livespec@0.33.0"]}}}))
+    calls = []
+
+    def runner(argv, **kw):
+        calls.append(argv[1])
+        if argv[1] == "livespec@0.33.0":
+            return subprocess.CompletedProcess(argv, 1, "", "  × No solution found when resolving tool "
+                                               "dependencies:\n  ╰─▶ Because livespec==0.33.0 was not found in "
+                                               "the package registry, we can conclude ...")
+        return subprocess.CompletedProcess(argv, 0, "{}", "")
+
+    a = adapter(tmp_path, tool(tmp_path, "uvx"), runner=runner)
+    assert a.server()["args"] == ["livespec@0.33.0"]
+    said = a.refresh(git_repo)
+    assert calls == ["livespec@0.33.0", f"livespec@{PINNED}"]
+    assert "livespec 0.33.0 is not published, so the pinned" in said and said.startswith("livespec index refreshed")
+    # Remembered: workers' servers and the next index use the pinned release at once.
+    assert a.server() == {"command": "uvx", "args": [f"livespec@{PINNED}"]} and a._version() == PINNED
+    calls.clear()
+    assert a.refresh(git_repo) == "livespec index refreshed" and calls == [f"livespec@{PINNED}"]
+    # Without uvx left to run the pinned one, the plugin's entry is all there is.
+    assert adapter(tmp_path).server()["args"] == ["livespec@0.33.0"]
+    # A failure that is not a missing release is no fallback.
+    cfg.write_text(json.dumps({"mcpServers": {"livespec": {"command": "uvx", "args": ["livespec@0.34.0"]}}}))
+    other = adapter(tmp_path, tool(tmp_path, "uvx"),
+                    runner=lambda argv, **kw: subprocess.CompletedProcess(argv, 2, "", "index crashed"))
+    assert other.refresh(git_repo) == "livespec index failed: index crashed"
+    assert "0.34.0" not in other.unpublished()
+    assert livespec_mod._uvx_release({"command": "livespec"}) is None
+    assert livespec_mod._uvx_release({"command": "uvx", "args": ["--from", "x", "livespec==1.2"]}) == "1.2"
+
+
 def test_two_refreshes_of_one_index_never_run_at_once(tmp_path, git_repo, monkeypatch):
     """Parallel tasks in one repository each plan, and each would refresh a stale
     index: livespec then fails with "database is locked" in all but one."""
