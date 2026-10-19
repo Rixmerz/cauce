@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-19
+
 ### Fixed
 
 - **A step split into more parts than the dispatcher's limit no longer
