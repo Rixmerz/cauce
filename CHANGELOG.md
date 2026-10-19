@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-19
+
 ### Fixed
 
 - **A confirmed finding is no longer closed by writing it down** (#58). The
