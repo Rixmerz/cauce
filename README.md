@@ -229,9 +229,11 @@ setting) says what the mod does with a decision:
 - **auto**: between turns, never during one, the mod asks the engine to
   compact with the line's instructions (`$.session.compact`, the call
   `/compact` makes; the engine refuses a `/` text a plugin submits as a
-  prompt), and a toast says so once it stood, or that a hook vetoed it. A call
-  that fails (a turn started) shows the line instead and says nothing of the
-  build. The hooks also see each compaction (PreCompact carries the line's
+  prompt), and a toast says so once it stood, or that a hook vetoed it. A
+  headless session (an SDK host, the app's cloud sessions) has no such call:
+  there the mod runs `/compact` with the instructions, as the person would
+  type it (`$.command.run`). A call that fails (a turn started) shows the line
+  instead and says nothing of the build. The hooks also see each compaction (PreCompact carries the line's
   marker, or a manual compaction or a SessionStart after one follows within
   three minutes): a build that ran it is kept as one that does, one never seen
   to run it as one that does not, `auto` falls back to suggest on it and says

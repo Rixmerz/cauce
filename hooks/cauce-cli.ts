@@ -74,6 +74,11 @@ export function compactedToast(decision: number): string {
   return `cauce: compacted (#${decision}): \`compact auto\` compacted between turns with cauce's /compact instructions`
 }
 
+/** The toast that says the mod ran `/compact` on cauce's word, in a session with no compaction between turns. */
+export function commandToast(decision: number): string {
+  return `cauce: compacting (#${decision}): \`compact auto\` ran /compact with cauce's instructions`
+}
+
 /** The toast that says a hook vetoed the compaction cauce asked for. */
 export function skippedToast(decision: number, reason: string): string {
   return `cauce: the compaction cauce asked for (#${decision}) was skipped: ${reason}`
