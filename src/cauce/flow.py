@@ -51,6 +51,10 @@ from cauce.store import Store, home
 #: How long a session prompt may sit in `running` with no update before it is
 #: taken for abandoned. Claude Code fires no Stop for an interrupted turn.
 SESSION_TASK_TIMEOUT = timedelta(hours=12)
+#: How long a session's subagent may sit in `running` before it is taken for one whose
+#: ending never reached cauce (a background agent's notice lost to a compaction or a
+#: closed session). Longer than a turn: a subagent may work for hours.
+DELEGATION_TIMEOUT = timedelta(hours=24)
 DEFAULT_MAX_TASKS = 10
 #: How often a dispatcher with work out checks on it and on new arrivals.
 POLL_S = 2.0
@@ -96,15 +100,18 @@ def sweep(store: Store, *, now: datetime | None = None, is_alive: Callable[[int 
             dead = not is_alive(task["pid"])
         else:
             updated = datetime.fromisoformat(task["updated_at"])
-            dead = task["source"] != "delegation" and now - updated > SESSION_TASK_TIMEOUT
+            dead = now - updated > (DELEGATION_TIMEOUT if task["source"] == "delegation" else SESSION_TASK_TIMEOUT)
         if not dead:
             continue
         gone = (f"no sign of life: its process ({task['pid']}) is gone" if task["source"] == "cauce" and task["pid"]
                 else "no sign of life")
         # A session's turn is no work to resume: the session closed or was cut off
         # before its answer arrived. It keeps the answer it had so far as its result.
+        # A subagent is the session's own work, and nothing cauce can resume: the same.
         stop = (stops.Stop("turn", "the session's turn ended without its answer reaching cauce")
-                if task["source"] == "hook" else stops.Stop("died", gone))
+                if task["source"] == "hook" else
+                stops.Stop("turn", "the session's subagent ended without its ending reaching cauce")
+                if task["source"] == "delegation" else stops.Stop("died", gone))
         stops.record(store, task["id"], stop, pid=None, current_cell=None, result=task["source"] == "cauce")
         if task["dispatched"]:
             store.pause_lane(task["repo"], f"task #{task['id']} stopped with no sign of life")

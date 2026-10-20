@@ -84,6 +84,14 @@ def test_session_start_lists_unfinished_work_dead_ends_and_swallowed_errors(stor
     context = hooks.session_start(event, store, root)["hookSpecificOutput"]["additionalContext"]
     assert "2 hook error(s)" in context and "half done thing" in context and "pin the version" in context
     assert "tasks of this session that stopped" not in context
+    # A turn or a subagent whose ending never arrived has nothing to resume: it is not listed.
+    lost = store.create_task("a subagent that never said it ended", status="running", source="delegation",
+                             session_id="s")
+    stops.record(store, lost["id"], stops.Stop("turn", "the session's subagent ended without its ending"))
+    cut = store.create_task("a worker that died", status="running", source="cauce", session_id="s")
+    stops.record(store, cut["id"], stops.Stop("died", "no sign of life"))
+    context = hooks.session_start(event, store, root)["hookSpecificOutput"]["additionalContext"]
+    assert "never said it ended" not in context and f"#{cut['id']} [interrupted] a worker that died" in context
     blocked = store.create_task("create the routes", status="running", source="cauce", session_id="s", cwd="/x")
     stops.record(store, blocked["id"], stops.Stop("permission", "the worker was refused Bash(node a.js)",
                                                   denied=("Bash(node a.js)",)))

@@ -499,7 +499,9 @@ def session_start(
     if registry:
         blocks.append(registry)
     if event.get("source") in ("resume", "compact"):
-        unfinished = store.list_tasks(session_id=session_id, status=("running", "interrupted"), limit=10)
+        # A turn or a subagent whose ending never arrived has nothing to resume: not unfinished work.
+        unfinished = [t for t in store.list_tasks(session_id=session_id, status=("running", "interrupted"), limit=30)
+                      if t["status"] == "running" or getattr(stops.of(store, t), "cause", None) != "turn"][:10]
         if unfinished:
             blocks.append("cauce: unfinished tasks in this session (context only, do not restart them unasked):\n"
                           + "\n".join(f"#{t['id']} [{t['status']}] {t['title']}" for t in unfinished))
