@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from cauce import cli, dispatch, flow, hooks, launch
 from cauce.store import Store
@@ -382,3 +385,50 @@ def test_the_hooks_revive_lanes_and_a_failure_costs_the_turn_nothing(store: Stor
 def test_without_an_env_file_nothing_is_exported(tmp_path):
     assert hooks._export({}, "X", "1") is False
     assert hooks._export({"CLAUDE_ENV_FILE": str(tmp_path / "no" / "such")}, "X", "1") is False
+
+
+# --- a worker that died is noticed at a turn's end, and resumed once -----------------------------------
+
+
+def test_a_dead_worker_is_swept_and_resumed_once_from_its_kept_work(store: Store, tmp_path, monkeypatch):
+    from cauce import stops
+
+    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    started: list[list[str]] = []
+    task = store.create_task("build the export", status="running", source="cauce", cwd=str(tmp_path), pid=999999)
+    store.add_event(task["id"], "attempt_started", seq=1, cell="opus/high")
+    alive = store.create_task("still going", status="running", source="cauce", cwd=str(tmp_path), pid=os.getpid())
+    gone = store.create_task("its folder is gone", status="interrupted", source="cauce", cwd=str(tmp_path / "x"))
+    stops.record(store, gone["id"], stops.Stop("died", "no sign of life"))
+    found = dispatch.recover(store, tmp_path, os.environ, popen=lambda argv, **kw: started.append(argv),
+                             is_alive=lambda pid: pid == os.getpid())
+    assert found == [task["id"]]
+    assert started[0][-3:] == ["resume", str(task["id"]), "--unattended"]
+    assert store.get_task(task["id"])["status"] == "interrupted"  # swept at once, not at the next session
+    assert stops.of(store, store.get_task(task["id"])).cause == "died"
+    assert store.get_task(alive["id"])["status"] == "running"
+    # Its death is handed to no session: the resume's ending is the one that counts.
+    assert store.unreported(task["session_id"] or "") == []
+    # Once: a second death is the orchestrator's.
+    assert dispatch.recover(store, tmp_path, os.environ, popen=lambda argv, **kw: started.append(argv)) == []
+    assert len(started) == 1
+
+
+def test_no_resume_without_autowork_for_an_old_death_or_one_that_cannot_start(store: Store, tmp_path,
+                                                                                monkeypatch):
+    from cauce import stops
+
+    task = store.create_task("x", status="interrupted", source="cauce", cwd=str(tmp_path))
+    stops.record(store, task["id"], stops.Stop("died", "no sign of life"))
+    assert dispatch.recover(store, tmp_path, os.environ, popen=pytest.fail) == []  # autowork off in tests
+    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    later = __import__("time").time() + dispatch.AUTO_RESUME_WITHIN_S + 60
+    assert dispatch.recover(store, tmp_path, os.environ, popen=pytest.fail, now=later) == []
+
+    def broken(*a, **kw):
+        raise OSError("no fork")
+
+    assert dispatch.recover(store, tmp_path, os.environ, popen=broken) == []
+    store._conn.execute("UPDATE events SET ts = 'garbled' WHERE task_id = ? AND kind = 'finished'", (task["id"],))
+    assert dispatch.recover(store, tmp_path, os.environ, popen=pytest.fail) == []
+    assert dispatch._alive(None) is False and dispatch._alive(os.getpid()) and not dispatch._alive(2 ** 22 + 7)

@@ -135,8 +135,14 @@ def samples(attempts: Sequence[Mapping[str, Any]]) -> list[tuple[str, bool]]:
     current: list[Any] | None = None
     before = None
     for i, a in enumerate(attempts):
+        if a.get("move") == "raced_out":
+            # Stopped because the other try of its race passed first: it says nothing of its
+            # cell, and the try after it started from the base beside it.
+            before = "race"
+            continue
         cell = _label(a.get("cell"))
-        if i == 0 or before == "next_model":
+        # A race's rung starts from the base beside the start: a first try of its own.
+        if i == 0 or before in ("next_model", "race"):
             current = [cell, False, False]
             out.append(current)
         elif current is None or cell != current[0] or before not in GOES_ON:

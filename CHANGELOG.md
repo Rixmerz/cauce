@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+### Added
+
+- **A hard start races the next rung.** Where a kind's start passes its first
+  try under half the time in a repository (over at least four), that first
+  try runs beside the next rung, each in its own worktree and each checked
+  there; the first to pass is kept, the other stopped with its process
+  group. A rung that wins has its work carried into the task's worktree;
+  when neither passes, the climb goes on from the rung. Measured here,
+  features passed their first try 29% of the time and each climb was a
+  whole attempt more of waiting. The `race` setting (on) turns it off.
+- **Large features run in parts by default.** `cauce workflow run feature`
+  runs as `feature-parallel` when the goal is 8 points or more, or touches
+  two areas or more, and says so; `--whole` keeps one build.
+- **A dead worker is noticed at once and resumed.** The hooks look at every
+  turn's end: a running task whose process is gone is swept and resumed once
+  from the worktree it left (`autowork` on). Measured here, five dead workers
+  cost 3.7 hours (17% of all run time), one of them noticed 93 minutes late.
+- **What was already broken is offered as a bugfix.** An ending lists the
+  problems the work found that were not its change's, shown with proof, and
+  the `cauce workflow run bugfix … --after` that would take each on; nothing
+  starts unless the orchestrator says so.
+- **`cauce stats` names the lost time.** The time of attempts whose worker
+  died is `lost`, and filing what a worker learned is `notes`; "other" went
+  from 18% to 1% of the measured time.
+
+### Changed
+
+- **No verifier twice.** A workflow step a blind review of its change follows
+  (a feature's build, an integrate step and the parts it joins) runs no
+  independent verifier of its own: the review reads the same request and diff.
+  Measured here, the verifier was 12% of all run time.
+- The orchestration guide tells the orchestrator to distribute the load:
+  independent pieces as tasks with their own surfaces, queued together, and
+  what depends on other work queued `--after` it at once.
+
 ## [0.26.0] - 2026-10-20
 
 ### Changed

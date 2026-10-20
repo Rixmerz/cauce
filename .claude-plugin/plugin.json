@@ -75,6 +75,12 @@
       "description": "A change that passes is checked again, before it counts, by a separate read-only worker that verifies the request, not the work, when its risk is high (data, security, money, a consumed contract, concurrency, delivery, or code changed with no test beside it) or medium and made by a cheap cell. Its findings go to the next attempt, two corrections at most. Off: a pass stands on its own check.",
       "default": true
     },
+    "race": {
+      "type": "boolean",
+      "title": "Race the next rung on a hard start",
+      "description": "Where a kind's start rarely passes its first try in this repository (under half, over at least four), its first try runs beside the next rung, each in its own worktree; the first to pass its check is kept and the other stopped. It costs a second worker and saves the climb's wait. Off: one try at a time.",
+      "default": true
+    },
     "engram": {
       "type": "boolean",
       "title": "Read the team's engram memory",

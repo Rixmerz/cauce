@@ -23,12 +23,15 @@ says about the code.
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import os
 import re
+import signal
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -394,6 +397,40 @@ def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path:
     if not spec.persist_session:
         argv.append("--no-session-persistence")
     return argv
+
+
+class Stoppable:
+    """A runner with `subprocess.run`'s contract whose worker a race can stop: the CLI runs
+    in a process group of its own, so stopping it stops the servers it started too."""
+
+    def __init__(self) -> None:
+        self.proc: subprocess.Popen[str] | None = None
+        self.stopped = False
+        self._lock = threading.Lock()
+
+    def __call__(self, argv: Sequence[str], *, input: str | None = None, cwd: str | None = None,
+                 timeout: float | None = None, env: Mapping[str, str] | None = None,
+                 **_: Any) -> subprocess.CompletedProcess[str]:
+        with self._lock:
+            if self.stopped:
+                return subprocess.CompletedProcess(list(argv), -signal.SIGTERM, "", "stopped before it started")
+            self.proc = subprocess.Popen(list(argv), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE, cwd=cwd, env=dict(env) if env else None, text=True,
+                                         start_new_session=True)
+        try:
+            out, err = self.proc.communicate(input, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.stop()
+            self.proc.communicate()
+            raise
+        return subprocess.CompletedProcess(list(argv), self.proc.returncode, out, err)
+
+    def stop(self) -> None:
+        with self._lock:
+            self.stopped = True
+            if self.proc is not None and self.proc.poll() is None:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(self.proc.pid, signal.SIGTERM)
 
 
 def run(

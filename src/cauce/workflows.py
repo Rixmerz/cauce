@@ -135,6 +135,39 @@ def locate(name: str, cwd: str | Path | None, scope: str | None = None) -> tuple
                         + "; `cauce workflow list` shows them")
 
 
+#: A feature this big, or one that touches this many areas, runs in parts by default.
+FAN_OUT_POINTS = 8
+FAN_OUT_AREAS = 2
+
+
+def fanned(name: str, cwd: str | Path | None, inputs: Mapping[str, str] | None,
+           scope: str | None = None) -> tuple[str, str | None]:
+    """The workflow a large feature runs as, and why: `feature` (cauce's own, not one the
+    person saved) becomes `feature-parallel` when its goal is `FAN_OUT_POINTS` or more, or
+    touches `FAN_OUT_AREAS` areas or more, the same pure estimate a task's plan makes. Its plan
+    splits the work into parts that build side by side, and a plan of one part is the
+    feature run whole, so nothing is lost when it should not split. (name, None) otherwise."""
+    from cauce import points, risk
+
+    goal = str((inputs or {}).get("goal") or "")
+    if name != "feature" or not goal:
+        return name, None
+    try:
+        if locate("feature", cwd, scope)[0] != "bundled" or locate("feature-parallel", cwd)[0] != "bundled":
+            return name, None
+    except WorkflowError:
+        return name, None
+    found = risk.of_request(goal, "feature")
+    size = points.of_request(goal, "feature", found)
+    areas = sorted({area for area, _ in risk.areas(found)})
+    if size.points < FAN_OUT_POINTS and len(areas) < FAN_OUT_AREAS:
+        return name, None
+    why = f"{size.points} points" + (f", {len(areas)} areas ({', '.join(areas)})" if len(areas) >= FAN_OUT_AREAS
+                                     else "")
+    return "feature-parallel", (f"runs as feature-parallel ({why}): its plan splits it into parts that build side "
+                                "by side, and a plan of one part is the feature run whole; `--whole` keeps one build")
+
+
 def load(name: str, cwd: str | Path | None, scope: str | None = None) -> dict[str, Any]:
     """A saved definition, checked, with where it came from (`scope`, `path`)."""
     where, path = locate(name, cwd, scope)
@@ -967,6 +1000,20 @@ def _headline(inputs: Mapping[str, str]) -> str:
     return next((line.strip() for line in text.splitlines() if line.strip()), "")
 
 
+def reviewed_next(defn: Mapping[str, Any], step: Mapping[str, Any]) -> bool:
+    """Whether a blind review of this step's change waits on it: a review step with no
+    ledger that needs it directly. That review is given the request and the diff, as the
+    independent verifier is, so a step it follows runs no verifier of its own. A step
+    that only reads, decides a ledger or fixes its rows is never one; the parts an integrate
+    step joins are, when a blind review follows the join."""
+    if str(step.get("kind") or "").startswith("review") or step.get("ledger"):
+        return False
+    after = [s for s in defn["steps"] if step["id"] in (s.get("needs") or ())]
+    # Parts a step runs in are reviewed through the integrate step that joins them.
+    return any((str(s.get("kind") or "").startswith("review") and not s.get("ledger"))
+               or (s.get("integrate") and reviewed_next(defn, s)) for s in after)
+
+
 def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Mapping[str, Any],
                 inputs: Mapping[str, str], options: Mapping[str, Any], latest: Mapping[str, dict], *,
                 part: Mapping[str, Any] | None = None) -> dict:
@@ -1047,6 +1094,8 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
                  {"id": area["id"], "n": area["n"], "of": area["of"], "area": True} if area else None),
         # A plan a later step fans out over: its pass carries the parts and their contract.
         "parts": True if any(s.get("fanout") == step["id"] for s in defn["steps"]) else None,
+        # A blind review of this step's change follows: it does the verifier's work.
+        "reviewed_next": True if reviewed_next(defn, step) else None,
         "ledger": held,
         "integrate": {k: joining[k] for k in ("branches", "contract")} if joins and joining else None,
         # A run queued after other work: its steps wait for that work to pass, as it does.

@@ -427,3 +427,30 @@ def test_session_start_says_what_the_registry_shadows_once(store, tmp_path):
         "layout-inspector": {"server": {"command": "npx", "args": ["li@latest"]}, "touches": "ui"}}))
     again = said()
     assert "with no fixed version" in again and "takes" not in again
+
+
+def test_an_ending_names_what_was_already_broken_and_the_bugfix_that_would_take_it_on(store: Store):
+    run = store.create_run(name="feature", scope="bundled", source="x", definition="{}", repo="r",
+                           session_id="s", status="done")
+    review = store.create_task("[feature#1 review] x", status="done", source="queue", session_id="s",
+                               workflow_run=run["id"], workflow_step="review")
+    old = {"where": "lib/tax.py:12", "what": "rounds half down", "evidence_class": "deterministic",
+           "cause": "pre-existing", "proof": "pytest tests/test_tax.py"}
+    guess = {**old, "where": "lib/x.py", "evidence_class": "inferential"}
+    mine = {**old, "where": "app.py:3", "cause": "introduced"}
+    store.add_event(review["id"], "finished", status="done", findings=[old, guess, mine, old])
+    last = store.create_task("[feature#1 recheck] x", status="done", source="queue", session_id="s",
+                             workflow_run=run["id"], workflow_step="recheck")
+    store.add_event(last["id"], "finished", status="done")
+    lines = hooks._found_before(store, store.get_task(last["id"]))
+    assert lines[0].startswith("  it found 1 problem(s) that were already there")
+    assert "lib/tax.py:12: rounds half down" in lines[1] and f"--after run:{run['id']}" in lines[1]
+    assert "cauce workflow run bugfix 'rounds half down (lib/tax.py:12)'" in lines[1]
+    alone = store.create_task("x", status="done", source="cauce", session_id="s")
+    many = [{**old, "where": f"f{i}.py"} for i in range(5)]
+    store.add_event(alone["id"], "finished", status="done", findings=many)
+    found = hooks._found_before(store, store.get_task(alone["id"]))
+    assert f"--after task:{alone['id']}" in found[1] and found[-1].startswith("    and 2 more")
+    plain = store.create_task("y", status="done", source="cauce", session_id="s")
+    store.add_event(plain["id"], "finished", status="done")
+    assert hooks._found_before(store, store.get_task(plain["id"])) == []

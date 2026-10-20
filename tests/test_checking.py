@@ -928,3 +928,14 @@ def test_a_workflow_step_s_kept_commit_is_named_by_its_goal_not_the_step_title()
     assert orchestrate.commit_title(step) == "Make workflows faster by running parts in parallel"
     assert orchestrate.commit_title({"title": "[bugfix#3 fix] Fix it", "body": ""}) == "Fix it"
     assert orchestrate.commit_title({"title": "Add a flag to the importer"}) == "Add a flag to the importer"
+
+
+def test_a_step_a_blind_review_follows_runs_no_verifier_of_its_own(git_repo, store, verifier_on):
+    """The verifier was 12% of the time, mostly before a review step that reads the same diff."""
+    script = Script(passing(), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+                 options=orchestrate.Options(reviewed_next=True))
+    assert report.status == "done" and len(script.specs) == 1  # the worker only, no verifier
+    assert store.events_of(report.task_id, "verified") == []
+    assert any("the blind review step that follows" in r for r in report.plan.reasons)
+    assert orchestrate.Options(reviewed_next=True).stored()["reviewed_next"] is True

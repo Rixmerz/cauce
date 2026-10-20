@@ -214,6 +214,25 @@ Request: $ARGUMENTS
    itself. Never set `max_parallel` to slow it down; that ceiling is the
    person's.
 
+   **Speed is distributing the load.** Workers that run at once are the
+   fastest way through a request, so give cauce work it can run side by side:
+   - Split a request with independent pieces into one task each, every one
+     with its own `--surface` (the folders or files it may write), and queue
+     them together. Tasks whose surfaces cannot touch start at once, with no
+     question to Haiku; one long task runs alone.
+   - A large feature (`cauce workflow run feature`) runs as `feature-parallel`
+     by itself when its goal is big or touches several areas: its plan splits
+     it into parts that build side by side. Pass `--whole` only when the
+     pieces truly cannot be separated.
+   - A start that rarely passes its first try here races the next rung on
+     that try (the `race` setting): leave it on.
+   - Do not wait on one task to queue the next unless it needs its work; when
+     it does, queue it now with `--after <task>` so it starts the moment the
+     first passes.
+   - An ending that lists problems that were already there (not that
+     change's) offers the bugfix for each: start the ones worth it with
+     `--after`, so they never block the work at hand.
+
    Work you queued, or ran in the background, reports back on its own: when
    it ends, a `cauce:` notice reaches you at the end of your turn or with the
    person's next message. Act on it then, as each line says. Tell the person,

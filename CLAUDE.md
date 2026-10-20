@@ -36,7 +36,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -549,6 +549,36 @@ yields the default kind, not a guess.
   and the endings tell it to ask in its conversation and run the line on a yes. The orchestrator
   gains no power: it still resumes `--unattended`, and a dismissal it types is
   recorded as its call, never as the person's.
+- A start that rarely passes its first try here (under `orchestrate.RACE_BELOW` over at
+  least `RACE_SAMPLES` first tries of its kind in the repository, `standards.rates`)
+  races the next rung that needs no approval on that try (`race_cell`, the `race`
+  setting): each in its own worktree (`isolate.race_lane`), each checked there, the
+  first to pass kept and the other stopped (`launch.Stoppable`, its process group).
+  A rung that wins has its work carried into the task's worktree (`isolate.adopt`);
+  when neither passes, the climb goes on from the rung. Both tries are attempts with
+  their cost; one stopped because the other passed first (`RACED_OUT`) teaches its cell
+  nothing, and the rung's is a first try of its own (`standards.samples`). Never a
+  pinned start, a reading kind, a ledger, integrate or plan-parts step, a resume, a run
+  in the checkout, or a worktree that brought files in from it. Money is no brake: the
+  second worker is the price of the climb's wait.
+- A workflow step a blind review of its change follows (`workflows.reviewed_next`: a
+  review with no ledger that needs it, or an integrate step that joins its parts and is
+  followed by one) runs no independent verifier of its own (`Options.reviewed_next`):
+  the review reads the request and the diff as the verifier would, and the plan says so.
+- `cauce workflow run feature` runs as `feature-parallel` when its goal is
+  `workflows.FAN_OUT_POINTS` or more, or touches `FAN_OUT_AREAS` areas, by the plan's
+  pure estimate (`workflows.fanned`), and says so; never a `feature` the person saved,
+  and `--whole` keeps one build.
+- A worker that died is noticed at a turn's end, not at the next session: the hooks
+  sweep a running task whose process is gone and resume it once on their own
+  (`dispatch.recover`: `cauce resume --unattended` in the worktree it left, within
+  `AUTO_RESUME_WITHIN_S`, at most `AUTO_RESUMES`, with `autowork` on). Its death is no
+  ending handed to a session; a second one is the orchestrator's. The analysis reads
+  the time from an attempt that never finished to its run's end as `lost_s`, never
+  as other.
+- An ending names the problems the work found that were already there, shown with
+  proof (`hooks._found_before`), and the `bugfix` that would take one on `--after` the
+  work; nothing is started: the orchestrator decides.
 - A worker never inherits the host's session id (`CLAUDE_CODE_SESSION_ID`),
   and an attempt never keeps the host's session as its own.
 - Problems and fixes are global; notes belong to one project and are never

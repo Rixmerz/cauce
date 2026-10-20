@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from cauce import config, orchestrator, project, repo, stops
+from cauce import findings as findings_mod
 from cauce.store import OPEN_FOR_A_RELAY, Store, home
 from cauce.text import fold, words
 
@@ -289,11 +290,13 @@ def _scribe(event: Mapping[str, Any], root: Path, env: Mapping[str, str]) -> Non
 
 
 def _revive(store: Store, root: Path, env: Mapping[str, str]) -> None:
-    """A lane with queued work and no dispatcher (one died on a full disk, or was killed)
-    gets one again (`dispatch.revive`). Its failure is noted, and never costs the turn."""
+    """A worker that died is noticed and resumed (`dispatch.recover`), and a lane with queued
+    work and no dispatcher (one died on a full disk, or was killed) gets one again
+    (`dispatch.revive`). Its failure is noted, and never costs the turn."""
     try:
         from cauce import dispatch
 
+        dispatch.recover(store, root, env)
         dispatch.revive(store, root, env)
     except Exception:  # the turn goes on
         note_error(root, "revive")
@@ -585,6 +588,7 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
         lines += [f"  it ran with a warning: {warning}" for warning in _warned(store, t["id"])]
         lines += _went_past(store, t)
         lines += _behind(store, t)
+        lines += _found_before(store, t)
         if t["status"] == "done":
             branch = data.get("branch")
             where = (f"; branch {branch}: show `git diff HEAD...{branch}` and merge only when they say so"
@@ -613,6 +617,39 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
                          "opens the lane; when the queued work does not depend on it, tell the person and "
                          f"run `cauce lanes --unpause {t.get('repo')}` to let them start now")
     return "\n".join(lines), [t["id"] for t in ended]
+
+
+#: The most problems that were already there an ending lists.
+FOUND_BEFORE_SHOWN = 3
+
+
+def _found_before(store: Store, ended: Mapping) -> list[str]:
+    """Problems the work found that were already there, shown with proof: never this change's
+    to fix, never a blocker, and so never fixed unless somebody starts it. The ending names
+    them and the bugfix that would take one on, after this work, for the orchestrator to
+    decide; nothing is started."""
+    tasks = store.run_tasks(int(ended["workflow_run"])) if ended.get("workflow_run") else [ended]
+    found: dict[str, Mapping] = {}
+    for task in tasks:
+        final = store.final_event(task["id"]) if task.get("status") == "done" else None
+        for f in ((final or {}).get("data") or {}).get("findings") or ():
+            if isinstance(f, Mapping) and f.get("cause") == "pre-existing" and f.get("evidence_class") == \
+                    "deterministic":
+                found.setdefault(findings_mod.key(f), f)
+    if not found:
+        return []
+    after_ref = f"run:{ended['workflow_run']}" if ended.get("workflow_run") else f"task:{ended['id']}"
+    shown = list(found.values())[:FOUND_BEFORE_SHOWN]
+    lines = [f"  it found {len(found)} problem(s) that were already there, not this change's (each shown with "
+             "its proof); a bugfix for one is yours to decide, nothing was started:"]
+    for f in shown:
+        what = " ".join(str(f.get("what") or "").split())[:200]
+        where = str(f.get("where") or "")
+        lines.append(f"    {where}: {what} — `cauce workflow run bugfix {shlex.quote(f'{what} ({where})')} "
+                     f"--after {after_ref}`")
+    if len(found) > len(shown):
+        lines.append(f"    and {len(found) - len(shown)} more: `cauce show {ended['id']}`")
+    return lines
 
 
 def _behind(store: Store, ended: Mapping) -> list[str]:

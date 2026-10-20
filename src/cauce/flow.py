@@ -205,6 +205,7 @@ def queued_options(task: dict, defaults: Options) -> Options:
         parts=bool(raw.get("parts", defaults.parts)),
         integrate=raw.get("integrate") or defaults.integrate,
         touches=tuple(raw.get("touches") or defaults.touches),
+        reviewed_next=bool(raw.get("reviewed_next")) or defaults.reviewed_next,
     )
 
 
