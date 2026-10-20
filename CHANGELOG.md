@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-10-20
+
+### Added
+
+- **Scenarios with real processes and a fake `claude`.** The unit tests drive
+  the engine in-process with the adaptive settings off, and never saw a worker
+  die under the dispatcher, a resume drop a workflow part, or a worker inherit
+  the host's session. `tests/test_scenarios.py` runs the real commands as
+  processes with a scripted `claude` on PATH and ends each with `cauce doctor`;
+  run against 0.29.1, all three fail on the bugs 0.29.2 fixed.
+- **A corpus of real requests for the router** (`tests/corpus/requests.json`):
+  a request it ever got wrong is kept with where it belongs.
+- **Round trips for what one place writes and another reads**
+  (`tests/test_contracts.py`): a task's stored options and every lane pause
+  reason.
+- **CI runs the plugin as Claude Code loads it**: `claude plugin validate` and
+  the mod's tests.
+
+- **`cauce doctor`: what the store says is broken.** Every rule is a bug cauce
+  shipped and found late in real work, turned into a query: a lane paused on
+  a task that passed, a task running with its process gone, queued work no
+  dispatcher took, an automatic resume that started nothing (broken: stuck
+  now), and over the last days a workflow part that lost its mark, an
+  integrate that skipped while parts kept branches, worktree attempts that
+  kept no session id, first attempts under their kind's turns, and a format
+  failure that climbed effort (suspect). Read only, no model; it exits 1 when
+  something is broken, and the session start names what is broken in its
+  repository.
+
+### Fixed
+
+- **A question in a request's first sentence stays with the session**
+  ("¿arreglaste los fallos…?", "hay forma de…?"): only an opening of doubt was
+  read as one.
+- **A resume keeps everything the task was queued with.** Its stored options
+  left out the start cell, the turns, the base commit, `--carry`, the attempt
+  limit and an explicit `--no-livespec`, so the resume after it ran without
+  them.
+
 ## [0.29.2] - 2026-10-20
 
 ### Fixed

@@ -54,7 +54,9 @@ _READS = re.compile(r"^\W*(explain|why|what|how|where|when|which|who|review|audi
 _ASKS = re.compile(r"(?:^|[.!?¿]\s*)\W*(?:y |tambi[eé]n |pero |entonces )?(?:se )?(?:podr[ií]a\w*|"
                    r"deber[ií]a\w*|conviene|vale la pena|realmente|ser[ií]a|tendr[ií]a\w*|habr[ií]a|"
                    r"qu[eé] (?:pasa|tal|opinas|te parece)|y si|could|should|would|is it worth|what if|"
-                   r"does it make sense|do we need|can we)\b[^?]*\?", re.I)
+                   r"does it make sense|do we need|can we|hay (?:forma|manera)|is there a way)\b[^?]*\?", re.I)
+#: A request whose first sentence is itself a question ("¿lo arreglaste?", "did it pass?").
+_FIRST_ASKS = re.compile(r"^\W*[^.!?\n]{3,}\?")
 
 #: An opening that talks to the session itself: the answer is this conversation's to give.
 _TALKS = re.compile(r"^\W*(?:habla\w*|h[aá]blame|dime|dinos|cu[eé]nta(?:me|nos)|"
@@ -71,9 +73,9 @@ def talks(text: str) -> bool:
 def asks(text: str) -> bool:
     """Whether a request is a question about the work rather than the work: an opening
     of doubt (could, should, what if, vale la pena…) ending in a question mark, at the
-    start or after a sentence. A request that opens with a verb of change is an order,
-    whatever it asks after it."""
-    return bool(_ASKS.search(text)) and not opens_with_change(text)
+    start or after a sentence, or a first sentence that is a question. A request that
+    opens with a verb of change is an order, whatever it asks after it."""
+    return bool(_ASKS.search(text) or _FIRST_ASKS.search(text)) and not opens_with_change(text)
 
 
 @dataclass(frozen=True)

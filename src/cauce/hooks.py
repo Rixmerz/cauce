@@ -539,6 +539,15 @@ def session_start(
         if dead:
             blocks.append(_dead_end_text(dead, "cauce memory: recent fixes in this repository that did not work, "
                                                "met across areas."))
+    if key:
+        # What the store says is stuck now in this repository: a state cauce should never reach.
+        from cauce import doctor
+
+        broken = [f for f in doctor.check(store, repo=key, days=1) if f.severity == doctor.BROKEN]
+        if broken:
+            blocks.append("cauce doctor: work in this repository is stuck in a state cauce should never reach; "
+                          "tell the person, and run each line only on their word:\n"
+                          + "\n".join(f"- {f.what} → {f.fix}" for f in broken[:5]))
     if key and cwd and project.find(cwd) is not None and config.enabled("notes", {**os.environ, **env}):
         # After a compaction above all: what the project knows is read back from
         # its notes, not rebuilt from the code. The index, not the notes: a

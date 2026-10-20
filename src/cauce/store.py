@@ -984,6 +984,18 @@ class Store:
         rows = self._conn.execute("SELECT * FROM events WHERE task_id = ? AND kind = ? ORDER BY id", (task_id, kind))
         return [{**dict(r), "data": json.loads(r["data"])} for r in rows]
 
+    def events_of_kinds(self, kinds: Sequence[str], *, since: str | None = None) -> list[dict]:
+        """Every task's events of these kinds, oldest first, from `since` (an ISO time) on."""
+        clause = " AND ts >= ?" if since else ""
+        rows = self._conn.execute(
+            f"SELECT * FROM events WHERE kind IN ({', '.join('?' for _ in kinds)}){clause} ORDER BY id",  # noqa: S608
+            [*kinds, *([since] if since else [])])
+        return [{**dict(r), "data": json.loads(r["data"])} for r in rows]
+
+    def attempt(self, task_id: int, seq: int) -> dict | None:
+        row = self._conn.execute("SELECT * FROM attempts WHERE task_id = ? AND seq = ?", (task_id, seq)).fetchone()
+        return dict(row) if row else None
+
     def last_event(self, task_id: int, kind: str) -> dict | None:
         row = self._conn.execute(
             "SELECT * FROM events WHERE task_id = ? AND kind = ? ORDER BY id DESC LIMIT 1", (task_id, kind)).fetchone()

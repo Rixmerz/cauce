@@ -19,3 +19,16 @@ jobs:
       - run: python -m ruff check .
       - run: python -m coverage run -m pytest
       - run: python -m coverage report
+
+  plugin:
+    # The plugin as Claude Code loads it: its manifest, its commands and the mod's own tests,
+    # which the Python suite never runs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g @anthropic-ai/claude-code
+      - run: claude plugin validate .
+      - run: claude plugin test .

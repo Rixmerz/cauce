@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from cauce import hooks, route
 from cauce.store import Store
@@ -119,3 +120,19 @@ def test_a_request_that_talks_to_the_session_stays_with_it():
     assert route.talks("Tell me why the dispatcher waited on the second task before starting it")
     assert not route.talks("Realiza todas las pruebas sobre MECHA, testing de seguridad, inventa algo")
     assert not route.talks("Fix the summary line the report prints when a task stops for review")
+
+
+def test_the_corpus_of_real_requests_goes_where_each_belongs():
+    """Requests people typed: one the router once sent the wrong way is kept here, so it never
+    goes that way again. 'session' stays with the conversation; 'work' is not kept there for
+    being a question or a word to the session (its size and the context still decide)."""
+    corpus = json.loads((Path(__file__).parent / "corpus" / "requests.json").read_text())["requests"]
+    wrong = []
+    for item in corpus:
+        found = route.choose(item["text"], context_tokens=600_000, footprint=FOOTPRINT)
+        talked = route.talks(item["text"]) or route.asks(item["text"])
+        if item["expect"] == "session" and found.mode != route.MAIN:
+            wrong.append(f"to the session, went {found.mode}: {item['text'][:80]}")
+        if item["expect"] == "work" and (talked or (found.mode == route.MAIN and len(item["text"].split()) >= 8)):
+            wrong.append(f"is work, kept here ({found.reasons[0]}): {item['text'][:80]}")
+    assert wrong == []

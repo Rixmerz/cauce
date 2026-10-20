@@ -1,0 +1,28 @@
+{
+  "about": "Requests people typed, verbatim but for project names, and where each belongs: 'session' (the conversation answers it) or 'work' (an order that may go to a worker; the size and the context decide which). A request the router got wrong in real use is added here with its right answer.",
+  "requests": [
+    {"text": "Nuevos issues", "expect": "session"},
+    {"text": "Que falta", "expect": "session"},
+    {"text": "Que estamos pendiente", "expect": "session"},
+    {"text": "Que falta fixear o que", "expect": "session"},
+    {"text": "Que pruebas faltan por realizar", "expect": "session"},
+    {"text": "Habla en español y dime si falta mergesrmos o testear nueva version", "expect": "session"},
+    {"text": "Que rol o que puede hacer el agente orquestador ahora vs que se hace completamente sólo y automático", "expect": "session"},
+    {"text": "Consulta que pasa cuando un workflow activo encuentra un bug se gatillo un workflow de bugfix?", "expect": "session"},
+    {"text": "Realmente vale limitar los turnos?", "expect": "session"},
+    {"text": "También se podría reutilizar siempre la misma sesión por cada workerrol respectivamente para siempre tener nociones generales quizás? Al menos una sesión por workerrol por proyecto respectivsmente", "expect": "session"},
+    {"text": "¿Qué pasa si en vez de tener modelos de memoria o mejoras a nivel global por orquestador, lo hacemos a nivel de subagente? O de worker, mejor dicho, por rol.", "expect": "session"},
+    {"text": "arreglaste los fallos y mergeaste bajo una nueva version?, hay forma de benchmark quizas necesitamos algo para detectar los fallos más facilmente", "expect": "session"},
+    {"text": "Que otras ideas de mejora podemos implementar de mejoras? Quiero que miramos bien la velocidad que es lo que más me interesa y lo más importante ya que es la idea de distribuir carga", "expect": "session"},
+    {"text": "Espera eso te se jn problema de vuelta y es duplicar la quema de tokens al tener que delegar y luego que el delegado retorne un resumen al main", "expect": "session"},
+    {"text": "Se ve bien. ¿Vale la pena limitar los turnos por intento en cada tipo de tarea?", "expect": "session"},
+    {"text": "Should we cache the parsed config between runs, or is it cheap enough?", "expect": "session"},
+    {"text": "Tell me why the dispatcher waited on the second task before starting it", "expect": "session"},
+    {"text": "Implementa todas las mejoras respectivas implementa las tu mismo y luego valida", "expect": "work"},
+    {"text": "Realiza todas las pruebas respectivamente sobre la plataforma testing security inventa algo", "expect": "work"},
+    {"text": "Implementa todas las mejoras respectivas en base a los resultados criterios e investigscion", "expect": "work"},
+    {"text": "Fix the export so the tests pass again. Could it also log the row count while it is at it?", "expect": "work"},
+    {"text": "Add a retry with backoff to the webhook sender and cover it with tests", "expect": "work"},
+    {"text": "Corrige el cálculo de la fecha segura cuando baja la capacidad y agrega su prueba", "expect": "work"}
+  ]
+}

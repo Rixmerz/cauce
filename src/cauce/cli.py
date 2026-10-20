@@ -1205,6 +1205,20 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """States the store should never hold, read, never written: 1 when something is broken now."""
+    from cauce import doctor
+
+    key = repo.key(Path(args.repo).resolve()) if args.repo else None
+    store = Store.open()
+    try:
+        found = doctor.check(store, repo=key, days=args.days)
+    finally:
+        store.close()
+    print(json.dumps([f.data() for f in found], indent=2) if args.json else doctor.text(found))
+    return 1 if any(f.severity == doctor.BROKEN for f in found) else 0
+
+
 def cmd_evolution(args: argparse.Namespace) -> int:
     """How cauce evolves and why, read from the store: no model. `--snapshot` takes one now."""
     from cauce import evolution
@@ -2022,6 +2036,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--runs", action="store_true", help="one record per run instead of the summary (JSON)")
     p.add_argument("--csv", action="store_true", help="with --runs: CSV, for a spreadsheet")
     p.set_defaults(func=cmd_stats)
+    p = sub.add_parser("doctor", help="states the store should never hold: work stuck now (broken) and what went "
+                       "wrong over the last days (suspect); exits 1 when something is broken")
+    p.add_argument("--days", type=int, default=2, help="how far back the suspect rules read (0: everything)")
+    p.add_argument("--repo", help="only this repository (default: every one)")
+    p.add_argument("--json", action="store_true", help="the findings as JSON")
+    p.set_defaults(func=cmd_doctor)
     p = sub.add_parser("evolution", help="how cauce evolves and why: each metric's trend, and every change of a "
                                          "standard with its reason and verdict")
     p.add_argument("--days", type=int, default=30, help="the window (default 30; 0 for all time)")
