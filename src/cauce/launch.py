@@ -705,8 +705,11 @@ def read_parts(block: Mapping[str, Any]) -> tuple[tuple[dict[str, Any], ...], st
         if any(p["id"] == pid for p in parts):
             return (), "", f"two parts are called {pid!r}"
         prompt = part.get("prompt")
-        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > PART_CHARS:
+        if not isinstance(prompt, str) or not prompt.strip():
             return (), "", f"part {pid!r} has no prompt (text, at most {PART_CHARS} characters)"
+        if len(prompt) > PART_CHARS:
+            return (), "", (f"part {pid!r}: its prompt is {len(prompt)} characters, over {PART_CHARS}: say what the "
+                            "part builds and leave the how to its worker")
         given = part.get("surfaces") or []
         try:
             if not isinstance(given, list):

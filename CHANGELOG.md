@@ -15,6 +15,9 @@
   and the plan says so.
 - **"Render" is no page.** The words that put a request in the `ui` area read
   `render…` as rendering, so work on the Render host was kept as UI work.
+- **A plan's over-long part says so.** A part whose prompt ran past 6000
+  characters was reported as having no prompt; the plan's next attempt is now
+  told its length and to leave the how to the part's worker.
 - **A request that talks to the session stays with it.** "Habla en español y
   dime…", "tell me…", "resúmeme…" were routed as worker tasks; an opening that
   addresses the session is now its to answer.
