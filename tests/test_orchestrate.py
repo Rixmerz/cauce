@@ -702,7 +702,7 @@ def test_the_plan_says_when_a_task_needs_a_browser_or_running_servers(git_repo, 
     dry = run(text, git_repo, store, Options(dry_run=True), registry={}, classifier=kind("test"))
     notes = [r for r in dry.plan.reasons if r.startswith("this task ")]
     assert len(notes) == 2 and "browser MCP server" in notes[0] and "--allow 'mcp__browser'" in notes[0]
-    assert "start them yourself" in notes[1] and "mentions 'Start both dev servers'" in notes[1]
+    assert "starts them itself" in notes[1] and "'Start both dev servers'" in notes[1] and "--service" not in notes[1]
     (tmp_path / "caps.json").write_text(json.dumps({"browser": caps.EXAMPLE["browser"]}))
     registry = caps.load(tmp_path / "caps.json")
     dry = run(text, git_repo, store, Options(dry_run=True), registry=registry, classifier=kind("explore"))
@@ -1317,8 +1317,22 @@ def test_servers_named_by_a_port_that_answers_need_no_warning():
     assert orchestrate._unmet("the app runs with npm run dev", {}, verify=checks) == []
     said = orchestrate._unmet("the app runs with npm run dev", {}, verify="npx playwright test")
     assert len(said) == 1 and "mentions 'npm run dev'" in said[0]
-    # A task that tells the worker to start its servers needs them, whatever its check says.
-    assert orchestrate._unmet("Start both dev servers, then fix the 500 /api/cart returns", {}, verify="npm test")
+    # A task that tells the worker to start its servers needs them, whatever its check says, and its
+    # worker starts them: the plan says so and suggests no --service.
+    said = orchestrate._unmet("Start both dev servers, then fix the 500 /api/cart returns", {}, verify="npm test")
+    assert len(said) == 1 and "the worker starts them itself" in said[0] and "--service" not in said[0]
+    said = orchestrate._unmet("Levanta el backend y el front con npm run dev y corre los flujos de la API", {},
+                              verify="npm test")
+    assert len(said) == 1 and "'Levanta'" in said[0] and "--service" not in said[0]
+    said = orchestrate._unmet("Fix the cart page; start the servers yourself and check it", {})
+    assert len(said) == 1 and "the worker starts them itself" in said[0]
+    assert orchestrate._unmet("Fix the cart page; start the servers yourself and check it", {}, served=True) == []
+    assert not orchestrate._START_SERVERS.search("Run the backend tests and fix the ones that fail")
+    # A host and port named as context, with a check that talks to no server, is no need.
+    context = "The API at localhost:8080 returns a 500 for /cart; fix the handler and its test"
+    assert orchestrate._unmet(context, {}, verify="npm run lint && npm test && npm run build") == []
+    assert orchestrate._unmet(context, {}, verify="deno test -A --allow-net=localhost:8080") == []
+    assert orchestrate._unmet(context, {}, verify="curl -f localhost:8080/cart")
     assert orchestrate._unmet("the app runs with npm run dev", {}, verify="pytest tests/e2e_api")
 
 

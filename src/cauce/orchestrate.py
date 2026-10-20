@@ -1517,12 +1517,20 @@ _BROWSER = re.compile(r"\b(browser|navegador|navigate|navega\w*|abr[ie]\w* (?:el
 _SERVER = re.compile(r"(\bdev servers?\b|\blevanta\w*\b|\bstart (?:both |the )?(?:dev )?servers?\b|"
                      r"\bng serve\b|\bnpm (?:run )?(?:start|dev)\b|localhost:\d+)", re.IGNORECASE)
 _BROWSER_CAPS = ("browser", "playwright", "chrome", "puppeteer", "rastro")
-#: A task that tells the worker to start its servers: it needs them, whatever its check.
-_START_SERVERS = re.compile(r"(\blevanta\w*\b|\bstart (?:both |the |all )?(?:dev )?servers?\b)", re.IGNORECASE)
+#: A task that tells the worker to start its servers: it needs them, whatever its check, and
+#: its worker starts them itself.
+_START_SERVERS = re.compile(
+    r"(\blevanta\w*\b|\barranca\w*\s+(?:el|la|los|las|ambos)\b|"
+    r"\binicia\w*\s+(?:el |la |los |las )?(?:servidor\w*|servicios?|backend|front\w*|api|app)\b|"
+    r"\b(?:start|run|spin up|bring up|boot)\s+(?:up\s+)?(?:both |the |all |your |its )?(?:own )?(?:dev |local )?"
+    r"(?:servers?|backend|back-?end|frontend|front-?end|front)\b"
+    r"(?!\s+(?:tests?|checks?|suites?|specs?|lint\w*|builds?|unit\w*|pruebas?)\b))", re.IGNORECASE)
 #: A check that talks to a running server: only then does a task's mention of one
 #: say the check needs it. Lint, unit tests and a build do not.
-_CHECK_SERVES = re.compile(r"(localhost|127\.0\.0\.1|https?://|\be2e|playwright|cypress|puppeteer|\bcurl\b|"
+_CHECK_SERVES = re.compile(r"(\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0)\b|\be2e|playwright|cypress|puppeteer|\bcurl\b|"
                            r"\bwget\b|lighthouse|wait-on|start-server-and-test)", re.IGNORECASE)
+#: A permission a check is run with (`--allow-net=localhost:8000`): no server it talks to.
+_CHECK_GRANTS = re.compile(r"--allow-[\w-]+=\S*", re.IGNORECASE)
 
 
 #: A task that says in its own words it must change nothing: a validation whose
@@ -1580,8 +1588,10 @@ def _unmet(text: str, registry: Mapping[str, caps.Capability], *, served: bool =
     """What a task asks for that a one-shot worker does not have, said before any
     money is spent: a worker has no browser unless a capability gives it one, or
     its check or the project's own tests drive a headless one (`ci.browser`), and
-    a server it starts ends with it. A task whose check needs no server (lint,
-    tests, a build) is not told to start one for a word in its text."""
+    a server it starts ends with it. A task that tells its worker to start its servers
+    is said to have them started by its worker, never sent to `--service`; a task whose
+    check needs no server (lint, tests, a build) is not told to start one for a word in
+    its text, a host and port it names as context included."""
     notes = []
     if _BROWSER.search(text) and not any(k in name.lower() for name in registry for k in _BROWSER_CAPS):
         driven = ci.browser(where, verify) if where is not None else None
@@ -1591,9 +1601,12 @@ def _unmet(text: str, registry: Mapping[str, caps.Capability], *, served: bool =
             notes.append("this task needs a browser and workers have none: register a browser MCP server in "
                          "your cauce capabilities.json (`cauce capabilities --example` has one) and allow its "
                          "tools (--allow 'mcp__browser'), or check the pages yourself")
-    mention = _SERVER.search(text)
-    asked = bool(mention and _START_SERVERS.search(text))
-    if mention and not served and not _all_listening(text) and (asked or not verify or _CHECK_SERVES.search(verify)):
+    mention, started = _SERVER.search(text), _START_SERVERS.search(text)
+    if started and not served:
+        notes.append(f"this task tells its worker to start its servers ({started.group(0).strip()!r}): the worker "
+                     "starts them itself, and they stop when it finishes")
+    elif mention and not served and not _all_listening(text) and (
+            not verify or _CHECK_SERVES.search(_CHECK_GRANTS.sub(" ", verify))):
         notes.append(f"this task mentions {mention.group(0)!r}: if its work needs running servers, pass them with "
                      "--service 'npm run dev@4200' (cauce starts each before the work and stops it after), or "
                      "start them yourself before dispatching; a server a worker starts stops when it finishes")

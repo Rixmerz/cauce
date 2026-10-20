@@ -137,6 +137,15 @@ def test_the_neutral_directory_is_created(tmp_path):
         ("¿dónde se registra la ruta? y agrega un log", "implement"),
         ("¿dónde se define el usuario que se crea?", "explore"),
         ("where is the router defined #explore, then add a route", "explore"),  # a tag is a person's word
+        # joining branches is writing, whatever the branches hold
+        ("Integra la rama cauce/task-1394 en cauce/task-1400 con cherry-pick y resuelve conflictos; son los "
+         "arreglos de la auditoría de seguridad", "implement"),
+        ("Mergea la rama de seguridad en main y resuelve los conflictos del audit", "implement"),
+        ("Haz merge de la rama del audit en main", "implement"),
+        ("Cherry-pick the security audit findings onto the release branch", "implement"),
+        ("Merge the audit branch into main and resolve the conflicts in the security module", "implement"),
+        ("Resuelve los conflictos de la rama de auditoría con main", "implement"),
+        ("haz un review del PR de login antes del merge", "review-critical"),
     ],
 )
 def test_a_request_for_a_change_is_never_read_only(text, kind):
