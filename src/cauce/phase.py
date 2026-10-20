@@ -30,8 +30,8 @@ def kind_of(sig: str) -> str:
     return "exploring"
 
 
-def recent(task_id: int, attempt: int | None, env: Mapping[str, str] | None = None) -> list[str]:
-    """The signatures of the attempt's last calls, oldest first."""
+def _calls(task_id: int, attempt: int | None, env: Mapping[str, str] | None) -> list[dict]:
+    """The attempt's calls in the tail of today's log, oldest first."""
     path = signature.log_dir(dict(os.environ) if env is None else env) / f"{datetime.now(UTC):%Y-%m-%d}.ndjson"
     try:
         with path.open("rb") as fh:
@@ -46,9 +46,23 @@ def recent(task_id: int, attempt: int | None, env: Mapping[str, str] | None = No
             e = json.loads(raw)
         except ValueError:
             continue
-        if e.get("task_id") == task_id and (attempt is None or e.get("attempt") == attempt):
-            out.append(str(e.get("sig") or ""))
-    return out[-LAST:]
+        if isinstance(e, dict) and e.get("task_id") == task_id and (attempt is None or e.get("attempt") == attempt):
+            out.append(e)
+    return out
+
+
+def recent(task_id: int, attempt: int | None, env: Mapping[str, str] | None = None) -> list[str]:
+    """The signatures of the attempt's last calls, oldest first."""
+    return [str(e.get("sig") or "") for e in _calls(task_id, attempt, env)][-LAST:]
+
+
+def session_of(task_id: int, attempt: int | None, env: Mapping[str, str] | None = None) -> str | None:
+    """The Claude Code session the attempt's worker runs in, as its last call said; None before
+    its first call, or when the log's tail no longer holds one."""
+    for e in reversed(_calls(task_id, attempt, env)):
+        if isinstance(e.get("session_id"), str) and e["session_id"]:
+            return e["session_id"]
+    return None
 
 
 def of(task_id: int, attempt: int | None, env: Mapping[str, str] | None = None) -> str | None:

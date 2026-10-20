@@ -295,3 +295,39 @@ def test_an_answer_of_the_wrong_form_is_asked_again_of_the_same_cell_once_then_c
     assert again.move is Move.MORE_EFFORT and not again.reshape
     # Shallow work stays on the effort axis: a form is only a form.
     assert not decide(PLAN, [fail("opus/xhigh", Failure.INCONCLUSIVE, "no evidence")]).reshape
+
+
+def test_a_second_correction_in_a_row_on_one_model_hands_the_work_to_a_stronger_one():
+    def corrected(cell: str, what: str) -> Attempt:
+        return Attempt(Cell.parse(cell), 30, False, Failure.CODE_BUG, f"{cell} passed its own check; {what}",
+                       blockers=({"where": "src/zip.py:10", "what": what},))
+
+    # One correction is the shallow kind: the same model, more thorough.
+    first = decide(IMPLEMENT, [corrected("sonnet/medium", "the declared size is trusted")])
+    assert first.move is Move.MORE_EFFORT and first.cell == Cell("sonnet", "high")
+    # A second one that still leaves blockers goes to the next model, not the next effort.
+    second = decide(IMPLEMENT, [corrected("sonnet/medium", "the declared size is trusted"),
+                                corrected("sonnet/high", "local headers are not checked")])
+    assert second.move is Move.NEXT_MODEL and second.cell.model == "opus"
+    assert any("two corrections in a row" in line for line in second.because)
+    # A plain shallow failure after a correction still climbs effort.
+    third = decide(IMPLEMENT, [corrected("sonnet/medium", "x"), fail("sonnet/high", Failure.CODE_BUG)])
+    assert third.move is Move.MORE_EFFORT
+
+
+def test_a_task_failure_on_work_that_stands_is_a_decision_not_a_replan():
+    from cauce.escalate import Attempt, Failure, Move, decide
+    from cauce.matrix import ladder_for
+
+    ladder = ladder_for("implement")
+    cell = ladder[0]
+    stands = Attempt(cell, 30, False, Failure.ARCHITECTURE_BUG, "one point needs a design decision",
+                     changed=("a.py",), stands=True)
+    decision = decide(ladder, [stands])
+    assert decision.move is Move.DECIDE and not decision.continues
+    assert '"one point needs a design decision"' in decision.reason and "kept on its branch" in decision.reason
+    # Work that does not stand is a wrong task, as before, and so is one found wrong under a refusal.
+    plain = Attempt(cell, 30, False, Failure.ARCHITECTURE_BUG, "x", changed=("a.py",))
+    assert decide(ladder, [plain]).move is Move.REPLAN
+    refused = Attempt(cell, 30, False, Failure.ARCHITECTURE_BUG, "x", denied=("Bash(npm test)",), stands=True)
+    assert decide(ladder, [refused]).move is Move.REPLAN

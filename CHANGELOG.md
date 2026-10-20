@@ -2,6 +2,83 @@
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-10-20
+
+### Fixed
+
+- **A workflow never builds on the wrong commit.** A step's kept branch deleted
+  while its run still built on it made the next step start on the run's base
+  in silence: a review read no change, a refute blocked on a change it could
+  not find, and the run reported a branch without the work. Each ending now
+  keeps its branch's tip (`finished.tip`); a branch gone while its run is active
+  is put back there (`branch_restored`), and one that cannot be stops the run
+  with a `workflow_error`. `isolate.prepare` refuses a base it cannot read
+  instead of using HEAD.
+- **A fix's later round starts from the round before it**, never from the
+  build: the run's last branch holds every round's fixes. `cauce doctor` flags
+  a round that did not (`fix-round-off-base`).
+- **Nothing deletes committed work.** Prune leaves the branches of an active
+  run, and deletes a copy only for a twin whose task passed; a cancel (a
+  workflow's too) keeps what the task changed on its branch; a resume that ends
+  short keeps what the run before it kept.
+- **A worktree never gets another commit's dependencies.** A dependency folder
+  whose lockfile differs from the checkout's is not linked; the worker is told
+  to install it, and the plan names the `--allow` that lets the install run.
+- **A second correction in a row on one model goes to the next model**, not the
+  next effort: more thinking from the model that missed defects twice is the
+  bet that already lost.
+- **Work done with one open question is not a failure.** A worker that changed
+  files whose check passed, and reports `spec_bug`/`architecture_bug` for one
+  point that needs a design decision, stops as `decision`: work kept on its
+  branch, the point quoted, the orchestrator's call; the ending says "work done,
+  one decision open" and `cauce run` exits 4.
+- **Reports say what checked the work.** "In your checkout" only without a
+  worktree; "unverified" only when no check cauce ran passed; "the worker's own
+  check, not re-run by cauce" when that is the only evidence; a kept branch is
+  named with its commit.
+- **Security problems a worker found are an alert**, a `⚠ security:` line in the
+  report and the ending, secrets masked, not a line among the notes. Problems
+  quoted from before the work are masked too.
+- **Stale stops leave the board.** A stopped task whose kept branch already
+  landed on HEAD is taken off as `landed`; a prompt that is only a CLI flag or a
+  bare slash command (`--continue`, `/clear`) is no turn.
+- **Risk words read in their sense:** a lockfile is no concurrency, a config's
+  or linter's schema is no data, a deployment said not to change is no
+  delivery.
+- **The route leaves conversation with the session:** informing imperatives and
+  questions about where the work stands (indícame, explícame, qué falta, tienes
+  pendientes), and a request for a report back.
+- **Merges, cherry-picks, rebases and conflict resolution are changes**, never a
+  read-only review, whatever the text says of an audit.
+- **No `--service` advice that does not apply:** a task that starts its own
+  servers, or names a host only as context with a check that talks to none.
+- **livespec:** uv's resolver errors ("No solution found … livespec==X") read as
+  an unpublished release, recorded ones too, so the pinned release runs; an
+  index failure is said in one plan, not every plan.
+- **The workspace offer names no folder that does not exist**, and says making
+  one is the person's choice.
+- **A running attempt's cost is read from its live transcript**; when it cannot
+  be, views say running, never $0.00.
+- **Claude Code's own folder (a plugin's cached copy) and cauce's home are never
+  a project.**
+- **Compaction no longer waits for a natural break near a full context:** from
+  80% of the window, the harness's own compaction is near.
+- **A dead worker's lost time stops at its time limit** in the analysis; what
+  passed until a sweep noticed is `unnoticed_s`.
+
+### Added
+
+- `cauce dismiss` keeps a reason: `--why TEXT` (`--reason`), or the words after
+  the ids; the UI's dismiss takes one too.
+- `cauce tasks --all` names each row's project; an empty folder points at it.
+- `cauce run --detach` queues the task and starts its lane.
+- Workflow inputs are listed by `workflow list`, `show` and `run <name> --help`;
+  an input only a step's `verify` uses is filled by `--verify` (`--check`); a
+  positional text fills the one required input left.
+- `cauce workflow status` is a line per step (state, cell, attempt, cost,
+  branch, why it stopped); `--verbose` shows the inputs whole.
+- Shown text is clipped at a sentence or a word (`text.clip`), never mid-word.
+
 ## [0.30.1] - 2026-10-20
 
 ### Fixed

@@ -267,3 +267,24 @@ def test_a_base_that_took_in_the_branch_s_own_work_under_another_commit_is_not_a
     git(git_repo, "add", "-A")
     git(git_repo, "commit", "-q", "-m", "someone else's change")
     assert isolate.behind(git_repo, "run", base) == {"base": base, "commits": 1, "both": ["a.txt"]}
+
+
+def test_dependencies_installed_for_another_lockfile_are_not_linked(git_repo, tmp_path):
+    _with_dependencies(git_repo)
+    (git_repo / "package-lock.json").write_text('{"lockfileVersion": 3, "packages": {"pg": {}}}\n')
+    git(git_repo, "add", "package-lock.json")
+    git(git_repo, "commit", "-q", "-m", "add pg")
+    base = git(git_repo, "rev-parse", "HEAD").strip()
+    # The checkout moved back to dependencies without pg, and its node_modules was installed from them.
+    git(git_repo, "checkout", "-q", "HEAD~1")
+    ws = isolate.prepare(git_repo, 12, tmp_path / "home", base=base)
+    # The step builds on the commit with pg: the checkout's node_modules is not what it needs.
+    assert "node_modules" in ws.stale and "node_modules" not in ws.links
+    assert not (ws.path / "node_modules").exists()
+    # server/ has no lockfile on either side: still shared.
+    assert "server/node_modules" in ws.links
+
+
+def test_a_base_that_cannot_be_read_is_refused_never_replaced_by_head(git_repo, tmp_path):
+    with pytest.raises(isolate.IsolationError, match="is gone"):
+        isolate.prepare(git_repo, 13, tmp_path / "home", base="0" * 40)

@@ -113,7 +113,8 @@ def test_show_prints_what_the_independent_check_found_under_its_attempt(capsys):
         lines[first + 4]]
     # A finding that is not a blocker is printed once, as found, and clipped like the summary.
     assert lines[first + 4].startswith("      found: [pre-existing, inferential] src/y.py:3: an unused import")
-    assert len(lines[first + 4]) == 4 + 300
+    # At a word, marked: never mid-word.
+    assert len(lines[first + 4]) <= 4 + 300 and lines[first + 4].endswith("long…")
     assert sum("the total is rounded twice" in line for line in lines) == 1
     second = lines.index("    built it 2")
     assert lines[second + 1] == "    independent check at opus/high: passed"
@@ -1276,3 +1277,83 @@ def test_tasks_and_show_say_the_points(capsys):
     out = capsys.readouterr().out
     assert "points 5: 4 criteria, touches schema, risk high" in out
     assert "realized 8: 8 files, 400 lines" in out
+
+
+def test_a_dismissal_keeps_its_why_given_by_flag_or_after_the_ids(capsys):
+    store = Store.open()
+    one = store.create_task("x", status="failed", source="cauce", repo="r")
+    two = store.create_task("y", status="blocked", source="cauce", repo="r")
+    three = store.create_task("z", status="failed", source="cauce", repo="r")
+    store.close()
+    assert cli.main(["dismiss", str(one["id"]), "--why", "the blockers are wrong"]) == 0
+    # Words after the ids are the reason, not an id that fails to parse.
+    assert cli.main(["dismiss", str(two["id"]), f"#{three['id']}", "superseded", "by", "the", "new", "design"]) == 0
+    assert "dismissed task" in capsys.readouterr().out
+    store = Store.open()
+    first = stops.of(store, store.get_task(one["id"]))
+    assert first.reason.endswith(": the blockers are wrong") and first.extra["why"] == "the blockers are wrong"
+    for task in (two, three):
+        stop = stops.of(store, store.get_task(task["id"]))
+        assert stop.extra["why"] == "superseded by the new design"
+    store.close()
+    # Where the stop is shown, the why is shown with it.
+    assert cli.main(["show", str(one["id"])]) == 0
+    assert "the blockers are wrong" in capsys.readouterr().out
+    assert cli.main(["dismiss", "--reason", "x", "not-a-number"]) == 2
+    assert "cauce dismiss N --why" in capsys.readouterr().err
+
+
+def test_every_notice_that_offers_a_dismissal_prints_its_real_syntax():
+    from pathlib import Path
+
+    from cauce import hooks
+
+    said = Path(hooks.__file__).read_text(encoding="utf-8")
+    assert "`cauce dismiss N`" not in said and said.count("cauce dismiss N --why '<why>'") == 2
+    assert stops.dismiss_command(12) == "cauce dismiss 12 --why '<why>'"
+
+
+def test_tasks_lists_every_project_with_all_and_points_there_from_an_empty_one(capsys, tmp_path, monkeypatch):
+    store = Store.open()
+    store.create_task("api work", status="done", source="cauce", repo="/work/api", kind="implement")
+    store.create_task("web work", status="failed", source="cauce", repo="/work/web", kind="implement")
+    store.close()
+    empty = tmp_path / "elsewhere"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+    assert cli.main(["tasks"]) == 0
+    out = capsys.readouterr().out
+    assert "no tasks in this project" in out and "2 in 2 other project(s)" in out and "cauce tasks --all" in out
+    assert cli.main(["tasks", "--all"]) == 0
+    rows = capsys.readouterr().out.splitlines()
+    assert any(" api " in row and "api work" in row for row in rows)
+    assert any(" web " in row and "web work" in row for row in rows)
+
+
+def test_run_detach_queues_the_task_and_starts_its_lane(capsys, git_repo, monkeypatch):
+    kicked = []
+    monkeypatch.setattr(dispatch, "kick", lambda cwd, key, env: kicked.append((str(cwd), key)) or "A worker takes it.")
+    monkeypatch.setattr(orchestrate, "run", lambda *a, **kw: pytest.fail("a detached run never runs here"))
+    assert cli.main(["run", "fix the totals", "--repo", str(git_repo), "--detach", "--verify", "true"]) == 0
+    out = capsys.readouterr().out
+    store = Store.open()
+    (task,) = store.list_tasks(status=["queued"])
+    store.close()
+    assert f"queued #{task['id']}" in out and f"cauce events --task {task['id']} --follow" in out
+    assert json.loads(task["options"])["verify"] == "true"
+    assert kicked == [(str(git_repo.resolve()), task["repo"])]
+
+
+def test_clip_cuts_at_a_sentence_or_a_word_never_inside_a_bracket():
+    from cauce.text import clip
+
+    assert clip("short", 30) == "short"
+    cell = clip("attempt 3 sonnet/xhigh [claude-sonnet-4-5] → more effort on the same model", 26)
+    assert cell == "attempt 3 sonnet/xhigh…" and "[c" not in cell
+    said = clip("The patch checks the path but applies it later (line 197). A crafted file can escape the "
+                "folder before the check runs.", 90)
+    assert said == "The patch checks the path but applies it later (line 197). …"
+    words = clip("word " * 40, 50)
+    assert words.endswith("word…") and len(words) <= 50
+    assert len(clip("x" * 100, 30)) == 30
+    assert clip("a\n  b c", 10, one_line=True) == "a b c"

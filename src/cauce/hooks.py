@@ -46,8 +46,9 @@ from typing import Any, TextIO
 
 from cauce import config, orchestrator, project, repo, stops
 from cauce import findings as findings_mod
+from cauce.notes import _SECRET
 from cauce.store import OPEN_FOR_A_RELAY, Store, home
-from cauce.text import fold, words
+from cauce.text import clip, fold, words
 
 _NUDGES = frozenset({
     "sigue", "continua", "continue", "--continue", "go on", "keep going", "dale", "sigue porfa",
@@ -91,17 +92,22 @@ def _ignored(text: str) -> bool:
     # message: none of them is a turn to record as a task.
     return (not stripped or stripped.startswith(("<task-notification", "<command-", "<local-command", "<system-",
                                                  ENDINGS_HEADER, ASKED))
-            or bool(_PLUGIN_SENT.match(stripped)))
+            or bool(_PLUGIN_SENT.match(stripped)) or bool(_ECHO.fullmatch(stripped)))
+
+
+#: A prompt that is only a command line's flags (`--continue`, `--resume <id>`) or a bare
+#: slash command (`/clear`): an echo of how a session was started or cleared, no request.
+_ECHO = re.compile(r"(?:--?[A-Za-z][\w-]*(?:[= ][^\s-]\S*)?\s*)+|/[A-Za-z][\w:-]*")
 
 
 def _dead_end_text(dead: list[dict], intro: str) -> str:
     lines = [intro]
     for d in dead:
-        line = f"- {d['problem']} ({d['repo'] or 'unknown repo'}): tried {d['tried'][:200]}"
+        line = f"- {d['problem']} ({d['repo'] or 'unknown repo'}): tried {clip(d['tried'], 200, one_line=True)}"
         if d["why"]:
-            line += f"; failed: {d['why'][:120]}"
+            line += f"; failed: {clip(d['why'], 120, one_line=True)}"
         if d["worked_instead"]:
-            line += f"; what worked: {d['worked_instead'][:200]}"
+            line += f"; what worked: {clip(d['worked_instead'], 200, one_line=True)}"
         lines.append(line)
     return "\n".join(lines)
 
@@ -246,6 +252,8 @@ def stop(event: Mapping[str, Any], store: Store) -> dict | None:
         usage.ingest_subagents(store, event["transcript_path"], **counted)
     _scribe(event, home(), os.environ)
     _evolve(store, home())
+    cwd = event.get("cwd")
+    _landed(store, repo.toplevel(Path(cwd)) if cwd and Path(cwd).is_dir() else None, home())
     _revive(store, home(), os.environ)
     from cauce import naming
 
@@ -333,6 +341,17 @@ def _revive(store: Store, root: Path, env: Mapping[str, str]) -> None:
         note_error(root, "revive")
 
 
+def _landed(store: Store, top: Path | None, root: Path) -> None:
+    """Stopped tasks of this checkout whose kept work is already on its HEAD leave the
+    board (`stops.landed`). Its failure is noted, and never costs the turn."""
+    if top is None:
+        return
+    try:
+        stops.landed(store, top)
+    except Exception:  # the turn goes on
+        note_error(root, "landed")
+
+
 def _evolve(store: Store, root: Path) -> None:
     """What ended settles the standards and, on a new day, the evolution history
     (`cauce.evolution`). Its failure is noted, and never costs the turn its endings."""
@@ -388,7 +407,7 @@ def _orchestrates(store: Store, session_id: str, cwd: str) -> str | None:
     text = ("cauce: this session orchestrates this project, and every stop is yours to carry. What only the "
             "person can grant (a refused command's rule, a cell's approval, a merge) you ask them for in this "
             "conversation and, on their yes, run its line; every other stop you decide: resume it, rewrite it, "
-            "or dismiss it with why (`cauce dismiss N`). Nothing is left waiting on the person unasked.")
+            "or dismiss it with why (`cauce dismiss N --why '<why>'`). Nothing is left waiting on the person unasked.")
     if moved:
         text += f" {moved} task(s) sent by a session that ended or went quiet report here now."
     return text
@@ -483,6 +502,7 @@ def session_start(
     # The branches of this checkout whose work landed since: merged ones go.
     top = repo.toplevel(Path(cwd)) if cwd and Path(cwd).is_dir() else None
     if top is not None:
+        _landed(store, top, root)
         flow.prune(store, [top])
     key = repo.key(cwd) if cwd else None
     store.touch_session(session_id, cwd, key)
@@ -501,7 +521,8 @@ def session_start(
     if event.get("source") in ("resume", "compact"):
         # A turn or a subagent whose ending never arrived has nothing to resume: not unfinished work.
         unfinished = [t for t in store.list_tasks(session_id=session_id, status=("running", "interrupted"), limit=30)
-                      if t["status"] == "running" or getattr(stops.of(store, t), "cause", None) != "turn"][:10]
+                      if not (t.get("source") == "hook" and _ignored(str(t.get("body") or "")))
+                      and (t["status"] == "running" or getattr(stops.of(store, t), "cause", None) != "turn")][:10]
         if unfinished:
             blocks.append("cauce: unfinished tasks in this session (context only, do not restart them unasked):\n"
                           + "\n".join(f"#{t['id']} [{t['status']}] {t['title']}" for t in unfinished))
@@ -622,13 +643,18 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
     lines = [ENDINGS_HEADER + " Act on each now: tell the person what happened. Every stop is yours to carry: "
              "one only the person can grant (a refused command's rule, a cell's approval) you ask them for here, "
              "and on their yes you run its line; any other you decide as its line says: resume it, rewrite it, "
-             "or dismiss it with why (`cauce dismiss N`). Nothing waits on the person unasked (never redo a "
-             "worker's task by hand)."]
+             "or dismiss it with why (`cauce dismiss N --why '<why>'`). Nothing waits on the person unasked "
+             "(never redo a worker's task by hand)."]
     for t in ended:
         data = t["finished_data"]
         changed = data.get("changed") or []
         total = data.get("changed_n") or len(changed)
-        lines.append(f"#{t['id']} [{t['status']}] {t['title']}")
+        stop = stops.view(store, t) if t["status"] != "done" else None
+        decided = bool(stop) and stop["cause"] == "decision"
+        # Work done that waits on one decision is no failure, and its header never reads as one.
+        lines.append(f"#{t['id']} [{'work done, one decision open' if decided else t['status']}] {t['title']}")
+        # A security problem the worker named goes first, on a line of its own, secrets masked.
+        lines += [f"  ⚠ security: {alert}" for alert in data.get("alerts") or ()]
         # Said when it started, to a caller that may be gone by now: a queued step's above all.
         lines += [f"  it ran with a warning: {warning}" for warning in _warned(store, t["id"])]
         lines += _went_past(store, t)
@@ -636,21 +662,34 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
         lines += _found_before(store, t)
         if t["status"] == "done":
             branch = data.get("branch")
-            where = (f"; its work is on branch {branch}, merged only on the person's word"
-                     if branch else "; its changes are in the checkout" if changed else "; it changed nothing")
+            commit = f" (commit {str(data['commit'])[:12]})" if data.get("commit") else ""
+            # In the checkout only when the run had no worktree; an older ending did not say.
+            where = (f"; its work is on branch {branch}{commit}, merged only on the person's word"
+                     if branch else "; its changes are in the checkout (the run had no worktree)"
+                     if changed and not data.get("isolated") else "; no branch kept its changes"
+                     if changed else "; it changed nothing")
             lines.append(f"  passed at {data.get('final_cell') or t['final_cell']}{where}")
             if t.get("result"):
-                lines.append(f"  the worker says: {str(t['result'])[:800]}")
+                lines.append(f"  the worker says: {clip(str(t['result']), 800)}")
             if changed:
                 lines.append("  changed: " + ", ".join(changed[:8])
                              + (f" and {total - 8} more" if total > 8 else ""))
             lines += verdict_lines(data.get("verdict"))
             continue
-        stop = stops.view(store, t)
-        if stop:
-            lines.append(f"  stopped by {stop['who']}: {stop['reason'][:300]}")
+        if decided:
+            branch = data.get("branch")
+            commit = f" (commit {str(data['commit'])[:12]})" if data.get("commit") else ""
+            checked = {"cauce": "its check passed, run by cauce",
+                       "worker": "its own check passed, not re-run by cauce"}.get(str(stop.get("checked") or ""),
+                                                                                 "no check cauce ran passed")
+            lines.append(f"  the work is done and kept on branch {branch}{commit}, merged only on the person's word "
+                         f"({checked})" if branch else f"  the work is done and in the checkout ({checked})")
+            said = stop.get("account") or stop["reason"]
+            lines.append(clip(f"  one point needs a decision; the worker says: {said}", 900))
+        elif stop:
+            lines.append(f"  stopped by {stop['who']}: {clip(stop['reason'], 300)}")
             if stop.get("account"):
-                lines.append(f"  the worker found: {stop['account'][:800]}")
+                lines.append(f"  the worker found: {clip(stop['account'], 800)}")
         if changed:
             shown = ", ".join(changed[:5]) + (f" and {total - 5} more" if total > 5 else "")
             lines.append(f"  changed so far: {shown}")
@@ -716,7 +755,8 @@ def _found_before(store: Store, ended: Mapping) -> list[str]:
     lines = [f"  it found {len(found)} problem(s) that were already there, not this change's (each shown with "
              "its proof); a bugfix for one is yours to decide, nothing was started:"]
     for f in shown:
-        what = " ".join(str(f.get("what") or "").split())[:200]
+        # A finding may quote what it found: nothing that looks like a secret is repeated.
+        what = clip(_SECRET.sub("[secret]", str(f.get("what") or "")), 200, one_line=True)
         where = str(f.get("where") or "")
         lines.append(f"    {where}: {what} — `cauce workflow run bugfix {shlex.quote(f'{what} ({where})')} "
                      f"--after {after_ref}`")
@@ -744,7 +784,7 @@ def _behind(store: Store, ended: Mapping) -> list[str]:
 def _warned(store: Store, task_id: int) -> list[str]:
     """What a task's plan warned of when its run started, clipped."""
     planned = (store.last_event(task_id, "planned") or {}).get("data") or {}
-    return [str(warning)[:300] for warning in planned.get("warnings") or ()]
+    return [clip(str(warning), 300) for warning in planned.get("warnings") or ()]
 
 
 def _went_past(store: Store, ended: Mapping) -> list[str]:
@@ -777,7 +817,7 @@ def _stopped_text(store: Store, tasks: list[dict]) -> str:
         lines.append(f"#{t['id']} [{t['status']}] {t['title']}")
         if stop:
             whose = "ask the person for it here" if stops.waits_on(store, t) == "person" else "yours to decide"
-            lines.append(f"  stopped by {stop['who']}: {stop['reason'][:300]}")
+            lines.append(f"  stopped by {stop['who']}: {clip(stop['reason'], 300)}")
             lines.append(f"  next ({whose}): {stop['todo']}" + (f": {stop['next']}" if stop["next"] else ""))
     return "\n".join(lines)
 

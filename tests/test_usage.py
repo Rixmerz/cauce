@@ -92,3 +92,38 @@ def test_usage_is_kept_by_task_or_session_only(store: Store):
 
     with pytest.raises(ValueError, match="task_id or session_id"):
         store.usage_by("repo", ["r"])
+
+
+def test_a_running_attempt_shows_its_cost_so_far_or_running_never_zero(store: Store, tmp_path, monkeypatch):
+    from cauce import signature, workflow_cli
+    from cauce.ui import api
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cc"))
+    task = store.create_task("add the export", status="running", source="cauce", repo="r")
+    store.add_event(task["id"], "attempt_started", seq=1, cell="sonnet/medium")
+    # No call of its worker reached the log yet: the cost is unknown, said as running.
+    seen = usage.so_far(store, store.get_task(task["id"]))
+    assert seen == {"cost_usd": 0.0, "cost_running": True}
+    assert workflow_cli._money(seen) == "running"
+    assert workflow_cli._money({"cost_usd": 1.5, "cost_running": True}) == "$1.50 + running"
+    running = next(r for r in api.board(store)["running"] if r["id"] == task["id"])
+    assert running["cost_running"] is True
+    # Its worker's calls name its session; the live transcript gives what it cost so far.
+    worker = {"CAUCE_HOME": str(tmp_path / "cauce-home"), "CAUCE_WORKER_TASK": str(task["id"]),
+              "CAUCE_WORKER_ATTEMPT": "1"}
+    signature.append({"session_id": "w-1", "tool_name": "Read", "tool_input": {}}, worker)
+    transcript = tmp_path / "cc" / "projects" / "-tmp-wt" / "w-1.jsonl"
+    transcript.parent.mkdir(parents=True)
+    before = json.loads(line("m0", out=999999))
+    before["timestamp"] = "2000-01-01T00:00:00Z"  # an earlier attempt's, in a resumed session's file
+    transcript.write_text(json.dumps(before) + "\n" + line("m1", out=1000) + line("m1", out=2000)
+                          + line("m2", out=500))
+    seen = usage.so_far(store, store.get_task(task["id"]))
+    expected = usage.dollars("claude-opus-5-5", 2, 2000, 1000, 100) + usage.dollars("claude-opus-5-5", 2, 500,
+                                                                                   1000, 100)
+    assert seen["cost_live"] is True and seen["cost_usd"] == round(expected, 2) > 0
+    assert workflow_cli._money(seen).endswith(" so far")
+    # Once the attempt ended, its recorded cost is the cost.
+    store.add_event(task["id"], "attempt_finished", seq=1, cost_usd=0.4)
+    assert usage.so_far(store, store.get_task(task["id"])) == {"cost_usd": 0.0}
+    assert usage.transcript_of("../etc/passwd") is None

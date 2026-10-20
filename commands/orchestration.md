@@ -96,7 +96,9 @@ Request: $ARGUMENTS
    number and each attempt on stderr as they happen, and its report when it
    stops. A `warning:` line (no browser, servers that must be running) means
    the task as written will not get far: say so to the person before waiting
-   on it.
+   on it. `cauce run … --detach` queues it instead and starts its lane's
+   dispatcher: it prints the task number at once, and the ending reaches this
+   session as every queued task's does.
 
    Write the task in full. The worker gets the person's own words from this
    session that relate to it (cauce's scribe puts them in its brief), but none
@@ -183,8 +185,13 @@ Request: $ARGUMENTS
      (`cauce show <id>`); do not try it yourself in this context.
    - `blocked` by `review` — the independent check's blockers stayed open on
      work that passed its own check: read them (`cauce show <id>`), then resume
-     it for one more round with `--unattended`, or dismiss it with why when the
-     blockers are wrong.
+     it for one more round with `--unattended`, or dismiss it with why
+     (`cauce dismiss <id> --why '<why>'`) when the blockers are wrong.
+   - `blocked` by `decision` (exit 4) — the work is done: it changed files, its
+     check passed, and it is kept on its branch; the worker names one point that
+     needs a design decision, quoted in the reason. It did not fail. Tell the
+     person what was done and the point; on their answer, merge the branch and
+     send what the decision asks as a new task, or dismiss it with why.
 
    - `replan` because it outgrew its turns — the task is not wrong. cauce
      resumes it once on its own with more turns (as it does a worker that died,
@@ -212,7 +219,7 @@ Request: $ARGUMENTS
    that is gone, a task past its unattended attempts and a branch to merge are
    the person's to grant: ask them in this conversation, and on their yes run
    the line. Everything else you decide at once (resume it `--unattended`,
-   rewrite it, or `cauce dismiss <id>` with why). How many workers
+   rewrite it, or `cauce dismiss <id> --why '<why>'`). How many workers
    run at once is cauce's: it adapts to the API, memory, disk and load by
    itself. Never set `max_parallel` to slow it down; that ceiling is the
    person's.

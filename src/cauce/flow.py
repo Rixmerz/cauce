@@ -120,7 +120,7 @@ def sweep(store: Store, *, now: datetime | None = None, is_alive: Callable[[int 
 
 
 #: Statuses whose branch waits on nothing: no resume continues from it.
-PRUNE_STATUSES = frozenset({"done", "dismissed"})
+PRUNE_STATUSES = frozenset({"done", "dismissed", "cancelled"})
 
 
 def prune(store: Store, dirs: list[Path] | None = None, *, dry_run: bool = False) -> list[dict]:
@@ -148,12 +148,18 @@ def prune(store: Store, dirs: list[Path] | None = None, *, dry_run: bool = False
             task = store.get_task(task_id)
             if task is None or task["status"] not in PRUNE_STATUSES:
                 continue
+            run = store.get_run(int(task["workflow_run"])) if task.get("workflow_run") else None
+            if run is not None and run["status"] == "active":
+                # A later step of its run may still start from this branch, or join it.
+                continue
             branch = isolate.branch_for(task_id)
             why = isolate.prunable(top, branch)
             if why is None:
-                # Another kept branch holds the very same work: this copy loses nothing.
+                # Another kept branch holds the very same work: this copy loses nothing. Only a
+                # twin whose task passed counts: one that may resume may still fail and drop it.
                 twin = next((other for other in sorted(trees) if other != task_id and trees[other]
-                             and trees[other] == trees[task_id]), None)
+                             and trees[other] == trees[task_id]
+                             and (store.get_task(other) or {}).get("status") == "done"), None)
                 why = f"the same work as {isolate.branch_for(twin)}" if twin is not None else None
             if why is None or (not dry_run and not isolate.delete_branch(top, branch)):
                 continue

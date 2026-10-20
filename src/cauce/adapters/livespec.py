@@ -103,9 +103,23 @@ _NOT_PUBLISHED = re.compile(r"not found in the package registry|no version of li
                             r"no solution found when resolving", re.IGNORECASE)
 
 
+#: The release an error names: uv says `livespec==X` whatever form the command took.
+_NAMED_RELEASE = re.compile(r"\blivespec(?:\[[^\]]*\])?(?:==|@)([0-9][\w.+-]*)", re.IGNORECASE)
+
+
+def unpublished_in(text: str) -> str | None:
+    """The livespec release uv's resolver says is not on the registry ("No solution found
+    when resolving tool dependencies … livespec==X", "there is no version of
+    livespec==X"), or None when the text says no such thing."""
+    if not _NOT_PUBLISHED.search(text or ""):
+        return None
+    found = _NAMED_RELEASE.search(text)
+    return found.group(1).rstrip(".,;:") if found else None
+
+
 def _uvx_release(server: Mapping[str, Any]) -> str | None:
     """The livespec release a `uvx livespec@X` (or `livespec==X`) entry runs, or None."""
-    if Path(str(server.get("command") or "")).name != "uvx":
+    if Path(str(server.get("command") or "")).name not in ("uvx", "uv"):
         return None
     for arg in server.get("args") or []:
         match = re.fullmatch(r"livespec(?:\[[^\]]*\])?(?:@|==)([0-9][\w.+-]*)", str(arg))
@@ -179,6 +193,11 @@ class Livespec:
             return {"command": "livespec", "args": []}
         if shutil.which("uvx", path=path):
             return {"command": "uvx", "args": [f"livespec@{PINNED}"]}
+        if plugin and _uvx_release(plugin[0]) is not None and Path(str(plugin[0]["command"])).is_absolute():
+            # The plugin's own `uvx` (a full path off the PATH) runs the pinned release instead.
+            command = str(plugin[0]["command"])
+            run = ["tool", "run"] if Path(command).name == "uv" else []
+            return {"command": command, "args": [*run, f"livespec@{PINNED}"]}
         return plugin[0] if plugin else None
 
     def _version(self) -> str | None:
@@ -265,8 +284,31 @@ class Livespec:
             data = json.loads(self._failure_path(repo_dir).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
+        missing = unpublished_in(str(data.get("error") or ""))
+        if missing and missing != PINNED:
+            # An index that failed only because the release it ran is not published (kept by
+            # a cauce that did not read uv's resolver error so): the release is remembered as
+            # unpublished, the pinned one runs from now on, and the failure is no failure here.
+            self._remember_unpublished(missing)
+            self._remember_failure(repo_dir, None)
+            return None
         head = _head(root)
         return str(data.get("error") or "it failed") if head and data.get("head") == head else None
+
+    def failure_said(self, repo_dir: Path) -> bool:
+        """Whether a plan already said the failure `last_failure` gives: said once, it is
+        not said again in every plan while the checkout stays where it failed. The first
+        call marks it said."""
+        path = self._failure_path(repo_dir)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        if data.get("said"):
+            return True
+        with contextlib.suppress(OSError):
+            path.write_text(json.dumps({**data, "said": True}), encoding="utf-8")
+        return False
 
     def _remember_failure(self, repo_dir: Path, error: str | None) -> None:
         path = self._failure_path(repo_dir)
@@ -307,9 +349,12 @@ class Livespec:
             except (OSError, subprocess.TimeoutExpired) as exc:
                 return f"livespec index did not run: {exc}"
             fell_back = ""
+            said = f"{proc.stderr or ''}\n{proc.stdout or ''}"
             missing = _uvx_release({"command": argv[0], "args": argv[1:]})
-            if proc.returncode != 0 and missing and missing != PINNED and _NOT_PUBLISHED.search(
-                    f"{proc.stderr or ''}\n{proc.stdout or ''}"):
+            if missing is None and Path(argv[0]).name in ("uvx", "uv"):
+                # A release named some other way (`uv tool run`, `--from`): uv's error names it.
+                missing = unpublished_in(said)
+            if proc.returncode != 0 and missing and missing != PINNED and _NOT_PUBLISHED.search(said):
                 # A plugin tagged with a release not on the registry yet: every index (and
                 # every worker's server) would fail until it is. The pinned one runs instead.
                 self._remember_unpublished(missing)

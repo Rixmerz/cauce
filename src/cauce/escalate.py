@@ -15,6 +15,10 @@ circles:
   does not clear on its own; it is raised once, then the task is split.
 - **Replan** — the spec or the architecture is wrong. No model fixes a task that
   should not exist; the run stops and says so.
+- **Decide** — the work is done (it changed files and the check that shows it
+  passed), but the worker names one point that needs a design decision. That is
+  no failure and no task to rewrite: the work is kept on its branch and the
+  orchestrator decides the point.
 - **Review** — the work passed its own check and nothing is left to climb
   to; only the independent check's blockers stand. The work is kept for a
   person, never dropped as a failure.
@@ -76,6 +80,7 @@ class Move(StrEnum):
     BLOCKED = "blocked"
     CONVERGED = "converged"
     REVIEW = "review"
+    DECIDE = "decide"
 
 
 #: The moves after which another attempt runs.
@@ -123,6 +128,9 @@ class Attempt:
     blockers: tuple[dict[str, str], ...] = ()
     #: Only its answer's form failed (see `WorkerResult.shape`): what made it unreadable.
     shape: str = ""
+    #: The work stands though the worker reported a failure: it changed files and the
+    #: check that shows them passed (cauce's, or with none given the worker's own).
+    stands: bool = False
 
 
 @dataclass(frozen=True)
@@ -275,6 +283,18 @@ def decide(
     failure = last.failure or Failure.INCONCLUSIVE
     seen = f"attempt {len(attempts)} at {last.cell.label} ended {failure}: {MEANING[failure]}"
 
+    if failure in REPLAN and last.stands and not last.denied:
+        # The worker did the work and its check passed, and it names a point the work
+        # cannot settle by itself (a design decision). Nothing here is wrong: the work
+        # is kept, and the point goes to the orchestrator, quoted.
+        point = " ".join(last.summary.split())[:300] or MEANING[failure]
+        return Decision(Move.DECIDE, reason=f"the work is done and kept on its branch; one point needs a "
+                                            f"decision: \"{point}\"",
+                        because=(seen, f"it changed {len(last.changed)} file(s) and the check that shows them "
+                                       "passed: the work stands, so this is no wrong task and no failure",
+                                 "a decision is no climb: no model makes it for the person, so the work is "
+                                 "kept and the point goes to the orchestrator"))
+
     if failure in REPLAN:
         return Decision(Move.REPLAN, reason=f"{failure}: the task, not the work, is wrong",
                         because=(seen, "no model fixes a task that should not exist: it is rewritten or split, "
@@ -423,6 +443,18 @@ def decide(
         because = (seen, *([_correction(last, why)] if last.blockers else []), rule, _arrives(target))
         return _gated(Move.NEXT_MODEL, target, last.max_turns, why, allow_approval, because,
                       _skipped(ladder, last.cell, target))
+
+    prior = attempts[-2] if len(attempts) >= 2 else None
+    if last.blockers and prior is not None and prior.blockers and prior.cell.model == last.cell.model:
+        # Two corrections in a row on one model, each leaving blockers the check shows: more
+        # of its thinking keeps missing defects of this work, so a stronger model reads it.
+        target = _next_model(ladder, last.cell)
+        if target is not None:
+            why = f"{last.cell.model} left blockers in two corrections in a row"
+            return _gated(Move.NEXT_MODEL, target, last.max_turns, why, allow_approval,
+                          (seen, _correction(last, f"{why}: more effort from it is the bet that already missed "
+                                                   "twice, so a stronger model takes the work"), _arrives(target)),
+                          _skipped(ladder, last.cell, target))
 
     # Effort axis: the work was shallow. The next effort of the same model,
     # and only when this model has run out does the next one start.

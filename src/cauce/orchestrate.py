@@ -65,9 +65,20 @@ from cauce import services as services_mod
 from cauce import surfaces as surfaces_mod
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify, narrow
-from cauce.escalate import MAX_TURNS_CEILING, Attempt, Decision, Failure, Move, decide, review_reason, waited
+from cauce.escalate import (
+    MAX_TURNS_CEILING,
+    REPLAN,
+    Attempt,
+    Decision,
+    Failure,
+    Move,
+    decide,
+    review_reason,
+    waited,
+)
 from cauce.matrix import DEFAULT_TURNS, READ_ONLY_KINDS, Cell, ladder_for, turns_for
 from cauce.store import Store, home
+from cauce.text import clip
 
 #: Failures that describe something tried against the problem, worth keeping
 #: as a dead end. A timeout or a turn ceiling says nothing about the fix.
@@ -89,6 +100,7 @@ _FINAL_STATUS = {
     Move.BLOCKED: "blocked",
     Move.CONVERGED: "failed",
     Move.REVIEW: "blocked",
+    Move.DECIDE: "blocked",
 }
 
 #: Endings that wait on a person, not on the task being rewritten: the work done
@@ -255,6 +267,11 @@ class Report:
     check_output: list[str] = field(default_factory=list)
     #: Whether it worked in a worktree; outside one, its changes are in the checkout.
     isolated: bool = False
+    #: What checked the work it left: "cauce" (its check, or `--verify`, passed), "worker"
+    #: (only the worker's own check, not re-run by cauce), or "" (nothing passed).
+    checked: str = ""
+    #: The commit its kept branch ends on.
+    commit: str | None = None
     #: Why it stopped short of a pass, and who made that call.
     stop: stops.Stop | None = None
     #: Earlier copies of this task, same text, taken off the board by its pass.
@@ -267,6 +284,16 @@ class Report:
     #: A passing plan's parts and the contract they keep, for the workflow step that fans out over it.
     parts: tuple[dict, ...] = ()
     contract: str = ""
+    #: Security problems the passing worker named (`alerts`), secrets masked.
+    alerts: list[str] = field(default_factory=list)
+
+    def checked_text(self) -> str:
+        """What checked the work, said as it is: "unverified" only when no check cauce ran passed."""
+        if self.checked == "cauce":
+            return "checked by cauce's own run of its check"
+        if self.checked == "worker":
+            return "checked by the worker's own check, not re-run by cauce"
+        return "unverified"
 
     def text(self) -> str:
         lines = [
@@ -307,21 +334,29 @@ class Report:
                 wrote = ", ".join(self.check_output[:8]) + (f" and {more} more" if more > 0 else "")
                 lines.append(f"written by the check itself ({len(self.check_output)}, committed as its output; "
                              f"a check that rewrites tracked files may give other files in your checkout): {wrote}")
-        if self.branch and self.status == "done":
-            lines.append(f"branch {self.branch} — review it, then merge it; your checkout has none of it until then")
+        at = f" (commit {self.commit[:12]})" if self.commit else ""
+        if self.branch and self.status == "cancelled":
+            lines.append(f"branch {self.branch} keeps what it did before the cancel, unverified: "
+                         f"`git diff HEAD...{self.branch}` shows it; `git branch -D {self.branch}` drops it")
+        elif self.branch and self.status == "done":
+            lines.append(f"branch {self.branch}{at} — review it, then merge it; your checkout has none of it until "
+                         f"then; {self.checked_text()}")
         elif self.branch:
-            lines.append(f"branch {self.branch} keeps this task's unverified work: review it with "
-                         f"`git diff HEAD...{self.branch}`, or `cauce resume {self.task_id}` once the block is cleared")
+            then = ("decide the open point, then merge it" if self.stop is not None and self.stop.cause == "decision"
+                    else f"or `cauce resume {self.task_id}` once the block is cleared")
+            lines.append(f"branch {self.branch}{at} keeps this task's work, {self.checked_text()}: review it with "
+                         f"`git diff HEAD...{self.branch}`, {then}")
         elif self.task_id and self.changed and not self.isolated:
             # No worktree (asked for, or a folder that is no checkout): there is no
             # branch to review, the files themselves are the work.
-            lines.append("these changes are in your checkout" + ("" if self.status == "done" else ", unverified"))
+            lines.append(f"these changes are in your checkout (the run had no worktree), {self.checked_text()}")
         elif self.task_id and self.status != "done" and self.changed:
             lines.append("nothing of it was kept")
         lines += self.impact
         if self.superseded:
             lines.append("off the board: " + ", ".join(f"#{i}" for i in self.superseded)
                          + ", earlier copies of this task that had stopped")
+        lines += [f"⚠ security: {alert}" for alert in self.alerts]
         if self.noted:
             lines.append("notes: " + "; ".join(
                 f"{'kept' if n['new'] else 'already known as'} #{n['id']} [{n['topic']}] {n['title']}"
@@ -418,8 +453,10 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
             meanwhile = "this task runs without it" if runnable_absent else "this task uses the index as it is"
             failed = getattr(adapter, "last_failure", lambda _d: None)(repo_dir)
             if failed:
-                neighbour_notes.append(f"{adapter.name}: its last index here failed ({failed[:160]}); not tried "
-                                       f"again until the checkout moves; {meanwhile}")
+                # Said once: a failure every plan repeats until the checkout moves is noise.
+                if options.dry_run or not getattr(adapter, "failure_said", lambda _d: False)(repo_dir):
+                    neighbour_notes.append(f"{adapter.name}: its last index here failed ({clip(failed, 160)}); not "
+                                           f"tried again until the checkout moves; {meanwhile}")
             elif adapter.server() is None:
                 neighbour_notes.append(f"{adapter.name}: cannot {what} here; {meanwhile}")
             elif options.dry_run:
@@ -678,8 +715,8 @@ def _race(launcher: Launcher, spec: launch.LaunchSpec, start: Cell, rung: Cell, 
         loser = 1 - winner
         lost = done[loser]
         if done[winner].passed:
-            lost = dataclasses.replace(lost, passed=False, summary=f"stopped: {(start, rung)[winner].label} passed "
-                                       f"its check first. {lost.summary}"[:2000])
+            lost = dataclasses.replace(lost, passed=False, summary=clip(
+                f"stopped: {(start, rung)[winner].label} passed its check first. {lost.summary}", 2000))
         kept = done[winner]
         if winner == 1:
             isolate.adopt(lane, workspace)
@@ -900,6 +937,15 @@ def run(
             if workspace.links:
                 context.append("Linked from the person's checkout and shared with it: "
                                + ", ".join(workspace.links) + ". Use them; do not delete or reinstall them.")
+            if workspace.stale:
+                # Linking them would hand the worker another commit's dependencies.
+                context.append("Not linked from the person's checkout: " + ", ".join(workspace.stale)
+                               + ". The lockfile here differs from the one they were installed from there, so "
+                               "install the dependencies in this directory first (`npm ci`, `uv sync`, as the "
+                               "project does).")
+                say(f"dependencies not linked, their lockfile differs from your checkout's: "
+                    f"{', '.join(workspace.stale)}; the worker installs them (a refused install is allowed "
+                    f"with --allow, e.g. 'Bash(npm ci)')")
             if not resumed:
                 filled = _fill_worktree(store, task["id"], workspace, text, options.carry, say)
                 context += filled
@@ -1139,6 +1185,11 @@ def run(
             elif _settles(result, options.verify) and (
                     isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
                 result = _settled(result, options.verify, workdir)
+            stands = ""
+            if result.failure in REPLAN and not result.denied and (
+                    isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
+                # A worker that did the work and names a point it cannot settle: does the work stand?
+                stands = _stands(result, options.verify, workdir)
             if before is not None and workspace is not None and \
                     (wrote := isolate.rewritten(before, isolate.fingerprint(workspace.path))):
                 report.check_output = sorted({*report.check_output, *wrote})
@@ -1179,8 +1230,11 @@ def run(
                 settled = ledger_mod.outcome(deciding, result.verdicts)
                 store.add_event(task["id"], "ledger_decided", seq=nth, **settled.data())
                 if settled.stop:
-                    review_stop = stops.Stop("review", settled.stop, attempt=nth, account=result.summary[:2000])
+                    review_stop = stops.Stop("review", settled.stop, attempt=nth, account=clip(result.summary, 2000))
             changed.update(result.changed_paths)
+            # What checked the work this attempt left: cauce's check, or only the worker's own.
+            report.checked = ("cauce" if (result.passed and options.verify) or stands == "cauce" else
+                              "worker" if (result.passed and result.evidence.strip()) or stands == "worker" else "")
             report.cells.append(cell.label)
             report.served.append(result.served_model)
             report.cost_usd += result.cost_usd
@@ -1218,7 +1272,7 @@ def run(
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
                               transient=result.transient, findings=result.findings, network=result.network,
                               load=result.load, shape=result.shape,
-                              blockers=open_blockers)
+                              blockers=open_blockers, stands=bool(stands) and result.failure in REPLAN)
             attempts.append(attempt)
             if raced is not None and not raced_first:
                 # The start's try went on: the rung's, stopped or failed, is recorded after it.
@@ -1230,7 +1284,7 @@ def run(
             if result.report is not None:
                 store.add_event(task["id"], "report", seq=seq, passed=result.passed, report=result.report)
             say(f"cauce: #{task['id']} attempt {seq} " + ("passed" if result.passed else
-                f"ended {(result.failure or Failure.INCONCLUSIVE).value}: {result.summary[:160]}"))
+                f"ended {(result.failure or Failure.INCONCLUSIVE).value}: {clip(result.summary, 160)}"))
             if review_stop is not None:
                 report.stop = review_stop
                 report.status, report.summary = "blocked", review_stop.reason
@@ -1278,8 +1332,9 @@ def run(
                     _cause(decision, attempt), decision.reason, denied=attempt.denied, allow=attempt.allow,
                     attempt=seq,
                     next_cell=decision.cell.label if decision.cell else None,
-                    account=(findings_mod.text(attempt.blockers) if decision.move is Move.REVIEW
-                             else result.summary)[:2000])
+                    account=clip(findings_mod.text(attempt.blockers) if decision.move is Move.REVIEW
+                                 else result.summary, 2000),
+                    extra={"checked": report.checked} if decision.move is Move.DECIDE else {})
                 break
             if decision.move is Move.NEXT_MODEL and workspace is not None:
                 # A new model starts from the base, not the bet that lost; what the
@@ -1314,15 +1369,20 @@ def run(
         if workspace is not None:
             report.isolated = True
             report.changed = list(isolate.changed(workspace))
-            # Work that outgrew its turns is kept too: the task was not wrong, only big.
+            # Work that outgrew its turns is kept too: the task was not wrong, only big. A
+            # cancel stops the work, never throws it away: what it changed stays on its branch.
+            # Nor does a resume that ends short drop what an earlier run of it kept.
             outgrew = report.stop is not None and report.stop.cause == "turns"
             report.branch = isolate.finish(
-                workspace, keep=report.status in KEEPS_WORK or outgrew,
+                workspace, keep=report.status in KEEPS_WORK or outgrew or report.status == "cancelled" or resumed,
                 message=isolate.message(task["id"], title=commit_title(task), subject=subject,
                                         summary=attempts[-1].summary if attempts else "",
                                         status="done" if report.status == "done" else report.status,
                                         check_output=len([p for p in report.check_output if p in report.changed])),
             )
+            if report.branch:
+                with contextlib.suppress(isolate.IsolationError):
+                    report.commit = isolate.head(workspace.repo_dir, report.branch)
             if report.branch and report.status == "done":
                 # The fix that worked is anchored to the commit a person can check.
                 store.set_fix_commit(task["id"], isolate.head(workspace.repo_dir, report.branch))
@@ -1347,7 +1407,7 @@ def run(
         # An investigator's stop is no broken state of the project: the person's queue goes on.
         reading_for_init = '"investigation"' in (store.get_task(task["id"]).get("options") or "")
         if status != "done" and store.get_task(task["id"])["dispatched"] and not by_a_person and not reading_for_init:
-            store.pause_lane(key, f"task #{task['id']} ended {status}: {report.summary[:200]}")
+            store.pause_lane(key, f"task #{task['id']} ended {status}: {clip(report.summary, 200, one_line=True)}")
         if workspace is None:
             report.changed = sorted(changed)
         mark = time.monotonic()
@@ -1361,9 +1421,15 @@ def run(
             _to_engram(store, task, report, the_plan, workspace.repo_dir if workspace else repo_dir)
         # Filing what it learned runs before the ending and the next workflow step: timed.
         timing["notes_s"] = time.monotonic() - mark
+        if status == "done":
+            # A security problem the worker named is an alert of its own, never only a note among others.
+            report.alerts = notes.security_alerts(report.learned, attempts[-1].findings if attempts else ())
         size = _realized(store, task["id"], report, workspace, time.monotonic() - clock)
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
+                        tip=_tip(workspace, report.branch),
+                        commit=report.commit, checked=report.checked, isolated=report.isolated,
+                        alerts=report.alerts,
                         changed=report.changed[:CHANGED_KEPT], changed_n=len(report.changed),
                         stop=report.stop.data() if report.stop else None,
                         risk=the_plan.risk.data(), points=the_plan.points.points, realized=size.points,
@@ -1420,6 +1486,17 @@ def verdict_card(store: Store, task_id: int, report: Report, options: Options, v
 
 _STEP_TAG = re.compile(r"^\[[\w.-]+#\d+ [\w.-]+\]\s*")
 _LEAD = re.compile(r"^[A-Z][^:\n]{0,40}:\s+")
+
+
+def _tip(workspace: isolate.Workspace | None, branch: str | None) -> str | None:
+    """The commit a kept branch ends on, kept with the ending: what builds on it can still
+    find the work if the branch is ever deleted."""
+    if workspace is None or not branch:
+        return None
+    try:
+        return isolate.head(workspace.repo_dir, f"refs/heads/{branch}")
+    except (isolate.IsolationError, OSError):
+        return None
 
 
 def commit_title(task: Mapping[str, Any]) -> str:
@@ -1517,12 +1594,20 @@ _BROWSER = re.compile(r"\b(browser|navegador|navigate|navega\w*|abr[ie]\w* (?:el
 _SERVER = re.compile(r"(\bdev servers?\b|\blevanta\w*\b|\bstart (?:both |the )?(?:dev )?servers?\b|"
                      r"\bng serve\b|\bnpm (?:run )?(?:start|dev)\b|localhost:\d+)", re.IGNORECASE)
 _BROWSER_CAPS = ("browser", "playwright", "chrome", "puppeteer", "rastro")
-#: A task that tells the worker to start its servers: it needs them, whatever its check.
-_START_SERVERS = re.compile(r"(\blevanta\w*\b|\bstart (?:both |the |all )?(?:dev )?servers?\b)", re.IGNORECASE)
+#: A task that tells the worker to start its servers: it needs them, whatever its check, and
+#: its worker starts them itself.
+_START_SERVERS = re.compile(
+    r"(\blevanta\w*\b|\barranca\w*\s+(?:el|la|los|las|ambos)\b|"
+    r"\binicia\w*\s+(?:el |la |los |las )?(?:servidor\w*|servicios?|backend|front\w*|api|app)\b|"
+    r"\b(?:start|run|spin up|bring up|boot)\s+(?:up\s+)?(?:both |the |all |your |its )?(?:own )?(?:dev |local )?"
+    r"(?:servers?|backend|back-?end|frontend|front-?end|front)\b"
+    r"(?!\s+(?:tests?|checks?|suites?|specs?|lint\w*|builds?|unit\w*|pruebas?)\b))", re.IGNORECASE)
 #: A check that talks to a running server: only then does a task's mention of one
 #: say the check needs it. Lint, unit tests and a build do not.
-_CHECK_SERVES = re.compile(r"(localhost|127\.0\.0\.1|https?://|\be2e|playwright|cypress|puppeteer|\bcurl\b|"
+_CHECK_SERVES = re.compile(r"(\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0)\b|\be2e|playwright|cypress|puppeteer|\bcurl\b|"
                            r"\bwget\b|lighthouse|wait-on|start-server-and-test)", re.IGNORECASE)
+#: A permission a check is run with (`--allow-net=localhost:8000`): no server it talks to.
+_CHECK_GRANTS = re.compile(r"--allow-[\w-]+=\S*", re.IGNORECASE)
 
 
 #: A task that says in its own words it must change nothing: a validation whose
@@ -1580,8 +1665,10 @@ def _unmet(text: str, registry: Mapping[str, caps.Capability], *, served: bool =
     """What a task asks for that a one-shot worker does not have, said before any
     money is spent: a worker has no browser unless a capability gives it one, or
     its check or the project's own tests drive a headless one (`ci.browser`), and
-    a server it starts ends with it. A task whose check needs no server (lint,
-    tests, a build) is not told to start one for a word in its text."""
+    a server it starts ends with it. A task that tells its worker to start its servers
+    is said to have them started by its worker, never sent to `--service`; a task whose
+    check needs no server (lint, tests, a build) is not told to start one for a word in
+    its text, a host and port it names as context included."""
     notes = []
     if _BROWSER.search(text) and not any(k in name.lower() for name in registry for k in _BROWSER_CAPS):
         driven = ci.browser(where, verify) if where is not None else None
@@ -1591,9 +1678,12 @@ def _unmet(text: str, registry: Mapping[str, caps.Capability], *, served: bool =
             notes.append("this task needs a browser and workers have none: register a browser MCP server in "
                          "your cauce capabilities.json (`cauce capabilities --example` has one) and allow its "
                          "tools (--allow 'mcp__browser'), or check the pages yourself")
-    mention = _SERVER.search(text)
-    asked = bool(mention and _START_SERVERS.search(text))
-    if mention and not served and not _all_listening(text) and (asked or not verify or _CHECK_SERVES.search(verify)):
+    mention, started = _SERVER.search(text), _START_SERVERS.search(text)
+    if started and not served:
+        notes.append(f"this task tells its worker to start its servers ({started.group(0).strip()!r}): the worker "
+                     "starts them itself, and they stop when it finishes")
+    elif mention and not served and not _all_listening(text) and (
+            not verify or _CHECK_SERVES.search(_CHECK_GRANTS.sub(" ", verify))):
         notes.append(f"this task mentions {mention.group(0)!r}: if its work needs running servers, pass them with "
                      "--service 'npm run dev@4200' (cauce starts each before the work and stops it after), or "
                      "start them yourself before dispatching; a server a worker starts stops when it finishes")
@@ -1660,20 +1750,25 @@ def _spans(repo_dir: Path, add_dirs: Sequence[str]) -> str | None:
     if not apart:
         return None
     named = [own, *apart] if folder is None else apart
+    spans = (f"this task spans {len(apart) + 1} repositories ({', '.join(t.name for t in [own, *apart])}): tracked "
+             "apart, each keeps its own notes and board")
+    choice = ("making them one project is the person's choice, never cauce's: it moves what each repository kept "
+              "(notes, tasks, rules) to that folder")
     if folder is None:
-        # Their own folder when it holds exactly these; else a new one beside them, that
-        # links them in: a workspace's folder holds only its own repositories.
+        # Only a folder that exists and holds exactly these: a workspace's folder holds only
+        # its own repositories, and a path nobody made is no offer.
         parent = own.parent
         try:
             held = {c.resolve() for c in parent.iterdir() if (c / ".git").exists()}
         except OSError:
             held = set()
-        whole = held == {t.resolve() for t in named} and parent != Path.home().resolve()
-        folder = parent if whole else parent / "-".join(t.name for t in named)
+        if held != {t.resolve() for t in named} or parent == Path.home().resolve() or parent == Path("/"):
+            return (f"{spans}; a workspace needs a folder that holds just them, which the person makes (or "
+                    f"links them into) before `cauce workspace add <folder> --with …`; {choice}")
+        folder = parent
     flags = " ".join(f"--with {shlex.quote(str(t))}" for t in named)
-    return (f"this task spans {len(apart) + 1} repositories ({', '.join(t.name for t in [own, *apart])}): tracked "
-            f"apart, each keeps its own notes and board; `cauce workspace add {shlex.quote(str(folder))} {flags}` "
-            "makes them one project, tracked in that folder")
+    return (f"{spans}; `cauce workspace add {shlex.quote(str(folder))} {flags}` would make them one project, "
+            f"tracked in that folder; {choice}")
 
 
 def _refused_here(store: Store, key: str | None, granted: Sequence[str], mode: str) -> list[tuple[str, int]]:
@@ -1707,6 +1802,8 @@ def _cause(decision: Decision, attempt: Attempt) -> str:
         return "converged"
     if decision.move is Move.REVIEW:
         return "review"
+    if decision.move is Move.DECIDE:
+        return "decision"
     if decision.move is Move.REPLAN:
         if attempt.failure in (Failure.SPEC_BUG, Failure.ARCHITECTURE_BUG):
             return "spec"
@@ -2016,7 +2113,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     if not decided:
         say(f"cauce: #{task_id} the independent check could not decide; the pass stands")
         return dataclasses.replace(result, cost_usd=cost, evidence=result.evidence + "\n\n[independent check "
-                                   f"inconclusive: {verdict.summary[:300]}]"), None, ledger, corrections, ()
+                                   f"inconclusive: {clip(verdict.summary, 300)}]"), None, ledger, corrections, ()
     if not blockers:
         if carried:
             say(f"cauce: #{task_id} the earlier problems are fixed; {len(carried)} new one(s) read from the code "
@@ -2044,7 +2141,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
            if progress else f"the same problem survived {MAX_CORRECTIONS} corrections" if len(still) == len(blockers)
            else f"after {MAX_CORRECTIONS} corrections a problem it found before is still there, beside new ones")
     stop = stops.Stop("review", f"the independent check still finds problems; {why}", attempt=nth,
-                      account=found[:2000])
+                      account=clip(found, 2000))
     failed = dataclasses.replace(result, passed=False, failure=failure, cost_usd=cost,
                                  summary=f"the independent check still finds problems{room}: {result.summary}",
                                  evidence=found)
@@ -2084,17 +2181,17 @@ def brief(
                  "Do not repeat one without saying why it would work this time:"]
         for d in dead_ends:
             where = f"{d['repo']}, {_SCOPE_SAID[d['scope']]}" if d.get("scope") in _SCOPE_SAID else d["repo"]
-            line = f"- ({where}) {d['problem']}: tried {d['tried'][:200]}"
+            line = f"- ({where}) {d['problem']}: tried {clip(d['tried'], 200, one_line=True)}"
             if d["why"]:
-                line += f"; failed because {d['why'][:200]}"
+                line += f"; failed because {clip(d['why'], 200, one_line=True)}"
             if d["worked_instead"]:
-                line += f"; what worked: {d['worked_instead'][:200]}"
+                line += f"; what worked: {clip(d['worked_instead'], 200, one_line=True)}"
             lines.append(line)
         parts.append("\n".join(lines))
     if attempts:
         lines = ["Previous attempts on this task — already tried, do not repeat:"]
         for i, a in enumerate(attempts, 1):
-            lines.append(f"  attempt {i} [{a.cell.label}, {a.failure or 'no verdict'}] {a.summary[:300]}")
+            lines.append(f"  attempt {i} [{a.cell.label}, {a.failure or 'no verdict'}] {clip(a.summary, 300)}")
             if a.denied:
                 lines.append(f"    refused: {', '.join(a.denied[:5])}")
         if failed := failed_output(attempts[-1]):
@@ -2243,6 +2340,18 @@ def _settled(result: launch.WorkerResult, command: str, workdir: Path) -> launch
         result, passed=True, failure=None, evidence=output or f"`{command}` exited 0",
         summary=f"{result.summary} ({cause}; `{command}` passed in its place)",
     )
+
+
+def _stands(result: launch.WorkerResult, command: str | None, workdir: Path) -> str:
+    """Whether the work of a worker that reported a failure of the task (`spec_bug`,
+    `architecture_bug`) stands anyway: "cauce" when the repository's check, run by cauce,
+    passes on it; "worker" when there is none to run and the worker's own check is its
+    evidence (shown, with at most the one criterion the open point leaves unmet); "" otherwise."""
+    if command:
+        code, _ = _check(command, workdir)
+        return "cauce" if code == 0 else ""
+    unmet = sum(1 for c in result.criteria if not c.get("met"))
+    return "worker" if result.evidence.strip() and unmet <= 1 and unmet < max(len(result.criteria), 1) else ""
 
 
 def _note(store: Store, task: dict, key: str | None, report: Report, the_plan: Plan, checkout: Path,

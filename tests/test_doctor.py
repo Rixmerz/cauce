@@ -126,3 +126,20 @@ def test_the_events_doctor_reads_keep_the_version_that_wrote_them(store: Store):
     kept = {e["kind"]: e["data"].get("version") for e in store.events(task_id=t["id"])}
     assert kept == {"planned": __version__, "attempt_started": __version__, "moved": __version__,
                     "finished": __version__, "report": None}
+
+
+def test_a_fix_round_that_did_not_start_on_the_round_before_is_suspect(store: Store):
+    run = store.create_run(name="feature", scope="bundled", source="x", repo="r",
+                           definition=json.dumps({"name": "feature", "steps": []}))
+    first = store.create_task("fix", status="done", source="queue", repo="r", workflow_run=run["id"],
+                              workflow_step="fix", options=json.dumps({"ledger": {"role": "fix", "round": 1,
+                                                                                  "base": "b0"}}))
+    store.add_event(first["id"], "finished", status="done", branch=f"cauce/task-{first['id']}", tip="t1")
+    for base, version in (("b0", "0.31.0"), ("t1", "0.31.0")):
+        again = store.create_task("fix", status="done", source="queue", repo="r", workflow_run=run["id"],
+                                  workflow_step="fix", options=json.dumps({"ledger": {"role": "fix", "round": 2,
+                                                                                      "base": base}}))
+        store.add_event(again["id"], "planned", version=version)
+    found = rules(store, now=LATER, alive=lambda pid: True).get("fix-round-off-base", [])
+    # Only the round that started where round 1 started is off its base.
+    assert [(f.severity, f.task_id) for f in found] == [(doctor.SUSPECT, first["id"] + 1)]

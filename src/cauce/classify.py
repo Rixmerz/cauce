@@ -32,7 +32,7 @@ from pathlib import Path
 
 from cauce import models
 from cauce.matrix import DEFAULT_KIND, KINDS
-from cauce.text import fold, words
+from cauce.text import clip, fold, words
 
 COMPLEXITIES = ("trivial", "low", "medium", "high")
 MIN_CONFIDENCE = 0.6
@@ -57,6 +57,13 @@ _CRITICAL = re.compile(
     r"|seguridad|security|permis\w*|secret\w*|credencial\w*|credentials?)\b"
 )
 
+#: Where a clause opens: the text's start, a punctuation mark, or a joining word.
+_OPENS = r"(?:^|[.;:\n!?(]\s*|,\s*|\b(?:y|e|and|then|luego|despues|tambien|also|please|por favor)\s+)"
+#: Verbs that join work kept apart: a merge, a cherry-pick, a rebase, conflicts resolved.
+_INTEGRATE = (r"merge|mergea|mergear|mergealo|mergeala|mergealas|mergealos|haz (?:el |un )?merge|fusiona|fusionar"
+              r"|integra|integrar|integrate|cherry-pick\w*|rebase|rebasea|rebasear"
+              r"|(?:resuelve|resolver|resolve)\s+(?:\w+\s+){0,2}conflict\w*")
+
 #: (pattern, kind, reason). Order matters only where two could fire; each one is
 #: written to be right on its own.
 _RULES: tuple[tuple[re.Pattern[str], str, str], ...] = (
@@ -71,6 +78,12 @@ _RULES: tuple[tuple[re.Pattern[str], str, str], ...] = (
                    r"|intermittent\w*|sporadic\w*|no se (por que|la causa)|no reproduce\w*)\b"),
         "debug-unclear",
         "a failure without a clear cause",
+    ),
+    (
+        # Joining work is writing work, whatever it joins: "integra la rama … de la auditoría".
+        re.compile(_OPENS + r"(" + _INTEGRATE + r")\b"),
+        "implement",
+        "asks to merge, cherry-pick or resolve conflicts",
     ),
     (
         re.compile(r"\b(code review|haz (un )?review|review (the|this|my) (pr|diff|change)"
@@ -110,8 +123,8 @@ _TAG = re.compile(r"#([a-z][a-z-]+)\b")
 #: A verb of change opening a clause: "Crear 5 módulos", "... y registrar la ruta".
 #: Not anywhere in the text: "busca dónde se crea el usuario" is still a search.
 _CHANGE = re.compile(
-    r"(?:^|[.;:\n!?(]\s*|,\s*|\b(?:y|e|and|then|luego|despues|tambien|also|please|por favor)\s+)"
-    r"(crea|crear|creen|creame|create|implementa|implementar|implement|agrega|agregar|anade|anadir|add"
+    _OPENS + r"(" + _INTEGRATE
+    + r"|crea|crear|creen|creame|create|implementa|implementar|implement|agrega|agregar|anade|anadir|add"
     r"|escribe|escribir|write|registra|registrar|register|modifica|modificar|modify|edita|editar|edit"
     r"|arregla|arreglar|fix|refactoriza|refactorizar|refactor|elimina|eliminar|borra|borrar|delete|remove"
     r"|actualiza|actualizar|update|genera|generar|generate|migra|migrar|migrate|renombra|renombrar|rename"
@@ -307,7 +320,7 @@ def by_model(text: str, *, kinds: Sequence[str] | None = None, **haiku_kwargs) -
             cost_usd=cost,
         )
     return Classification(
-        str(kind), str(complexity), "model", str(out.get("reason") or "")[:200], cost
+        str(kind), str(complexity), "model", clip(str(out.get("reason") or ""), 200), cost
     )
 
 

@@ -23,6 +23,23 @@
     {"text": "Implementa todas las mejoras respectivas en base a los resultados criterios e investigscion", "expect": "work"},
     {"text": "Fix the export so the tests pass again. Could it also log the row count while it is at it?", "expect": "work"},
     {"text": "Add a retry with backoff to the webhook sender and cover it with tests", "expect": "work"},
-    {"text": "Corrige el cálculo de la fecha segura cuando baja la capacidad y agrega su prueba", "expect": "work"}
+    {"text": "Corrige el cálculo de la fecha segura cuando baja la capacidad y agrega su prueba", "expect": "work"},
+    {"text": "tienes pendientes", "expect": "session"},
+    {"text": "¿tienes pendientes?", "expect": "session"},
+    {"text": "Tienes pendientes de la tarea de ayer en el repositorio de la API", "expect": "session"},
+    {"text": "Hay pendientes en el repositorio de la plataforma después del último merge?", "expect": "session"},
+    {"text": "En qué quedó la tarea del gráfico de capacidad que mandamos ayer al worker", "expect": "session"},
+    {"text": "indícame cuál es el problema de la exportación de reportes en el módulo de facturas", "expect": "session"},
+    {"text": "dime qué falta para terminar la migración del dispatcher a las colas nuevas", "expect": "session"},
+    {"text": "explícame por qué falló el workflow de ayer en el paso de integración", "expect": "session"},
+    {"text": "qué opinas de cambiar el dispatcher para que use colas por repositorio", "expect": "session"},
+    {"text": "resume lo que hicimos hoy en el repositorio de la plataforma y lo que queda", "expect": "session"},
+    {"text": "Muéstrame los pendientes que quedaron abiertos en el repositorio de la API", "expect": "session"},
+    {"text": "Lista los errores que encontraste en la última corrida del workflow de seguridad", "expect": "session"},
+    {"text": "Observaciones de la revisión:\n- el botón de guardar no responde en el formulario de cotización\n- el gráfico de carga se ve cortado en el teléfono\n- el aviso de cambio de fecha no llega al portal\n- la tabla de tickets no ordena por fecha\nNecesito que me des todos los errores que veas en estas observaciones, con su causa probable y dónde están en el código.", "expect": "session"},
+    {"text": "Observaciones de la revisión:\n- el botón de guardar no responde en el formulario de cotización\n- el gráfico de carga se ve cortado en el teléfono\nNecesito que los arregles todos y me digas qué cambiaste en cada uno.", "expect": "work"},
+    {"text": "Arregla el eje del gráfico de carga en el teléfono y dime qué cambiaste en el componente", "expect": "work"},
+    {"text": "Integra la rama cauce/task-1394 en cauce/task-1400 con cherry-pick y resuelve conflictos; son los arreglos de la auditoría de seguridad", "expect": "work"},
+    {"text": "Merge the audit branch into main and resolve the conflicts in the security module", "expect": "work"}
   ]
 }

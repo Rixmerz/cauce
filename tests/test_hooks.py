@@ -484,3 +484,19 @@ def test_a_passing_ending_carries_its_verdict_so_the_session_never_redoes_the_wo
     blocked = hooks.verdict_lines({**full, "independent": {"ran": True, "passed": False, "blocking": 2}})
     assert "  independent check: 2 blocker(s) left, recorded" in blocked
     assert hooks.verdict_lines(None) == [] and hooks.verdict_lines({}) [-1].endswith("not checked or not met")
+
+
+def test_a_command_line_flag_or_a_bare_slash_command_is_no_turn(store: Store, tmp_path):
+    for echo in ("--continue", "--resume", "--resume 4f2a9c", "-c", "/clear", "/compact", "  --continue  "):
+        prompt(store, echo)
+    assert store.list_tasks() == []
+    # A request that only opens with a dash or a slash is one.
+    prompt(store, "--verify is missing from the run, add it", prompt_id="p2")
+    prompt(store, "/tmp fills up after the build, find why", prompt_id="p3")
+    assert len(store.list_tasks()) == 2
+    # One recorded before is no unfinished work when the session comes back.
+    old = store.create_task("--continue", status="running", source="hook", session_id="s2")
+    real = store.create_task("wire the export", status="running", source="hook", session_id="s2")
+    out = hooks.session_start({"session_id": "s2", "source": "resume"}, store, tmp_path)
+    text = out["hookSpecificOutput"]["additionalContext"] if out else ""
+    assert f"#{real['id']} [running]" in text and f"#{old['id']}" not in text

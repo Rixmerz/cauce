@@ -245,3 +245,22 @@ def test_an_attempt_whose_worker_died_is_lost_time_and_notes_are_their_own_phase
     assert seconds["lost_s"] == 1800.0 and seconds["notes_s"] == 6.0
     assert seconds["other_s"] == 3.0  # 70 - 1 - 50 - 10 - 6; the run that died leaves nothing to "other"
     assert {"lost_s", "notes_s"} <= set(analysis.RUN_COLUMNS)
+
+
+def test_a_dead_worker_noticed_days_later_is_lost_only_up_to_its_time_limit(store):
+    from datetime import UTC, datetime, timedelta
+
+    from cauce import launch
+
+    task = store.create_task("x", status="interrupted", source="cauce", kind="implement")
+    start = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
+    for event_kind, at, data in (("planned", start, {"kind": "implement", "plan_s": 1.0}),
+                                 ("attempt_started", start, {"seq": 1, "max_turns": 30}),
+                                 ("finished", start + timedelta(days=3), {"status": "interrupted"})):
+        event = store.add_event(task["id"], event_kind, **data)
+        store._conn.execute("UPDATE events SET ts = ? WHERE id = ?", (at.isoformat(timespec="seconds"), event))
+    run = analysis.runs(*store.runs_since(""))[0]
+    limit = launch.timeout_for(30)
+    # Three days passed before a sweep noticed it; the worker could not have run past its limit.
+    assert run["lost_s"] == limit and run["unnoticed_s"] == 3 * 86400 - limit
+    assert "unnoticed_s" in analysis.RUN_COLUMNS

@@ -55,6 +55,9 @@ from cauce.store import Store
 
 #: The context is worth compacting from this share of the model's window.
 WORTH_SHARE = 0.5
+#: From this share a compaction is near anyway (the harness's own, at a moment nobody
+#: chose): a natural break is no longer waited for.
+PRESSING_SHARE = 0.8
 #: A model's context window, unless the transcript shows a larger one.
 WINDOW = 200_000
 #: The window of a model run with a million-token context: named so in its id
@@ -275,6 +278,9 @@ def decide(signals: Signals, at: datetime) -> Decision:
     not_held = []
     if signals.breaks:
         held.append("a natural break: " + "; ".join(signals.breaks[:3]))
+    elif share >= PRESSING_SHARE:
+        held.append(f"no natural break, but from {PRESSING_SHARE:.0%} the harness's own compaction is near: "
+                    "better now, at a moment cauce can see")
     else:
         not_held.append("no natural break: no work this session sent ended and was reported, no branch was merged")
     if signals.holding:

@@ -48,6 +48,7 @@ FIXED_IN = {
     "attempts-with-no-session": "0.29.2",
     "turns-under-the-kind": "0.29.2",
     "format-failure-climbed": "0.30.1",
+    "fix-round-off-base": "0.31.0",
 }
 #: Statuses a task leaves the board with: nothing it paused waits on it any more.
 _ENDED = ("done", "dismissed", "superseded", "cancelled")
@@ -291,10 +292,43 @@ def format_failures_that_climbed(store: Store, *, since: str, **_) -> Iterable[F
         yield _history("format-failure-climbed", before, None)
 
 
+def fix_rounds_off_their_base(store: Store, *, since: str, **_) -> Iterable[Finding]:
+    """A fix's later round that started where the round before it started, not on what that
+    round kept: the run's last branch misses the earlier round's fixes."""
+    before: list[int] = []
+    seen: set[int] = set()
+    for event in store.events_of_kinds(["planned"], since=since):
+        task = store.get_task(event["task_id"])
+        spec = _options(task).get("ledger") or {} if task else {}
+        if not task or task["id"] in seen or spec.get("role") != "fix" or int(spec.get("round") or 1) < 2:
+            continue
+        seen.add(task["id"])
+        earlier = [t for t in store.run_tasks(task["workflow_run"]) if t["id"] < task["id"]
+                   and t.get("workflow_step") == task.get("workflow_step") and t["status"] == "done"]
+        if not earlier:
+            continue
+        prior = earlier[-1]
+        kept = (store.final_event(prior["id"]) or {}).get("data") or {}
+        if not kept.get("branch"):
+            continue
+        prior_base = (_options(prior).get("ledger") or {}).get("base")
+        off = spec.get("base") != kept["tip"] if kept.get("tip") else spec.get("base") == prior_base
+        if off and _fixed("fix-round-off-base", _version_of(store, task["id"])):
+            before.append(task["id"])
+        elif off:
+            yield Finding("fix-round-off-base", SUSPECT,
+                          f"run {task['workflow_run']}: fix round {spec.get('round')} #{task['id']} did not start "
+                          f"from what round {int(spec.get('round')) - 1} #{prior['id']} kept on {kept['branch']}",
+                          f"merge {kept['branch']} into the run's last branch before using it", task["id"],
+                          task["repo"])
+    if before:
+        yield _history("fix-round-off-base", before, None)
+
+
 RULES: tuple[Callable[..., Iterable[Finding]], ...] = (
     lanes_paused_on_ended, running_with_no_process, queued_with_no_dispatcher, resumes_that_never_ran,
     parts_that_lost_their_mark, joins_short_of_their_parts, attempts_with_no_session, turns_under_the_kind,
-    format_failures_that_climbed,
+    format_failures_that_climbed, fix_rounds_off_their_base,
 )
 
 
