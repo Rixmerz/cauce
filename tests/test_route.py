@@ -97,3 +97,16 @@ def test_the_prompt_hook_advises_and_keeps_each_decision(store: Store, git_repo,
 
     monkeypatch.setattr(route, "choose", broken)
     assert hooks._route(store, 1, MEDIUM, str(git_repo), None) is None
+
+
+def test_a_question_about_the_work_stays_with_the_session_and_an_order_with_one_does_not():
+    asked = ("También se podría reutilizar siempre la misma sesión por cada rol para tener nociones generales "
+             "quizás? Al menos una sesión por rol por proyecto")
+    found = route.choose(asked, context_tokens=600_000, footprint=FOOTPRINT)
+    assert found.mode == route.MAIN and "a question about the work" in found.reasons[0]
+    assert route.asks("Should we cache the parsed config between runs, or is it cheap enough?")
+    assert route.asks("Se ve bien. ¿Vale la pena limitar los turnos por intento en cada tipo de tarea?")
+    order = "Fix the export so the tests pass again. Could it also log the row count while it is at it?"
+    assert not route.asks(order)
+    assert route.choose(order, context_tokens=600_000, footprint=FOOTPRINT).mode == route.WORKER
+    assert not route.asks(MEDIUM)

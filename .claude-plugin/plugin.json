@@ -87,6 +87,12 @@
       "description": "Each request is read, with no model, for the way it is best done: by the session itself (small, reading, or about this conversation), by one worker that runs while the session goes on, or in parts side by side (large, or several areas). The session is told only when it is not itself, and decides. Off: the session chooses alone.",
       "default": true
     },
+    "primer": {
+      "type": "boolean",
+      "title": "Brief each worker with how its cell got oriented",
+      "description": "A passing worker says what it had to find before its first change; the next worker of its role or area starts from those lines. Each repository alternates tasks with and without them until each side has 12, then keeps the primer only where it won (fewer calls before the first change, first tries no worse). Off: no primer.",
+      "default": true
+    },
     "engram": {
       "type": "boolean",
       "title": "Read the team's engram memory",

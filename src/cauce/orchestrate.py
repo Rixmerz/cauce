@@ -922,8 +922,19 @@ def run(
     if dead:
         # What the workers are shown, kept as shown: the memory grows after the run.
         store.add_event(task["id"], "dead_ends", shown=dead)
+    # How the cell's earlier workers got oriented: given or withheld by the primer's
+    # trial, and kept either way so the two arms can be compared.
+    role_name = the_plan.role.name if the_plan.role is not None else None
+    primed: dict[str, Any] = {}
+    if config.enabled("primer", os.environ):
+        lines = cells.primer(store, key, role=role_name, areas=reach)
+        if lines:
+            arm, why = cells.primer_arm(store, key, task["id"])
+            primed = {"primer_arm": arm, "primer_lines": len(lines), "primer_why": why}
+            if arm == "primer":
+                context.append(cells.primer_text(lines))
     store.add_event(task["id"], "briefed", session=got, dead_ends=len(dead), areas=list(reach),
-                    context_chars=sum(len(line) for line in context))
+                    context_chars=sum(len(line) for line in context), **primed)
     # The runtime the project declares goes first on the worker's PATH, and on its
     # check's: a worker given the wrong Node hunts for another and is refused each one.
     run_env = runtime.env_for(workdir)
@@ -1224,11 +1235,14 @@ def run(
                     report.impact += adapter.assess(result.changed_paths, repo_dir, status)
                 if len(attempts) > 1:
                     _remember(store, task, key, attempt, "worked", result, kind=the_plan.kind,
-                              role=the_plan.role.name if the_plan.role is not None else None)
+                              role=role_name)
+                if result.orientation:
+                    cells.record_orientation(store, task["id"], result.orientation, role=role_name,
+                                             areas=cells.of_paths(result.changed_paths) or reach)
                 break
             if result.failure in _MEMORABLE and result.summary:
                 _remember(store, task, key, attempt, "failed", result, kind=the_plan.kind,
-                          role=the_plan.role.name if the_plan.role is not None else None)
+                          role=role_name)
             reading = not writes or (declared_read_only and not any(a.changed for a in attempts))
             decision = decide(the_plan.ladder, attempts, allow_approval=options.allow_approval, reading=reading)
             resume, fresh = _continues(decision, session)

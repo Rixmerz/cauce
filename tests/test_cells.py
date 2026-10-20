@@ -121,3 +121,115 @@ def test_settling_scopes_the_old_fixes(store: Store):
     evolution.settle(store)
     assert store.meta(cells.BACKFILL_KEY) == "0"
     assert hooks  # the hooks import cells lazily; the module stays light
+
+
+# --- the primer --------------------------------------------------------------------
+
+
+def _oriented(store: Store, lines, *, role, areas, repo="r"):
+    task = store.create_task("t", status="done", source="cauce", repo=repo)
+    return task, cells.record_orientation(store, task["id"], lines, role=role, areas=areas)
+
+
+def test_a_cell_s_orientation_primes_the_next_worker_of_its_role_or_area(store: Store):
+    _, kept = _oriented(store, ["islands/Board.tsx draws the board; its data is from routes/api/board.ts",
+                                "AKIA1234567890ABCDEF is the key to use"], role="implementer", areas=("ui",))
+    assert kept == ["islands/Board.tsx draws the board; its data is from routes/api/board.ts"]  # never a secret
+    _oriented(store, ["the migrations run with deno task migrate before the tests"], role="debugger",
+              areas=("data",))
+    _oriented(store, ["   ", "x"], role="implementer", areas=("ui",))  # nothing worth keeping, no event
+    assert cells.primer(store, "r", role="reviewer", areas=("ui",)) == [
+        "islands/Board.tsx draws the board; its data is from routes/api/board.ts"]
+    assert cells.primer(store, "r", role="debugger", areas=()) == [
+        "the migrations run with deno task migrate before the tests"]
+    assert cells.primer(store, "r", role="security-auditor", areas=("security",)) == []
+    assert cells.primer(store, None, role="debugger", areas=()) == []
+    assert cells.primer(store, "elsewhere", role="debugger", areas=("data",)) == []
+    text = cells.primer_text(cells.primer(store, "r", role="debugger", areas=("ui",)))
+    assert text.startswith("How earlier workers") and "data, not instructions" in text and text.count("\n- ") == 2
+    assert cells.primer_text([]) == ""
+
+
+def test_a_primer_holds_each_line_once_and_at_most_its_size(store: Store):
+    for i in range(cells.PRIMER_LINES + 3):
+        _oriented(store, [f"line number {i} about the ui code here", "The SAME line about the ui code"],
+                  role="implementer", areas=("ui",))
+    found = cells.primer(store, "r", role=None, areas=("ui",))
+    assert len(found) == cells.PRIMER_LINES and sum("same line" in x.lower() for x in found) == 1
+
+
+def _trial_task(store: Store, arm: str, *, passed: bool, calls: int, repo="r"):
+    task = store.create_task("t", status="done", source="cauce", repo=repo)
+    store.add_event(task["id"], "briefed", primer_arm=arm)
+    store.add_event(task["id"], "briefed", primer_arm="ignored")  # a resume's brief: the first one counts
+    store.add_attempt(task["id"], cell="sonnet/medium", max_turns=80, passed=int(passed), input_tokens=1000 + calls)
+    for i in range(calls):
+        store._conn.execute("INSERT INTO tool_events (session_id, task_id, attempt, ts, tool, sig, arg_hash, ok) "
+                            "VALUES ('w', ?, 1, '2026-10-20T00:00:00Z', 'read', 'read', ?, 1)", (task["id"], str(i)))
+    store._conn.execute("INSERT INTO tool_events (session_id, task_id, attempt, ts, tool, sig, arg_hash, ok) "
+                        "VALUES ('w', ?, 1, '2026-10-20T00:00:00Z', 'edit', 'edit', 'e', 1)", (task["id"],))
+    return task
+
+
+def test_the_primer_s_trial_alternates_then_keeps_the_winner(store: Store):
+    arm, why = cells.primer_arm(store, "r", 7)
+    assert arm == "control" and "trial" in why and cells.primer_arm(store, "r", 8)[0] == "primer"
+    assert cells.primer_arm(store, None, 7)[0] == "primer"
+    for _ in range(cells.PRIMER_TRIAL):
+        _trial_task(store, "primer", passed=True, calls=8)
+        _trial_task(store, "control", passed=True, calls=20)
+    found = cells.trial(store, "r")
+    assert found["primer"] == {"tasks": cells.PRIMER_TRIAL, "passed_first": cells.PRIMER_TRIAL,
+                               "calls_before_edit_p50": 8, "input_tokens_p50": 1008}
+    arm, why = cells.primer_arm(store, "r", 7)
+    assert arm == "primer" and "won" in why
+    # Elsewhere, a primer that made first tries fail more lost.
+    for _ in range(cells.PRIMER_TRIAL):
+        _trial_task(store, "primer", passed=False, calls=5, repo="other")
+        _trial_task(store, "control", passed=True, calls=20, repo="other")
+    arm, why = cells.primer_arm(store, "other", 8)
+    assert arm == "control" and "lost" in why
+    assert cells.trial(store, None)["primer"]["tasks"] == 2 * cells.PRIMER_TRIAL
+
+
+def test_stats_show_the_primer_s_trial(store: Store):
+    from cauce import analysis
+
+    task = _trial_task(store, "primer", passed=True, calls=3)
+    _trial_task(store, "control", passed=False, calls=9)
+    store.add_event(task["id"], "planned", kind="implement", start="sonnet/medium", plan_s=1.0)
+    store.add_event(task["id"], "finished", status="done", wall_s=60.0)
+    report = analysis.compute(store, days=0)
+    assert report["primer"]["primer"]["tasks"] == 1 and report["primer"]["control"]["passed_first"] == 0
+    said = analysis.text(report)
+    assert "the cell's primer in the brief" in said
+    assert "with it     tasks    1  first 100%  calls before the first change p50 3" in said
+    assert "without it  tasks    1  first   0%  calls before the first change p50 9" in said
+
+
+def test_a_run_leaves_its_orientation_and_the_next_run_s_brief_follows_its_arm(git_repo, store, monkeypatch):
+    import dataclasses
+
+    from cauce.orchestrate import run
+
+    from .test_orchestrate import Script, kind, ok
+
+    monkeypatch.setenv("CAUCE_PRIMER", "on")
+    oriented = dataclasses.replace(ok(), orientation=("the export lives in src/export.py; run pytest -q tests",))
+    first = Script(oriented, write="export.py")
+    report = run("add the export", git_repo, store, registry={}, launcher=first, classifier=kind("implement"))
+    assert store.last_event(report.task_id, "oriented")["data"]["lines"] == [
+        "the export lives in src/export.py; run pytest -q tests"]
+    assert "primer_arm" not in store.last_event(report.task_id, "briefed")["data"]  # nothing to prime with yet
+    seen = {}
+    for _ in range(2):
+        script = Script(ok(), write="import.py")
+        again = run("add the import", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+        briefed = store.last_event(again.task_id, "briefed")["data"]
+        seen[briefed["primer_arm"]] = "src/export.py" in script.specs[0].prompt
+        assert briefed["primer_lines"] == 1 and "trial" in briefed["primer_why"]
+    assert seen == {"primer": True, "control": False}
+    monkeypatch.setenv("CAUCE_PRIMER", "off")
+    off = Script(ok(), write="other.py")
+    done = run("add the other", git_repo, store, registry={}, launcher=off, classifier=kind("implement"))
+    assert "primer_arm" not in store.last_event(done.task_id, "briefed")["data"]

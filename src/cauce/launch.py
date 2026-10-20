@@ -113,6 +113,7 @@ When you are done, end your reply with exactly one fenced block:
   "commit": "the change in one line for the project's history, imperative, under 72 characters",
   "evidence": "the command you ran to check it and its real output, verbatim",
   "learned": ["a durable fact about this project that you confirmed and the next person would want"],
+  "orientation": ["what you had to find before your first change: a file, a command, a trap"],
   "criteria": [{{"id": "S1", "met": true, "evidence": "what shows it"}}],
   "findings": [{{"where": "path:line", "what": "the problem",
                 "evidence_class": "deterministic" | "inferential" | "insufficient",
@@ -162,6 +163,11 @@ When you are done, end your reply with exactly one fenced block:
   business rule, why the code is shaped this way, a convention, how to run or
   test something, a trap. Not what you changed, not guesses, not anything
   plain from reading the code, never a secret. `[]` when there is none.
+- `orientation`: at most six short lines on what you had to find out before
+  your first change, so the next worker on this kind of work here starts
+  there: where the code for it lives (`path` and what it holds), the command
+  that checks it, a trap you hit. Only what you used; never a secret. `[]`
+  when you needed nothing.
 - `criteria`: when the task lists criteria `S1..Sn`, one entry for each, met or
   not, with what shows it. A pass that leaves one out is not a pass, and nor is
   one that says your work does not meet one. `[]` when the task lists none.
@@ -325,6 +331,8 @@ class WorkerResult:
     permission_mode: str = ""
     #: Facts about the project the worker says it confirmed: filed in its notes on a pass.
     learned: tuple[str, ...] = ()
+    #: What the worker had to find before its first change, for the next one of its cell.
+    orientation: tuple[str, ...] = ()
     #: The one line the worker proposes as the commit's subject; "" when it gave none.
     commit: str = ""
     #: The report its task asked for (a `cauce-report` block), parsed; None when there is none.
@@ -566,6 +574,7 @@ def parse(
     summary = str(block.get("summary") or "")[:1000]
     evidence = str(block.get("evidence") or "")[:4000]
     common["learned"] = learned(block)
+    common["orientation"] = orientation(block)
     common["commit"] = commit_subject(block)
     common["report"] = report_block(text)
     common["criteria"] = criteria_mod.read(block)
@@ -730,6 +739,20 @@ def learned(block: Mapping[str, Any]) -> tuple[str, ...]:
         return ()
     found = [" ".join(x.split())[:LEARNED_CHARS] for x in raw if isinstance(x, str) and x.strip()]
     return tuple(dict.fromkeys(found))[:MAX_LEARNED]
+
+
+#: How many orientation lines one attempt may leave for the next worker, and how long each may be.
+MAX_ORIENTATION, ORIENTATION_CHARS = 6, 300
+
+
+def orientation(block: Mapping[str, Any]) -> tuple[str, ...]:
+    """What a result block says the worker had to find before its first change: strings
+    only, a few, short."""
+    raw = block.get("orientation")
+    if not isinstance(raw, list):
+        return ()
+    found = [" ".join(x.split())[:ORIENTATION_CHARS] for x in raw if isinstance(x, str) and x.strip()]
+    return tuple(dict.fromkeys(found))[:MAX_ORIENTATION]
 
 
 #: The longest commit subject kept; a longer one is cut at a word.

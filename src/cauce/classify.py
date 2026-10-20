@@ -323,6 +323,12 @@ def classify(text: str, *, use_model: bool = True, kinds: Sequence[str] | None =
     return narrow(asks_for_change(text, by_model(text, kinds=kinds, **model_kwargs)), kinds)
 
 
+def opens_with_change(text: str) -> bool:
+    """Whether a request opens with a verb of change ("Fix the export…"): an order, whatever
+    questions follow it."""
+    return _CHANGE.match(fold(text).strip()) is not None
+
+
 def asks_for_change(text: str, found: Classification) -> Classification:
     """A reading kind for a request that asks for a change becomes `implement`.
     A tag is a person's word and stays; so does a question."""

@@ -51,6 +51,7 @@ DEFAULTS: dict[str, Any] = {
     # Each request is advised the way it is best done: by the session itself, one worker,
     # or in parts side by side (`cauce.route`); the session decides.
     "route": True,
+    "primer": True,
     # engram (the team's memory, when its server runs): searched into the brief,
     # and handed to workers read-only. See `cauce.adapters.engram`.
     "engram": True,

@@ -36,7 +36,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -47,7 +47,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
 | `src/cauce/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
-| `src/cauce/cells.py` | where a lesson belongs: the area a path or a change is in, the role that met it, or everyone (`scope`); the text a failure is kept and matched by (a workflow step's goal, never its template); no model |
+| `src/cauce/cells.py` | where a lesson belongs: the area a path or a change is in, the role that met it, or everyone (`scope`); the text a failure is kept and matched by (a workflow step's goal, never its template); the cell's primer (how its workers got oriented) and its trial; no model |
 | `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away |
 | `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
 | `src/cauce/grants.py` | what workers may do: the permission mode per model (auto; Haiku bypasses) and the rules a person keeps per repository with `cauce allow` |
@@ -591,7 +591,23 @@ yields the default kind, not a guess.
   worker attempt's measured input (`Store.worker_footprint`); with no measure, size and
   a full context decide. The prompt hook says it only when it is not the session, keeps
   every decision as a `routed` event to be measured, and never costs the turn. It is
-  advice: the session decides.
+  advice: the session decides. A question about the work (an opening of doubt,
+  `route.asks`: could, should, what if, vale la pena… with a question mark,
+  wherever it falls) stays with the session, and so does a question mark that
+  ends a request; neither when the request opens with a verb of change
+  (`classify.opens_with_change`): that is an order, whatever it asks after.
+- A cell keeps how its workers got oriented (`cells.primer`): a passing worker's
+  `orientation` (what it had to find before its first change, filtered as a
+  note is) is kept as an `oriented` event with its role and the areas of its
+  change, and the next worker of that role, or of a task reaching one of those
+  areas, gets the recent lines in its brief, as data, never instructions; the
+  verifier never does. Whether it earns its place is measured, never assumed:
+  a repository's briefs alternate with and without it until each arm has
+  `cells.PRIMER_TRIAL` first tries, then it stays only where its workers reached
+  their first change in fewer calls and passed their first tries no worse than
+  `PRIMER_MARGIN` below (`primer_arm`); the `briefed` event keeps the arm and
+  why, and `cauce stats` shows both arms. The `primer` setting turns it off;
+  tests run with `CAUCE_PRIMER=off`.
 - A passing ending keeps its verdict (`orchestrate.verdict_card`): each criterion the
   worker answered with its evidence, the check cauce ran (never the worker's word), the
   independent check's outcome or why it did not run, and the attempts. The ending notice

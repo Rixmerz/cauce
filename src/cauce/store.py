@@ -182,6 +182,8 @@ STRICT_OVERLAP = 3
 #: A word held by this share of the problems or more is no evidence of a match: every
 #: run of a workflow shares its step's template, every task its repository's name.
 COMMON_SHARE = 0.2
+#: The tools a worker changes a file with, as the tool-call log names them.
+EDIT_TOOLS = ("edit", "write", "multiedit", "notebookedit")
 #: The query's first distinct words weighed for a strict match.
 STRICT_CANDIDATES = 40
 #: A strict match needs this many distinctive words in its query to go on.
@@ -986,6 +988,36 @@ class Store:
         row = self._conn.execute(
             "SELECT * FROM events WHERE task_id = ? AND kind = ? ORDER BY id DESC LIMIT 1", (task_id, kind)).fetchone()
         return {**dict(row), "data": json.loads(row["data"])} if row else None
+
+    def orientations(self, repo: str, *, limit: int = 40) -> list[dict]:
+        """What passing workers in a repository had to find before their first change
+        (`oriented` events' data: lines, role, areas), newest first."""
+        rows = self._conn.execute(
+            "SELECT e.data FROM events e JOIN tasks t ON t.id = e.task_id WHERE e.kind = 'oriented' AND t.repo = ? "
+            "ORDER BY e.id DESC LIMIT ?", (repo, limit)).fetchall()
+        return [json.loads(r[0]) for r in rows]
+
+    def primer_trial(self, repo: str | None) -> list[dict]:
+        """The tasks of a repository (None: of every one) whose brief was put in a primer arm: the arm, whether
+        the first try passed, its input tokens, and how many tool calls it made before
+        its first change (None when it made none)."""
+        rows = self._conn.execute(
+            "SELECT e.task_id, e.data FROM events e JOIN tasks t ON t.id = e.task_id "
+            "WHERE e.kind = 'briefed' AND (? IS NULL OR t.repo = ?) ORDER BY e.id", (repo, repo)).fetchall()
+        out: dict[int, dict] = {}
+        for task_id, raw in rows:
+            arm = json.loads(raw).get("primer_arm")
+            if arm and task_id not in out:
+                out[task_id] = {"task_id": task_id, "arm": arm}
+        for task_id, row in out.items():
+            first = self._conn.execute(
+                "SELECT passed, input_tokens FROM attempts WHERE task_id = ? AND seq = 1", (task_id,)).fetchone()
+            tools = [r[0] for r in self._conn.execute(
+                "SELECT tool FROM tool_events WHERE task_id = ? AND attempt = 1 ORDER BY id", (task_id,))]
+            edit = next((i for i, tool in enumerate(tools) if tool in EDIT_TOOLS), None)
+            row.update(passed_first=bool(first and first[0]), input_tokens=int(first[1]) if first else 0,
+                       calls_before_edit=edit)
+        return [r for r in out.values() if r["input_tokens"] or r["passed_first"]]
 
     def session_events(self, session_id: str | None, kinds: Sequence[str], *, since: str = "",
                        repo: str | None = None) -> list[dict]:

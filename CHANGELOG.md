@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Each cell primes its next worker.** A fresh worker spent a third of its
+  calls (a median of 24) finding its way before its first change. A passing
+  worker now says what it had to find (`orientation`: where the code lives,
+  the command that checks it, a trap), and the next worker of its role, or of
+  a task reaching the same area, starts from those lines. It is a trial, not
+  a belief: each repository alternates briefs with and without the primer
+  until each side has 12 first tries, then keeps it only where it got workers
+  to their first change sooner without failing more first tries. `cauce stats`
+  shows both sides; the `primer` setting turns it off.
+
+### Fixed
+
+- **A question is no longer sent to a worker.** The router read a question
+  whose question mark fell mid-text ("¿Se podría…? Al menos…") as work to
+  queue. A question about the work (could, should, what if, vale la pena…)
+  now stays with the session, and a request that opens with a verb of change
+  stays an order even when it ends with a question.
+
 ## [0.28.0] - 2026-10-20
 
 ### Changed
