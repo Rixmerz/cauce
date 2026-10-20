@@ -77,7 +77,7 @@ test('the tools are registered with the project topics named, and no list the en
     'board': { exitCode: 0, stdout: EMPTY_BOARD },
   })
   await $.session.start({ cwd: '/work/shop', surface: 'terminal', isInteractive: true })
-  expect(seen.tools.map(t => t.name)).toEqual(['recall', 'note', 'queue', 'tasks', 'resume', 'overview'])
+  expect(seen.tools.map(t => t.name)).toEqual(['recall', 'note', 'queue', 'tasks', 'resume', 'overview', 'compact'])
   const note = seen.tools.find(t => t.name === 'note')!
   expect((note.inputSchema as any).properties.topic.description).toContain('business, billing;')
   expect((note.inputSchema as any).required).toEqual(['fact'])
@@ -295,7 +295,7 @@ test('a cauce that cannot run is said, never a hang', async ($, on) => {
   mock.clock(on)
   const seen = world(on, {}, true)
   await $.session.start({ cwd: '/work/shop', surface: 'terminal', isInteractive: true })
-  expect(seen.tools.length).toBe(6)
+  expect(seen.tools.length).toBe(7)
   expect((await call($, 'tasks', {})).deny).toBe('cauce could not read its board')
   expect((await call($, 'recall', { question: 'x' })).deny).toContain('cauce did not run')
 })
@@ -423,6 +423,36 @@ test('suggest: the line is shown to the person once, never sent to the model', a
   expect(compactionCalls(seen)[0]).toEqual(['compaction', 'next', '--session', 'sess-1', '--version', '2.1.302', '--json'])
 })
 
+test('orchestrator: cauce\'s moment is advice the session gets, once; it decides', async ($, on) => {
+  let calls = 0
+  const advice = 'cauce [compaction #7]: this looks like a good moment to compact this session (…). It is your call.'
+  const { seen, clock } = await started($, on, {
+    'compaction next': () => ({ exitCode: 0, stdout: JSON.stringify(calls++ === 0
+      ? { action: 'advise', decision: 7, advice } : { action: null }) }),
+  })
+  await clock.advance(15_000)
+  await clock.advance(15_000)
+  expect(seen.prompts).toEqual([advice])
+  expect(seen.toasts).toEqual([])
+})
+
+test('compact: the session decides; cauce takes it, and it runs at the next idle look', async ($, on) => {
+  const asked = compacts(on, () => ({ messages: [{ role: 'user', text: 'the summary', toolUses: [] }] }))
+  let n = 0
+  const { seen, clock } = await started($, on, {
+    'compaction request': () => ({ exitCode: 0, stdout: JSON.stringify(n++ === 0 ? { id: 7 } : { error: 'off' }) }),
+    'compaction next': () => ({ exitCode: 0, stdout: SUBMIT }),
+    'compaction delivered': { exitCode: 0, stdout: JSON.stringify({ kept: true }) },
+  })
+  const answer = await call($, 'compact', { why: 'the feature landed', keep: 'the open question on refunds' })
+  expect(answer.result).toStartWith('compaction #7 is set: it runs when this turn ends')
+  expect(compactionCalls(seen)[0]).toEqual(['compaction', 'request', '--session', 'sess-1', '--cwd', '/work/shop',
+    '--why', 'the feature landed', '--json', '--keep', 'the open question on refunds'])
+  await clock.advance(15_000)
+  expect(asked).toEqual([INSTRUCTIONS])
+  expect((await call($, 'compact', { why: 'x' })).deny).toBe('off')
+})
+
 const INSTRUCTIONS = LINE.slice('/compact '.length)
 const SUBMIT = JSON.stringify({ action: 'submit', decision: 7, line: LINE, instructions: INSTRUCTIONS })
 const DELIVERED = ['compaction', 'delivered', '7', '--session', 'sess-1', '--version', '2.1.302']
@@ -449,8 +479,7 @@ test('auto: the engine compacts between turns with the instructions, said after 
     expect(asked).toEqual([INSTRUCTIONS])
     expect(seen.prompts).toEqual([])  // nothing reaches the model as a message
     expect(compactionCalls(seen)[1]).toEqual([...DELIVERED, '--ran', '--json'])
-    expect(seen.toasts).toEqual(["cauce: compacted (#7): `compact auto` compacted between turns with cauce's /compact "
-      + 'instructions'])
+    expect(seen.toasts).toEqual(["cauce: compacted (#7) between turns with cauce's /compact instructions"])
   })
 
 test('auto: a hook that vetoes it is said, and is no verdict on the build', async ($, on) => {
@@ -487,7 +516,7 @@ test('auto, headless: with no compaction between turns, /compact runs with the i
     expect(seen.prompts).toEqual([])
     // The submit stays open: the hooks that see its marker settle it.
     expect(compactionCalls(seen)).toHaveLength(1)
-    expect(seen.toasts).toEqual(["cauce: compacting (#7): `compact auto` ran /compact with cauce's instructions"])
+    expect(seen.toasts).toEqual(["cauce: compacting (#7): ran /compact with cauce's instructions"])
   })
 
 test('auto: a call that fails is no refusal of the build: the line is shown, and nothing said before it',

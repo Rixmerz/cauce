@@ -499,6 +499,14 @@ yields the default kind, not a guess.
 - A compaction digest is read from the transcript and git, never written by
   a model: it may leave things out to fit, never paraphrase. A person's
   words are kept as typed; harness text (commands, reminders) is not theirs.
+- Compacting is the orchestrating session's call (`compact orchestrator`, the
+  default): cauce's moment reaches it as advice with its reasons, never as a
+  compaction, and it compacts with the mod's `compact` tool
+  (`compaction.request`), on that advice or on its own, run when its turn ends
+  with no check of the cache, the size or the cooldown. What it asks to keep is
+  quoted apart and marked as the session's (`kept_by_session`), never mixed
+  into cauce's instructions; a worker never compacts, and with `compact off`
+  the tool is refused. The tool is delegated like `queue` and `resume`.
 - The scribe reads a session's transcript, never its context, and never with a
   model: the same rules as a compaction digest, kept as the session goes, in the
   cauce home, secrets masked. Its failure never costs a turn its endings. A

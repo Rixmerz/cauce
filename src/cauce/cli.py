@@ -1807,6 +1807,11 @@ def cmd_compaction(args: argparse.Namespace) -> int:
     from cauce import compaction
 
     mode = config.choice("compact", os.environ)
+    if args.compaction_command == "request" and (os.environ.get("CAUCE_WORKER_TASK") or mode == "off"):
+        why = ("a cauce worker never compacts" if os.environ.get("CAUCE_WORKER_TASK")
+               else "the person turned cauce's compaction off (`cauce config compact`)")
+        print(json.dumps({"error": why}) if args.json else f"cauce: {why}", file=None if args.json else sys.stderr)
+        return 0 if args.json else 1
     if os.environ.get("CAUCE_WORKER_TASK") or (args.compaction_command == "next" and mode == "off"):
         # A worker's session never compacts on cauce's word, and with the setting
         # off there is nothing to take: neither opens the store.
@@ -1819,6 +1824,9 @@ def cmd_compaction(args: argparse.Namespace) -> int:
         if args.compaction_command == "delivered" and (args.ran or args.skipped is not None):
             answer = compaction.compacted(store, home(), args.session, args.decision, version=args.version,
                                           skip=args.skipped)
+        elif args.compaction_command == "request":
+            answer = compaction.request(store, home(), session_id=args.session, cwd=args.cwd, why=args.why or "",
+                                        keep=args.keep or "")
         elif args.compaction_command == "delivered":
             why = (f"the engine rejected it: {args.rejected}" if args.rejected is not None
                    else "a turn started before it could be submitted")
@@ -1830,7 +1838,7 @@ def cmd_compaction(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(answer, ensure_ascii=False))
     else:
-        for key in ("said", "line"):
+        for key in ("said", "line", "advice"):
             if answer.get(key):
                 print(answer[key])
     return 0
@@ -2256,6 +2264,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = csub.add_parser("next", help="settle a submitted /compact and take the pending decision, once")
     p.add_argument("--session", required=True)
     p.add_argument("--version", default="unknown", help="the Claude Code version the session runs on")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_compaction)
+    p = csub.add_parser("request", help="the orchestrating session decided to compact: it runs when its turn "
+                                        "ends, with cauce's instructions and what it asks to keep")
+    p.add_argument("--session", required=True)
+    p.add_argument("--cwd", help="where the session works (its open work and branches are read there)")
+    p.add_argument("--why", help="why now, in a line")
+    p.add_argument("--keep", help="what the summary must also keep, beyond what cauce keeps itself")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_compaction)
     p = csub.add_parser("delivered", help="what became of a decision the mod was to submit; with none of the "

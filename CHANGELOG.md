@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-10-20
+
+### Changed
+
+- **The orchestrating session decides when to compact.** A new `compact`
+  mode, `orchestrator`, is the default. cauce still sees the moment (a large
+  context, a break between tasks, the cache warm), but tells the session with
+  its reasons instead of compacting or handing the person a line; the session
+  compacts by calling the new `compact` tool (`why`, and `keep` for what must
+  survive beyond the requests, open work and branches cauce keeps itself),
+  on that advice or on its own judgment. It runs when its turn ends, with
+  cauce's instructions and what the session asked to keep quoted apart as its
+  own (`cauce compaction request`). `suggest`, `auto` and `off` work as before.
+
 ## [0.25.0] - 2026-10-19
 
 ### Added

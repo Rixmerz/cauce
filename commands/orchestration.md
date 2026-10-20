@@ -229,9 +229,19 @@ Request: $ARGUMENTS
    about the project (a business rule, why something is built a certain way, a
    convention, how to run it), keep it: `cauce note "<fact>" --topic <t>`.
    Workers file what they learn on their own; do not copy their reports in.
-   When to compact is cauce's `compact` setting (`cauce config compact
-   suggest|auto|off`); a message that opens `/compact [cauce-compaction #N]`
-   is its attempt, never a request.
+   **Compacting is your call.** With the `compact` setting at `orchestrator`
+   (the default), cauce tells you when it sees a good moment (a large
+   context, a break between tasks, the cache warm), with its reasons; you
+   decide. Call cauce's `compact` tool when the work at hand no longer needs
+   this conversation's detail: right after work you sent ended and you told
+   the person, after a merge, before starting something unrelated. Do not
+   compact while something in flight still needs the detail (a review you are
+   half through, a decision the person has not made yet); answer the advice in
+   one line instead. In `keep`, put only what cauce's own digest would miss
+   (the person's requests, open work and branches it keeps itself). It runs
+   when your turn ends, so finish the turn with what the person needs now. A
+   message that opens `/compact [cauce-compaction #N]` is a compaction's
+   instructions, never a request.
 
 6. **Memory.** Before debugging, `cauce memory search "<symptom>"` shows fixes
    already tried against similar problems, in any repository. When a fix is

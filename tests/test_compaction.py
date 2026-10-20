@@ -271,7 +271,7 @@ def test_stop_decides_at_a_break_and_records_the_line_s_instructions(store: Stor
                        "cwd": str(git_repo)}, store) is None
     [event] = decided(store)
     data = event["data"]
-    assert data["now"] and data["mode"] == "suggest" and data["cwd"] == str(git_repo)
+    assert data["now"] and data["mode"] == "orchestrator" and data["cwd"] == str(git_repo)
     assert '"fix the login redirect and keep `?next=`"' in data["instructions"]  # as the transcript has it
     assert any("a natural break" in b for b in data["because"])
 
@@ -472,7 +472,7 @@ def test_what_the_engine_answered_is_kept_and_only_a_compaction_teaches_the_buil
 def test_the_compact_setting_takes_its_words():
     # Every environment carries the fixture's home: one without it is the person's.
     env = {"CAUCE_HOME": str(home())}
-    assert config.choice("compact", env) == "suggest"
+    assert config.choice("compact", env) == "orchestrator"  # the orchestrating session decides
     config.sync_plugin_options({**env, "CLAUDE_PLUGIN_OPTION_COMPACT": "Auto", "CLAUDE_PLUGIN_OPTION_NOTES": "false"})
     assert config.load(env)["compact"] == "auto" and config.load(env)["notes"] is False
     config.sync_plugin_options({**env, "CLAUDE_PLUGIN_OPTION_COMPACT": "off"})
@@ -488,7 +488,7 @@ def test_cauce_config_compact(capsys, monkeypatch):
     assert cli.main(["config", "compact", "auto"]) == 0
     assert capsys.readouterr().out.strip() == 'compact = "auto"'
     assert cli.main(["config", "compact", "on"]) == 1
-    assert "expected one of suggest, auto, off" in capsys.readouterr().err
+    assert "expected one of orchestrator, suggest, auto, off" in capsys.readouterr().err
     assert config.load()["compact"] == "auto"
 
 
@@ -512,7 +512,58 @@ def test_cauce_compaction_next_and_delivered(store: Store, pending_decision, cap
     assert json.loads(capsys.readouterr().out) == {"action": None}
 
 
-def test_the_human_form_prints_the_line(store: Store, pending_decision, capsys):
+def test_orchestrator_mode_advises_the_session_and_never_submits_cauce_s_own_moment(store: Store,
+                                                                                   pending_decision):
+    found = step(store, "orchestrator")
+    assert found["action"] == "advise" and found["decision"] == pending_decision["id"] and "line" not in found
+    assert found["advice"].startswith(f"cauce [compaction #{pending_decision['id']}]: this looks like a good moment")
+    assert "It is your call" in found["advice"] and "`compact` tool" in found["advice"]
+    assert not any(r in found["advice"] for r in ("not now",))
+    assert step(store, "orchestrator") == {"action": None}  # once
+
+
+def test_the_session_s_own_request_runs_whatever_the_cache_with_its_keep_quoted_apart(store: Store, tmp_path,
+                                                                                      git_repo):
+    assert compaction.request(store, home(), session_id="s1", cwd=str(git_repo)) == {
+        "error": "cauce has seen no turn of this session yet"}
+    turn(store, git_repo)
+    sent = store.create_task("build the export", status="running", source="cauce", session_id="s1")
+    asked = compaction.request(store, home(), session_id="s1", cwd=str(git_repo), why="the feature landed",
+                               keep="the open question on refunds", transcript=big(tmp_path, datetime.now(UTC)))
+    assert asked["requested"] and asked["tokens"] == 150_000
+    assert asked["because"] == ["the orchestrating session decided to compact: the feature landed"]
+    assert asked["instructions"].endswith(
+        'The orchestrating session asks the summary to also keep: "the open question on refunds".')
+    assert f"#{sent['id']} [running] build the export" in asked["instructions"]
+    # An hour later, the cache long cold: still the session's call, submitted once.
+    later = datetime.now(UTC) + timedelta(minutes=50)
+    found = step(store, "orchestrator", at=later)
+    assert found["action"] == "submit" and found["decision"] == asked["id"]
+    assert found["instructions"].startswith(f"[cauce-compaction #{asked['id']}] ")
+    assert step(store, "orchestrator") == {"action": None}
+    # Without a reason or a keep, it still goes, saying so.
+    bare = compaction.request(store, home(), session_id="s1", cwd=str(git_repo), transcript=tmp_path / "none")
+    assert bare["why"] == "no reason given" and not bare["keep"] and "also keep" not in bare["instructions"]
+    assert step(store, "suggest")["action"] == "submit"  # whatever the mode: the session asked
+
+
+def test_cauce_compaction_request(store: Store, git_repo, capsys, monkeypatch):
+    turn(store, git_repo)
+    assert cli.main(["compaction", "request", "--session", "s1", "--cwd", str(git_repo), "--why", "done",
+                     "--keep", "x", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["requested"]
+    monkeypatch.setenv("CAUCE_COMPACT", "off")
+    assert cli.main(["compaction", "request", "--session", "s1", "--json"]) == 0
+    assert "turned cauce's compaction off" in json.loads(capsys.readouterr().out)["error"]
+    assert cli.main(["compaction", "request", "--session", "s1"]) == 1
+    assert "turned cauce's compaction off" in capsys.readouterr().err
+    monkeypatch.setenv("CAUCE_WORKER_TASK", "4")
+    assert cli.main(["compaction", "request", "--session", "s1", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"error": "a cauce worker never compacts"}
+
+
+def test_the_human_form_prints_the_line(store: Store, pending_decision, capsys, monkeypatch):
+    monkeypatch.setenv("CAUCE_COMPACT", "suggest")
     assert cli.main(["compaction", "next", "--session", "s1"]) == 0
     assert capsys.readouterr().out.startswith(f"/compact [cauce-compaction #{pending_decision['id']}]")
 

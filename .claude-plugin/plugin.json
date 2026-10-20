@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -90,13 +90,14 @@
     "compact": {
       "type": "string",
       "title": "Compact at the right moment",
-      "description": "cauce decides when a session should compact (a large context, at a break between tasks, while the prompt cache is warm, never while this session's run holds the checkout) and what /compact should keep, read from your requests verbatim and the session's open work. suggest: the mod shows you the /compact line to paste. auto: the mod has Claude Code compact with those instructions between turns; a build never seen to run it falls back to suggest and says so once. off: Claude Code's own auto-compaction alone.",
+      "description": "cauce decides when a session should compact (a large context, at a break between tasks, while the prompt cache is warm, never while this session's run holds the checkout) and what /compact should keep, read from your requests verbatim and the session's open work. orchestrator: the orchestrating session is told at that moment and decides itself, compacting with the cauce compact tool (on that advice or on its own), with what it asks to keep. suggest: the mod shows you the /compact line to paste. auto: the mod has Claude Code compact with those instructions between turns; a build never seen to run it falls back to suggest and says so once. off: Claude Code's own auto-compaction alone.",
       "options": [
+        "orchestrator",
         "suggest",
         "auto",
         "off"
       ],
-      "default": "suggest"
+      "default": "orchestrator"
     },
     "delegate": {
       "type": "boolean",
