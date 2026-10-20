@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-10-20
+
 ### Changed
 
 - **The orchestrating session decides when to compact.** A new `compact`
