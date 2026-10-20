@@ -473,7 +473,8 @@ def test_a_run_leaves_an_event_trail_a_watcher_can_follow(git_repo, store):
     assert store.events(after=events[3]["id"], task_id=report.task_id)[0]["kind"] == "moved"
     # Where its time went: each phase is kept on the events, for the analysis.
     assert events[0]["data"]["plan_s"] >= 0 and events[0]["data"]["queued_s"] is None
-    assert events[1]["data"] == {"session": None, "dead_ends": 0, "context_chars": events[1]["data"]["context_chars"]}
+    assert events[1]["data"] == {"session": None, "dead_ends": 0, "areas": [],
+                                 "context_chars": events[1]["data"]["context_chars"]}
     assert events[2]["data"]["since_start_s"] >= 0 and events[2]["data"]["brief_chars"] > 0
     assert {"wall_s", "duration_s", "check_s", "verifier_s", "input_tokens"} <= set(events[3]["data"])
     assert {"wall_s", "hold_s", "services_s", "worker_s", "check_s", "verifier_s"} <= set(events[-1]["data"])

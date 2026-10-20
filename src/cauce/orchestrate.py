@@ -34,6 +34,7 @@ from typing import Any
 
 from cauce import (
     after,
+    cells,
     ci,
     config,
     dispatch,
@@ -72,6 +73,10 @@ from cauce.store import Store, home
 #: as a dead end. A timeout or a turn ceiling says nothing about the fix.
 _MEMORABLE = frozenset({Failure.CODE_BUG, Failure.TEST_BUG, Failure.APPROACH, Failure.SPEC_BUG,
                         Failure.ARCHITECTURE_BUG})
+
+#: How a brief names where a dead end came from (`cauce.cells.scope`).
+_SCOPE_SAID = {"shared": "met across areas", "area": "met in this task's area", "role": "met by this role"}
+
 
 class Cancelled(Exception):
     """Raised into a run when someone cancels it; the run stops and cleans up."""
@@ -908,12 +913,16 @@ def run(
 
     # Strict, as the prompt hook: a task's text shares a word or two with
     # nearly every task in its repository, and a loose match puts unrelated
-    # failures in front of the worker as if they were this problem's.
-    dead = store.dead_ends(text, repo=key, limit=5, strict=True)
+    # failures in front of the worker as if they were this problem's. Matched by
+    # the work's own text (a step's goal, never its template) and kept to its
+    # cell: the failures of its area, of its role, and the shared ones.
+    reach = cells.of_request(text, the_plan.kind, touched_paths(text, options))
+    dead = cells.dead_ends(store, cells.memory_text(store, task), repo=key, areas=reach,
+                           role=the_plan.role.name if the_plan.role is not None else None)
     if dead:
         # What the workers are shown, kept as shown: the memory grows after the run.
         store.add_event(task["id"], "dead_ends", shown=dead)
-    store.add_event(task["id"], "briefed", session=got, dead_ends=len(dead),
+    store.add_event(task["id"], "briefed", session=got, dead_ends=len(dead), areas=list(reach),
                     context_chars=sum(len(line) for line in context))
     # The runtime the project declares goes first on the worker's PATH, and on its
     # check's: a worker given the wrong Node hunts for another and is refused each one.
@@ -1214,10 +1223,12 @@ def run(
                 for adapter, status in the_plan.active:
                     report.impact += adapter.assess(result.changed_paths, repo_dir, status)
                 if len(attempts) > 1:
-                    _remember(store, task, key, attempt, "worked", result)
+                    _remember(store, task, key, attempt, "worked", result, kind=the_plan.kind,
+                              role=the_plan.role.name if the_plan.role is not None else None)
                 break
             if result.failure in _MEMORABLE and result.summary:
-                _remember(store, task, key, attempt, "failed", result)
+                _remember(store, task, key, attempt, "failed", result, kind=the_plan.kind,
+                          role=the_plan.role.name if the_plan.role is not None else None)
             reading = not writes or (declared_read_only and not any(a.changed for a in attempts))
             decision = decide(the_plan.ladder, attempts, allow_approval=options.allow_approval, reading=reading)
             resume, fresh = _continues(decision, session)
@@ -2048,7 +2059,8 @@ def brief(
         lines = ["Fixes already tried against similar problems, here or in another repository. "
                  "Do not repeat one without saying why it would work this time:"]
         for d in dead_ends:
-            line = f"- ({d['repo']}) {d['problem']}: tried {d['tried'][:200]}"
+            where = f"{d['repo']}, {_SCOPE_SAID[d['scope']]}" if d.get("scope") in _SCOPE_SAID else d["repo"]
+            line = f"- ({where}) {d['problem']}: tried {d['tried'][:200]}"
             if d["why"]:
                 line += f"; failed because {d['why'][:200]}"
             if d["worked_instead"]:
@@ -2254,10 +2266,14 @@ def _to_engram(store: Store, task: dict, report: Report, the_plan: Plan, checkou
 
 
 def _remember(store: Store, task: dict, key: str | None, attempt: Attempt, outcome: str,
-              result: launch.WorkerResult) -> None:
-    problem = store.open_problem(task["title"], repo=key, symptom=task["body"][:1000])
+              result: launch.WorkerResult, *, role: str | None, kind: str) -> None:
+    """A fix kept with its cell: the role the worker wore and the areas of what it changed
+    (of its request when it changed nothing), matched later by the work's own text."""
+    goal = cells.memory_text(store, task)
+    problem = store.open_problem(task["title"], repo=key, symptom=goal[:1000])
     store.add_fix(
         problem, f"{attempt.cell.label}: {result.summary}", outcome, repo=key,
         why=str(attempt.failure or "") if outcome == "failed" else "",
-        evidence=result.evidence, task_id=task["id"],
+        evidence=result.evidence, task_id=task["id"], role=role,
+        areas=cells.of_paths(result.changed_paths) or cells.of_request(goal, kind),
     )
