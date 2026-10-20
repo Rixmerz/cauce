@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-10-20
+
 ### Added
 
 - **Each cell primes its next worker.** A fresh worker spent a third of its
