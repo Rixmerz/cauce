@@ -308,12 +308,12 @@ def test_an_explicit_max_turns_wins_over_the_standard(git_repo, store: Store):
     from cauce import repo
 
     key = repo.key(git_repo)
-    store.set_standard(key, "implement", 1, start_turns=40)
-    store.add_calibration(at=stamp(NOW), repo=key, kind="implement", band=1, field="start_turns", old_value="30",
-                          new_value="40", rule="r", evidence="{}", version=__version__)
+    store.set_standard(key, "implement", 1, start_turns=100)
+    store.add_calibration(at=stamp(NOW), repo=key, kind="implement", band=1, field="start_turns", old_value="80",
+                          new_value="100", rule="r", evidence="{}", version=__version__)
     plain = run("tweak it", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"),
                 adapters=[])
-    assert plain.plan.turns == 40 and plain.plan.standard["turns"] == 40
+    assert plain.plan.turns == 100 and plain.plan.standard["turns"] == 100
     asked = run("tweak it", git_repo, store, Options(dry_run=True, max_turns=12), registry={},
                 classifier=kind("implement"), adapters=[])
     assert asked.plan.turns is None and asked.plan.standard["turns"] is None
@@ -408,6 +408,12 @@ def test_the_plan_names_a_revert_and_a_standard_off_the_ladder(git_repo, store: 
     store.set_standard(key, "docs", 2, measured={"tasks": 4})
     said = standards.for_plan(store, key, "docs", 2, pinned=False, explicit_turns=False).reasons
     assert said == ("no standard for docs at 2 points here yet: cauce's rules choose (measured over 4 tasks so far)",)
+    # A standard's turns set before the kind's rose never take room away from it.
+    store.set_standard(key, "implement", 13, start_turns=40)
+    low = standards.for_plan(store, key, "implement", 13, pinned=False, explicit_turns=False)
+    assert low.turns is None and "under the kind's 80: the kind's win" in low.reasons[0]
+    store.set_standard(key, "implement", 8, start_turns=100)
+    assert standards.for_plan(store, key, "implement", 8, pinned=False, explicit_turns=False).turns == 100
 
 
 def test_a_repository_that_joins_a_workspace_takes_its_standards_and_open_changes_with_it(store: Store):

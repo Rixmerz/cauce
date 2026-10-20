@@ -489,6 +489,11 @@ def for_plan(store: Store, repo: str, kind: str, band: int, *, pinned: bool, exp
     if turns and explicit_turns:
         reasons.append(f"the standard for {name} starts with {turns} turns; the turns asked for this task win")
         turns = None
+    if turns and turns < turns_for(kind):
+        # A standard set before the kind's turns rose is room taken away: the kind's own win.
+        reasons.append(f"the standard for {name} starts with {turns} turns, under the kind's "
+                       f"{turns_for(kind)}: the kind's win")
+        turns = None
     for field, value, what in (("start_cell", cell, f"starts at {cell.label if cell else ''}"),
                                ("start_turns", turns, f"starts with {turns} turns")):
         change = latest.get(field)

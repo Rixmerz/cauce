@@ -22,6 +22,8 @@ def test_a_path_is_in_one_area_and_a_change_in_its_specific_ones():
     assert cells.of_request("fix the login password check", "bugfix", ["tests/test_login.py"]) == (
         "security", "tests")
     assert "ui" in cells.of_request("the modal button overlaps on small screens", "bugfix")
+    # A hosting service's name is no rendered page.
+    assert "ui" not in cells.of_request("reject replayed Render webhooks in the deploy sync", "bugfix")
 
 
 def _met(store: Store, problem: int, *, role: str | None, areas: tuple[str, ...], task: int | None = 1) -> None:

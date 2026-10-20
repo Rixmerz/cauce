@@ -538,7 +538,7 @@ def parse(
     envelope, overcome = _overcome(envelope, changed, spec.target_dir)
     denied = denials(envelope)
     session = envelope.get("session_id") if envelope else None
-    if session and session == os.environ.get("CLAUDE_CODE_SESSION_ID"):
+    if session and session in {os.environ.get(name) for name in HOST_SESSION_VARS}:
         session = None  # the person's own session, never a worker's to continue
     common = dict(changed_paths=changed, duration_s=duration_s, denied=denied, allow=allow_rules(envelope),
                   overcome=overcome, session_id=session if isinstance(session, str) else "", **usage)
@@ -920,6 +920,10 @@ def _int(value: Any) -> int:
     return int(value) if isinstance(value, (int, float)) else 0
 
 
+#: Where a host names the person's session; a worker inherits none of them.
+HOST_SESSION_VARS = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_REMOTE_SESSION_ID")
+
+
 def worker_env() -> dict[str, str]:
     env = dict(os.environ)
     env["CAUCE_HOOKS_OFF"] = "1"
@@ -927,7 +931,9 @@ def worker_env() -> dict[str, str]:
     # A host that runs the person's session (the app's cloud sessions) names it in the
     # environment; a worker that inherits it writes its transcript under that session's
     # id, and every attempt reads it back as its own session.
-    env.pop("CLAUDE_CODE_SESSION_ID", None)
+    # The cloud host names it twice: a worker that keeps either one reports the host's id.
+    for name in HOST_SESSION_VARS:
+        env.pop(name, None)
     # A fork inside a worker re-reads its whole context outside cauce's account: off,
     # whatever the person's own sessions set.
     env["CLAUDE_CODE_FORK_SUBAGENT"] = "0"
