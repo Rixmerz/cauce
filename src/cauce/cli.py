@@ -330,9 +330,11 @@ def cmd_resume(args: argparse.Namespace) -> int:
             known = list(findings_mod.read({"findings": checked["blockers"]}))
         else:  # a check an older cauce recorded kept only what it showed
             known = findings_mod.blocking(findings_mod.read({"findings": checked.get("findings") or []}))
-        # What the task is beyond its run options (an investigator's mark) stays on it.
+        # What the task is beyond its run options stays on it: an investigator's mark, and the
+        # part of a workflow step it runs (without it, its step reads as this task alone and
+        # the integrate after it drops every other part's branch).
         prior = json.loads(task["options"] or "{}")
-        kept = (options.stored() | {k: prior[k] for k in ("investigation",) if k in prior}
+        kept = (options.stored() | {k: prior[k] for k in ("investigation", "part") if k in prior}
                 | ({"allow_approval": True} if inherited else {}))
         store.update_task(args.id, options=json.dumps(kept), dispatched=0, cancel_requested=0)
         # It runs again: a lane paused on its stopping no longer waits on anyone, and

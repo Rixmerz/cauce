@@ -1000,7 +1000,8 @@ def test_a_dismissed_review_resumes_with_the_blockers_the_check_recorded(tmp_pat
     work.mkdir()
     store = Store.open()
     task = store.create_task("fix it", status="blocked", source="cauce", repo="r", cwd=str(work), kind="implement",
-                             options=json.dumps({"investigation": "inv-1", "kind": "implement"}))
+                             options=json.dumps({"investigation": "inv-1", "kind": "implement",
+                                                 "part": {"id": "api", "n": 1, "of": 2, "plan": 9}}))
     shown = {"where": "app.py:3", "what": "drops the last item", "evidence_class": "deterministic",
              "cause": "introduced", "proof": "python probe.py"}
     carried = {"where": "app.py:9", "what": "may be slow", "evidence_class": "inferential", "cause": "introduced",
@@ -1024,6 +1025,8 @@ def test_a_dismissed_review_resumes_with_the_blockers_the_check_recorded(tmp_pat
     store = Store.open()
     # An investigator stays one when it is resumed.
     assert json.loads(store.get_task(task["id"])["options"])["investigation"] == "inv-1"
+    # A workflow step's part stays one: its integrate joins every part's branch.
+    assert json.loads(store.get_task(task["id"])["options"])["part"]["id"] == "api"
     store.close()
 
 
