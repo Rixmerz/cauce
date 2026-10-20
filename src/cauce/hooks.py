@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from cauce import config, orchestrator, project, repo, stops
+from cauce import findings as findings_mod
 from cauce.store import OPEN_FOR_A_RELAY, Store, home
 from cauce.text import fold, words
 
@@ -163,7 +164,33 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
             blocks.append("cauce notes: what this project's notes say about this (kept from earlier work; check "
                           "them against the code, and `cauce recall \"<question>\"` for more):\n"
                           + "\n".join(f"- {notes.line(n, text_chars=300)}" for n in known))
+    if routed := _route(store, task["id"], text, cwd, event.get("transcript_path")):
+        blocks.append(routed)
     return _context("UserPromptSubmit", "\n\n".join(blocks)) if blocks else None
+
+
+def _route(store: Store, task_id: int, text: str, cwd: str | None, transcript: str | None) -> str | None:
+    """Which way the request is best done (`cauce.route`): said only when it is not the
+    session itself, the default, and kept on the turn either way, to be measured. Only in
+    an enrolled project, with the `route` setting on; it never costs the turn."""
+    if not cwd or not config.enabled("route", os.environ) or project.find(cwd) is None:
+        return None
+    try:
+        from cauce import compaction, route
+
+        share, tokens = None, None
+        if transcript:
+            context = compaction.read_context(Path(transcript))
+            tokens = context.tokens
+            share = context.tokens / context.window if context.tokens else None
+        footprint = store.worker_footprint(repo.key(cwd))
+        chosen = route.choose(text, context_tokens=tokens, context_share=share, footprint=footprint)
+        store.add_event(task_id, "routed", **chosen.data(), context_tokens=tokens,
+                        worker_tokens=footprint[0] if footprint else None)
+        return chosen.advice() or None
+    except Exception:  # the turn goes on
+        note_error(home(), "route")
+        return None
 
 
 def _handed_back(store: Store, event: Mapping[str, Any], agent_id: str, text: str) -> None:
@@ -289,11 +316,13 @@ def _scribe(event: Mapping[str, Any], root: Path, env: Mapping[str, str]) -> Non
 
 
 def _revive(store: Store, root: Path, env: Mapping[str, str]) -> None:
-    """A lane with queued work and no dispatcher (one died on a full disk, or was killed)
-    gets one again (`dispatch.revive`). Its failure is noted, and never costs the turn."""
+    """A worker that died is noticed and resumed (`dispatch.recover`), and a lane with queued
+    work and no dispatcher (one died on a full disk, or was killed) gets one again
+    (`dispatch.revive`). Its failure is noted, and never costs the turn."""
     try:
         from cauce import dispatch
 
+        dispatch.recover(store, root, env)
         dispatch.revive(store, root, env)
     except Exception:  # the turn goes on
         note_error(root, "revive")
@@ -585,9 +614,10 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
         lines += [f"  it ran with a warning: {warning}" for warning in _warned(store, t["id"])]
         lines += _went_past(store, t)
         lines += _behind(store, t)
+        lines += _found_before(store, t)
         if t["status"] == "done":
             branch = data.get("branch")
-            where = (f"; branch {branch}: show `git diff HEAD...{branch}` and merge only when they say so"
+            where = (f"; its work is on branch {branch}, merged only on the person's word"
                      if branch else "; its changes are in the checkout" if changed else "; it changed nothing")
             lines.append(f"  passed at {data.get('final_cell') or t['final_cell']}{where}")
             if t.get("result"):
@@ -595,6 +625,7 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
             if changed:
                 lines.append("  changed: " + ", ".join(changed[:8])
                              + (f" and {total - 8} more" if total > 8 else ""))
+            lines += verdict_lines(data.get("verdict"))
             continue
         stop = stops.view(store, t)
         if stop:
@@ -613,6 +644,66 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
                          "opens the lane; when the queued work does not depend on it, tell the person and "
                          f"run `cauce lanes --unpause {t.get('repo')}` to let them start now")
     return "\n".join(lines), [t["id"] for t in ended]
+
+
+def verdict_lines(verdict: Mapping | None) -> list[str]:
+    """The verdict a passing ending carries (`orchestrate.verdict_card`), for the session that
+    sent the work: what it was held to and how that was checked, so it reports the result
+    instead of re-reading the code or running the tests again. A verdict cauce did not keep
+    (an older ending) says nothing."""
+    if not isinstance(verdict, Mapping):
+        return []
+    lines = []
+    check = verdict.get("check")
+    lines.append(f"  check: `{check['command']}` passed, run by cauce in its worktree" if isinstance(check, Mapping)
+                 else "  check: none was given, so nothing ran it: say so to the person")
+    for c in verdict.get("criteria") or ():
+        mark = "met" if c.get("met") else "NOT met"
+        lines.append(f"  {c.get('id')} {mark}: {c.get('evidence') or 'no evidence given'}")
+    ind = verdict.get("independent") or {}
+    if ind.get("ran"):
+        lines.append("  independent check: " + ("passed" if ind.get("passed") else
+                                                 f"{ind.get('blocking')} blocker(s) left, recorded"))
+    elif ind.get("why"):
+        lines.append(f"  independent check: not run ({ind['why']})")
+    unverified = not isinstance(check, Mapping) or any(not c.get("met") for c in verdict.get("criteria") or ())
+    lines.append("  this verdict is cauce's own record: do not re-read the code or re-run the check to confirm it"
+                 + ("; open the diff only where it says something was not checked or not met" if unverified
+                    else "; open the diff only if the person asks"))
+    return lines
+
+
+#: The most problems that were already there an ending lists.
+FOUND_BEFORE_SHOWN = 3
+
+
+def _found_before(store: Store, ended: Mapping) -> list[str]:
+    """Problems the work found that were already there, shown with proof: never this change's
+    to fix, never a blocker, and so never fixed unless somebody starts it. The ending names
+    them and the bugfix that would take one on, after this work, for the orchestrator to
+    decide; nothing is started."""
+    tasks = store.run_tasks(int(ended["workflow_run"])) if ended.get("workflow_run") else [ended]
+    found: dict[str, Mapping] = {}
+    for task in tasks:
+        final = store.final_event(task["id"]) if task.get("status") == "done" else None
+        for f in ((final or {}).get("data") or {}).get("findings") or ():
+            if isinstance(f, Mapping) and f.get("cause") == "pre-existing" and f.get("evidence_class") == \
+                    "deterministic":
+                found.setdefault(findings_mod.key(f), f)
+    if not found:
+        return []
+    after_ref = f"run:{ended['workflow_run']}" if ended.get("workflow_run") else f"task:{ended['id']}"
+    shown = list(found.values())[:FOUND_BEFORE_SHOWN]
+    lines = [f"  it found {len(found)} problem(s) that were already there, not this change's (each shown with "
+             "its proof); a bugfix for one is yours to decide, nothing was started:"]
+    for f in shown:
+        what = " ".join(str(f.get("what") or "").split())[:200]
+        where = str(f.get("where") or "")
+        lines.append(f"    {where}: {what} — `cauce workflow run bugfix {shlex.quote(f'{what} ({where})')} "
+                     f"--after {after_ref}`")
+    if len(found) > len(shown):
+        lines.append(f"    and {len(found) - len(shown)} more: `cauce show {ended['id']}`")
+    return lines
 
 
 def _behind(store: Store, ended: Mapping) -> list[str]:

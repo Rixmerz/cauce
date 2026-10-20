@@ -25,6 +25,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -346,3 +347,77 @@ def revive(store: Store, root: Path, env: Mapping[str, str], *,
                 os.utime(stamp, (now, now))
             revived.append(key)
     return revived
+
+
+#: How many times a task that stopped for a mechanical cause is resumed on its own, from
+#: the work it kept, before it is the orchestrator's to decide.
+AUTO_RESUMES = 1
+#: Stops the orchestrator would always continue the same way, so no session is woken for
+#: them: a worker that died, work that outgrew its turns (resumed with more), a network that
+#: stayed down through cauce's waits, a machine under load through its waits. Each is cauce's
+#: own account (`stops`), never a judgment about the work.
+MECHANICAL = ("died", "turns", "network", "load")
+#: Only deaths this recent are resumed on their own: an upgrade never wakes old ones.
+AUTO_RESUME_WITHIN_S = 6 * 3600
+
+
+def _alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OverflowError, ValueError):
+        return True
+    return True
+
+
+def recover(store: Store, root: Path, env: Mapping[str, str], *, popen: Callable[..., object] | None = None,
+            is_alive: Callable[[int | None], bool] = _alive, now: float | None = None) -> list[int]:
+    """Workers that died mid-attempt (a restart, a killed process) cost the time until somebody
+    noticed, and then the time until somebody resumed them; the other mechanical stops cost a
+    wake of the orchestrating session, which would only resume them. At a turn's end the hooks
+    look: a running task whose process is gone is swept as `died` at once, and a task that
+    stopped for a `MECHANICAL` cause within `AUTO_RESUME_WITHIN_S` is resumed on its own
+    (`cauce resume --unattended`, more turns for one that outgrew them, in the worktree it left,
+    its work kept), at most `AUTO_RESUMES` times; past that it is the orchestrator's. With
+    `autowork` off nothing starts. Never in a GET. The tasks resumed."""
+    from cauce import stops
+
+    running = store.list_tasks(status=["running"], limit=500, source=("cauce",))
+    if any(t["pid"] and not is_alive(t["pid"]) for t in running):
+        from cauce import flow  # only when a worker is gone: it pulls in the orchestrator
+
+        flow.sweep(store, is_alive=is_alive)
+    if not config.enabled("autowork", env):
+        return []
+    now = time.time() if now is None else now
+    start = popen or subprocess.Popen
+    resumed: list[int] = []
+    for task in store.list_tasks(status=["interrupted", "replan", "blocked"], limit=100, source=("cauce",)):
+        stop = stops.of(store, task)
+        ended = store.final_event(task["id"])
+        if stop is None or stop.cause not in MECHANICAL or not task.get("cwd") or not Path(task["cwd"]).is_dir():
+            continue
+        if len(store.events_of(task["id"], "auto_resumed")) >= AUTO_RESUMES:
+            continue
+        try:
+            if now - datetime.fromisoformat(str((ended or {}).get("ts"))).timestamp() > AUTO_RESUME_WITHIN_S:
+                continue
+        except ValueError:
+            continue
+        try:
+            (root / "work").mkdir(parents=True, exist_ok=True)
+            with open(root / "work" / "auto-resume.log", "a") as out:
+                more = ["--max-turns", str(stops.RESUME_TURNS)] if stop.cause == "turns" else []
+                start([sys.executable, "-m", "cauce", "resume", str(task["id"]), "--unattended", *more],
+                      cwd=str(task["cwd"]), env=child_env(env), stdin=subprocess.DEVNULL, stdout=out,
+                      stderr=subprocess.STDOUT, start_new_session=True)
+        except OSError:
+            continue
+        store.add_event(task["id"], "auto_resumed", after=stop.reason, cause=stop.cause)
+        # Its stop is no ending to hand a session: the resume's own ending is.
+        store.add_event(task["id"], "reported", via="auto_resume")
+        resumed.append(int(task["id"]))
+    return resumed

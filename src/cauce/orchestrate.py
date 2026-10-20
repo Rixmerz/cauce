@@ -25,6 +25,8 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor
+from concurrent.futures import wait as wait_for
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -155,6 +157,10 @@ class Options:
     #: The files the change a step reads touches (a review's diff): capabilities about
     #: them join it (`Capability.touches`).
     touches: tuple[str, ...] = ()
+    #: A workflow step a blind review of its change waits on: that review reads the
+    #: request and the diff as the independent verifier would, so the verifier is not
+    #: run twice on the same work (`workflows.reviewed_next`).
+    reviewed_next: bool = False
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -166,7 +172,7 @@ class Options:
                   "step_role": self.step_role, "surfaces": list(self.surfaces),
                   "ledger": self.ledger, "add_dirs": list(self.add_dirs), "services": list(self.services),
                   "run_verify": self.run_verify, "parts": self.parts, "integrate": self.integrate,
-                  "touches": list(self.touches)}
+                  "touches": list(self.touches), "reviewed_next": self.reviewed_next}
         kept = {k: v for k, v in values.items() if v not in (None, [], False)}
         if not self.keep_learned:
             kept["keep_learned"] = False  # a task whose findings wait on a person's word
@@ -200,6 +206,8 @@ class Plan:
     points: points_mod.Score = field(default_factory=lambda: points_mod.Score(1))
     #: What it took from the standard of its band (`cauce.standards`): None outside a repository.
     standard: dict | None = None
+    #: The rung its first try races beside the start (`race_cell`): None when it does not.
+    race: Cell | None = None
 
 
 @dataclass(frozen=True)
@@ -239,6 +247,8 @@ class Report:
     stop: stops.Stop | None = None
     #: Earlier copies of this task, same text, taken off the board by its pass.
     superseded: list[int] = field(default_factory=list)
+    #: What the passing worker answered for each criterion `S#` of the request: id, met, evidence.
+    criteria: tuple[dict[str, Any], ...] = ()
     #: What the passing worker learned, and where each fact was filed in the notes.
     learned: tuple[str, ...] = ()
     noted: list[dict] = field(default_factory=list)
@@ -509,9 +519,164 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     selected = _with_role(caps.select(registry, kind, workdir=repo_dir, paths=touched_paths(text, options),
                                       reading=kind in READ_ONLY_KINDS), role, registry, repo_dir)
     names = tuple(dict.fromkeys([*selected.names, *(a.name for a, _ in active)]))
+    race, race_why = race_cell(store, key, kind, ladder, start, options)
+    if race is not None:
+        reasons.append(race_why)
     return Plan(kind, classification, ladder, start, reasons + neighbour_notes, names,
                 tuple(context), tuple(statuses), tuple(active), tuple(known), role, team, why,
-                risk, turns, size, standard.data() if standard is not None else None)
+                risk, turns, size, standard.data() if standard is not None else None, race)
+
+
+#: A start whose first tries passed less often than this here, over at least `RACE_SAMPLES`
+#: of them, races the next rung on its first try (`race_cell`).
+RACE_BELOW = 0.5
+RACE_SAMPLES = 4
+
+
+def race_cell(store: Store, key: str | None, kind: str, ladder: Sequence[Cell], start: Cell,
+              options: Options) -> tuple[Cell | None, str]:
+    """The rung a task's first try races beside its start, and why; (None, "") when it does
+    not race. A climb after a first try that failed is a whole attempt more of waiting: where
+    the start's first tries pass less than `RACE_BELOW` of the time in this repository, the
+    next rung that needs no approval runs at the same time, each in its own worktree, and
+    the first that passes its check is kept (the other is stopped). Money is no brake, so the
+    second worker is the price of the time. Never a pinned start, a reading kind, a step that
+    decides a ledger, joins parts or plans them, work in the person's checkout, or with
+    `race` off."""
+    if (not key or options.start is not None or kind in READ_ONLY_KINDS or not options.isolate
+            or options.launch_dir or options.ledger or options.integrate or options.parts
+            or not config.enabled("race", os.environ)):
+        return None, ""
+    after = list(ladder)[_index_of(ladder, start) + 1:]
+    rung = next((c for c in after if not c.needs_approval), None)
+    if rung is None:
+        return None, ""
+    window = [t for t in standards.ended(store, repo=key) if t.kind == kind][-standards.WINDOW:]
+    passed, tried = standards.rates(window).get(start.label, [0, 0])
+    if tried < RACE_SAMPLES or passed / tried >= RACE_BELOW:
+        return None, ""
+    return rung, (f"its first try races {start.label} against {rung.label}: {passed} of {tried} first tries at "
+                  f"{start.label} passed here; the first to pass its check is kept, the other stopped")
+
+
+@dataclass
+class Raced:
+    """What a race's first try came to: the try that goes on (the one that passed, else the
+    higher rung's, unless only the environment stopped it) and the one recorded beside it."""
+
+    result: launch.WorkerResult
+    cell: Cell
+    spec: launch.LaunchSpec
+    other: launch.WorkerResult
+    other_cell: Cell
+    #: The kept try's check already ran, in the worktree its work came from.
+    checked: bool
+
+
+#: The move a race's stopped try is kept with: it says nothing of its cell (`standards.samples`).
+RACED_OUT = "raced_out"
+
+
+def _record_raced(store: Store, task_id: int, raced: Raced, turns: int, capabilities: Sequence[str],
+                  report: Report, *, first: bool) -> int:
+    """Keep the try a race did not go on with, as an attempt of its own: its cost, its cell
+    and what it said. When it is the start's (`first`), the rung's that goes on follows it as
+    a new start (`race`); a try stopped because the other passed first teaches no cell."""
+    o = raced.other
+    stopped = o.summary.startswith("stopped:")
+    seq = store.add_attempt(
+        task_id, cell=raced.other_cell.label, max_turns=turns, passed=0,
+        failure=(o.failure or Failure.INCONCLUSIVE).value, summary=o.summary, evidence=kept_evidence(o.evidence),
+        cost_usd=o.cost_usd, input_tokens=o.input_tokens, output_tokens=o.output_tokens, turns=o.turns,
+        duration_s=o.duration_s, changed_paths=o.changed_paths, served_model=o.served_model or None,
+        capabilities=capabilities)
+    store.add_event(task_id, "attempt_finished", seq=seq, cell=raced.other_cell.label, passed=False,
+                    failure=(o.failure or Failure.INCONCLUSIVE).value, cost_usd=o.cost_usd, turns=o.turns,
+                    summary=o.summary[:500], raced=True, stopped=stopped, wall_s=round(o.duration_s, 2),
+                    input_tokens=o.input_tokens, output_tokens=o.output_tokens,
+                    cache_read_tokens=o.cache_read_tokens, cache_write_tokens=o.cache_write_tokens,
+                    worker_cost_usd=round(o.cost_usd, 4), served_model=o.served_model)
+    if stopped:
+        store.set_move(task_id, seq, RACED_OUT, "the other try passed its check first")
+    elif first:
+        store.set_move(task_id, seq, "race", f"raced {raced.cell.label} beside it")
+    report.cells.append(raced.other_cell.label)
+    report.served.append(o.served_model)
+    report.cost_usd += o.cost_usd
+    return seq
+
+
+def _raced_attempt(raced: Raced, turns: int) -> Attempt:
+    o = raced.other
+    return Attempt(raced.other_cell, turns, False, o.failure or Failure.INCONCLUSIVE, o.summary, o.denied,
+                   allow=o.allow, changed=o.changed_paths, evidence=o.evidence[-1500:], transient=o.transient,
+                   findings=o.findings)
+
+
+def _launch(launcher: Launcher, spec: launch.LaunchSpec, runner: launch.Stoppable) -> launch.WorkerResult:
+    if launcher is launch.run:
+        return launch.run(spec, runner=runner)
+    return launcher(spec)
+
+
+def _race(launcher: Launcher, spec: launch.LaunchSpec, start: Cell, rung: Cell, workspace: isolate.Workspace,
+          verify: str | None) -> Raced | None:
+    """Run the start and the rung side by side, each in its own worktree, each checked in it:
+    the first that passes is kept and the other stopped. The task's worktree ends holding the
+    kept try's work. None when the second worktree cannot be made: the try runs alone."""
+    try:
+        lane = isolate.race_lane(workspace, home())
+    except (isolate.IsolationError, OSError):
+        return None
+    there = str(lane.path)
+    second = dataclasses.replace(
+        spec, cell=rung, model_id=models.pinned(rung.model), permission_mode=grants.mode_for(rung.model),
+        launch_dir=lane.path, prompt=spec.prompt.replace(str(workspace.path), there),
+        env={**spec.env, "CAUCE_WORKER_ATTEMPT": spec.env.get("CAUCE_WORKER_ATTEMPT", "") + "-race"},
+        resume_session="", fork_session=False)
+    runners = (launch.Stoppable(), launch.Stoppable())
+
+    def side(i: int, run_spec: launch.LaunchSpec, where: Path) -> launch.WorkerResult:
+        found = _launch(launcher, run_spec, runners[i])
+        if found.passed and verify and not runners[i].stopped:
+            found = _verified(found, verify, where)
+        return found
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {pool.submit(side, 0, spec, workspace.path): 0, pool.submit(side, 1, second, lane.path): 1}
+            done: dict[int, launch.WorkerResult] = {}
+            pending = set(futures)
+            winner = None
+            while pending and winner is None:
+                finished, pending = wait_for(pending, return_when=FIRST_COMPLETED)
+                for future in finished:
+                    done[futures[future]] = future.result()
+                    if done[futures[future]].passed and winner is None:
+                        winner = futures[future]
+                if winner is not None:
+                    for i in (0, 1):
+                        if i != winner:
+                            runners[i].stop()
+            for future in pending:
+                done[futures[future]] = future.result()
+        if winner is None:
+            # Neither passed: the climb goes on from the higher rung, unless only the environment stopped it.
+            winner = 0 if done[1].failure is Failure.ENVIRONMENT and done[0].failure is not Failure.ENVIRONMENT else 1
+        loser = 1 - winner
+        lost = done[loser]
+        if done[winner].passed:
+            lost = dataclasses.replace(lost, passed=False, summary=f"stopped: {(start, rung)[winner].label} passed "
+                                       f"its check first. {lost.summary}"[:2000])
+        kept = done[winner]
+        if winner == 1:
+            isolate.adopt(lane, workspace)
+            # Its session lived in the race's worktree, which goes: what follows starts fresh.
+            kept = dataclasses.replace(kept, session_id="")
+        return Raced(kept, (start, rung)[winner], (spec, second)[winner], lost, (start, rung)[loser],
+                     checked=bool(verify) and kept.passed)
+    finally:
+        isolate.drop(lane)
 
 
 def touched_paths(text: str, options: Options, changed: Sequence[str] = ()) -> list[str]:
@@ -699,6 +864,8 @@ def run(
                     queued_s=queued_s)
 
     workspace = None
+    filled: list[str] = []
+    resumed = False
     # Why the task's worktree could not be made, in one line. It stops the task before its first
     # attempt, resumable, instead of leaving it `running` under a process that is about to exit.
     no_worktree: str | None = None
@@ -722,7 +889,8 @@ def run(
                 context.append("Linked from the person's checkout and shared with it: "
                                + ", ".join(workspace.links) + ". Use them; do not delete or reinstall them.")
             if not resumed:
-                context += _fill_worktree(store, task["id"], workspace, text, options.carry, say)
+                filled = _fill_worktree(store, task["id"], workspace, text, options.carry, say)
+                context += filled
         except (isolate.IsolationError, OSError) as exc:  # git failed, or git or the disk is not there
             no_worktree = " ".join(str(exc).split())
     if workspace is not None and task.get("workflow_run"):
@@ -752,7 +920,11 @@ def run(
     run_env = runtime.env_for(workdir)
     briefing = roles.brief(the_plan.role) if the_plan.role is not None else None
     # The independent check: what it found first, and how many corrections it has had.
-    verifying = writes and not declared_read_only and config.enabled("verifier", os.environ)
+    verifying = writes and not declared_read_only and config.enabled("verifier", os.environ) \
+        and not options.reviewed_next
+    if writes and options.reviewed_next and config.enabled("verifier", os.environ):
+        the_plan.reasons.append("no independent check of its own: the blind review step that follows reads "
+                                "this change as the verifier would")
     ledger: dict[str, Mapping[str, str]] = {findings_mod.key(f): f for f in known_findings}
     corrections = 0
     # A workflow step that decides ledger rows: a pass answers each, and its answers decide the run.
@@ -783,6 +955,9 @@ def run(
     # What an integrate step joined before its first attempt (`_integrate`).
     joined: dict[str, Any] | None = None
     timing = {"hold_s": 0.0, "services_s": 0.0, "worker_s": 0.0, "check_s": 0.0, "verifier_s": 0.0, "wait_s": 0.0}
+    # Its first try races the next rung (`race_cell`): only a fresh run in its own worktree
+    # that brought nothing in from the person's checkout, which the race's lane would lack.
+    racing = the_plan.race is not None and workspace is not None and not history and not filled and not resumed
     try:
         mark = time.monotonic()
         if in_place:
@@ -896,7 +1071,28 @@ def run(
             elif fresh:
                 say(f"cauce: #{task['id']} attempt {nth} starts fresh: {fresh}")
             mark = time.monotonic()
-            result = launcher(spec)
+            raced, raced_first = None, False
+            if racing and the_plan.race is not None and workspace is not None:
+                racing = False
+                store.add_event(task["id"], "attempt_started", seq=nth + 1, cell=the_plan.race.label, race_of=nth,
+                                model=models.pinned(the_plan.race.model) or the_plan.race.model, max_turns=turns,
+                                since_start_s=round(time.monotonic() - clock, 2))
+                say(f"cauce: #{task['id']} attempt {nth} races {the_plan.race.label} beside {cell.label}")
+                raced = _race(launcher, spec, cell, the_plan.race, workspace, options.verify)
+            if raced is not None:
+                # What follows (the independent check, the next attempt) works in the task's worktree,
+                # which holds the kept try's work: the spec keeps its place, with the kept try's cell.
+                result = raced.result
+                spec = dataclasses.replace(spec, cell=raced.cell, model_id=raced.spec.model_id,
+                                           permission_mode=raced.spec.permission_mode)
+                if raced.cell != cell:
+                    # The higher rung's try goes on: the start's is recorded before it.
+                    _record_raced(store, task["id"], raced, turns, selection.names, report, first=True)
+                    attempts.append(_raced_attempt(raced, turns))
+                    nth, raced_first = nth + 1, True
+                cell = raced.cell
+            else:
+                result = launcher(spec)
             if result.fresh:
                 say(f"cauce: #{task['id']} attempt {nth} started fresh: {result.fresh}")
             session = WorkerSession(result.session_id if spec.persist_session else "", spec.model_id or cell.model,
@@ -910,7 +1106,7 @@ def run(
             # worker's: it is committed with the work, and said, since a check that rewrites
             # tracked files may not give the same files on the person's checkout.
             before = isolate.fingerprint(workspace.path) if workspace is not None and options.verify else None
-            if result.passed and options.verify:
+            if result.passed and options.verify and not (raced is not None and raced.checked):
                 result = _verified(result, options.verify, workdir)
             elif _settles(result, options.verify) and (
                     isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
@@ -996,6 +1192,12 @@ def run(
                               load=result.load,
                               blockers=open_blockers)
             attempts.append(attempt)
+            if raced is not None and not raced_first:
+                # The start's try went on: the rung's, stopped or failed, is recorded after it.
+                store.set_move(task["id"], seq, "race", f"raced {raced.other_cell.label} beside it")
+                _record_raced(store, task["id"], raced, turns, selection.names, report, first=False)
+                if not result.passed:
+                    attempts.append(_raced_attempt(raced, turns))
             subject = result.commit or subject
             if result.report is not None:
                 store.add_event(task["id"], "report", seq=seq, passed=result.passed, report=result.report)
@@ -1008,6 +1210,7 @@ def run(
             if result.passed:
                 report.status, report.final_cell, report.summary = "done", cell.label, result.summary
                 report.learned, report.parts, report.contract = result.learned, result.parts, result.contract
+                report.criteria = result.criteria
                 for adapter, status in the_plan.active:
                     report.impact += adapter.assess(result.changed_paths, repo_dir, status)
                 if len(attempts) > 1:
@@ -1137,6 +1340,8 @@ def run(
                         at=round(time.time(), 3), **gaps,
                         **{k: round(v, 2) for k, v in timing.items()},
                         **({"ledger": settled.data()} if settled else {}),
+                        **({"verdict": verdict_card(store, task["id"], report, options, verifying)}
+                           if status == "done" else {}),
                         **({"parts": list(report.parts), "contract": report.contract}
                            if status == "done" and report.parts else {}))
         store.add_message(task["id"], "worker", report.text())
@@ -1148,6 +1353,36 @@ def run(
             store.add_event(task["id"], "workflow_error", error=str(exc)[:300])
             say(f"cauce: #{task['id']} could not start the work that waits on it: {exc}")
     return report
+
+
+#: The most of one criterion's evidence a verdict keeps.
+CRITERION_EVIDENCE = 240
+
+
+def verdict_card(store: Store, task_id: int, report: Report, options: Options, verifying: bool) -> dict[str, Any]:
+    """What the passing work was held to, kept with its ending so the session that sent it
+    reads the verdict instead of re-reading the code: each criterion `S#` the worker
+    answered with its evidence, the repository's check that cauce ran (never the worker's
+    word), the independent check's outcome or why it did not run, and how many attempts it
+    took. Read from cauce's records and git only."""
+    verified = store.last_event(task_id, "verified")
+    if verified is not None:
+        data = verified["data"] or {}
+        independent = {"ran": True, "passed": bool(data.get("passed")), "blocking": int(data.get("blocking") or 0)}
+    elif options.reviewed_next:
+        independent = {"ran": False, "why": "a blind review step of this workflow reads the change next"}
+    elif not verifying:
+        independent = {"ran": False, "why": "it changed nothing to check, or the verifier is off"}
+    else:
+        independent = {"ran": False, "why": f"its risk ({report.plan.risk.tier}) does not call for one"}
+    return {
+        "criteria": [{"id": str(c.get("id")), "met": bool(c.get("met")),
+                      "evidence": " ".join(str(c.get("evidence") or "").split())[:CRITERION_EVIDENCE]}
+                     for c in report.criteria if isinstance(c, Mapping)],
+        "check": {"command": options.verify, "passed": True} if options.verify else None,
+        "independent": independent,
+        "attempts": len(report.cells),
+    }
 
 
 _STEP_TAG = re.compile(r"^\[[\w.-]+#\d+ [\w.-]+\]\s*")

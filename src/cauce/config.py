@@ -45,6 +45,12 @@ DEFAULTS: dict[str, Any] = {
     # A passing change whose risk is high (or medium, made by a cheap cell) is
     # checked again by an independent verifier before it counts.
     "verifier": True,
+    # A start that rarely passes its first try here races the next rung on that try, each in
+    # its own worktree; the first that passes its check is kept (`orchestrate.race_cell`).
+    "race": True,
+    # Each request is advised the way it is best done: by the session itself, one worker,
+    # or in parts side by side (`cauce.route`); the session decides.
+    "route": True,
     # engram (the team's memory, when its server runs): searched into the brief,
     # and handed to workers read-only. See `cauce.adapters.engram`.
     "engram": True,

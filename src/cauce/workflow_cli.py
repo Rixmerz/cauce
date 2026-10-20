@@ -335,8 +335,13 @@ def _run(args: argparse.Namespace) -> int:
                                  # A directory beside the work every step's workers may read, kept on the run.
                                  "add_dirs": [str(Path(d).expanduser().resolve()) for d in args.add_dir]
                                  if getattr(args, "add_dir", None) else None}.items() if v is not None}
+    fanned = None
+    if not getattr(args, "whole", False):
+        args.name, fanned = workflows.fanned(args.name, where, inputs, args.scope)
     store = Store.open()
     try:
+        if fanned and not args.json:
+            print(f"cauce: {fanned}")
         if args.dry_run:
             if args.after is not None:
                 after.target(store, run_id=args.after)  # the run it would wait for is checked too
@@ -374,7 +379,7 @@ def _run(args: argparse.Namespace) -> int:
     finally:
         store.close()
     if args.json:
-        print(json.dumps({**shown, "gaps": run["gaps"], "warnings": warned,
+        print(json.dumps({**shown, "gaps": run["gaps"], "warnings": warned, **({"fanned": fanned} if fanned else {}),
                           **({"warnings_error": unseen} if unseen else {})}, ensure_ascii=False, default=str))
     else:
         print(f"started run #{run['id']} of {run['name']} ({run['scope']}): "
@@ -532,6 +537,7 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--add-dir", action="append", default=[], metavar="DIR",
                    help="a directory beside the work every step's workers may use, such as a sibling repository "
                         "(repeatable)")
+    p.add_argument("--whole", action="store_true", help="a large feature runs as one build instead of in parts")
     p.add_argument("--dry-run", action="store_true", help="check the inputs and the memory, show the steps; queue "
                                                           "nothing")
     p.add_argument("--after", type=int, metavar="RUN",

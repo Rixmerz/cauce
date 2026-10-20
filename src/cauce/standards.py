@@ -15,7 +15,8 @@ dispatcher, never from a GET) and applies two rules, and nothing else:
   one rung per calibration, down as far as the ladder's first rung and never below
   it, and never onto a cell that needs an approval;
 - the start turns are the 75th percentile of the turns the band's passing tasks
-  needed, capped at `escalate.MAX_TURNS_CEILING`, one `TURNS_STEP` per calibration.
+  needed, capped at `escalate.MAX_TURNS_CEILING`, one `TURNS_STEP` per calibration,
+  never under the kind's own turns (a cap is room; a lower one saves nothing).
 
 A band moves one field at a time, and not again before that change is judged: once
 `JUDGE_AFTER` tasks ran under it, the window before and the window after are
@@ -135,8 +136,14 @@ def samples(attempts: Sequence[Mapping[str, Any]]) -> list[tuple[str, bool]]:
     current: list[Any] | None = None
     before = None
     for i, a in enumerate(attempts):
+        if a.get("move") == "raced_out":
+            # Stopped because the other try of its race passed first: it says nothing of its
+            # cell, and the try after it started from the base beside it.
+            before = "race"
+            continue
         cell = _label(a.get("cell"))
-        if i == 0 or before == "next_model":
+        # A race's rung starts from the base beside the start: a first try of its own.
+        if i == 0 or before in ("next_model", "race"):
             current = [cell, False, False]
             out.append(current)
         elif current is None or cell != current[0] or before not in GOES_ON:
@@ -227,13 +234,17 @@ def _rank(values: Sequence[int], q: float) -> int:
     return ordered[min(len(ordered) - 1, max(0, math.ceil(q * len(ordered)) - 1))]
 
 
-def start_turns(current: int, needed: Sequence[int]) -> tuple[int | None, dict[str, Any]]:
-    """Where the start turns move (None: they stay), and the evidence."""
+def start_turns(current: int, needed: Sequence[int], floor: int = 1) -> tuple[int | None, dict[str, Any]]:
+    """Where the start turns move (None: they stay), and the evidence.
+
+    Never under `floor`, the kind's own turns: a cap is room, and an attempt that is
+    done stops on its own, so a lower one saves nothing and cuts the slow passes.
+    """
     evidence: dict[str, Any] = {"samples": len(needed), "min_samples": MIN_SAMPLES, "p75": None, "step": TURNS_STEP}
     if len(needed) < MIN_SAMPLES:
         return None, evidence
-    aim = min(_rank(needed, TURNS_PERCENTILE), MAX_TURNS_CEILING)
-    evidence["p75"] = aim
+    evidence["p75"] = min(_rank(needed, TURNS_PERCENTILE), MAX_TURNS_CEILING)
+    aim = max(evidence["p75"], floor)
     if aim == current:
         return None, evidence
     return min(max(current + max(-TURNS_STEP, min(TURNS_STEP, aim - current)), 1), MAX_TURNS_CEILING), evidence
@@ -284,10 +295,11 @@ def calibrate(store: Store, repo: str, *, now: datetime | None = None) -> list[d
             continue
         needed = [n for n in (turns_needed(t.attempts) for t in window if t.passed) if n]
         current = row.get("start_turns")
-        turns, evidence = start_turns(current or turns_for(kind), needed)
+        turns, evidence = start_turns(current or turns_for(kind), needed, turns_for(kind))
         if turns is not None:
             rule = (f"the 75th percentile of the turns {len(needed)} passing tasks needed is {evidence['p75']}"
-                    + ("" if turns == evidence["p75"] else f"; one step of {TURNS_STEP} toward it"))
+                    + ("" if turns == evidence["p75"] else f"; one step of {TURNS_STEP} toward it")
+                    + (f", never under the kind's {turns_for(kind)}" if evidence["p75"] < turns_for(kind) else ""))
             changes.append(_record(store, at=at, repo=repo, kind=kind, band=band, field="start_turns",
                                    old_value=str(current) if current else None, new_value=str(turns), rule=rule,
                                    evidence={**evidence, "tasks": len(window)}))

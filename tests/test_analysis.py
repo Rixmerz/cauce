@@ -221,3 +221,27 @@ def test_the_breakdown_shows_the_gaps_instead_of_other_and_leaves_out_what_was_n
     said = analysis.text(analysis.compute(store, days=0))
     assert "advance 4s" in said and "pickup 25s" in said and "spawn 5s" in said
     assert {"advance_s", "pickup_s", "spawn_s"} <= set(analysis.RUN_COLUMNS)
+
+
+def test_an_attempt_whose_worker_died_is_lost_time_and_notes_are_their_own_phase(store):
+    """The time a dead worker cost was read as "other": 17% of it, here."""
+    from datetime import UTC, datetime, timedelta
+
+    task = store.create_task("x", status="interrupted", source="cauce", kind="implement")
+    start = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
+    for event_kind, at, data in (("planned", start, {"kind": "implement", "plan_s": 1.0}),
+                                 ("attempt_started", start, {"seq": 1}),
+                                 ("finished", start + timedelta(minutes=30), {"status": "interrupted"})):
+        event = store.add_event(task["id"], event_kind, **data)
+        store._conn.execute("UPDATE events SET ts = ? WHERE id = ?", (at.isoformat(timespec="seconds"), event))
+    done = store.create_task("y", status="done", source="cauce", kind="implement")
+    store.add_event(done["id"], "planned", kind="implement", plan_s=1.0)
+    store.add_event(done["id"], "attempt_started", seq=1)
+    store.add_event(done["id"], "attempt_finished", seq=1, passed=True, wall_s=50.0)
+    store.add_event(done["id"], "finished", status="done", wall_s=70.0, worker_s=50.0, check_s=10.0, notes_s=6.0)
+    found = {r["task"]: r for r in analysis.runs(*store.runs_since(""))}
+    assert found[task["id"]]["lost_s"] == 1800.0 and found[done["id"]]["lost_s"] is None
+    seconds = analysis.phases(list(found.values()))["seconds"]
+    assert seconds["lost_s"] == 1800.0 and seconds["notes_s"] == 6.0
+    assert seconds["other_s"] == 3.0  # 70 - 1 - 50 - 10 - 6; the run that died leaves nothing to "other"
+    assert {"lost_s", "notes_s"} <= set(analysis.RUN_COLUMNS)

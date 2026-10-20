@@ -2,6 +2,75 @@
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-10-20
+
+### Added
+
+- **A hard start races the next rung.** Where a kind's start passes its first
+  try under half the time in a repository (over at least four), that first
+  try runs beside the next rung, each in its own worktree and each checked
+  there; the first to pass is kept, the other stopped with its process
+  group. A rung that wins has its work carried into the task's worktree;
+  when neither passes, the climb goes on from the rung. Measured here,
+  features passed their first try 29% of the time and each climb was a
+  whole attempt more of waiting. The `race` setting (on) turns it off.
+- **Large features run in parts by default.** `cauce workflow run feature`
+  runs as `feature-parallel` when the goal is 8 points or more, or touches
+  two areas or more, and says so; `--whole` keeps one build.
+- **A dead worker is noticed at once and resumed.** The hooks look at every
+  turn's end: a running task whose process is gone is swept and resumed once
+  from the worktree it left (`autowork` on). Measured here, five dead workers
+  cost 3.7 hours (17% of all run time), one of them noticed 93 minutes late.
+- **What was already broken is offered as a bugfix.** An ending lists the
+  problems the work found that were not its change's, shown with proof, and
+  the `cauce workflow run bugfix … --after` that would take each on; nothing
+  starts unless the orchestrator says so.
+- **`cauce stats` names the lost time.** The time of attempts whose worker
+  died is `lost`, and filing what a worker learned is `notes`; "other" went
+  from 18% to 1% of the measured time.
+
+- **Each request is told its way.** With no model, cauce reads a request for
+  the way it is best done and says it when that is not the session itself:
+  one worker, or parts side by side. Work done in a session re-reads its
+  whole context every turn, so the choice compares the session's context
+  times a worker's measured turns against what a worker attempt reads here
+  (measured: about 2.3M tokens over 26 turns; the session in which this was
+  built read about 600k each turn); reading, small work and what points back
+  into the conversation stay with the session. Every decision is kept to be
+  measured. The `route` setting (on) turns it off.
+- **Mechanical stops resume without waking the session.** A task that
+  outgrew its turns (with more), lost the network or ran under load through
+  cauce's waits is resumed once on its own, as a dead worker is, before any
+  session hears of it; review, permission and approval stops still reach the
+  orchestrator.
+
+### Changed
+
+- **Attempts start with room to finish.** A first attempt gets 80 turns, and
+  a feature, UI or test task 120 (were 30 and 60). Measured here, 20 of 110
+  attempts ran out of turns and 15 of those passed on the next one, paying a
+  fresh orientation again (157 minutes and $58); passing features needed 104
+  turns at p90. A cap costs nothing when the work is done early, so a
+  calibration never moves a band's start turns under its kind's.
+
+- **The session reads the verdict instead of redoing the work.** A passing
+  ending keeps what the work was held to (`verdict`): each criterion `S#` the
+  worker answered with its evidence, the repository's check cauce ran in its
+  worktree, and the independent check's outcome or why it did not run. The
+  ending notice gives it whole and tells the orchestrator not to re-read the
+  code, re-run the check or diff the branch to confirm it; it no longer asks
+  it to show `git diff`. The diff is opened only when the person asks, or
+  where the verdict says something was not checked or not met. The
+  orchestration guide says the same: the workers are a team that checks
+  itself, and the session that delegated never repeats their work.
+- **No verifier twice.** A workflow step a blind review of its change follows
+  (a feature's build, an integrate step and the parts it joins) runs no
+  independent verifier of its own: the review reads the same request and diff.
+  Measured here, the verifier was 12% of all run time.
+- The orchestration guide tells the orchestrator to distribute the load:
+  independent pieces as tasks with their own surfaces, queued together, and
+  what depends on other work queued `--after` it at once.
+
 ## [0.26.0] - 2026-10-20
 
 ### Changed

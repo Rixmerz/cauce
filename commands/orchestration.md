@@ -159,8 +159,9 @@ Request: $ARGUMENTS
    account; `changed (from git)` is what the files say. Never tell the user a
    file was created or changed unless that line names it, and remember that a
    branch is not their checkout: nothing is there until it is merged.
-   - `done` with a branch — show the user the summary and `git diff HEAD...<branch>`;
-     merge only when they say so.
+   - `done` with a branch — tell the user the summary and its verdict (the
+     check that passed, each criterion with its evidence); merge only when they
+     say so. Show the diff only if they ask for it.
    - `needs_approval` — the next cell needs a person (Fable). Ask; rerun with
      `--allow-approval` only on a yes.
    - `replan` — the task as written cannot be done, or does not fit. Rewrite or
@@ -185,9 +186,11 @@ Request: $ARGUMENTS
      it for one more round with `--unattended`, or dismiss it with why when the
      blockers are wrong.
 
-   - `replan` because it outgrew its turns — the task is not wrong: continue it
-     with `cauce resume <id> --max-turns 120 --unattended` (its work stays), or
-     split what the report says is left.
+   - `replan` because it outgrew its turns — the task is not wrong. cauce
+     resumes it once on its own with more turns (as it does a worker that died,
+     a network that stayed down, or a machine under load), so you hear of it only
+     when that resume ends; if it stops again, continue it with
+     `cauce resume <id> --max-turns 120 --unattended`, or split what is left.
 
    A resume you start on your own, with nothing the person just granted,
    carries `--unattended`: it refuses what only they can clear (a refused
@@ -213,6 +216,44 @@ Request: $ARGUMENTS
    run at once is cauce's: it adapts to the API, memory, disk and load by
    itself. Never set `max_parallel` to slow it down; that ceiling is the
    person's.
+
+   **Trust the verdict; never redo the work.** The workers are a team that
+   checks itself: the repository's check runs in their worktree, an
+   independent verifier reads risky changes, and a workflow's blind review
+   reads the diff. When work ends, its notice carries the verdict: each
+   criterion `S#` with its evidence, the check that passed, and the
+   independent check's outcome. Report that to the person. Do not re-read the
+   changed files, re-run the tests or diff the branch to confirm it: that
+   repeats the work you delegated, at the cost of this session's whole
+   context. Open the diff only when the person asks, or when the verdict
+   itself says something was not checked or not met.
+
+   **Each request has its way.** cauce reads every request for the way it is
+   best done, with no model, and tells you only when it is not you: a
+   `cauce route:` line says a worker (with what each way would read: the
+   turns times your context here, against a worker's measured reading) or
+   parts side by side. Reading, small work while your context is small, and
+   what points back into this conversation are yours. Follow the line unless
+   the work needs this conversation; it is advice, the call is yours.
+
+   **Speed is distributing the load.** Workers that run at once are the
+   fastest way through a request, so give cauce work it can run side by side:
+   - Split a request with independent pieces into one task each, every one
+     with its own `--surface` (the folders or files it may write), and queue
+     them together. Tasks whose surfaces cannot touch start at once, with no
+     question to Haiku; one long task runs alone.
+   - A large feature (`cauce workflow run feature`) runs as `feature-parallel`
+     by itself when its goal is big or touches several areas: its plan splits
+     it into parts that build side by side. Pass `--whole` only when the
+     pieces truly cannot be separated.
+   - A start that rarely passes its first try here races the next rung on
+     that try (the `race` setting): leave it on.
+   - Do not wait on one task to queue the next unless it needs its work; when
+     it does, queue it now with `--after <task>` so it starts the moment the
+     first passes.
+   - An ending that lists problems that were already there (not that
+     change's) offers the bugfix for each: start the ones worth it with
+     `--after`, so they never block the work at hand.
 
    Work you queued, or ran in the background, reports back on its own: when
    it ends, a `cauce:` notice reaches you at the end of your turn or with the

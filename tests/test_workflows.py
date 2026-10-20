@@ -1370,3 +1370,44 @@ def test_the_cli_makes_a_step_fan_out_and_one_join_the_parts(git_repo, kicks, ca
     assert "waits on 'build', a step run in parts" in capsys.readouterr().err
     assert cli.main(["workflow", "step", "set", "split", "join", "--clear", "integrate", "--needs", "do"]) == 0
     assert "integrate" not in workflows.load("split", git_repo)["steps"][2]
+
+
+def test_the_steps_a_blind_review_follows_run_no_verifier_of_their_own():
+    feature = workflows.load("feature", None)
+    marked = {s["id"]: workflows.reviewed_next(feature, s) for s in feature["steps"]}
+    assert marked == {"build": True, "review": False, "refute": False, "fix": False, "recheck": False}
+    parallel = workflows.load("feature-parallel", None)
+    marked = {s["id"]: workflows.reviewed_next(parallel, s) for s in parallel["steps"]}
+    assert marked["build"] and marked["integrate"] and not marked["plan"] and not marked["fix"]
+
+
+def test_a_large_feature_runs_in_parts_by_default(git_repo, tmp_path, monkeypatch):
+    small = "Add a --verbose flag to the CLI"
+    big = ("Build the billing module: a schema migration for invoices, the payment webhook with its signature check, "
+           "the admin screens to list and refund them, and tests for each: S1 the migration, S2 the webhook, S3 the "
+           "refund, S4 the list, S5 the totals, S6 the emails, S7 the export, S8 the audit log, in "
+           "src/billing/models.py, src/billing/webhook.py, src/admin/invoices.tsx, src/billing/refund.py")
+    assert workflows.fanned("feature", git_repo, {"goal": small}) == ("feature", None)
+    name, why = workflows.fanned("feature", git_repo, {"goal": big})
+    assert name == "feature-parallel" and "points" in why and "--whole" in why
+    assert workflows.fanned("bugfix", git_repo, {"goal": big}) == ("bugfix", None)
+    assert workflows.fanned("feature", git_repo, {}) == ("feature", None)
+    # A feature the person saved is theirs: never swapped.
+    user = workflows.dirs(git_repo)["user"]
+    user.mkdir(parents=True, exist_ok=True)
+    (user / "feature.json").write_text((workflows.bundled_dir() / "feature.json").read_text())
+    assert workflows.fanned("feature", git_repo, {"goal": big}) == ("feature", None)
+    assert workflows.fanned("feature", git_repo, {"goal": big}, scope="nowhere") == ("feature", None)
+
+
+def test_the_run_command_says_it_fans_out_and_whole_keeps_one_build(git_repo, store: Store, kicks, capsys,
+                                                                     monkeypatch):
+    monkeypatch.chdir(git_repo)
+    monkeypatch.setattr(workflows, "fanned", lambda name, *a, **kw: ("feature-parallel", "runs as feature-parallel"))
+    assert cli.main(["workflow", "run", "feature", "the export", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("cauce: runs as feature-parallel") and "feature-parallel would run here" in out
+    assert cli.main(["workflow", "run", "feature", "the export", "--dry-run", "--whole"]) == 0
+    assert capsys.readouterr().out.startswith("feature would run here")
+    assert cli.main(["workflow", "run", "feature", "the export", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["fanned"] == "runs as feature-parallel"

@@ -143,6 +143,8 @@ def test_the_start_turns_rule_at_its_boundaries():
     assert standards.start_turns(38, needed)[0] == 41
     assert standards.start_turns(41, needed)[0] is None
     assert standards.start_turns(60, needed)[0] == 60 - standards.TURNS_STEP
+    assert standards.start_turns(60, needed, floor=55)[0] == 55  # never under the kind's own turns
+    assert standards.start_turns(80, needed, floor=80)[0] is None
     huge = [900] * 8
     assert standards.start_turns(MAX_TURNS_CEILING - 3, huge)[0] == MAX_TURNS_CEILING
     assert standards.start_turns(MAX_TURNS_CEILING, huge)[0] is None
@@ -190,12 +192,17 @@ def test_a_band_with_a_change_not_judged_yet_does_not_move(store: Store):
 
 
 def test_turns_move_when_the_cell_stays(store: Store):
-    many(store, 8, ("sonnet/medium", 1, None, None, 52))
+    many(store, 8, ("sonnet/medium", 1, None, None, turns_for("implement") + 22))
     change, = standards.calibrate(store, "r", now=NOW)
     # from cauce's own rules (the kind's turns), one step toward what passes needed
     assert (change["field"], change["old_value"], change["new_value"]) == (
         "start_turns", None, str(turns_for("implement") + standards.TURNS_STEP))
-    assert json.loads(store.calibrations(repo="r")[0]["evidence"])["p75"] == 52
+    assert json.loads(store.calibrations(repo="r")[0]["evidence"])["p75"] == turns_for("implement") + 22
+
+
+def test_turns_never_move_under_the_kind_s_own(store: Store):
+    many(store, 8, ("sonnet/medium", 1, None, None, 12))
+    assert standards.calibrate(store, "r", now=NOW) == []
 
 
 def test_a_pinned_start_teaches_no_cell(store: Store):

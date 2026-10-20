@@ -1790,6 +1790,10 @@ def cmd_endings(args: argparse.Namespace) -> int:
     next prompt deliver. `--peek` reads it without taking it."""
     store = Store.open()
     try:
+        if not args.peek:
+            # A mechanical stop is resumed before it could wake the session (`dispatch.recover`).
+            with contextlib.suppress(Exception):
+                dispatch.recover(store, home(), os.environ)
         text, ids = hooks.endings(store, args.session, claim=None if args.peek else args.via)
         statuses = {str(i): (store.get_task(i) or {}).get("status") for i in ids}
     finally:

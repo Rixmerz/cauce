@@ -430,7 +430,7 @@ def test_each_move_says_where_it_went_and_why_and_routing_adds_them_up(store: St
     d = api.task_detail(store, report.task_id)
     c = d["attempts"][0]["climb"]
     assert (c["from"], c["to"], c["axis"], c["trigger"]) == ("sonnet/medium", "sonnet/high", "effort", "code_bug")
-    assert c["because"][0].startswith("attempt 1 at sonnet/medium ended code_bug") and c["turns_to"] == 30
+    assert c["because"][0].startswith("attempt 1 at sonnet/medium ended code_bug") and c["turns_to"] == 80
     assert d["attempts"][1]["climb"] is None
     assert api.flow_of(store, report.task_id)["steps"][0]["climb"]["to"] == "sonnet/high"
 

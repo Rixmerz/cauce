@@ -928,3 +928,43 @@ def test_a_workflow_step_s_kept_commit_is_named_by_its_goal_not_the_step_title()
     assert orchestrate.commit_title(step) == "Make workflows faster by running parts in parallel"
     assert orchestrate.commit_title({"title": "[bugfix#3 fix] Fix it", "body": ""}) == "Fix it"
     assert orchestrate.commit_title({"title": "Add a flag to the importer"}) == "Add a flag to the importer"
+
+
+def test_a_step_a_blind_review_follows_runs_no_verifier_of_its_own(git_repo, store, verifier_on):
+    """The verifier was 12% of the time, mostly before a review step that reads the same diff."""
+    script = Script(passing(), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+                 options=orchestrate.Options(reviewed_next=True))
+    assert report.status == "done" and len(script.specs) == 1  # the worker only, no verifier
+    assert store.events_of(report.task_id, "verified") == []
+    assert any("the blind review step that follows" in r for r in report.plan.reasons)
+    assert orchestrate.Options(reviewed_next=True).stored()["reviewed_next"] is True
+
+
+def test_a_pass_keeps_the_verdict_it_was_held_to(git_repo, store):
+    answered = WorkerResult(True, None, "done", "1 passed", cost_usd=0.1,
+                            criteria=({"id": "S1", "met": True, "evidence": "  the   export test passes "},
+                                      "not a record"))
+    script = Script(answered, write="app.py")
+    check = "true"
+    report = run("Fix the export:\n- S1 keep the header", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"), options=Options(verify=check))
+    verdict = store.final_event(report.task_id)["data"]["verdict"]
+    assert verdict["check"] == {"command": "true", "passed": True} and verdict["attempts"] == 1
+    assert verdict["criteria"] == [{"id": "S1", "met": True, "evidence": "the export test passes"}]
+    assert verdict["independent"] == {"ran": False, "why": "it changed nothing to check, or the verifier is off"}
+    reviewed = run("Fix the export again", git_repo, store, registry={}, launcher=Script(ok(), write="app.py"),
+                   classifier=kind("implement"), options=Options(reviewed_next=True))
+    found = store.final_event(reviewed.task_id)["data"]["verdict"]
+    assert found["check"] is None and "blind review" in found["independent"]["why"]
+
+
+def test_the_verdict_names_the_independent_check_or_why_it_did_not_run(git_repo, store, verifier_on):
+    script = Script(passing(), check("pass"), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert store.final_event(report.task_id)["data"]["verdict"]["independent"] == {
+        "ran": True, "passed": True, "blocking": 0}
+    calm = run("Explain the cache in the docs", git_repo, store, registry={},
+               launcher=Script(ok(), check("pass"), write="NOTES.md"), classifier=kind("docs"))
+    independent = store.final_event(calm.task_id)["data"]["verdict"]["independent"]
+    assert independent.get("ran") or independent["why"].startswith("its risk")

@@ -36,7 +36,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -279,7 +279,10 @@ yields the default kind, not a guess.
   kind's turns and passed with more, it starts at the median those passes
   needed (capped at `escalate.MAX_TURNS_CEILING`), and the plan says so. An
   explicit `--max-turns` wins. A calibrated standard (below) takes the place of
-  these rules for its band, and may lower the start, never below the ladder.
+  these rules for its band, and may lower the start cell, never below the
+  ladder, and never the start turns below the kind's (`matrix.turns_for`): a
+  cap is room, an attempt that is done stops on its own, and a lower cap only
+  cuts the slow passes.
 - A task's points are its size on the Fibonacci scale (1, 2, 3, 5, 8, 13),
   estimated when it is planned by a pure function of what the plan knows
   (`points.estimate`: its criteria, kind, risk tier and the areas that raised
@@ -301,7 +304,7 @@ yields the default kind, not a guess.
   ladder's first rung and never a cell that needs an approval. The start turns
   move toward the 75th percentile of what the band's passes needed, one
   `standards.TURNS_STEP` per calibration, capped at
-  `escalate.MAX_TURNS_CEILING`. A band moves one field at a time, and not
+  `escalate.MAX_TURNS_CEILING` and never under the kind's own. A band moves one field at a time, and not
   again before that change is judged. Money moves no standard: a point's cost
   is measured and shown, never a rule's input. `--start` and `--max-turns`
   always win, and the plan says which standard it used and why (its `planned`
@@ -549,6 +552,55 @@ yields the default kind, not a guess.
   and the endings tell it to ask in its conversation and run the line on a yes. The orchestrator
   gains no power: it still resumes `--unattended`, and a dismissal it types is
   recorded as its call, never as the person's.
+- A start that rarely passes its first try here (under `orchestrate.RACE_BELOW` over at
+  least `RACE_SAMPLES` first tries of its kind in the repository, `standards.rates`)
+  races the next rung that needs no approval on that try (`race_cell`, the `race`
+  setting): each in its own worktree (`isolate.race_lane`), each checked there, the
+  first to pass kept and the other stopped (`launch.Stoppable`, its process group).
+  A rung that wins has its work carried into the task's worktree (`isolate.adopt`);
+  when neither passes, the climb goes on from the rung. Both tries are attempts with
+  their cost; one stopped because the other passed first (`RACED_OUT`) teaches its cell
+  nothing, and the rung's is a first try of its own (`standards.samples`). Never a
+  pinned start, a reading kind, a ledger, integrate or plan-parts step, a resume, a run
+  in the checkout, or a worktree that brought files in from it. Money is no brake: the
+  second worker is the price of the climb's wait.
+- A workflow step a blind review of its change follows (`workflows.reviewed_next`: a
+  review with no ledger that needs it, or an integrate step that joins its parts and is
+  followed by one) runs no independent verifier of its own (`Options.reviewed_next`):
+  the review reads the request and the diff as the verifier would, and the plan says so.
+- `cauce workflow run feature` runs as `feature-parallel` when its goal is
+  `workflows.FAN_OUT_POINTS` or more, or touches `FAN_OUT_AREAS` areas, by the plan's
+  pure estimate (`workflows.fanned`), and says so; never a `feature` the person saved,
+  and `--whole` keeps one build.
+- A worker that died is noticed at a turn's end, not at the next session: the hooks
+  sweep a running task whose process is gone. A task that stopped for a mechanical
+  cause (`dispatch.MECHANICAL`: died, outgrew its turns, a network or a load that
+  outlasted cauce's waits) is resumed once on its own before any session hears of it
+  (`dispatch.recover`, from the hooks and `cauce endings`: `cauce resume --unattended`
+  in the worktree it left, with more turns for one that outgrew them, within
+  `AUTO_RESUME_WITHIN_S`, at most `AUTO_RESUMES`, with `autowork` on). Its stop is no
+  ending handed to a session; a second one is the orchestrator's. A stop that needs
+  judgment or a person (review, permission, approval, a wrong task) is never resumed so. The analysis reads
+  the time from an attempt that never finished to its run's end as `lost_s`, never
+  as other.
+- Each request is read for its way (`cauce.route`, the `route` setting), with no model:
+  the session itself (a turn, reading, what points back into the conversation), parts
+  side by side (`PARALLEL_POINTS`, `PARALLEL_AREAS` or `PARALLEL_PIECES`), else the
+  cheaper reading: the worker's measured turns times the session's context against a
+  worker attempt's measured input (`Store.worker_footprint`); with no measure, size and
+  a full context decide. The prompt hook says it only when it is not the session, keeps
+  every decision as a `routed` event to be measured, and never costs the turn. It is
+  advice: the session decides.
+- A passing ending keeps its verdict (`orchestrate.verdict_card`): each criterion the
+  worker answered with its evidence, the check cauce ran (never the worker's word), the
+  independent check's outcome or why it did not run, and the attempts. The ending notice
+  gives it (`hooks.verdict_lines`) and tells the session not to re-read the code, re-run
+  the check or diff the branch to confirm it: the delegated work is never done twice.
+  The diff is opened only on the person's word, or where the verdict says something was
+  not checked or not met.
+- An ending names the problems the work found that were already there, shown with
+  proof (`hooks._found_before`), and the `bugfix` that would take one on `--after` the
+  work; nothing is started: the orchestrator decides.
 - A worker never inherits the host's session id (`CLAUDE_CODE_SESSION_ID`),
   and an attempt never keeps the host's session as its own.
 - Problems and fixes are global; notes belong to one project and are never

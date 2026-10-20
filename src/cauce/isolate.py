@@ -309,6 +309,47 @@ def bring(ws: Workspace, rels: Sequence[str]) -> tuple[list[str], list[str]]:
     return copied, big
 
 
+def race_lane(ws: Workspace, root: Path) -> Workspace:
+    """A second worktree beside a task's, on its own branch from the same base, with the
+    same dependencies linked: where the rung a race runs works (`orchestrate.race_cell`)."""
+    branch = f"{ws.branch}-race"
+    path = root / "worktrees" / f"{ws.path.name}-race"
+    _git(ws.repo_dir, "worktree", "prune", check=False)
+    if path.exists():
+        _git(ws.repo_dir, "worktree", "remove", "--force", str(path), check=False)
+    _git(ws.repo_dir, "branch", "-D", branch, check=False)
+    _git(ws.repo_dir, "worktree", "add", "-b", branch, str(path), ws.base)
+    lane = Workspace(ws.repo_dir, path, branch, ws.base, ws.links)
+    link(lane)
+    return lane
+
+
+def adopt(src: Workspace, dst: Workspace) -> tuple[str, ...]:
+    """Make the task's worktree hold what a race's lane did: `dst` back to its base, and
+    `src`'s change against that base applied on it, uncommitted, as a worker leaves its
+    work. What it changed, from git."""
+    if src.links:
+        _git(src.path, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *src.links, check=False)
+    _git(src.path, "add", "-A")
+    if src.links:
+        _git(src.path, "reset", "-q", "--", *src.links, check=False)
+    patch = _git(src.path, "diff", "--cached", "--binary", src.base, strip=False)
+    reset(dst)
+    if patch.strip():
+        proc = subprocess.run(["git", "apply", "--binary", "--whitespace=nowarn"], cwd=str(dst.path), input=patch,
+                              capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            raise IsolationError(f"the race's work could not be carried over: {proc.stderr.strip()[:300]}")
+    return changed(dst)
+
+
+def drop(ws: Workspace) -> None:
+    """Remove a worktree and its branch, keeping nothing: a race's lane once it is decided."""
+    unlink(ws)
+    _git(ws.repo_dir, "worktree", "remove", "--force", str(ws.path), check=False)
+    _git(ws.repo_dir, "branch", "-D", ws.branch, check=False)
+
+
 def reset(ws: Workspace) -> None:
     """Back to the base commit, in the task's worktree only."""
     _git(ws.path, "reset", "--hard", ws.base)
