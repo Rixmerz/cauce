@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-10-20
+
 ### Added
 
 - **Scenarios with real processes and a fake `claude`.** The unit tests drive
