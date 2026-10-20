@@ -48,7 +48,7 @@ BACKFILL_KEY = "cells.backfill"
 _TESTS = re.compile(r"(^|/)(tests?|__tests__|spec|e2e)/|(^|/)test_[^/]*$|_test\.\w+$|\.(test|spec)\.\w+$")
 _DOCS = re.compile(r"(^|/)docs?/|\.(md|mdx|rst|txt)$")
 _UI_TEXT = re.compile(r"\b(ui|ux|page|screen|layout|component|button|modal|css|style\w*|frontend|front-end|"
-                      r"island|render\w*|pantalla|vista|bot[oó]n)\b", re.I)
+                      r"island|pantalla|vista|bot[oó]n)\b", re.I)
 
 
 def of_path(path: str) -> str:

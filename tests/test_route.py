@@ -110,3 +110,12 @@ def test_a_question_about_the_work_stays_with_the_session_and_an_order_with_one_
     assert not route.asks(order)
     assert route.choose(order, context_tokens=600_000, footprint=FOOTPRINT).mode == route.WORKER
     assert not route.asks(MEDIUM)
+
+
+def test_a_request_that_talks_to_the_session_stays_with_it():
+    said = "Habla en español y dime si falta mergear algo o testear la nueva versión de cauce en los repositorios"
+    found = route.choose(said, context_tokens=600_000, footprint=FOOTPRINT)
+    assert found.mode == route.MAIN and found.reasons == ("it talks to this session, which answers it",)
+    assert route.talks("Tell me why the dispatcher waited on the second task before starting it")
+    assert not route.talks("Realiza todas las pruebas sobre MECHA, testing de seguridad, inventa algo")
+    assert not route.talks("Fix the summary line the report prints when a task stops for review")

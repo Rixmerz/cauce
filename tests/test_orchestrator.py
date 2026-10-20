@@ -169,4 +169,5 @@ def test_a_session_dismisses_as_the_orchestrator(capsys, monkeypatch, store: Sto
 
 def test_a_worker_never_inherits_the_hosts_session(monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "the-person")
-    assert "CLAUDE_CODE_SESSION_ID" not in launch.worker_env()
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE_SESSION_ID", "the-person")
+    assert not set(launch.HOST_SESSION_VARS) & set(launch.worker_env())

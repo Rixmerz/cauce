@@ -591,6 +591,34 @@ def test_the_unattended_limit_ends_the_dispatcher_even_when_every_worker_was_bus
     assert len(report.ran) == 1 and "unattended limit" in report.stopped_because
 
 
+def test_a_run_of_its_own_that_stopped_is_resumed_by_the_dispatcher_not_a_later_turn(store: Store, monkeypatch):
+    """A worker killed under the dispatcher left its workflow waiting for some session's next
+    turn; the dispatcher that saw it end now runs `dispatch.recover` at once, and only then."""
+    for i in range(2):
+        store.enqueue(f"read file {i}", repo="r", cwd="/")
+    recovered = []
+    monkeypatch.setattr(dispatch, "recover", lambda *a, **k: recovered.append(1) or [])
+
+    class Ends:
+        def __init__(self, task_id, status):
+            self.task_id, self.status = task_id, status
+
+        def poll(self):
+            store.update_task(self.task_id, status=self.status)
+            return self.status
+
+    statuses = iter(["done", "interrupted"])
+    flow.work(store, max_tasks=1, parallel=True, start=lambda task, where: Ends(task["id"], next(statuses)),
+              pause=lambda: None, decide=lambda task, ahead: dispatch.Decision(True, "independent"))
+    assert recovered == []
+    flow.work(store, max_tasks=1, parallel=True, start=lambda task, where: Ends(task["id"], next(statuses)),
+              pause=lambda: None, decide=lambda task, ahead: dispatch.Decision(True, "independent"))
+    assert recovered == [1]
+    monkeypatch.setattr(dispatch, "recover", lambda *a, **k: (_ for _ in ()).throw(OSError("gone")))
+    flow._recover(store)
+    assert "OSError: gone" in store.events_of(0, "recover_error")[0]["data"]["error"]
+
+
 def test_another_dispatcher_s_unjudged_writing_work_borrows_no_worker(store: Store):
     """Beside its running work, another lane's writing task no decision has let start yet is
     no demand: the worker it would borrow sits idle while this lane has work to run."""

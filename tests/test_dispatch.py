@@ -400,6 +400,9 @@ def test_a_dead_worker_is_swept_and_resumed_once_from_its_kept_work(store: Store
     alive = store.create_task("still going", status="running", source="cauce", cwd=str(tmp_path), pid=os.getpid())
     gone = store.create_task("its folder is gone", status="interrupted", source="cauce", cwd=str(tmp_path / "x"))
     stops.record(store, gone["id"], stops.Stop("died", "no sign of life"))
+    # Never from inside a worker (its mod asks for endings): that resume would be refused, its one try spent.
+    assert dispatch.recover(store, tmp_path, {**os.environ, "CAUCE_WORKER_TASK": "7"}, popen=pytest.fail) == []
+    assert "CAUCE_WORKER_TASK" not in dispatch.child_env({"CAUCE_WORKER_TASK": "7", "CAUCE_WORKER_ATTEMPT": "1"})
     found = dispatch.recover(store, tmp_path, os.environ, popen=lambda argv, **kw: started.append(argv),
                              is_alive=lambda pid: pid == os.getpid())
     assert found == [task["id"]]

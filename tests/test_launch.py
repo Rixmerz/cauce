@@ -487,6 +487,7 @@ def test_a_plan_that_runs_in_parts_is_read_strictly(tmp_path):
     ([PARTS[0], {**PARTS[1], "surfaces": []}], "c", "part 'web' declares no surfaces"),
     ([PARTS[0], {**PARTS[1], "id": "api"}], "c", "two parts are called 'api'"),
     ([PARTS[0], {**PARTS[1], "prompt": " "}], "c", "part 'web' has no prompt"),
+    ([PARTS[0], {**PARTS[1], "prompt": "x" * 6001}], "c", "part 'web': its prompt is 6001 characters, over 6000"),
     ([PARTS[0], {**PARTS[1], "id": "Web Page"}], "c", "part 2 has no id"),
     ([PARTS[0], {**PARTS[1], "surfaces": ["../up"]}], "c", "part 'web': a surface stays inside the project"),
     ([PARTS[0], "web"], "c", "part 2 is not an object"),

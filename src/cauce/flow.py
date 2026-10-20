@@ -477,6 +477,22 @@ def _settle(store: Store) -> None:
         store.add_event(0, "evolution_error", error=f"{type(exc).__name__}: {exc}"[:300])
 
 
+#: The statuses a mechanical stop leaves (`dispatch.MECHANICAL`): only these may resume on their own.
+_MAY_RESUME = ("interrupted", "replan", "blocked")
+
+
+def _recover(store: Store) -> None:
+    """A run of its own that ended badly may be a mechanical stop (a worker killed, out of
+    turns): resumed here at once (`dispatch.recover`), not at some session's next turn,
+    which may never come while work runs unattended. Its failure is an event on task 0."""
+    from cauce import dispatch
+
+    try:
+        dispatch.recover(store, home(), os.environ)
+    except Exception as exc:  # the dispatcher goes on; the error is kept, never silent
+        store.add_event(0, "recover_error", error=f"{type(exc).__name__}: {exc}"[:300])
+
+
 def work(
     store: Store,
     *,
@@ -539,15 +555,17 @@ def work(
             raise
     while True:
         try:
-            ended = False
+            ended, stopped = False, False
             for handle in list(out):
                 status = handle.poll()
                 if status is not None:
                     out.remove(handle)
                     report.ran.append(Ran(handle.task_id, status))
-                    ended = True
+                    ended, stopped = True, stopped or status in _MAY_RESUME
             if ended:
                 _settle(store)
+            if stopped:
+                _recover(store)
             launched: list[tuple[dict, Path]] = []
             if started < max_tasks:
                 with capacity.held(home()):

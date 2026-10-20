@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+## [0.29.2] - 2026-10-20
+
+### Fixed
+
+- **Workers in a cloud session can be continued again.** A cloud host names
+  the person's session in `CLAUDE_CODE_REMOTE_SESSION_ID` too, and a worker
+  that inherited it reported the host's session as its own, so cauce kept none
+  and every "more turns" or "more effort" attempt started fresh. Workers no
+  longer inherit it, and an id that is either host's is still never kept.
+- **A standard set before a kind's turns rose no longer cuts them.** An
+  `implement` task started with the 40 turns a band's old standard held, under
+  the kind's 80; a standard's turns under the kind's own now give way to them,
+  and the plan says so.
+- **"Render" is no page.** The words that put a request in the `ui` area read
+  `render…` as rendering, so work on the Render host was kept as UI work.
+- **A worker killed under the dispatcher is resumed by it.** Its workflow
+  waited for some session's next turn to resume it; the dispatcher that sees
+  one of its own runs stop now runs the mechanical resume at once.
+- **A worker never spends another task's resume.** The mod also runs inside
+  a worker's session and asks for endings; that ran the mechanical resume
+  with the worker's identity, whose `cauce resume` refused, and the task's one
+  automatic try was spent. Inside a worker nothing is resumed, and a process
+  cauce starts on its own never carries a worker's identity.
+- **A lane paused by a dead worker opens when that task passes.** The
+  dispatcher wrote its pause as `task #N: …` and the release looked for
+  `task #N …`, so a resume that passed left the lane paused and the next
+  workflow step queued behind it for good.
+- **A resumed part stays a part.** `cauce resume` rewrote a task's options
+  without the workflow part it ran, so its step read as that task alone and the
+  integrate after it joined nothing: every other part's branch was dropped
+  and the review read half the change.
+- **A plan's over-long part says so.** A part whose prompt ran past 6000
+  characters was reported as having no prompt; the plan's next attempt is now
+  told its length and to leave the how to the part's worker.
+- **A request that talks to the session stays with it.** "Habla en español y
+  dime…", "tell me…", "resúmeme…" were routed as worker tasks; an opening that
+  addresses the session is now its to answer.
+
 ## [0.29.1] - 2026-10-20
 
 ### Fixed

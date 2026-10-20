@@ -218,3 +218,13 @@ def test_two_deliverers_at_once_never_hand_over_the_same_ending(store):
         th.join()
     assert sorted(got) == [1, 2, 3, 4, 5]  # each once, whoever won
     assert store.claim_unreported("s", via="late") == []
+
+
+def test_a_lane_paused_by_the_dispatcher_is_released_by_its_task(store):
+    """The dispatcher writes `task #N: …` when a process dies; a resume of N that passed
+    left that pause in place, and the queue behind it never started."""
+    store.pause_lane("r", "task #24: its process exited unexpectedly")
+    assert not store.release_lane("r", 2) and not store.release_lane("r", 240)
+    assert store.release_lane("r", 24)
+    store.pause_lane("r", "task #24 ended blocked: a refused command")
+    assert store.release_lane("r", 24)

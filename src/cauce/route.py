@@ -56,6 +56,17 @@ _ASKS = re.compile(r"(?:^|[.!?¿]\s*)\W*(?:y |tambi[eé]n |pero |entonces )?(?:s
                    r"qu[eé] (?:pasa|tal|opinas|te parece)|y si|could|should|would|is it worth|what if|"
                    r"does it make sense|do we need|can we)\b[^?]*\?", re.I)
 
+#: An opening that talks to the session itself: the answer is this conversation's to give.
+_TALKS = re.compile(r"^\W*(?:habla\w*|h[aá]blame|dime|dinos|cu[eé]nta(?:me|nos)|"
+                    r"res[uú]me(?:lo|me|nos)|resum[ií]\w*|responde\w*|contesta\w*|tell (?:me|us)|"
+                    r"summari[sz]e|walk me through)\b", re.I)
+
+
+def talks(text: str) -> bool:
+    """Whether a request opens by talking to the session (tell me, habla, dime…):
+    what it asks is an answer, and the session holding the conversation gives it."""
+    return bool(_TALKS.search(text))
+
 
 def asks(text: str) -> bool:
     """Whether a request is a question about the work rather than the work: an opening
@@ -120,6 +131,8 @@ def choose(text: str, *, context_tokens: int | None = None, context_share: float
     words = len(text.split())
     if words < MIN_WORDS:
         return Route(MAIN, ("a turn of the conversation",))
+    if talks(text):
+        return Route(MAIN, ("it talks to this session, which answers it",))
     if asks(text):
         return Route(MAIN, ("a question about the work, for this conversation to answer",))
     ruled = by_rules(text)
