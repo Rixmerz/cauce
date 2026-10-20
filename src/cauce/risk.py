@@ -57,6 +57,8 @@ _PATHS = (
     ("delivery", (".github/workflows/*", "**/Dockerfile", "Dockerfile", "**/docker-compose*.yml", "*.tf",
                   "**/*.tf", "**/k8s/**", "**/helm/**", ".gitlab-ci.yml", "**/deploy/**")),
 )
+#: The areas a path can be in, read by `cauce.cells` too.
+PATH_AREAS = _PATHS
 #: What follows "checkout" in a shop, and what a request about a shop says elsewhere.
 _SHOP_NOUN = re.compile(r"\s+(?:totals?|pages?|flow|forms?|buttons?|carts?|prices?|amounts?|steps?|screens?|"
                         r"summary|process|fees?|tax(?:es)?|discounts?|coupons?|items?|lines?|api|endpoints?)\b", re.I)
@@ -204,9 +206,12 @@ def areas(risk: Risk) -> list[tuple[str, str]]:
     return [(m.group(1), m.group(3)) for m in map(_ABOUT.match, risk.reasons) if m]
 
 
-def _matches(path: str, patterns: Iterable[str]) -> bool:
+def path_matches(path: str, patterns: Iterable[str]) -> bool:
     name = PurePosixPath(path).name
     return any(fnmatch.fnmatch(path, p) or fnmatch.fnmatch(name, p) for p in patterns)
+
+
+_matches = path_matches
 
 
 def of_change(risk: Risk, changed: Sequence[str] | None) -> Risk:

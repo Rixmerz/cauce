@@ -149,7 +149,12 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
     task = store.create_task(text, status="running", source="hook", session_id=session_id, prompt_id=prompt_id,
                              cwd=cwd, repo=key)
     blocks = [notice] if (notice := _endings(store, session_id, via="prompt")) else []
-    dead = store.dead_ends(text, repo=key, limit=_MAX_DEAD_ENDS, strict=True) if len(words(text)) >= 3 else []
+    # The session delegates: it hears only of failures met across areas, never one
+    # cell's (`cauce.cells`), which goes to the workers of that cell.
+    from cauce import cells
+
+    dead = cells.dead_ends(store, text, repo=key, shared_only=True, limit=_MAX_DEAD_ENDS) \
+        if len(words(text)) >= 3 else []
     if dead:
         store.add_event(task["id"], "dead_ends", shown=dead)
         blocks.append(_dead_end_text(
@@ -526,9 +531,12 @@ def session_start(
     if cwd and repo.toplevel(Path(cwd)) is not None and project.find(cwd) is not None:
         blocks += _freshen(Path(cwd), root, env, adapters)
     if key:
-        dead = store.dead_ends(repo=key, limit=5)
+        from cauce import cells
+
+        dead = cells.recent_shared(store, repo=key, limit=5)
         if dead:
-            blocks.append(_dead_end_text(dead, "cauce memory: recent fixes in this repository that did not work."))
+            blocks.append(_dead_end_text(dead, "cauce memory: recent fixes in this repository that did not work, "
+                                               "met across areas."))
     if key and cwd and project.find(cwd) is not None and config.enabled("notes", {**os.environ, **env}):
         # After a compaction above all: what the project knows is read back from
         # its notes, not rebuilt from the code. The index, not the notes: a

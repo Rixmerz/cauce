@@ -31,7 +31,7 @@ import os
 import random
 import sqlite3
 import time
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -179,6 +179,15 @@ _APPEND_ONLY_TRIGGERS = "".join(
 
 #: Words a query and a problem must share for a strict match.
 STRICT_OVERLAP = 3
+#: A word held by this share of the problems or more is no evidence of a match: every
+#: run of a workflow shares its step's template, every task its repository's name.
+COMMON_SHARE = 0.2
+#: The query's first distinct words weighed for a strict match.
+STRICT_CANDIDATES = 40
+#: A strict match needs this many distinctive words in its query to go on.
+STRICT_MIN_TERMS = 2
+#: Below this many problems, no word is common yet.
+COMMON_MIN = 10
 
 TASK_STATES = ("queued", "running", "done", "failed", "interrupted", "blocked", "replan", "needs_approval",
                "cancelled", "dismissed")
@@ -231,6 +240,10 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "invalidated_on": "TEXT",
         # Evidence a person can check: the commit the verdict is about.
         "commit_sha": "TEXT",
+        # The cell it was met in (`cauce.cells`): the role the worker wore, and the
+        # areas of what it changed (comma-separated). NULL: recorded before scopes.
+        "role": "TEXT",
+        "areas": "TEXT",
     },
 }
 FIX_OUTCOMES = ("worked", "failed", "partial", "pending")
@@ -1406,15 +1419,18 @@ class Store:
         evidence: str = "",
         task_id: int | None = None,
         commit_sha: str | None = None,
+        role: str | None = None,
+        areas: Sequence[str] | None = None,
     ) -> int:
         if outcome not in FIX_OUTCOMES:
             raise ValueError(f"unknown outcome {outcome!r}")
         stamp = now()
         cur = self._conn.execute(
             "INSERT INTO fixes (problem_id, repo, description, outcome, why, evidence, task_id, created_at, "
-            "believed_from, commit_sha) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "believed_from, commit_sha, role, areas) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (problem_id, repo, description, outcome, why, evidence[:4000], task_id, stamp,
-             stamp if outcome == "worked" else None, commit_sha),
+             stamp if outcome == "worked" else None, commit_sha, role,
+             None if areas is None else ",".join(areas)),
         )
         fix_id = int(cur.lastrowid)
         self._index("fix", fix_id, repo, f"{description}\n{why}")
@@ -1454,6 +1470,14 @@ class Store:
             self._conn.execute("DELETE FROM memory_fts WHERE kind = 'fix' AND ref_id = ?", (fix_id,))
         return problem
 
+    def unscoped_fixes(self) -> list[dict]:
+        """The fixes a task recorded before scopes were kept (`cauce.cells.backfill`)."""
+        rows = self._conn.execute("SELECT * FROM fixes WHERE areas IS NULL AND task_id IS NOT NULL ORDER BY id")
+        return [dict(r) for r in rows.fetchall()]
+
+    def scope_fix(self, fix_id: int, *, role: str | None, areas: Sequence[str]) -> None:
+        self._conn.execute("UPDATE fixes SET role = ?, areas = ? WHERE id = ?", (role, ",".join(areas), fix_id))
+
     def set_fix_commit(self, task_id: int, commit_sha: str) -> None:
         self._conn.execute(
             "UPDATE fixes SET commit_sha = ? WHERE task_id = ? AND outcome = 'worked' AND commit_sha IS NULL",
@@ -1478,7 +1502,12 @@ class Store:
         only orders the results — scoping it out would hide the dead end that
         was found next door.
         """
-        terms = [w.replace('"', "") for w in words(query)][:12]
+        terms = [w.replace('"', "") for w in words(query)]
+        if strict:
+            terms = self._distinctive(terms)
+            if len(terms) < STRICT_MIN_TERMS:
+                return []  # what is left is too little to tell this problem from another
+        terms = terms[:12]
         if not terms:
             return []
         hits: list[sqlite3.Row] = []
@@ -1503,15 +1532,36 @@ class Store:
         found.sort(key=lambda p: 0 if repo is not None and p["repo"] == repo else 1)
         return found[:limit]
 
+    def _distinctive(self, terms: Sequence[str]) -> list[str]:
+        """The query's words that tell one problem from another: a word most problems hold
+        (a workflow step's template, the repository's name) matches them all, so a strict
+        match never counts it. Below `COMMON_MIN` problems every word counts."""
+        total = self._conn.execute("SELECT count(*) FROM problems").fetchone()[0]
+        if total < COMMON_MIN:
+            return list(dict.fromkeys(terms))[:STRICT_CANDIDATES]
+        kept = []
+        for term in list(dict.fromkeys(terms))[:STRICT_CANDIDATES]:
+            held = self._conn.execute(
+                "SELECT count(*) FROM memory_fts WHERE memory_fts MATCH ? AND kind = 'problem'",
+                (f'"{term}"',)).fetchone()[0]
+            if held < COMMON_SHARE * total:
+                kept.append(term)
+        return kept
+
     def dead_ends(
-        self, query: str | None = None, *, repo: str | None = None, limit: int = 8, strict: bool = False
+        self, query: str | None = None, *, repo: str | None = None, limit: int = 8, strict: bool = False,
+        scope: Callable[[dict], str | None] | None = None,
     ) -> list[dict]:
         """Fixes that failed — and fixes that worked until they did not — each
-        with what worked instead when something did."""
+        with what worked instead when something did. With `scope`, only problems
+        it names a scope for (`cauce.cells`), each dead end carrying it."""
         problems = (self.search(query, repo=repo, limit=50, strict=strict) if query
                     else self._recent_problems(repo, 50))
         out: list[dict] = []
         for problem in problems:
+            found = scope(problem) if scope is not None else None
+            if scope is not None and found is None:
+                continue
             holding = [f for f in problem["fixes"] if f["outcome"] == "worked" and not f["invalidated_on"]]
             for fix in problem["fixes"]:
                 disproved = fix["outcome"] == "worked" and fix["invalidated_on"]
@@ -1525,6 +1575,7 @@ class Store:
                     "why": fix["why"] or ("believed to work, then the problem came back" if disproved else ""),
                     "worked_instead": holding[-1]["description"] if holding else "",
                     "disproved_on": fix["invalidated_on"] if disproved else None,
+                    **({"scope": found} if found else {}),
                 })
                 if len(out) >= limit:
                     return out

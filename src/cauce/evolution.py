@@ -93,6 +93,9 @@ def settle(store: Store, *, now: datetime | None = None, tz: tzinfo | None = Non
     when one is due), and the first ending of a new day takes the day's snapshot. From the
     hooks and the dispatcher, never from a GET. `snapshot` is None when none was due."""
     now = now or _now()
+    from cauce import cells
+
+    cells.backfill(store)
     found = standards.settle(store, now=now)
     taken = None
     if found["ended"]:

@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Each cell keeps its own lessons.** A failure is kept with the role the
+  worker wore and the area of what it changed (ui, data, security, money,
+  contract, delivery, code; tests and docs only when nothing else changed).
+  A worker is shown the dead ends of its task's areas and of its role; a
+  failure two tasks met in areas with nothing in common is shared, and only
+  shared ones reach the orchestrating session. Fixes recorded before this get
+  their role and areas once, from their task's plan and changed files.
+
+### Fixed
+
+- **Dead ends no longer match on a workflow's template.** A step's failure
+  was kept under its template ("Build it, with its tests") and its brief text,
+  so every run of the workflow matched every other: measured here, 270 of the
+  306 dead ends shown to workers came from unrelated runs. A failure is now
+  kept and matched by the run's goal, and a strict match ignores the words a
+  fifth of the problems hold. Replayed on the same history, workers see 101
+  instead of 305, each of their own area or role.
+
 ## [0.27.0] - 2026-10-20
 
 ### Added

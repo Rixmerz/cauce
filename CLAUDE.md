@@ -47,6 +47,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
 | `src/cauce/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
+| `src/cauce/cells.py` | where a lesson belongs: the area a path or a change is in, the role that met it, or everyone (`scope`); the text a failure is kept and matched by (a workflow step's goal, never its template); no model |
 | `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away |
 | `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
 | `src/cauce/grants.py` | what workers may do: the permission mode per model (auto; Haiku bypasses) and the rules a person keeps per repository with `cauce allow` |
@@ -603,7 +604,18 @@ yields the default kind, not a guess.
   work; nothing is started: the orchestrator decides.
 - A worker never inherits the host's session id (`CLAUDE_CODE_SESSION_ID`),
   and an attempt never keeps the host's session as its own.
-- Problems and fixes are global; notes belong to one project and are never
+- Problems and fixes are kept with their cell (`cauce.cells`): the role the
+  worker wore and the areas of what it changed (of its request when it changed
+  nothing; tests and docs name an area only when the change holds nothing
+  else). A worker's brief gets the dead ends of its task's areas, of its role,
+  and the shared ones; a problem is shared when two tasks or more met it with
+  no area in common, or a person wrote it down. The orchestrating session (the
+  prompt hook, SessionStart) hears only the shared ones. A failure is kept and
+  matched by the work's own text, a workflow step's goal and never its
+  template, and a strict match counts only the words fewer than
+  `store.COMMON_SHARE` of the problems hold, at least `STRICT_MIN_TERMS` of
+  them. Fixes recorded before scopes get theirs once, at the first settle
+  (`cells.backfill`). Notes belong to one project and are never
   read from another (a workspace is one project). A note is written by a passing worker (`learned`), by
   Haiku from a session's conversation (every few turns, when the scribe finds
   them due, before a compaction, at its end), or by a person — never by a failed
