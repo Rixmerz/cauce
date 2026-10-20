@@ -32,7 +32,7 @@ from pathlib import Path
 
 from cauce import models
 from cauce.matrix import DEFAULT_KIND, KINDS
-from cauce.text import fold, words
+from cauce.text import clip, fold, words
 
 COMPLEXITIES = ("trivial", "low", "medium", "high")
 MIN_CONFIDENCE = 0.6
@@ -320,7 +320,7 @@ def by_model(text: str, *, kinds: Sequence[str] | None = None, **haiku_kwargs) -
             cost_usd=cost,
         )
     return Classification(
-        str(kind), str(complexity), "model", str(out.get("reason") or "")[:200], cost
+        str(kind), str(complexity), "model", clip(str(out.get("reason") or ""), 200), cost
     )
 
 

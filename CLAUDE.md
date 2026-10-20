@@ -109,6 +109,9 @@ The coverage floor lives in one place, `[tool.coverage.report] fail_under` in
 
 ## Conventions
 
+- **Shown text is clipped by `text.clip`**: at a sentence end near the limit,
+  else a word boundary, never inside a bracket, marked with "…"; never a bare
+  slice.
 - **Everything committed is in English** — code, prompts, docs, commit
   messages, PRs. The Spanish in `classify.py` and `text.py` is different and
   stays: it matches what users type.
@@ -213,8 +216,15 @@ yields the default kind, not a guess.
   file the line reader cannot read is skipped and said once.
 - Work that stopped for a person (blocked, needs approval) is kept on its
   branch, unverified, and so is work that outgrew its turns (a `replan` for
-  turns resumes with more); only `failed`, a `replan` for a wrong task and
-  `cancelled` drop it.
+  turns resumes with more); so is what a cancelled task changed (a cancel
+  stops work, never throws it away). Only `failed` and a `replan` for a wrong
+  task drop it, and never what an earlier run of the task kept: a resume that
+  ends short leaves its branch as it found it.
+- A `spec_bug` or `architecture_bug` on work that stands (it changed files and
+  cauce's check passed, or with no check the worker's own evidence and at most
+  one criterion open) is no replan: it stops as `decision` (blocked, the
+  worker's call, the orchestrator's to decide), its work kept, the point
+  quoted, and `cauce run` exits 4. Never "failed".
 - A run in the checkout itself (no worktree, and it writes or has a check)
   holds it: a second one there waits, says for which task, and a cancel
   still stops it. A run in a folder that is no checkout holds the folder and
@@ -361,6 +371,8 @@ yields the default kind, not a guess.
   worker itself: the tools of the MCP servers cauce hands it, reading the
   skill folders of its role, and the permission mode its model runs in
   (auto; Haiku bypasses), which a person changes with `cauce config mode`.
+- Two corrections in a row on one model, each leaving the independent check's
+  blockers, go to the next model, not the next effort.
 - A refused attempt blocks; it never climbs, whatever else it ended with,
   unless the worker found the task wrong. A refused write to a file in the
   worker's own directory that git shows changed anyway is no refusal: it
@@ -371,6 +383,11 @@ yields the default kind, not a guess.
   nothing (words about the task, never about what it builds) is read as
   reading while it changes nothing, and holds no checkout; a `feature`,
   `implement`, `refactor` or `docs` task never is.
+- A kept branch is never deleted while its workflow run is active, and as a
+  copy only of a twin whose task passed. Every ending keeps its branch's tip
+  (`finished.tip`); a step whose run builds on a branch that is gone puts it
+  back there (`branch_restored`), or stops the run with a `workflow_error`;
+  a worktree never starts on HEAD in place of a base it cannot read.
 - A kept branch is deleted only when nothing is lost (`isolate.prunable`):
   its commits are on another branch, HEAD holds every file it changed, it
   holds only artifacts, or another kept branch holds the same tree; never one
@@ -378,6 +395,8 @@ yields the default kind, not a guess.
   `branch_pruned` event. It runs in hooks and the server thread, never in a
   GET. A task asked again while one with the same text keeps its work points
   at `cauce resume`.
+- A dependency folder whose lockfile differs between the worktree and the
+  checkout is not linked (`isolate.Workspace.stale`): the worker installs it.
 - A worktree gets what the task needs from the person's checkout and nothing
   more: ignored paths the task names are copied (never linked, never
   committed, up to `isolate.BRING_BYTES`); uncommitted changes come only with
@@ -472,7 +491,8 @@ yields the default kind, not a guess.
   in `tests/conftest.py`); a test that wants another passes `machine`.
 - A session belongs to the `.cauce/` in its own directory or up to the top of
   its checkout, never above it; outside a checkout, its own directory only.
-  The home directory and `/` are never a project, a dotfiles checkout at home
+  The home directory, `/`, Claude Code's own folder (a plugin's cached copy)
+  and cauce's home are never a project, a dotfiles checkout at home
   included. The one exception is a workspace the person declared.
 - A workspace (`cauce workspace add`) is a folder of two or more repositories
   that is one project: `repo.key` answers with the folder for each of them and
@@ -731,6 +751,8 @@ yields the default kind, not a guess.
   what the ledger confirms, and costs nothing more when the review is clean.
   A refuter is told whether one review or two found its rows. What the steps
   before said reaches a step quoted, as context, never as its criteria.
+- A fix's later round starts from the tip the round before it kept, so the
+  run's last branch holds every round (`doctor`: `fix-round-off-base`).
 - A step can run in parts. A `fanout` step names a plan step before it that it
   waits on; that plan (`kind plan`, read-only) is asked for `parts` (1 to
   `launch.MAX_PARTS`, each an id, a prompt and surfaces no other part reaches)
