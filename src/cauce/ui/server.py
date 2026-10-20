@@ -378,7 +378,8 @@ class Handler(BaseHTTPRequestHandler):
             task = store.get_task(int(match.group(1)))
             if task is None:
                 return self._error(HTTPStatus.NOT_FOUND, "no such task")
-            if stops.dismiss(store, task, via="ui") is None:
+            why = data.get("why") if isinstance(data.get("why"), str) else ""
+            if stops.dismiss(store, task, via="ui", why=why[:500]) is None:
                 return self._error(HTTPStatus.CONFLICT, f"task #{task['id']} is {task['status']}: it waits on no one")
             dispatch.reopened(task, os.environ)
             return self._json(HTTPStatus.OK, {"id": task["id"], "dismissed": True})

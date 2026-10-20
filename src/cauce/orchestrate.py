@@ -68,6 +68,7 @@ from cauce.classify import Classification, classify, narrow
 from cauce.escalate import MAX_TURNS_CEILING, Attempt, Decision, Failure, Move, decide, review_reason, waited
 from cauce.matrix import DEFAULT_TURNS, READ_ONLY_KINDS, Cell, ladder_for, turns_for
 from cauce.store import Store, home
+from cauce.text import clip
 
 #: Failures that describe something tried against the problem, worth keeping
 #: as a dead end. A timeout or a turn ceiling says nothing about the fix.
@@ -418,7 +419,7 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
             meanwhile = "this task runs without it" if runnable_absent else "this task uses the index as it is"
             failed = getattr(adapter, "last_failure", lambda _d: None)(repo_dir)
             if failed:
-                neighbour_notes.append(f"{adapter.name}: its last index here failed ({failed[:160]}); not tried "
+                neighbour_notes.append(f"{adapter.name}: its last index here failed ({clip(failed, 160)}); not tried "
                                        f"again until the checkout moves; {meanwhile}")
             elif adapter.server() is None:
                 neighbour_notes.append(f"{adapter.name}: cannot {what} here; {meanwhile}")
@@ -678,8 +679,8 @@ def _race(launcher: Launcher, spec: launch.LaunchSpec, start: Cell, rung: Cell, 
         loser = 1 - winner
         lost = done[loser]
         if done[winner].passed:
-            lost = dataclasses.replace(lost, passed=False, summary=f"stopped: {(start, rung)[winner].label} passed "
-                                       f"its check first. {lost.summary}"[:2000])
+            lost = dataclasses.replace(lost, passed=False, summary=clip(
+                f"stopped: {(start, rung)[winner].label} passed its check first. {lost.summary}", 2000))
         kept = done[winner]
         if winner == 1:
             isolate.adopt(lane, workspace)
@@ -1179,7 +1180,7 @@ def run(
                 settled = ledger_mod.outcome(deciding, result.verdicts)
                 store.add_event(task["id"], "ledger_decided", seq=nth, **settled.data())
                 if settled.stop:
-                    review_stop = stops.Stop("review", settled.stop, attempt=nth, account=result.summary[:2000])
+                    review_stop = stops.Stop("review", settled.stop, attempt=nth, account=clip(result.summary, 2000))
             changed.update(result.changed_paths)
             report.cells.append(cell.label)
             report.served.append(result.served_model)
@@ -1230,7 +1231,7 @@ def run(
             if result.report is not None:
                 store.add_event(task["id"], "report", seq=seq, passed=result.passed, report=result.report)
             say(f"cauce: #{task['id']} attempt {seq} " + ("passed" if result.passed else
-                f"ended {(result.failure or Failure.INCONCLUSIVE).value}: {result.summary[:160]}"))
+                f"ended {(result.failure or Failure.INCONCLUSIVE).value}: {clip(result.summary, 160)}"))
             if review_stop is not None:
                 report.stop = review_stop
                 report.status, report.summary = "blocked", review_stop.reason
@@ -1278,8 +1279,8 @@ def run(
                     _cause(decision, attempt), decision.reason, denied=attempt.denied, allow=attempt.allow,
                     attempt=seq,
                     next_cell=decision.cell.label if decision.cell else None,
-                    account=(findings_mod.text(attempt.blockers) if decision.move is Move.REVIEW
-                             else result.summary)[:2000])
+                    account=clip(findings_mod.text(attempt.blockers) if decision.move is Move.REVIEW
+                                 else result.summary, 2000))
                 break
             if decision.move is Move.NEXT_MODEL and workspace is not None:
                 # A new model starts from the base, not the bet that lost; what the
@@ -1347,7 +1348,7 @@ def run(
         # An investigator's stop is no broken state of the project: the person's queue goes on.
         reading_for_init = '"investigation"' in (store.get_task(task["id"]).get("options") or "")
         if status != "done" and store.get_task(task["id"])["dispatched"] and not by_a_person and not reading_for_init:
-            store.pause_lane(key, f"task #{task['id']} ended {status}: {report.summary[:200]}")
+            store.pause_lane(key, f"task #{task['id']} ended {status}: {clip(report.summary, 200, one_line=True)}")
         if workspace is None:
             report.changed = sorted(changed)
         mark = time.monotonic()
@@ -2016,7 +2017,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     if not decided:
         say(f"cauce: #{task_id} the independent check could not decide; the pass stands")
         return dataclasses.replace(result, cost_usd=cost, evidence=result.evidence + "\n\n[independent check "
-                                   f"inconclusive: {verdict.summary[:300]}]"), None, ledger, corrections, ()
+                                   f"inconclusive: {clip(verdict.summary, 300)}]"), None, ledger, corrections, ()
     if not blockers:
         if carried:
             say(f"cauce: #{task_id} the earlier problems are fixed; {len(carried)} new one(s) read from the code "
@@ -2044,7 +2045,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
            if progress else f"the same problem survived {MAX_CORRECTIONS} corrections" if len(still) == len(blockers)
            else f"after {MAX_CORRECTIONS} corrections a problem it found before is still there, beside new ones")
     stop = stops.Stop("review", f"the independent check still finds problems; {why}", attempt=nth,
-                      account=found[:2000])
+                      account=clip(found, 2000))
     failed = dataclasses.replace(result, passed=False, failure=failure, cost_usd=cost,
                                  summary=f"the independent check still finds problems{room}: {result.summary}",
                                  evidence=found)
@@ -2084,17 +2085,17 @@ def brief(
                  "Do not repeat one without saying why it would work this time:"]
         for d in dead_ends:
             where = f"{d['repo']}, {_SCOPE_SAID[d['scope']]}" if d.get("scope") in _SCOPE_SAID else d["repo"]
-            line = f"- ({where}) {d['problem']}: tried {d['tried'][:200]}"
+            line = f"- ({where}) {d['problem']}: tried {clip(d['tried'], 200, one_line=True)}"
             if d["why"]:
-                line += f"; failed because {d['why'][:200]}"
+                line += f"; failed because {clip(d['why'], 200, one_line=True)}"
             if d["worked_instead"]:
-                line += f"; what worked: {d['worked_instead'][:200]}"
+                line += f"; what worked: {clip(d['worked_instead'], 200, one_line=True)}"
             lines.append(line)
         parts.append("\n".join(lines))
     if attempts:
         lines = ["Previous attempts on this task — already tried, do not repeat:"]
         for i, a in enumerate(attempts, 1):
-            lines.append(f"  attempt {i} [{a.cell.label}, {a.failure or 'no verdict'}] {a.summary[:300]}")
+            lines.append(f"  attempt {i} [{a.cell.label}, {a.failure or 'no verdict'}] {clip(a.summary, 300)}")
             if a.denied:
                 lines.append(f"    refused: {', '.join(a.denied[:5])}")
         if failed := failed_output(attempts[-1]):

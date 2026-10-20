@@ -37,8 +37,54 @@ def words(text: str, *, keep_stopwords: bool = False) -> list[str]:
 
 
 def title_of(text: str, limit: int = 120) -> str:
-    line = " ".join(text.split())
-    return line if len(line) <= limit else line[: limit - 1].rstrip() + "…"
+    return clip(text, limit, one_line=True)
+
+
+#: A sentence end: its mark, then a space (or the text's end).
+_SENTENCE_END = re.compile(r"[.!?…](?=\s|$)")
+#: How far back from the limit a sentence end or a word boundary may be and still be the cut.
+_SENTENCE_REACH = 0.6
+_WORD_REACH = 0.5
+_OPENERS = {"[": "]", "(": ")"}
+
+
+def clip(text: str, limit: int, *, one_line: bool = False) -> str:
+    """`text` in at most `limit` characters, cut where a reader expects it: after a
+    sentence that ends close to the limit, else at a word boundary, never inside a
+    bracketed part (`[claude-…]`, `(line 197)`) begun near the cut, and marked "…".
+    `one_line` collapses its whitespace first. The one place reports clip text."""
+    s = " ".join(str(text or "").split()) if one_line else str(text or "")
+    if len(s) <= limit:
+        return s
+    if limit < 2:
+        return "…"[:limit]
+    room = limit - 1  # the "…" takes the last character
+    window = s[: room + 1]
+    ends = [m.end() for m in _SENTENCE_END.finditer(window) if m.end() <= room - 1]
+    if ends and ends[-1] >= room * _SENTENCE_REACH:
+        cut, sentence = ends[-1], True
+    else:
+        spaces = [i for i, c in enumerate(window) if c.isspace()]
+        cut = spaces[-1] if spaces and spaces[-1] >= room * _WORD_REACH else room
+        sentence = False
+    cut = _outside_brackets(s, cut, floor=int(room * _WORD_REACH))
+    head = s[:cut].rstrip()
+    if sentence and len(head) <= room - 1:
+        return head + " …"
+    return head.rstrip(" ,;:-–—") + "…"
+
+
+def _outside_brackets(s: str, cut: int, *, floor: int) -> int:
+    """`cut`, moved back before a bracket still open there when it opened past `floor`."""
+    depth: list[int] = []
+    for i, c in enumerate(s[:cut]):
+        if c in _OPENERS:
+            depth.append(i)
+        elif depth and c == _OPENERS[s[depth[-1]]]:
+            depth.pop()
+    if depth and depth[-1] >= floor:
+        return depth[-1]
+    return cut
 
 
 def reads_alike(left: str, right: str, threshold: float = 0.85) -> bool:
