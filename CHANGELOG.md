@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-10-20
+
 ### Changed
 
 - **Each cell keeps its own lessons.** A failure is kept with the role the
