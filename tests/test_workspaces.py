@@ -289,9 +289,13 @@ def test_the_offer_never_takes_in_repositories_that_were_not_named(tmp_path, sto
     api, web = checkout(code / "api"), checkout(code / "web")
     checkout(code / "blog")
     offer = _spans(api, [str(web)])
-    assert f"cauce workspace add {code / 'api-web'} --with {api} --with {web}" in offer
+    # No folder holds just these two: no path is made up, the person makes one.
+    assert "cauce workspace add <folder>" in offer and "api-web" not in offer and str(code) not in offer
+    assert "a workspace needs a folder that holds just them" in offer and "the person's choice" in offer
     (code / "blog").rename(tmp_path / "blog")
-    assert f"cauce workspace add {code} --with" in _spans(api, [str(web)])
+    offer = _spans(api, [str(web)])
+    assert f"cauce workspace add {code} --with {api} --with {web}" in offer and "the person's choice" in offer
+    assert "moves what each repository kept" in offer
 
 
 def test_a_malformed_member_is_left_out(tmp_path):

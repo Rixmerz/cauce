@@ -15,6 +15,10 @@ circles:
   does not clear on its own; it is raised once, then the task is split.
 - **Replan** — the spec or the architecture is wrong. No model fixes a task that
   should not exist; the run stops and says so.
+- **Decide** — the work is done (it changed files and the check that shows it
+  passed), but the worker names one point that needs a design decision. That is
+  no failure and no task to rewrite: the work is kept on its branch and the
+  orchestrator decides the point.
 - **Review** — the work passed its own check and nothing is left to climb
   to; only the independent check's blockers stand. The work is kept for a
   person, never dropped as a failure.
@@ -76,6 +80,7 @@ class Move(StrEnum):
     BLOCKED = "blocked"
     CONVERGED = "converged"
     REVIEW = "review"
+    DECIDE = "decide"
 
 
 #: The moves after which another attempt runs.
@@ -123,6 +128,9 @@ class Attempt:
     blockers: tuple[dict[str, str], ...] = ()
     #: Only its answer's form failed (see `WorkerResult.shape`): what made it unreadable.
     shape: str = ""
+    #: The work stands though the worker reported a failure: it changed files and the
+    #: check that shows them passed (cauce's, or with none given the worker's own).
+    stands: bool = False
 
 
 @dataclass(frozen=True)
@@ -274,6 +282,18 @@ def decide(
         raise ValueError("the last attempt passed; there is nothing to decide")
     failure = last.failure or Failure.INCONCLUSIVE
     seen = f"attempt {len(attempts)} at {last.cell.label} ended {failure}: {MEANING[failure]}"
+
+    if failure in REPLAN and last.stands and not last.denied:
+        # The worker did the work and its check passed, and it names a point the work
+        # cannot settle by itself (a design decision). Nothing here is wrong: the work
+        # is kept, and the point goes to the orchestrator, quoted.
+        point = " ".join(last.summary.split())[:300] or MEANING[failure]
+        return Decision(Move.DECIDE, reason=f"the work is done and kept on its branch; one point needs a "
+                                            f"decision: \"{point}\"",
+                        because=(seen, f"it changed {len(last.changed)} file(s) and the check that shows them "
+                                       "passed: the work stands, so this is no wrong task and no failure",
+                                 "a decision is no climb: no model makes it for the person, so the work is "
+                                 "kept and the point goes to the orchestrator"))
 
     if failure in REPLAN:
         return Decision(Move.REPLAN, reason=f"{failure}: the task, not the work, is wrong",

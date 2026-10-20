@@ -100,6 +100,8 @@ def _step_line(step: dict[str, Any]) -> str:
         parts.append(f"try {step['tries']}")
     if step.get("phase"):
         parts.append(step["phase"])
+    if step["state"] == "running" and (step.get("cost_running") or step.get("cost_live")):
+        parts.append(_money(step))
     if step.get("waits"):
         parts.append(step["waits"])
     if step.get("commit"):
@@ -109,6 +111,15 @@ def _step_line(step: dict[str, Any]) -> str:
     if step.get("behind"):
         parts.append(step["behind"])
     return " · ".join(parts)
+
+
+def _money(item: dict[str, Any]) -> str:
+    """A cost as a view says it: what is known, and "running" for an attempt whose cost so far
+    could not be read, never $0.00."""
+    spent = float(item.get("cost_usd") or 0)
+    if item.get("cost_running"):
+        return f"${spent:.2f} + running" if spent else "running"
+    return f"${spent:.2f}" + (" so far" if item.get("cost_live") else "")
 
 
 def _points(run: dict[str, Any]) -> str:
@@ -122,7 +133,7 @@ def _run_line(run: dict[str, Any]) -> str:
         (s for s in steps if s["state"] in ("running", "queued")), None) or next(
         (s for s in steps if s["state"] not in ("done", "pending")), None) or next(
         (s for s in reversed(steps) if s["state"] == "done"), steps[-1] if steps else None)
-    head = f"#{run['id']} {run['name']} — {run['state']} · ${run['cost_usd']:.2f}" + _points(run)
+    head = f"#{run['id']} {run['name']} — {run['state']} · {_money(run)}" + _points(run)
     if at is None:
         return head
     n = steps.index(at) + 1
@@ -168,7 +179,7 @@ def _detail(step: dict[str, Any]) -> str:
 
 def _print_run(run: dict[str, Any], *, full: bool = False) -> None:
     """A run step by step, a line each; `full` (`--verbose`) adds its inputs whole and each step's detail."""
-    print(f"run #{run['id']} {run['name']} — {run['state']} · ${run['cost_usd']:.2f}{_points(run)} · {run['cwd']}")
+    print(f"run #{run['id']} {run['name']} — {run['state']} · {_money(run)}{_points(run)} · {run['cwd']}")
     for name, value in run["inputs"].items():
         # An input is often a whole brief: one line of it, unless asked for in full.
         print(f"  {name}: {value if full else _clip(value)}")

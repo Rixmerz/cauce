@@ -465,3 +465,17 @@ def test_the_hook_process_answers_precompact_with_nothing(tmp_path, git_repo):
     proc = subprocess.run([sys.executable, "-m", "cauce", "hook", "PreCompact"], input=event, capture_output=True,
                           text=True, env=env, check=False)
     assert proc.returncode == 0 and proc.stdout == ""
+
+
+def test_security_alerts_are_read_from_what_a_worker_learned_and_found_with_secrets_masked():
+    from cauce.notes import security_alerts
+
+    found = security_alerts(
+        ["The design tokens live in assets/styles.css", "Usage tokens are counted per model in usage.py",
+         "An npm token is committed in .npmrc and needs rotation", "Run `npm test` before a push",
+         "the deploy key is -----BEGIN OPENSSH PRIVATE KEY in deploy/, <private>do not say this</private>"],
+        [{"where": "api/login.py:40", "what": "SQL injection through the name parameter"},
+         {"where": "ui/x.ts", "what": "a label is truncated"}])
+    assert found == ["An npm token is committed in .npmrc and needs rotation",
+                     "the deploy key is [secret] in deploy/,",
+                     "api/login.py:40: SQL injection through the name parameter"]

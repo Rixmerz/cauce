@@ -313,3 +313,21 @@ def test_a_second_correction_in_a_row_on_one_model_hands_the_work_to_a_stronger_
     # A plain shallow failure after a correction still climbs effort.
     third = decide(IMPLEMENT, [corrected("sonnet/medium", "x"), fail("sonnet/high", Failure.CODE_BUG)])
     assert third.move is Move.MORE_EFFORT
+
+
+def test_a_task_failure_on_work_that_stands_is_a_decision_not_a_replan():
+    from cauce.escalate import Attempt, Failure, Move, decide
+    from cauce.matrix import ladder_for
+
+    ladder = ladder_for("implement")
+    cell = ladder[0]
+    stands = Attempt(cell, 30, False, Failure.ARCHITECTURE_BUG, "one point needs a design decision",
+                     changed=("a.py",), stands=True)
+    decision = decide(ladder, [stands])
+    assert decision.move is Move.DECIDE and not decision.continues
+    assert '"one point needs a design decision"' in decision.reason and "kept on its branch" in decision.reason
+    # Work that does not stand is a wrong task, as before, and so is one found wrong under a refusal.
+    plain = Attempt(cell, 30, False, Failure.ARCHITECTURE_BUG, "x", changed=("a.py",))
+    assert decide(ladder, [plain]).move is Move.REPLAN
+    refused = Attempt(cell, 30, False, Failure.ARCHITECTURE_BUG, "x", denied=("Bash(npm test)",), stands=True)
+    assert decide(ladder, [refused]).move is Move.REPLAN

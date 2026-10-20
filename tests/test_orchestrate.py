@@ -547,7 +547,7 @@ def test_work_a_refusal_stopped_is_kept_unverified_and_the_report_says_what_git_
     assert "created the routes; node was refused" in message
     text = report.text()
     assert "changed (from git): routes.js" in text
-    assert "keeps this task's unverified work" in text and f"cauce resume {report.task_id}" in text
+    assert "keeps this task's work, unverified" in text and f"cauce resume {report.task_id}" in text
     assert "review it, then merge it" not in text
     assert json.loads(store.get_task(report.task_id)["options"])["allow_tools"] == ["Bash(npm run build)"]
     finished = store.last_event(report.task_id, "finished")["data"]
@@ -579,10 +579,12 @@ def test_the_repositorys_check_can_settle_what_a_refused_worker_could_not(git_re
     report = run("create the routes", git_repo, store, Options(verify="true", isolate=False), registry={},
                  launcher=Script(refused()), classifier=kind("implement"))
     assert report.status == "done" and report.changed == ["routes.js"]
-    assert "these changes are in your checkout\n" in report.text()  # no branch to review: the files are the work
+    # No branch to review: the files are the work, and cauce's check passed on them.
+    assert "these changes are in your checkout (the run had no worktree), checked by cauce's own run of its " \
+           "check\n" in report.text()
     report = run("create the routes", git_repo, store, Options(isolate=False), registry={},
                  launcher=Script(refused()), classifier=kind("implement"))
-    assert "these changes are in your checkout, unverified" in report.text()
+    assert "these changes are in your checkout (the run had no worktree), unverified" in report.text()
 
 
 def test_work_that_failed_is_dropped_and_the_report_says_so(git_repo, store):
@@ -1820,3 +1822,77 @@ def test_a_resume_that_ends_short_keeps_what_the_run_before_it_kept(git_repo, st
     # The resume found the task wrong; what the run before it kept is still on its branch.
     assert again.status == "replan" and again.branch == first.branch
     assert "m.py" in git(git_repo, "show", "--name-only", "--format=", first.branch)
+
+
+def test_work_done_that_names_one_decision_is_kept_and_never_called_failed(git_repo, store):
+    """A worker that did the work (files changed, its check green) and reports `architecture_bug`
+    because one point needs a design decision: the work is kept on its branch, the stop waits on
+    the orchestrator's decision, and nothing says it failed."""
+    from cauce import cli, hooks, stops
+
+    point = "the export works; whether totals round per line or per invoice is a product decision"
+    decided = WorkerResult(False, Failure.ARCHITECTURE_BUG, point, evidence="pytest: 12 passed", cost_usd=0.1)
+    report = run("add the invoice export", git_repo, store, Options(verify="true"), registry={},
+                 launcher=Script(decided, write="export.py"), classifier=kind("implement"), session_id="s")
+    assert report.status == "blocked" and report.cells == ["sonnet/medium"]  # no climb, no replan
+    assert report.stop.cause == "decision" and report.stop.who == "worker"
+    assert stops.for_person(report.stop) is False  # the orchestrator's to decide
+    assert report.branch == f"cauce/task-{report.task_id}" and report.commit
+    assert "export.py" in git(git_repo, "show", "--name-only", report.branch)
+    text = report.text()
+    assert f"(commit {report.commit[:12]})" in text and "checked by cauce's own run of its check" in text
+    assert "failed" not in text.lower() and "decide the open point, then merge it" in text
+    assert point in report.stop.reason and "the work is done and kept on its branch" in report.stop.reason
+    assert cli._exit(report) == cli.EXIT_DECISION != 1
+    notice = hooks.endings(store, "s")[0]
+    assert f"#{report.task_id} [work done, one decision open]" in notice and "[blocked]" not in notice
+    assert f"the work is done and kept on branch {report.branch} (commit {report.commit[:12]})" in notice
+    assert f"one point needs a decision; the worker says: {point}" in notice and "failed" not in notice
+    assert "(its check passed, run by cauce)" in notice
+    # With no check given, the worker's own is the evidence, and said as such.
+    report = run("add the invoice export", git_repo, store, Options(), registry={},
+                 launcher=Script(decided, write="export.py"), classifier=kind("implement"))
+    assert report.stop.cause == "decision"
+    assert "checked by the worker's own check, not re-run by cauce" in report.text()
+    # A red check, or nothing changed, leaves the rule for a wrong task as it was.
+    report = run("add the invoice export", git_repo, store, Options(verify="false"), registry={},
+                 launcher=Script(decided, write="export.py"), classifier=kind("implement"))
+    assert report.status == "replan" and report.stop.cause == "spec" and report.branch is None
+    report = run("add the invoice export", git_repo, store, Options(verify="true"), registry={},
+                 launcher=Script(decided), classifier=kind("implement"))
+    assert report.status == "replan" and report.stop.cause == "spec"
+
+
+def test_a_passing_worker_that_names_a_security_problem_raises_an_alert_with_the_secret_masked(git_repo, store):
+    from cauce import hooks
+
+    learned = ("The CI reads the registry credential from .npmrc, which is committed: it needs rotation",
+               "Run the suite with `npm test`, it takes about a minute")
+    found = ({"where": "config/prod.env:3", "what": "api key sk-abcdefghijklmnop exposed in the repo",
+              "evidence_class": "deterministic", "cause": "pre-existing", "proof": "grep"},)
+    passed = WorkerResult(True, None, "added the route", evidence="1 passed", learned=learned, findings=found)
+    report = run("add the health route", git_repo, store, Options(), registry={},
+                 launcher=Script(passed, write="health.py"), classifier=kind("implement"), session_id="s")
+    assert report.status == "done" and len(report.alerts) == 2
+    assert "sk-abcdefghijklmnop" not in report.text() and "[secret]" in report.text()
+    assert "⚠ security: The CI reads the registry credential from .npmrc" in report.text()
+    notice = hooks.endings(store, "s")[0]
+    assert "  ⚠ security: The CI reads the registry credential from .npmrc, which is committed" in notice
+    assert "  ⚠ security: config/prod.env:3: api key [secret] exposed in the repo" in notice
+    assert "sk-abcdefghijklmnop" not in notice
+    assert not any("npm test" in line for line in notice.splitlines() if "⚠" in line)
+
+
+def test_an_index_failure_is_said_in_one_plan_not_in_every_one(git_repo, store, tmp_path):
+    adapter = _livespec(tmp_path, popen=lambda argv, **kw: pytest.fail("no refresh while it still fails"))
+    adapter._remember_failure(git_repo, "Workspace directory not found: /old")
+    said = []
+    for _ in range(3):
+        report = run("where is parse_amount", git_repo, store, Options(), registry={}, launcher=Script(ok()),
+                     classifier=kind("explore"), adapters=[adapter])
+        said.append(any("its last index here failed" in r for r in report.plan.reasons))
+    assert said == [True, False, False]
+    # A dry run shows it every time, and marks nothing.
+    report = run("where is parse_amount", git_repo, store, Options(dry_run=True), registry={},
+                 classifier=kind("explore"), adapters=[adapter])
+    assert any("its last index here failed" in r for r in report.plan.reasons)

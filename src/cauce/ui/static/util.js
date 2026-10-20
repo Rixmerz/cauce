@@ -18,6 +18,11 @@ export function h(tag, attrs = {}, ...children) {
 
 export const TURNS_TITLE = "the session's own turns, its subagents included, at API rates";
 export const usd = (v) => `$${(Number(v) || 0).toFixed(2)}`;
+// A cost as the API gives it (`usage.so_far`): "running" for an attempt whose cost so far could
+// not be read, never $0.00; "so far" while a live one is counted.
+export const cost = (item) => (item.cost_running
+  ? (Number(item.cost_usd) ? `${usd(item.cost_usd)} + running` : "running")
+  : `${usd(item.cost_usd)}${item.cost_live ? " so far" : ""}`);
 export const short = (text, n = 140) => {
   const s = String(text ?? "").replace(/\s+/g, " ").trim();
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;

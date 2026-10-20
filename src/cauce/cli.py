@@ -83,6 +83,17 @@ def _kind(value: str) -> str:
                                      "(or leave --kind out and cauce classifies the task)")
 
 
+#: A run's exit: 0 passed, 1 stopped short of it, 2 a usage error, 3 refused because only a
+#: person can clear what stopped it, 4 the work is done and kept but one point needs a decision.
+EXIT_DECISION = 4
+
+
+def _exit(report: orchestrate.Report) -> int:
+    if report.status == "done":
+        return 0
+    return EXIT_DECISION if report.stop is not None and report.stop.cause == "decision" else 1
+
+
 def _text(value: str) -> str:
     return sys.stdin.read() if value == "-" else value
 
@@ -164,7 +175,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         signal.signal(signal.SIGTERM, previous)
         store.close()
     print(report.text())
-    return 0 if report.status in ("done", "dry run") else 1
+    return _exit(report) if report.status != "dry run" else 0
 
 
 def _queue_after(args: argparse.Namespace, options: orchestrate.Options) -> int:
@@ -363,7 +374,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         signal.signal(signal.SIGTERM, previous)
         store.close()
     print(report.text())
-    return 0 if report.status == "done" else 1
+    return _exit(report)
 
 
 def _go_on(store: Store, key: str | None) -> bool:
@@ -1645,7 +1656,7 @@ def cmd_run_queued(args: argparse.Namespace) -> int:
         signal.signal(signal.SIGTERM, previous)
         store.close()
     print(report.text())
-    return 0 if report.status == "done" else 1
+    return _exit(report)
 
 
 def _candidates(store: Store, days: int) -> list[habits.Candidate]:
