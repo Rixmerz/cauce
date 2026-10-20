@@ -274,3 +274,34 @@ def test_the_briefing_says_how_many_symbols_the_request_reaches(tmp_path, git_re
     assert a.brief("nothing here matches zzzz", git_repo, status).reached == 0
     # no index to read says nothing, rather than zero
     assert a.brief("x", git_repo, a.inspect(tmp_path)).reached is None
+
+
+def test_a_resolver_error_on_a_plugin_release_is_read_as_unpublished_never_as_a_failure(tmp_path, git_repo):
+    """uv's resolver says "No solution found … livespec==X" or "there is no version of
+    livespec==X": the release is not published, so the pinned one runs, and a failure an older
+    cauce recorded that way is not repeated (nor retried) at that commit."""
+    assert livespec_mod.unpublished_in("× No solution found when resolving tool dependencies:\n"
+                                       "╰─▶ Because there is no version of livespec==0.33.0 and you require "
+                                       "livespec==0.33.0, we can conclude ...") == "0.33.0"
+    assert livespec_mod.unpublished_in("Because livespec==0.33.0 was not found in the package registry") == "0.33.0"
+    assert livespec_mod.unpublished_in("index crashed at livespec==0.33.0") is None
+    assert livespec_mod._uvx_release({"command": "/opt/uv/bin/uv", "args": ["tool", "run", "livespec@0.33.0"]}) \
+        == "0.33.0"
+    cfg = tmp_path / "cc" / "plugins" / "cache" / "rixmerz" / "livespec" / "0.33.0" / ".mcp.json"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(json.dumps({"mcpServers": {"livespec": {"command": "uvx", "args": ["livespec@0.33.0"]}}}))
+    a = adapter(tmp_path, tool(tmp_path, "uvx"))
+    a._remember_failure(git_repo, "× No solution found when resolving tool dependencies:\n  ╰─▶ Because there "
+                                  "is no version of livespec==0.33.0 and you require livespec==0.33.0, we can ...")
+    assert a.last_failure(git_repo) is None and "0.33.0" in a.unpublished()
+    assert a.server() == {"command": "uvx", "args": [f"livespec@{PINNED}"]}
+    assert not a._failure_path(git_repo).exists()
+    # A plugin whose uvx is a full path off the PATH runs the pinned release with it.
+    full = tmp_path / "opt" / "uvx"
+    cfg.write_text(json.dumps({"mcpServers": {"livespec": {"command": str(full), "args": ["livespec@0.33.0"]}}}))
+    assert adapter(tmp_path).server() == {"command": str(full), "args": [f"livespec@{PINNED}"]}
+    # Any other failure is said once by the plans, while it stands.
+    a._remember_failure(git_repo, "Workspace directory not found: /old")
+    assert a.last_failure(git_repo) == "Workspace directory not found: /old"
+    assert a.failure_said(git_repo) is False and a.failure_said(git_repo) is True
+    assert a.last_failure(git_repo) == "Workspace directory not found: /old"

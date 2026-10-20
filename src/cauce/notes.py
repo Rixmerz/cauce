@@ -136,6 +136,42 @@ def add_topic(store: Store, project: str, name: str, description: str) -> str:
 # --- writing ------------------------------------------------------------------
 
 
+#: Words that make a fact or a finding a security problem: a credential, a secret or a key
+#: that is exposed, or a hole. A design `token` or a usage `token` count is none: a token
+#: is one only beside a word that says it is exposed or rotated.
+_SECURITY = re.compile(
+    r"\b(credentials?|secrets?|private[ _-]?keys?|api[ _-]?keys?|access[ _-]?keys?|passwords?|"
+    r"vulnerab\w*|security (?:issue|problem|hole|flaw|risk|bug)\w*|injection|xss|csrf|ssrf|rce|"
+    r"(?:auth|access|bearer|api|npm|github|session)[ _-]?tokens?)\b"
+    r"|\btokens?\b(?=.{0,60}\b(?:exposed|leak\w*|committed|rotat\w*|plain ?text|public)\b)"
+    r"|\b(?:exposed|leak\w*|committed|rotat\w*)\b.{0,60}\btokens?\b",
+    re.IGNORECASE)
+#: The most security alerts an ending carries, and how long each may be.
+MAX_ALERTS, ALERT_CHARS = 5, 300
+
+
+def security_alerts(learned: Iterable[str], findings: Iterable[Mapping[str, Any]] = ()) -> list[str]:
+    """What a passing worker said about a security problem (an exposed credential, a
+    secret committed, a hole it found already there), one line each, so an ending
+    carries it as an alert instead of a note among others. Anything that looks like the
+    secret itself is masked (`_SECRET`), and `<private>` text left out."""
+    texts = [str(t) for t in learned]
+    for f in findings:
+        what = " ".join(str(f.get("what") or "").split())
+        where = str(f.get("where") or "").strip()
+        if what:
+            texts.append(f"{where}: {what}" if where else what)
+    out: list[str] = []
+    for text in texts:
+        line = " ".join(_PRIVATE.sub(" ", text).split())
+        if not line or not _SECURITY.search(line):
+            continue
+        line = _SECRET.sub("[secret]", line)[:ALERT_CHARS]
+        if line not in out:
+            out.append(line)
+    return out[:MAX_ALERTS]
+
+
 def clean_fact(text: str) -> str | None:
     """A fact as it is kept, or None when it is not worth keeping or must not be."""
     # What a person marked private never becomes a note.

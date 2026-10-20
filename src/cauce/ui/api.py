@@ -109,6 +109,7 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
             needs.append({**item, "asks": NEEDS_YOU[t["status"]], "stop": stops.view(store, t),
                           "waits_on": stops.waits_on(store, t)})
         elif t["status"] == "running":
+            item.update(usage.so_far(store, t))
             started = store.last_event(t["id"], "attempt_started")
             item["attempt"] = started["data"].get("seq") if started else None
             item["phase"] = phase.of(t["id"], item["attempt"])
@@ -194,7 +195,7 @@ def overview(store: Store, hours: float = 24, limit: int = 20, repos: set[str] |
     def line(t: dict[str, Any]) -> dict[str, Any]:
         return {"id": t["id"], "title": t["title"], "status": t["status"], "repo": t["repo"],
                 "workflow_run": t.get("workflow_run"), "workflow_step": t.get("workflow_step"),
-                "cell": t.get("final_cell") or t.get("current_cell"), "cost_usd": round(t.get("cost_usd") or 0, 2),
+                "cell": t.get("final_cell") or t.get("current_cell"), **usage.so_far(store, t),
                 "updated_at": t["updated_at"], **open_cards.get(t["id"], {"state": "ended"})}
 
     by_session: dict[str | None, list[dict[str, Any]]] = defaultdict(list)
@@ -266,7 +267,8 @@ def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:
     children = store.children(task_id)
     turns = usage.cost_by(store, "task_id", [task_id, *(c["id"] for c in children)])
     return {
-        "task": {**_brief(task), "body": task["body"], "options": json.loads(task.get("options") or "{}"),
+        "task": {**_brief(task), **usage.so_far(store, task), "body": task["body"],
+                 "options": json.loads(task.get("options") or "{}"),
                  "class_source": task["class_source"], "class_reason": task["class_reason"],
                  # What the session's own turns on it cost, its subagents' included; cost_usd is workers'.
                  "turns_usd": round(sum(turns.values()), 4), "waits": dispatch.waiting(store, task)},

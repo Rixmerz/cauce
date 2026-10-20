@@ -1,7 +1,7 @@
 import { toast } from "./main.js";
 import { get, post } from "./net.js";
 import { stopSection } from "./stop.js";
-import { cellChip, h, kindChip, pointsChip, repoName, statusBadge, TURNS_TITLE, usd, when } from "./util.js";
+import { cellChip, cost, h, kindChip, pointsChip, repoName, statusBadge, TURNS_TITLE, usd, when } from "./util.js";
 
 const drawer = () => document.getElementById("drawer");
 
@@ -139,7 +139,7 @@ export async function openTask(id, quiet = false) {
         h("div", { class: "meta row" },
           statusBadge(t.status), h("span", {}, repoName(t.repo)),
           kindChip(t.kind), pointsChip(t.points, t.points_why),
-          h("span", { title: "cauce's workers" }, `workers ${usd(t.cost_usd)}`),
+          h("span", { title: "cauce's workers" }, `workers ${cost(t)}`),
           t.turns_usd ? h("span", { title: TURNS_TITLE }, `turns ${usd(t.turns_usd)}`) : null,
           t.pinned ? h("span", { class: "chip" }, "pinned") : null, h("span", {}, when(t.created_at)))),
       h("div", { class: "row" }, ...actions, h("button", { onclick: close, "aria-label": "close" }, "✕"))),

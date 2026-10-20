@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import shlex
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from cauce import after, allow
@@ -60,8 +61,12 @@ CAUSES = {
     "crashed": ("failed", "cauce"),
     "converged": ("failed", "worker"),
     "review": ("blocked", "cauce"),
+    # The work is done and kept, and the worker names one point that needs a decision.
+    "decision": ("blocked", "worker"),
     "dismissed": ("dismissed", "you"),
     "superseded": ("dismissed", "cauce"),
+    # Its kept branch's work is already on the checkout's HEAD: nothing waits on it.
+    "landed": ("dismissed", "cauce"),
     # A plan whose parts cannot run side by side (their surfaces may touch): its pass is taken back.
     "parts": ("replan", "cauce"),
 }
@@ -166,7 +171,7 @@ def next_step(task_id: int, stop: Stop, *, resumable: bool = True) -> str | None
     """The command that continues the task, or None when none would: a task the
     worker found wrong is rewritten, and one that never ran cannot resume. A
     dismissed task resumes as what it was, so one that was replanned does not."""
-    if not resumable or stop.cause in ("spec", "ladder", "missing_dir", "converged"):
+    if not resumable or stop.cause in ("spec", "ladder", "missing_dir", "converged", "decision", "landed"):
         return None
     if stop.cause == "superseded" and stop.extra.get("retry"):
         return None  # its step was queued again: the retry is the one that goes on
@@ -234,10 +239,13 @@ def what_to_do(stop: Stop) -> str:
         "crashed": "cauce itself failed: the reason has the error; resume once it is fixed",
         "converged": "the findings are the answer: read them in the worker's account and act on them; "
                      "resuming would only repeat them",
+        "decision": "its work is done and kept on its branch, and one point needs a decision (quoted in its "
+                    "reason): decide it, then merge the branch and send what the decision asks as a new task",
         "review": "the independent check kept finding problems: read its findings, then fix what is right by "
                   "hand or resume for one more round",
         "dismissed": "nothing: you took it off the board; resume it if you want it after all",
         "superseded": "nothing: a later task with the same text passed; resume it if you want it after all",
+        "landed": "nothing: its work is already in the checkout's branch",
         "parts": "its parts may touch the same files, so they cannot run side by side: plan again (resume it, "
                  "or `cauce workflow retry` its step)",
     }.get(stop.cause, "read the attempts")
@@ -322,6 +330,42 @@ def supersede(store: Any, task: dict[str, Any]) -> list[int]:
         store.add_event(other["id"], "reported", via="superseded")
         store.release_lane(other.get("repo"), other["id"])
         gone.append(other["id"])
+    return gone
+
+
+def landed(store: Any, top: Path) -> list[int]:
+    """Tasks of this checkout that stopped short of a pass, whose kept branch's work is
+    already on its HEAD (merged into it, or squash-merged: `isolate.prunable`'s reasons,
+    read only): nothing waits on them any more, so they leave the board with an account
+    that says where their change is. Swept by the hooks, never by a GET. The ids taken off."""
+    from cauce import isolate, repo
+
+    kept = isolate.kept_branches(top)
+    if not kept:
+        return []
+    here = str(top.resolve())
+    gone = []
+    for task_id in sorted(kept):
+        task = store.get_task(task_id)
+        if task is None or task["status"] not in DISMISSABLE or task.get("source") not in ("cauce", "queue"):
+            continue
+        where = Path(task["cwd"]) if task.get("cwd") else None
+        top_of = repo.toplevel(where) if where is not None and where.is_dir() else None
+        if top_of is None or str(top_of.resolve()) != here:
+            continue
+        branch = isolate.branch_for(task_id)
+        why = isolate.prunable(top, branch)
+        # "merged" says another branch holds its commits: only HEAD's history is the checkout's.
+        if not (why == "squash-merged" or (why == "merged" and isolate.landed(top, branch))):
+            continue
+        into = isolate.current_branch(top) or "HEAD"
+        before = of(store, task)
+        record(store, task_id, Stop("landed", f"its change is already in {into} ({why})", by="cauce",
+                                    extra={"branch": branch, "into": into, "how": why, "was": task["status"],
+                                           **({"had_cause": before.cause} if before else {})}), result=False)
+        store.add_event(task_id, "reported", via="landed")
+        store.release_lane(task.get("repo"), task_id)
+        gone.append(task_id)
     return gone
 
 

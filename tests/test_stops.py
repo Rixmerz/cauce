@@ -314,3 +314,42 @@ def test_a_worktree_that_cannot_be_made_stops_the_task_resumable_instead_of_leav
     assert "already registered worktree; use 'add -f' to override" in stop["reason"]
     assert stops.next_step(report.task_id, stops.read(stop)) == f"cauce resume {report.task_id}"
     assert f"cauce resume {report.task_id}" in report.text()
+
+
+def test_a_stopped_task_whose_kept_work_landed_leaves_the_board_from_the_hooks(store: Store, git_repo, tmp_path):
+    from cauce import hooks
+
+    from .conftest import git
+
+    def stopped(text: str, branch_file: str) -> dict:
+        task = store.create_task(text, status="running", source="cauce", cwd=str(git_repo), repo="r")
+        stops.record(store, task["id"], stops.Stop("died", "its process went away"))
+        git(git_repo, "checkout", "-q", "-b", f"cauce/task-{task['id']}")
+        (git_repo / branch_file).write_text(f"{text}\n")
+        git(git_repo, "add", "-A")
+        git(git_repo, "commit", "-q", "-m", text)
+        git(git_repo, "checkout", "-q", "main")
+        return task
+
+    merged = stopped("add the export", "export.py")
+    squashed = stopped("add the import", "import.py")
+    open_work = stopped("add the report", "report.py")
+    git(git_repo, "merge", "-q", "--no-ff", "-m", "merge", f"cauce/task-{merged['id']}")
+    git(git_repo, "merge", "-q", "--squash", f"cauce/task-{squashed['id']}")
+    git(git_repo, "commit", "-q", "-m", "add the import")
+    # A GET never sweeps: the board reads it as it is until a hook runs.
+    assert store.get_task(merged["id"])["status"] == "interrupted"
+    hooks.session_start({"session_id": "s", "cwd": str(git_repo), "source": "startup"}, store, tmp_path)
+    for task, how in ((merged, "merged"), (squashed, "squash-merged")):
+        after = store.get_task(task["id"])
+        stop = stops.of(store, after)
+        assert after["status"] == "dismissed" and stop.cause == "landed" and stop.who == "cauce"
+        assert stop.reason == f"its change is already in main ({how})"
+        assert stops.next_step(task["id"], stop) is None
+        assert {e["data"]["via"] for e in store.events_of(task["id"], "reported")} == {"landed"}
+    assert store.get_task(open_work["id"])["status"] == "interrupted"
+    # The Stop hook sweeps too, and a second sweep finds nothing new.
+    git(git_repo, "merge", "-q", "--no-ff", "-m", "merge", f"cauce/task-{open_work['id']}")
+    hooks.stop({"session_id": "s", "cwd": str(git_repo)}, store)
+    assert stops.of(store, store.get_task(open_work["id"])).cause == "landed"
+    assert stops.landed(store, git_repo) == []

@@ -3,7 +3,7 @@
 // runs are started, retried and cancelled from a session (`cauce workflow …`).
 import { get } from "./net.js";
 import { curve, label, s } from "./svg.js";
-import { h, short, statusBadge, usd, when } from "./util.js";
+import { cost, h, short, statusBadge, when } from "./util.js";
 
 const COL = 210, ROW = 64, W = 176, BOX = 46, PAD = 12;
 const WAITS = new Set(["failed", "blocked", "replan", "needs_approval", "interrupted", "cancelled", "dismissed"]);
@@ -60,7 +60,7 @@ function runCard(run, ctx) {
     h("div", { class: "row" },
       h("b", {}, `#${run.id} ${run.name}`), h("span", { class: "chip" }, `v${run.version} · ${run.scope}`),
       h("span", { class: `tag ${stateClass(run.state === "waits on the orchestrator" ? "failed" : run.state)}` }, run.state),
-      h("span", { class: "meta" }, `${usd(run.cost_usd)}${run.points ? ` · ${run.points} points` : ""} · ${when(run.updated_at)}`)),
+      h("span", { class: "meta" }, `${cost(run)}${run.points ? ` · ${run.points} points` : ""} · ${when(run.updated_at)}`)),
     goal ? h("div", { class: "text" }, short(goal, 300)) : null,
     h("div", { class: "progress", title: `${done} of ${total} steps passed` },
       bar, h("em", {}, `${done}/${total}`)),

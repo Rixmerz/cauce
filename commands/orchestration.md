@@ -185,6 +185,11 @@ Request: $ARGUMENTS
      work that passed its own check: read them (`cauce show <id>`), then resume
      it for one more round with `--unattended`, or dismiss it with why when the
      blockers are wrong.
+   - `blocked` by `decision` (exit 4) — the work is done: it changed files, its
+     check passed, and it is kept on its branch; the worker names one point that
+     needs a design decision, quoted in the reason. It did not fail. Tell the
+     person what was done and the point; on their answer, merge the branch and
+     send what the decision asks as a new task, or dismiss it with why.
 
    - `replan` because it outgrew its turns — the task is not wrong. cauce
      resumes it once on its own with more turns (as it does a worker that died,
