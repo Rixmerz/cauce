@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`cauce doctor`: what the store says is broken.** Every rule is a bug cauce
+  shipped and found late in real work, turned into a query: a lane paused on
+  a task that passed, a task running with its process gone, queued work no
+  dispatcher took, an automatic resume that started nothing (broken: stuck
+  now), and over the last days a workflow part that lost its mark, an
+  integrate that skipped while parts kept branches, worktree attempts that
+  kept no session id, first attempts under their kind's turns, and a format
+  failure that climbed effort (suspect). Read only, no model; it exits 1 when
+  something is broken, and the session start names what is broken in its
+  repository.
+
 ## [0.29.2] - 2026-10-20
 
 ### Fixed
