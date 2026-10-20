@@ -157,7 +157,8 @@ def joins_short_of_their_parts(store: Store, *, since: str, **_) -> Iterable[Fin
     """An integrate step that skipped its join while more than one part kept a branch."""
     for event in store.events_of_kinds(["finished"], since=since):
         data = event["data"]
-        task = store.get_task(event["task_id"]) if data.get("skipped") else None
+        # A ledger step skipped for want of findings joins nothing: only an integrate step's skip counts.
+        task = store.get_task(event["task_id"]) if data.get("skipped") and "ledger" not in data else None
         if not task or not task.get("workflow_run"):
             continue
         kept = []

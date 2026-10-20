@@ -177,10 +177,17 @@ class Options:
                   "step_role": self.step_role, "surfaces": list(self.surfaces),
                   "ledger": self.ledger, "add_dirs": list(self.add_dirs), "services": list(self.services),
                   "run_verify": self.run_verify, "parts": self.parts, "integrate": self.integrate,
-                  "touches": list(self.touches), "reviewed_next": self.reviewed_next}
+                  "touches": list(self.touches), "reviewed_next": self.reviewed_next,
+                  # What `flow.queued_options` reads back: a resume stored without them lost them
+                  # for every resume after it (a step's start cell, its turns, its base commit).
+                  "start": self.start.label if self.start else None, "max_turns": self.max_turns,
+                  "base": self.base, "carry": self.carry,
+                  "max_attempts": self.max_attempts if self.max_attempts != Options.max_attempts else None}
         kept = {k: v for k, v in values.items() if v not in (None, [], False)}
         if not self.keep_learned:
             kept["keep_learned"] = False  # a task whose findings wait on a person's word
+        if self.livespec is False:
+            kept["livespec"] = False  # a person's --no-livespec, not the setting's default
         return kept
 
 

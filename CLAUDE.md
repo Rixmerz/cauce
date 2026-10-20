@@ -91,6 +91,17 @@ claude plugin test .
 in the file: helpers that take it are declared at its top level, and imported
 helpers never get it.
 
+`tests/test_scenarios.py` runs the real commands as processes (the dispatcher,
+`run-queued`, the automatic resume, workflows, worktrees) with
+`tests/scenarios/fake_claude.py` as `claude`, and ends each scenario with
+`cauce doctor`: a bug that leaves the store in a state it should never hold
+fails there. A way work moves that the unit tests drive in-process (a death, a
+resume, a part, a lane) gets a scenario; a bug that shipped gets a doctor rule;
+a request the router got wrong goes in `tests/corpus/requests.json`; a field
+one place writes and another reads gets a round trip in `tests/test_contracts.py`.
+Before a release, a small real task runs on the new version too: the CLI and the
+model are the one thing no test here fakes faithfully.
+
 The coverage floor lives in one place, `[tool.coverage.report] fail_under` in
 `pyproject.toml`. Raise it when the real number rises; never lower it to pass.
 
