@@ -14,7 +14,10 @@ A reason must be true, so a word is read in its context: "checkout" in git's
 sense (`git checkout`, "this checkout", "a read-only checkout", a checkout
 path, a worktree) is no money; a design "token", a chart library "migrated" or
 a label "truncated" is no security and no data, unless a word of the area's own
-sense is near (`_SENSES`); a word inside a path or an environment variable's
+sense is near (`_SENSES`); "lock" in a dependency lockfile (`package-lock`, "lock file")
+is no concurrency; a "schema" of a config or a linter (`$schema`, a JSON schema, eslint's) is
+no data; "deploy" said not to change ("no deployment changes") or about a linter's config is no
+delivery, unless the change touches deploy files; a word inside a path or an environment variable's
 name is no word of the request, and "payment" as one name in a list of names (an event, an enum) is no
 money until the change touches payment code. "Parallel" is never read away: a
 request that only mentions tasks running beside each other is still treated as
@@ -117,6 +120,17 @@ _SENSES = (
                 r"islands?|react|preact|vue|svelte|widgets?|icons?|pages?|routes?|templates?|apps?)\b", re.I),
      re.compile(r"\b(databases?|schemas?|tables?|columns?|rows?|records?|sql|backfill\w*|postgres\w*|mysql|"
                 r"sqlite|prisma|alembic|tenants?|users? data|data model)\b", re.I)),
+    ("data", "schema",
+     re.compile(r"\$schema|\b(json[ -]?schemas?|eslint\w*|lint\w*|config\w*|tsconfig|prettier|biome|ajv|zod|yaml|"
+                r"settings|validat\w*|editor|vs ?code|intellisense)\b", re.I),
+     re.compile(r"\b(databases?|tables?|columns?|rows?|records?|sql|backfill\w*|postgres\w*|mysql|sqlite|prisma|"
+                r"alembic|migrat\w*|indexes|indices|foreign keys?|data model|tenants?)\b", re.I)),
+    ("delivery", "deploy",
+     re.compile(r"\b(eslint\w*|lint\w*|prettier|biome|formatt\w*|typecheck\w*|tsconfig|editorconfig|"
+                r"code style|style guide)\b", re.I),
+     re.compile(r"\b(pipelines?|ci|cd|docker\w*|kubernetes|k8s|helm|terraform|infra\w*|rollouts?|rollbacks?|"
+                r"github actions|workflows?|render\.yaml|vercel|netlify|heroku|fly\.io|servers?|hosting)\b",
+                re.I)),
     ("data", "truncat",
      re.compile(r"\b(text|labels?|ellipsis|strings?|titles?|names?|characters?|chars|lines?|words?|axis|"
                 r"captions?|overflow)\b", re.I),
@@ -144,11 +158,37 @@ def _other_sense(area: str, text: str, found: re.Match[str]) -> bool:
     return False
 
 
+#: "lock" as a dependency lockfile: `package-lock`, `yarn.lock`, "lock file", "lock-file".
+_LOCKFILE_BEFORE = re.compile(r"(?:\b(?:package|pnpm|npm|yarn|bun|deno|cargo|poetry|composer|gemfile|pipfile|uv)"
+                              r"[-.]|\.)$", re.I)
+_LOCKFILE_AFTER = re.compile(r"[ -]?files?\b", re.I)
+#: A word said not to change: "no deployment changes", "without deploying", "sin deploy".
+_NEGATED = re.compile(r"\b(?:no|not|don.?t|without|never|nor|zero|sin|ni|nada de)\s+(?:\w+\s+){0,2}$", re.I)
+
+
+def _lockfile(text: str, found: re.Match[str]) -> bool:
+    before, after = text[max(0, found.start() - 12):found.start()], text[found.end():found.end() + 8]
+    return bool(_LOCKFILE_BEFORE.search(before) or _LOCKFILE_AFTER.match(after))
+
+
+def _own_sense(area: str, text: str, found: re.Match[str]) -> bool:
+    word = found.group(0).lower()
+    near = text[max(0, found.start() - _SENSE_WINDOW):found.end() + _SENSE_WINDOW]
+    return any(sense_area == area and word.startswith(start) and own.search(near)
+               for sense_area, start, _, own in _SENSES)
+
+
 def _not_meant(area: str, text: str, found: re.Match[str]) -> bool:
     """Whether the word found is used in another sense than the one its area is about."""
     word = found.group(0).lower()
     if _other_sense(area, text, found):
         return True
+    if area == "concurrency" and word == "lock":
+        return _lockfile(text, found)
+    if area == "delivery" and word.startswith("deploy"):
+        # Said not to change, and no word of delivery's own near it: context, not the change.
+        return bool(_NEGATED.search(text[max(0, found.start() - 40):found.start()])) \
+            and not _own_sense(area, text, found)
     if area == "money" and word == "checkout":
         return _git_checkout(text, found)
     if area == "money":

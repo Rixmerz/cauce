@@ -182,6 +182,12 @@ def test_checkout_in_a_shop_s_sense_is_money(text):
     ("Never truncate the month labels on the axis with an ellipsis", "data"),
     ("CI sets MECHA_TEST_TRUNCATE=1 for the Postgres job; fix the flaky chart test", "data"),
     ("Keep src/db/migrations/README.md as it is and fix the header", "data"),
+    ("Regenerate package-lock.json after bumping the parser dependency", "concurrency"),
+    ("Update the yarn.lock and the lock file of the web app", "concurrency"),
+    ("Keep the $schema key in the biome config and fix its rules", "data"),
+    ("The eslint config must stay valid against its JSON schema", "data"),
+    ("Fix the lint warnings in the dashboard, no deployment changes", "delivery"),
+    ("Move the eslint config the deploy script used into the repository root", "delivery"),
 ])
 def test_a_word_in_another_sense_raises_no_area(text, area):
     assert area not in _areas(text)
@@ -193,9 +199,25 @@ def test_a_word_in_another_sense_raises_no_area(text, area):
     ("Rotate the session token on every login", "security"),
     ("The API token leaks into the design system's logs", "security"),
     ("Truncate the audit log table after export", "data"),
+    ("Fix the lock around the queue so two workers never take the same task", "concurrency"),
+    ("Add a schema migration for the invoices table", "data"),
+    ("Validate the config schema before it writes the users table", "data"),
+    ("Change the deploy step of the CI pipeline to use the new image", "delivery"),
+    ("Fix the lint warnings, but do not touch the deployment pipeline", "delivery"),
 ])
 def test_a_word_in_its_own_sense_still_raises_its_area(text, area):
     assert area in _areas(text)
+
+
+def test_a_linter_config_change_is_not_high_for_its_lockfile_schema_and_deployment_words():
+    request = ("Configure eslint in the API repos: add the flat config, fix the lockfile, keep the json schema "
+               "of the config valid, no deployment changes")
+    r = risk.of_request(request, "implement")
+    assert r.tier == "medium" and r.reasons == []
+    # the tier is only raised: a change that touches deploy files is delivery all the same
+    r = risk.of_change(r, ["eslint.config.js", ".github/workflows/ci.yml", "tests/lint_test.ts"])
+    assert r.tier == "high" and any(x.startswith("it changed delivery (.github/workflows/ci.yml)") for x in r.reasons)
+    assert "concurrency" in _areas("Fix the lockfile and run the installs in parallel")
 
 
 def test_parallel_about_tasks_is_no_concurrency_and_about_code_is():

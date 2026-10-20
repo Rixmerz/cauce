@@ -122,6 +122,40 @@ def test_a_request_that_talks_to_the_session_stays_with_it():
     assert not route.talks("Fix the summary line the report prints when a task stops for review")
 
 
+def test_informing_imperatives_questions_about_state_and_reports_back_stay_with_the_session():
+    for said in ("indícame cuál es el problema de la exportación de reportes en el módulo de facturas",
+                 "Explícame por qué falló el workflow de ayer en el paso de integración",
+                 "Muéstrame los pendientes que quedaron abiertos en el repositorio de la API",
+                 "resume lo que hicimos hoy en el repositorio de la plataforma",
+                 "Enumera los errores que encontraste en la última corrida del workflow",
+                 "Qué opinas de cambiar el dispatcher para que use colas por repositorio",
+                 "Tienes pendientes de la tarea de ayer en el repositorio de la API",
+                 "Qué falta para terminar la migración del dispatcher a las colas",
+                 "En qué quedó la tarea del gráfico de capacidad que mandamos ayer"):
+        assert route.talks(said), said
+        assert route.choose(said, context_tokens=600_000, footprint=FOOTPRINT).mode == route.MAIN, said
+    pasted = ("- el botón de guardar no responde\n- el gráfico se ve cortado en el teléfono\n- el aviso no llega\n"
+              "Necesito que me des todos los errores que veas, con su causa y dónde están en el código.")
+    assert route.reports(pasted)
+    assert route.choose(pasted, context_tokens=600_000, footprint=FOOTPRINT).mode == route.MAIN
+    # a report that comes with a change, or after an order, is how the change is told: work
+    assert not route.reports("- el botón no responde\nNecesito que lo arregles y me digas qué cambiaste.")
+    assert not route.talks("Arregla el eje del gráfico de carga y dime qué cambiaste en el componente")
+    assert not route.talks("Lista de cambios: arregla el eje, agrega la leyenda y corrige el color")
+    assert not route.talks("Muestra el total bajo la tabla de tickets del tablero")
+    assert not route.talks("Dimensiones del gráfico: ajusta el alto a 320 en el componente de carga")
+    assert not route.talks("Resume the queued task with more turns in the same worktree")
+
+
+def test_a_merge_with_review_words_is_work_not_reading():
+    merge = ("Integra la rama cauce/task-1394 en cauce/task-1400 con cherry-pick y resuelve conflictos; son los "
+             "arreglos de la auditoría de seguridad")
+    found = route.choose(merge, context_tokens=600_000, footprint=FOOTPRINT)
+    assert found.kind == "implement" and found.mode != route.MAIN
+    assert route.choose("Audita el módulo de pagos y arregla lo que encuentres en el cálculo de cuotas",
+                        context_tokens=600_000, footprint=FOOTPRINT).kind == "implement"
+
+
 def test_the_corpus_of_real_requests_goes_where_each_belongs():
     """Requests people typed: one the router once sent the wrong way is kept here, so it never
     goes that way again. 'session' stays with the conversation; 'work' is not kept there for
