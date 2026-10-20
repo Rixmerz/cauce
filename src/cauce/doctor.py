@@ -7,6 +7,11 @@ a worker whose death nobody resumed. A rule reads the store as it is (`broken`: 
 is stuck now) or as it went over a window (`suspect`: something that should have
 happened did not). No model, no git call, no write; `cauce doctor` prints them, the
 session start names what is broken, and the scenario tests assert there is none.
+
+A `suspect` rule names the release that fixes its bug (`FIXED_IN`), and reads it only from
+what that release or a later one wrote (the `version` an event keeps): the records from
+before it are counted apart as `fixed`, so what it reports is the bug coming back, never
+the history the fix is for.
 """
 from __future__ import annotations
 
@@ -20,8 +25,9 @@ from cauce import after
 from cauce.matrix import turns_for
 from cauce.store import Store
 
-#: What a finding says of the work: stuck now, or a sign over the window.
-BROKEN, SUSPECT = "broken", "suspect"
+#: What a finding says of the work: stuck now, a sign over the window, or records from
+#: before the release that fixes what they show.
+BROKEN, SUSPECT, FIXED = "broken", "suspect", "fixed"
 #: How far back the `suspect` rules read by default.
 WINDOW_DAYS = 2
 #: Queued work no dispatcher took for this long, with nothing running in its lane, is stuck.
@@ -35,6 +41,14 @@ RUNNING_SILENT = timedelta(minutes=2)
 SESSIONLESS_SHARE, SESSIONLESS_MIN = 0.5, 3
 #: A summary that says a worker's answer had the wrong shape, not that its work was wrong.
 _FORMAT = re.compile(r"cannot run in parts|no result block|two result blocks|could not be read", re.I)
+#: The release that fixes each suspect rule's bug: records written before it are history.
+FIXED_IN = {
+    "part-lost-its-mark": "0.29.2",
+    "join-short-of-parts": "0.29.2",
+    "attempts-with-no-session": "0.29.2",
+    "turns-under-the-kind": "0.29.2",
+    "format-failure-climbed": "0.30.1",
+}
 #: Statuses a task leaves the board with: nothing it paused waits on it any more.
 _ENDED = ("done", "dismissed", "superseded", "cancelled")
 
@@ -67,6 +81,31 @@ def _options(task: Mapping) -> dict:
     except ValueError:
         return {}
     return found if isinstance(found, dict) else {}
+
+
+def _release(version: object) -> tuple[int, ...]:
+    """A version as numbers; none (a record from before events kept one) is the oldest."""
+    found = re.match(r"(\d+)\.(\d+)\.(\d+)", str(version or ""))
+    return tuple(int(n) for n in found.groups()) if found else (0,)
+
+
+def _fixed(rule: str, version: object) -> bool:
+    """The record was written before the release that fixes its rule's bug."""
+    return _release(version) < _release(FIXED_IN[rule])
+
+
+def _version_of(store: Store, task_id: int) -> object:
+    """The version of the latest record a task holds that keeps one."""
+    found = [e for e in (store.last_event(task_id, kind) for kind in ("planned", "attempt_started", "finished"))
+             if e is not None]
+    return max(found, key=lambda e: e["id"])["data"].get("version") if found else None
+
+
+def _history(rule: str, ids: list[int], repo: str | None) -> Finding:
+    """Records a rule matched that the release fixing it never wrote: counted, never a sign."""
+    return Finding(rule, FIXED, f"{len(ids)} record(s) from before {FIXED_IN[rule]}, the release that fixes it "
+                                f"(latest #{max(ids)})",
+                   "nothing to do: work run since shows whether it came back", max(ids), repo)
 
 
 # --- broken: work stuck now --------------------------------------------------------------
@@ -147,6 +186,9 @@ def parts_that_lost_their_mark(store: Store, *, since: str, **_) -> Iterable[Fin
             marked = [t for t in tasks if _options(t).get("part")]
             for t in tasks:
                 if marked and not _options(t).get("part"):
+                    if _fixed("part-lost-its-mark", _version_of(store, t["id"])):
+                        yield _history("part-lost-its-mark", [t["id"]], t["repo"])
+                        continue
                     yield Finding("part-lost-its-mark", SUSPECT,
                                   f"run {run}: #{t['id']} runs step {step!r} with no part beside "
                                   f"{len(marked)} part(s): the step reads as it alone",
@@ -167,7 +209,9 @@ def joins_short_of_their_parts(store: Store, *, since: str, **_) -> Iterable[Fin
                 ended = store.final_event(t["id"]) or {}
                 if (ended.get("data") or {}).get("branch"):
                     kept.append(t["id"])
-        if len(kept) > 1:
+        if len(kept) > 1 and _fixed("join-short-of-parts", data.get("version")):
+            yield _history("join-short-of-parts", [task["id"]], task["repo"])
+        elif len(kept) > 1:
             yield Finding("join-short-of-parts", SUSPECT,
                           f"run {task['workflow_run']}: #{task['id']} passed without joining, while parts "
                           f"{', '.join(f'#{k}' for k in kept)} each kept a branch: the work after it misses some",
@@ -178,6 +222,7 @@ def joins_short_of_their_parts(store: Store, *, since: str, **_) -> Iterable[Fin
 def attempts_with_no_session(store: Store, *, since: str, **_) -> Iterable[Finding]:
     """Worktree attempts keep their session to be continued; when most keep none, none can be."""
     by_repo: dict[str | None, list[bool]] = {}
+    before: dict[str | None, list[int]] = {}
     for event in store.events_of_kinds(["attempt_started"], since=since):
         if not event["data"].get("base"):
             continue  # not in a worktree: no session is kept there
@@ -185,7 +230,13 @@ def attempts_with_no_session(store: Store, *, since: str, **_) -> Iterable[Findi
         task = store.get_task(event["task_id"])
         if attempt is None or task is None or (attempt.get("passed") is None and attempt.get("failure") is None):
             continue
+        if _fixed("attempts-with-no-session", event["data"].get("version")):
+            if not attempt.get("session_id"):
+                before.setdefault(task["repo"], []).append(task["id"])
+            continue
         by_repo.setdefault(task["repo"], []).append(bool(attempt.get("session_id")))
+    for repo, ids in before.items():
+        yield _history("attempts-with-no-session", ids, repo)
     for repo, kept in by_repo.items():
         missing = kept.count(False)
         if len(kept) >= SESSIONLESS_MIN and missing / len(kept) >= SESSIONLESS_SHARE:
@@ -200,13 +251,18 @@ def turns_under_the_kind(store: Store, *, since: str, **_) -> Iterable[Finding]:
     """First attempts that started under their kind's turns, with no `--max-turns` asking for
     it: one finding per repository and kind."""
     under: dict[tuple[str | None, str], list[int]] = {}
+    before: dict[str | None, list[int]] = {}
     for event in store.events_of_kinds(["attempt_started"], since=since):
         turns = event["data"].get("max_turns")
         task = store.get_task(event["task_id"]) if event["data"].get("seq") == 1 else None
         if not task or not task.get("kind") or not isinstance(turns, int) or _options(task).get("max_turns"):
             continue
-        if turns < turns_for(task["kind"]):
+        if turns < turns_for(task["kind"]) and _fixed("turns-under-the-kind", event["data"].get("version")):
+            before.setdefault(task["repo"], []).append(task["id"])
+        elif turns < turns_for(task["kind"]):
             under.setdefault((task["repo"], task["kind"]), []).append(task["id"])
+    for repo, old in before.items():
+        yield _history("turns-under-the-kind", old, repo)
     for (repo, kind), ids in under.items():
         yield Finding("turns-under-the-kind", SUSPECT,
                       f"{len(ids)} {kind} task(s) started under the kind's {turns_for(kind)} turns "
@@ -216,17 +272,23 @@ def turns_under_the_kind(store: Store, *, since: str, **_) -> Iterable[Finding]:
 
 def format_failures_that_climbed(store: Store, *, since: str, **_) -> Iterable[Finding]:
     """A worker's answer of the wrong shape is no shallow work: it climbed effort anyway."""
+    before: list[int] = []
     for event in store.events_of_kinds(["moved"], since=since):
         data = event["data"]
         if data.get("axis") != "effort" or data.get("trigger") != "inconclusive":
             continue
         attempt = store.attempt(event["task_id"], int(data.get("seq") or 0))
-        if attempt and _FORMAT.search(attempt.get("summary") or ""):
+        if attempt and _FORMAT.search(attempt.get("summary") or "") and _fixed("format-failure-climbed",
+                                                                               data.get("version")):
+            before.append(event["task_id"])
+        elif attempt and _FORMAT.search(attempt.get("summary") or ""):
             yield Finding("format-failure-climbed", SUSPECT,
                           f"#{event['task_id']} climbed {data.get('from_cell')} → {data.get('to_cell')} because its "
                           f"answer had the wrong shape: {str(attempt['summary'])[:120]}",
                           "the shape the brief asks for was missed; a stronger cell pays for a format, not for depth",
                           event["task_id"], None)
+    if before:
+        yield _history("format-failure-climbed", before, None)
 
 
 RULES: tuple[Callable[..., Iterable[Finding]], ...] = (
@@ -249,16 +311,19 @@ def check(store: Store, *, repo: str | None = None, days: int = WINDOW_DAYS, now
         found.extend(rule(store, now=now, since=since, alive=alive or flow.alive))
     if repo is not None:
         found = [f for f in found if f.repo in (repo, None)]
-    return sorted(found, key=lambda f: (f.severity != BROKEN, f.rule, f.task_id or 0))
+    return sorted(found, key=lambda f: ((BROKEN, SUSPECT, FIXED).index(f.severity), f.rule, f.task_id or 0))
 
 
 def text(found: list[Finding]) -> str:
-    if not found:
-        return "cauce doctor: nothing broken, nothing suspect."
     lines = []
+    if not any(f.severity != FIXED for f in found):
+        lines.append("cauce doctor: nothing broken, nothing suspect.")
     for severity in (BROKEN, SUSPECT):
         mine = [f for f in found if f.severity == severity]
         if mine:
             lines.append(f"{severity} ({len(mine)}):")
             lines += [f"  [{f.rule}] {f.what}\n      → {f.fix}" for f in mine]
+    if history := [f for f in found if f.severity == FIXED]:
+        lines.append("fixed since, history only:")
+        lines += [f"  [{f.rule}] {f.what}" for f in history]
     return "\n".join(lines)

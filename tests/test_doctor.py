@@ -96,3 +96,33 @@ def test_the_command_exits_1_only_when_something_is_broken(store: Store, capsys)
     store.pause_lane("r", f"task #{passed['id']} ended done")
     assert cli.main(["doctor", "--json"]) == 1
     assert json.loads(capsys.readouterr().out.split("\n", 1)[1])[0]["rule"] == "lane-paused-on-ended"
+
+
+def test_records_from_before_the_release_that_fixes_a_rule_are_history_never_a_sign(store: Store):
+    for n, version in enumerate(("0.29.1", "0.29.1", "0.29.1", None)):
+        t = store.create_task(f"t{n}", status="done", source="cauce", repo="r", kind="implement")
+        store.add_event(t["id"], "attempt_started", seq=1, base="abc", max_turns=40, version=version)
+        store.add_attempt(t["id"], cell="sonnet/high", max_turns=40, passed=1)
+    found = rules(store, now=LATER, alive=lambda pid: True)
+    assert {f.severity for fs in found.values() for f in fs} == {doctor.FIXED}
+    assert found["attempts-with-no-session"][0].what == (
+        "4 record(s) from before 0.29.2, the release that fixes it (latest #4)")
+    said = doctor.text(doctor.check(store, days=0))
+    assert said.startswith("cauce doctor: nothing broken, nothing suspect.\nfixed since, history only:")
+    # The same bug written by a release that fixes it is the bug come back.
+    t = store.create_task("t", status="done", source="cauce", repo="r", kind="implement")
+    store.add_event(t["id"], "attempt_started", seq=1, base="abc", max_turns=40, version="0.29.2")
+    store.add_attempt(t["id"], cell="sonnet/high", max_turns=40, passed=1)
+    back = rules(store, now=LATER, alive=lambda pid: True)["turns-under-the-kind"]
+    assert [(f.severity, f.task_id) for f in back] == [(doctor.SUSPECT, t["id"]), (doctor.FIXED, 4)]
+
+
+def test_the_events_doctor_reads_keep_the_version_that_wrote_them(store: Store):
+    from cauce import __version__
+
+    t = store.create_task("t", status="done", source="cauce", repo="r")
+    for kind in ("planned", "attempt_started", "moved", "finished", "report"):
+        store.add_event(t["id"], kind, seq=1)
+    kept = {e["kind"]: e["data"].get("version") for e in store.events(task_id=t["id"])}
+    assert kept == {"planned": __version__, "attempt_started": __version__, "moved": __version__,
+                    "finished": __version__, "report": None}

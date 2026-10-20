@@ -234,6 +234,11 @@ DEEPER_PROMPT = ("Your last answer to this task did not pass; what failed it is 
                  "directory and the task is the one you were given. You now think at a higher effort: look deeper "
                  "than before, find why it failed and what else the same cause breaks, fix it, and check it "
                  "before you answer.")
+#: What a session whose answer could not be read is told: its work stands, only the form
+#: of its answer failed, and what failed it is said below.
+RESHAPE_PROMPT = ("Your last answer to this task could not be read; why is below. Your work so far is in this "
+                  "directory and stands: do not redo it. Answer again, in the result contract you were given, "
+                  "with exactly one result block.")
 #: The CLI's words when a session it was asked to resume is not there to resume.
 _NO_SESSION = re.compile(r"no conversation found|session[^\n]{0,60}(?:not found|does not exist|could not be "
                          r"(?:found|loaded|resumed))|invalid session", re.IGNORECASE)
@@ -346,6 +351,9 @@ class WorkerResult:
     #: A plan's parts (id, prompt, surfaces) and the contract they keep: on a pass of a plan asked for them.
     parts: tuple[dict[str, Any], ...] = ()
     contract: str = ""
+    #: What made its answer unreadable, when only the answer's form failed (no single result
+    #: block, a plan's parts that cannot run): its work may stand, and it is asked again.
+    shape: str = ""
     #: Refused writes to files the attempt changed anyway, per git: no block.
     overcome: tuple[str, ...] = ()
     #: The launch broke (a timeout, no JSON, an errored session), not the work:
@@ -569,7 +577,8 @@ def parse(
     block = result_block(text)
     if block is None:
         return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
-                            "the worker did not answer with exactly one result block", raw=text, **common)
+                            "the worker did not answer with exactly one result block", raw=text,
+                            shape="its answer did not hold exactly one result block", **common)
     verdict = str(block.get("verdict") or "").lower()
     summary = str(block.get("summary") or "")[:1000]
     evidence = str(block.get("evidence") or "")[:4000]
@@ -603,7 +612,8 @@ def parse(
             if problem:
                 return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
                                     f"claimed a pass, but its plan cannot run in parts: {problem}: " + summary,
-                                    evidence, raw=text, verdict=verdict, **common)
+                                    evidence, raw=text, verdict=verdict,
+                                    shape=f"its plan cannot run in parts: {problem}", **common)
             common.update(parts=parts, contract=contract)
         return WorkerResult(True, None, summary, evidence, raw=text, verdict=verdict, **common)
     failure = _refused(_failure(block.get("failure"), verdict), denied)

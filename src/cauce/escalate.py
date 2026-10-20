@@ -91,6 +91,8 @@ NETWORK_WAITS = (30, 90, 270)
 #: dispatcher's level halves on it (`cauce.capacity`), and the same cell goes again.
 LOAD_WAITS = (60, 180)
 MAX_TURNS_CEILING = 200
+#: Times one cell is asked again for an answer only its form failed, before it climbs.
+RESHAPES = 1
 
 
 @dataclass(frozen=True)
@@ -119,6 +121,8 @@ class Attempt:
     #: The independent check's blockers, when they are all that failed it: the
     #: work passed its own check (or had none to run and its own check passed).
     blockers: tuple[dict[str, str], ...] = ()
+    #: Only its answer's form failed (see `WorkerResult.shape`): what made it unreadable.
+    shape: str = ""
 
 
 @dataclass(frozen=True)
@@ -134,6 +138,8 @@ class Decision:
     skipped: tuple[str, ...] = ()
     #: Seconds to wait before the next attempt (a network that dropped).
     wait_s: int = 0
+    #: The same cell answers again in its own session: only the form of its answer failed.
+    reshape: bool = False
 
     @property
     def continues(self) -> bool:
@@ -177,6 +183,16 @@ def repeated_answer(attempts: Sequence[Attempt]) -> bool:
     so only a pair from different cells counts.
     """
     return _repeated_pair(attempts) is not None
+
+
+def reshape_streak(attempts: Sequence[Attempt]) -> int:
+    """How many attempts in a row, ending with the last, failed only the form of their answer on its cell."""
+    streak, cell = 0, attempts[-1].cell
+    for a in reversed(attempts):
+        if a.passed or not a.shape or a.cell != cell:
+            break
+        streak += 1
+    return streak
 
 
 def _repeated_pair(attempts: Sequence[Attempt]) -> tuple[int, int] | None:
@@ -362,6 +378,19 @@ def decide(
             why = "the turns were raised and the raised attempt changed nothing"
         return Decision(Move.REPLAN, reason="the task does not fit even the raised turn ceiling; split it",
                         because=(seen, f"{why}: the task is bigger than one worker, so it is split, not climbed"))
+
+    if failure is Failure.INCONCLUSIVE and last.shape and reshape_streak(attempts) <= RESHAPES:
+        # The answer could not be read: no single result block, a plan whose parts cannot
+        # run. That is the form, not the depth of the work: a stronger cell pays for a
+        # format. The same cell is asked again, in its own session when one is kept, once;
+        # an answer it still cannot shape climbs as any inconclusive does.
+        return Decision(Move.RETRY, last.cell, last.max_turns,
+                        f"its answer could not be read ({last.shape}); the same cell answers again",
+                        because=(seen, f"only the answer's form failed: {last.shape}",
+                                 "a wrong form is no shallow work: more effort or another model pays for a "
+                                 "format; the same cell is told what was wrong and answers again, once",
+                                 f"next: {last.cell.label} again"),
+                        reshape=True)
 
     pair = _repeated_pair(attempts)
     if pair and reading:
