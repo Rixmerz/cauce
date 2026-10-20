@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.29.1] - 2026-10-20
+
 ### Fixed
 
 - **A subagent whose ending never arrived no longer stays "running".** A
