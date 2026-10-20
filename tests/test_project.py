@@ -155,3 +155,20 @@ def test_the_ui_lists_only_enrolled_sessions_with_their_names(store: Store, git_
     listed = api.sessions(store, {"r"})
     assert [(s["id"], s["name"], s["named_by"]) for s in listed] == [("in", "Cart total fix", "haiku")]
     assert api.session_detail(store, "out") is None
+
+
+def test_claude_codes_own_folder_and_a_plugins_cached_copy_are_never_a_project(tmp_path, monkeypatch):
+    config = tmp_path / "claude-config"
+    cached = config / "plugins" / "cache" / "someone" / "a-plugin" / "1.0.0"
+    cached.mkdir(parents=True)
+    (cached / ".git").mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    assert project.find(cached) is None
+    for never in (config, cached):
+        try:
+            project.enroll(never)
+        except project.NotAProject:
+            pass
+        else:
+            raise AssertionError(f"{never} was enrolled")
+    assert not (cached / ".cauce").exists()

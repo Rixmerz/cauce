@@ -41,18 +41,37 @@ RENAME_EVERY = 10
 
 
 class NotAProject(ValueError):
-    """A directory that is never a project: the home directory or the filesystem root."""
+    """A directory that is never a project: the home directory, the filesystem root, or
+    Claude Code's or cauce's own folders."""
 
 
 def _never(d: Path) -> bool:
     return d == d.parent or d == Path.home().resolve()
 
 
+def _tools_home(here: Path) -> bool:
+    """Whether `here` is inside Claude Code's own folder (a plugin's cached copy, its
+    settings) or cauce's home: tools' files, never a person's project."""
+    import os
+
+    from cauce.store import home
+
+    homes = [Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude"), home()]
+    for top in homes:
+        try:
+            if here == top.resolve() or top.resolve() in here.parents:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _scope(cwd: str | Path) -> list[Path]:
     """The directories whose `.cauce/` a session in `cwd` may belong to: `cwd` and
-    its parents up to the top of its checkout, or `cwd` alone outside one."""
+    its parents up to the top of its checkout, or `cwd` alone outside one. None
+    for Claude Code's own folder or cauce's home."""
     here = Path(cwd).resolve()
-    if _never(here):
+    if _never(here) or _tools_home(here):
         return []
     chain: list[Path] = []
     for d in (here, *here.parents):

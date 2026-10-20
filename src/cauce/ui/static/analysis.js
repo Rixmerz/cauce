@@ -16,7 +16,8 @@ const PHASES = [
   ["verifier_s", "verifier", "the independent check"],
   ["wait_s", "wait", "waiting for a network that dropped, or for a machine under load"],
   ["notes_s", "notes", "filing what a passing worker learned"],
-  ["lost_s", "lost", "attempts whose worker died: from its start to the run's end being noticed"],
+  ["lost_s", "lost", "attempts whose worker died: from its start to its time limit at most"],
+  ["unnoticed_s", "unnoticed", "after a dead worker's time limit, until cauce noticed it had died"],
   ["other_s", "other", "the rest of the run: recording, committing"],
 ];
 const PERIOD_KEY = "cauce.analysis.days";

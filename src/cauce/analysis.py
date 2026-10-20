@@ -26,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cauce import cells as cells_mod
-from cauce import usage
+from cauce import launch, usage
 from cauce.store import Store
 
 #: The phases of a run, in the order they happen. The first four come before its own wall
@@ -34,7 +34,7 @@ from cauce.store import Store
 #: for the dispatcher (`pickup_s`) and the process starting (`spawn_s`), which split the
 #: older `queued_s` where they were measured.
 PHASES = ("advance_s", "pickup_s", "spawn_s", "queued_s", "plan_s", "setup_s", "worker_s", "check_s", "verifier_s",
-          "wait_s", "notes_s", "lost_s", "other_s")
+          "wait_s", "notes_s", "lost_s", "unnoticed_s", "other_s")
 #: The phases before a run's own start: never part of its wall time, so never taken from "other".
 BEFORE_RUN = frozenset({"advance_s", "pickup_s", "spawn_s", "queued_s"})
 #: The events a compaction decision leaves (`cauce.compaction`).
@@ -97,6 +97,7 @@ def runs(tasks: Sequence[Mapping[str, Any]], events: Sequence[Mapping[str, Any]]
                 # An attempt with no `attempt_finished` before the run's end lost its worker (it died,
                 # or was cut off): the time from its start to the end is lost, not "other".
                 current["_open_attempt"] = event["ts"]
+                current["_open_turns"] = data.get("max_turns")
                 if current["brief_chars"] is None:
                     current["brief_chars"] = data.get("brief_chars")
                     if (since := _number(data.get("since_start_s"))) is not None:
@@ -129,7 +130,7 @@ def _start(task: Mapping[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
         "advance_s": None, "pickup_s": None, "spawn_s": None,
         "queued_s": _number(data.get("queued_s")), "plan_s": _number(data.get("plan_s")), "setup_s": None,
         "worker_s": None, "check_s": None, "verifier_s": None, "wait_s": None, "hold_s": None, "notes_s": None,
-        "lost_s": None, "_open_attempt": None,
+        "lost_s": None, "unnoticed_s": None, "_open_attempt": None, "_open_turns": None,
         "attempts": 0, "first_try": None, "verified": 0, "verifier_blocked": 0, "moves": [], "cells": [],
         "cost_usd": 0.0, "turns": 0, "input_tokens": 0, "output_tokens": 0, "refused": 0,
         "cache_read_tokens": 0, "measured_input_tokens": 0, "verifier_cost_usd": 0.0,
@@ -172,7 +173,14 @@ def _end(run: dict[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
                   "notes_s"):
         run[phase] = _number(data.get(phase))
     if run["_open_attempt"]:
-        run["lost_s"] = _between(run["_open_attempt"], run["ended_at"])
+        # A worker runs at most its attempt's time limit: what passed after it, the run
+        # waited dead for someone to notice (a sweep at the next session), not work lost.
+        gone = _between(run["_open_attempt"], run["ended_at"])
+        turns = run["_open_turns"] if isinstance(run["_open_turns"], int) else 0
+        limit = float(launch.timeout_for(turns))
+        if gone is not None:
+            run["lost_s"] = round(min(gone, limit), 2)
+            run["unnoticed_s"] = round(max(gone - limit, 0.0), 2)
     # A run from before the phases were timed: what its attempts measured, the CLI's
     # own duration for the work, and nothing for what was never measured.
     if run["worker_s"] is None and run["_worker_s"]:

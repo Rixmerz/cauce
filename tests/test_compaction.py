@@ -590,3 +590,11 @@ def test_stats_lists_each_decision_its_cost_against_a_cold_one_and_whether_it_ra
     assert "wait" in text and "not now: no natural break" in text
     assert cli.main(["stats", "--json"]) == 0
     assert len(json.loads(capsys.readouterr().out)["compactions"]) == 2
+
+
+def test_a_context_near_full_does_not_wait_for_a_natural_break():
+    # 172,000 of 200,000 (86%) and no work ended: the harness's own compaction is near.
+    decided = compaction.decide(ready(breaks=(), tokens=172_000), NOW)
+    assert decided.now and "the harness's own compaction is near" in " | ".join(decided.because)
+    # Under the pressing share, a break is still waited for.
+    assert not compaction.decide(ready(breaks=(), tokens=150_000), NOW).now
