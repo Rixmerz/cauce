@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.29.2] - 2026-10-20
+
 ### Fixed
 
 - **Workers in a cloud session can be continued again.** A cloud host names
