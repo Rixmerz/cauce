@@ -1079,7 +1079,8 @@ def run(
                 persist_session=workspace is not None,
                 resume_session=resume,
                 fork_session=fork,
-                resume_prompt=launch.DEEPER_PROMPT if fork else launch.CONTINUE_PROMPT,
+                resume_prompt=(launch.DEEPER_PROMPT if fork else launch.RESHAPE_PROMPT
+                               if decision is not None and decision.reshape else launch.CONTINUE_PROMPT),
                 resume_note=continuation_note([*history, *attempts][-1]) if resume else "",
             )
             store.update_task(task["id"], current_cell=cell.label)
@@ -1216,7 +1217,7 @@ def run(
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
                               transient=result.transient, findings=result.findings, network=result.network,
-                              load=result.load,
+                              load=result.load, shape=result.shape,
                               blockers=open_blockers)
             attempts.append(attempt)
             if raced is not None and not raced_first:
@@ -1616,16 +1617,18 @@ def _continues(decision: Decision, session: WorkerSession | None) -> tuple[str, 
     why. More turns on the same cell continue it; more effort on the same model continues
     a fork of it at the new effort, since the approach stood and the depth was missing.
     Any other move is a new bet: a new model must not inherit the old one's approach, and
-    a retry is for a launch that broke. A worktree is reset to the base only for another
+    a retry is for a launch that broke, unless only its answer's form failed: then the same
+    cell answers again in its own session (`Decision.reshape`). A worktree is reset to the base only for another
     model (and undone outside its surfaces only as a wrong approach), so the model tells it."""
-    if session is None or decision.move not in (Move.MORE_TURNS, Move.MORE_EFFORT) or decision.cell is None:
+    if session is None or decision.cell is None or not (
+            decision.move in (Move.MORE_TURNS, Move.MORE_EFFORT) or decision.reshape):
         return "", ""
     before, model = session.attempt, models.pinned(decision.cell.model) or decision.cell.model
     if not session.id:
         return "", f"attempt {before} kept no session to continue"
     if session.model != model:
         return "", f"attempt {before} ran on {session.model}, this one runs on {model}"
-    if decision.move is Move.MORE_TURNS and session.cell != decision.cell:
+    if (decision.move is Move.MORE_TURNS or decision.reshape) and session.cell != decision.cell:
         return "", f"attempt {before} ran at {session.cell.label}, this one at {decision.cell.label}"
     return session.id, ""
 
@@ -2104,6 +2107,8 @@ def continuation_note(last: Attempt) -> str:
     """What a continued session is told failed its attempt, which its context does not
     hold: the independent check's blockers in a correction round (its work passed its
     own check), else the output that failed it."""
+    if last.shape:
+        return f"Why your last answer could not be read: {last.shape}."
     if last.blockers:
         return ("The independent check, which reads only the request and the diff, found these problems in your "
                 "work after it passed its own check:\n" + findings_mod.text(last.blockers)[:3000])

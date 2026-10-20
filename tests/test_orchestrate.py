@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from cauce import __version__, launch, orchestrate, roles
 from cauce import capabilities as caps
-from cauce import launch, orchestrate, roles
 from cauce.classify import Classification
 from cauce.escalate import MAX_TURNS_CEILING, Failure
 from cauce.launch import WRITE_TOOLS, WorkerResult
@@ -1015,6 +1015,21 @@ def test_a_continued_session_is_told_the_check_that_failed_after_it_ran_out(git_
     assert first.resume_note == ""
 
 
+def test_an_answer_of_the_wrong_form_is_asked_again_in_the_same_session_and_climbs_nothing(git_repo, store):
+    out = WorkerResult(False, Failure.INCONCLUSIVE, "the worker did not answer with exactly one result block",
+                       cost_usd=0.1, session_id="sess-1", shape="its answer did not hold exactly one result block")
+    script = Script(out, ok(), write="half.py")
+    report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert report.status == "done" and report.moves[0].startswith("retry")
+    first, second = script.specs
+    assert second.cell == first.cell and second.max_turns == first.max_turns
+    assert second.resume_session == "sess-1" and not second.fork_session
+    assert second.resume_prompt == launch.RESHAPE_PROMPT
+    assert "did not hold exactly one result block" in second.resume_note
+    moved = store.last_event(report.task_id, "moved")["data"]
+    assert moved["axis"] == "retry" and moved["continued"] is True and moved["version"] == __version__
+
+
 def test_more_turns_without_a_session_start_fresh_and_say_why(git_repo, store):
     out = WorkerResult(False, Failure.TURNS_EXHAUSTED, "ran past its time", cost_usd=0.1)
     lines = []
@@ -1120,6 +1135,9 @@ def test_a_session_is_continued_only_where_the_cell_and_the_model_still_match_it
         "", "attempt 1 ran at sonnet/medium, this one at sonnet/high")
     for move in (Move.NEXT_MODEL, Move.RETRY, Move.REPLAN):
         assert _continues(Decision(move, Cell("opus", "high"), 30), kept) == ("", "")
+    reshape = Decision(Move.RETRY, medium, 30, reshape=True)
+    assert _continues(reshape, kept) == ("sess-1", "")
+    assert _continues(Decision(Move.RETRY, high, 30, reshape=True), kept)[0] == ""
     models.pin("sonnet", "claude-sonnet-5-5")  # pinned since: another model runs it
     assert _continues(effort, kept) == ("", "attempt 1 ran on sonnet, this one runs on claude-sonnet-5-5")
 

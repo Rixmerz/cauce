@@ -280,3 +280,18 @@ def test_a_network_try_between_two_answers_does_not_hide_that_they_repeat():
     assert decide(IMPLEMENT, pair).move is Move.NEXT_MODEL
     between = [pair[0], dropped("sonnet/high", changed=()), pair[1]]
     assert decide(IMPLEMENT, between).move is Move.NEXT_MODEL
+
+
+def unreadable(cell: str) -> Attempt:
+    return Attempt(Cell.parse(cell), 80, False, Failure.INCONCLUSIVE, "claimed a pass, but its plan cannot run in "
+                   "parts: part 'x' has no prompt", shape="its plan cannot run in parts: part 'x' has no prompt")
+
+
+def test_an_answer_of_the_wrong_form_is_asked_again_of_the_same_cell_once_then_climbs():
+    first = decide(PLAN, [unreadable("opus/xhigh")])
+    assert first.move is Move.RETRY and first.cell == Cell.parse("opus/xhigh") and first.reshape
+    assert first.max_turns == 80 and "only the answer's form failed" in " ".join(first.because)
+    again = decide(PLAN, [unreadable("opus/xhigh"), unreadable("opus/xhigh")])
+    assert again.move is Move.MORE_EFFORT and not again.reshape
+    # Shallow work stays on the effort axis: a form is only a form.
+    assert not decide(PLAN, [fail("opus/xhigh", Failure.INCONCLUSIVE, "no evidence")]).reshape

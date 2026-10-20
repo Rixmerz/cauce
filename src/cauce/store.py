@@ -36,6 +36,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from cauce import __version__
 from cauce.text import fold, title_of, words
 
 SCHEMA = """
@@ -176,6 +177,9 @@ _APPEND_ONLY_TRIGGERS = "".join(
     f"CREATE TRIGGER IF NOT EXISTS {table}_{verb}_refused BEFORE {verb.upper()} ON {table} "
     f"BEGIN SELECT RAISE(ABORT, '{table} is append-only'); END;\n"
     for table in _APPEND_ONLY for verb in ("update", "delete"))
+
+#: Events that keep the version that wrote them: what `cauce doctor` reads a bug from.
+VERSIONED = frozenset({"planned", "attempt_started", "moved", "finished"})
 
 #: Words a query and a problem must share for a strict match.
 STRICT_OVERLAP = 3
@@ -1142,6 +1146,10 @@ class Store:
     # --- events: what a watcher reads ---------------------------------------
 
     def add_event(self, task_id: int, event: str, /, **data: Any) -> int:
+        if event in VERSIONED:
+            # The version that wrote it: `cauce doctor` tells a bug that came back from the
+            # records a release that fixes it never wrote.
+            data.setdefault("version", __version__)
         cur = self._conn.execute(
             "INSERT INTO events (task_id, ts, kind, data) VALUES (?, ?, ?, ?)",
             (task_id, now(), event, json.dumps(data, ensure_ascii=False, default=str)),

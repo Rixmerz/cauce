@@ -96,6 +96,18 @@ def test_every_failure_is_typed(tmp_path, stdout, failure):
     assert not result.passed and result.failure is failure
 
 
+def test_only_an_answer_of_the_wrong_form_says_what_was_wrong_with_it(tmp_path):
+    for unreadable in (envelope("no block at all"), envelope(block(verdict="pass") + block(verdict="fail"))):
+        assert parse(proc(unreadable), spec(tmp_path)).shape == "its answer did not hold exactly one result block"
+    planned = parse(proc(envelope(block(verdict="pass", summary="planned", evidence="read it", parts=[{"id": "x"}],
+                                        contract="c"))), spec(tmp_path, parts=True))
+    assert planned.shape.startswith("its plan cannot run in parts: ")
+    # A pass with no evidence, or a failure the worker named, is about the work: no form to fix.
+    for work in (envelope(block(verdict="pass", summary="fixed")),
+                 envelope(block(verdict="inconclusive", summary="x"))):
+        assert parse(proc(work), spec(tmp_path)).shape == ""
+
+
 def test_an_errored_session_says_why_not_its_subtype(tmp_path):
     limited = json.dumps({"is_error": True, "subtype": "success", "result": "Claude AI usage limit reached"})
     assert parse(proc(limited), spec(tmp_path)).summary == "the session errored: Claude AI usage limit reached"

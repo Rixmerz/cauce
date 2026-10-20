@@ -95,7 +95,9 @@ helpers never get it.
 `run-queued`, the automatic resume, workflows, worktrees) with
 `tests/scenarios/fake_claude.py` as `claude`, and ends each scenario with
 `cauce doctor`: a bug that leaves the store in a state it should never hold
-fails there. A way work moves that the unit tests drive in-process (a death, a
+fails there. A doctor rule's `suspect` reads only records the release that fixes
+its bug wrote (`doctor.FIXED_IN`, the `version` its events keep): a new rule
+names that release. A way work moves that the unit tests drive in-process (a death, a
 resume, a part, a lane) gets a scenario; a bug that shipped gets a doctor rule;
 a request the router got wrong goes in `tests/corpus/requests.json`; a field
 one place writes and another reads gets a round trip in `tests/test_contracts.py`.
@@ -140,7 +142,11 @@ yields the default kind, not a guess.
   ladder walk. More effort on the same model keeps the approach, and so the
   session (below); another model never inherits it.
 - A retry is for a launch that broke (a timeout before any change, no JSON,
-  an errored session); it is never an escalation. An environment the worker
+  an errored session); it is never an escalation. An answer only its form
+  failed (no single result block, a plan's parts that cannot run:
+  `WorkerResult.shape`) is asked again of the same cell, once, with its turns
+  and in its own session when one is kept (`Decision.reshape`); a second one
+  climbs as any inconclusive does. An environment the worker
   named, or a check cauce could not run, blocks at once. A refused
   command is neither: it blocks at once, because it is a setting. An
   environment failure on an attempt that changed files is not work that never

@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.30.1] - 2026-10-20
+
+### Fixed
+
+- **An answer of the wrong form no longer climbs.** A worker whose answer could
+  not be read (no single result block, a plan whose parts cannot run) was read
+  as shallow work and sent to more effort: a plan climbed opus/xhigh → opus/max
+  for a part without a prompt. Now the same cell is asked again, once, in its
+  own session when one is kept (`launch.RESHAPE_PROMPT`, told what was wrong
+  and not to redo its work), with the same turns; a second unreadable answer
+  climbs as any inconclusive does. The `moved` event says `retry`.
+- **`cauce doctor` reports a bug coming back, not its history.** Its suspect
+  rules read every record of the window against today's rules, so tasks run
+  before 0.29.2 kept showing as sessions never kept and turns under the kind.
+  The events it reads (`planned`, `attempt_started`, `moved`, `finished`) now
+  keep the version that wrote them; each suspect rule names the release that
+  fixes it (`doctor.FIXED_IN`) and reads it only from that release on. What
+  came before is counted apart, under "fixed since, history only".
+
 ## [0.30.0] - 2026-10-20
 
 ### Added

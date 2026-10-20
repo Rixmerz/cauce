@@ -79,7 +79,9 @@ def world(tmp_path: Path, git_repo: Path, _isolated_home: Path):
             store = Store(self.home / "cauce.db")
             try:
                 broken = [f for f in doctor.check(store) if f.severity == doctor.BROKEN
-                          or f.rule in ("part-lost-its-mark", "join-short-of-parts", "attempts-with-no-session")]
+                          or (f.severity == doctor.SUSPECT and f.rule in (
+                              "part-lost-its-mark", "join-short-of-parts", "attempts-with-no-session",
+                              "format-failure-climbed"))]
             finally:
                 store.close()
             assert broken == [], doctor.text(broken)
@@ -128,7 +130,9 @@ def test_a_workflow_part_that_died_is_resumed_and_the_join_holds_every_part(worl
     parts = [{"id": "api", "prompt": "PART-API: write api.txt", "surfaces": ["api.txt"]},
              {"id": "web", "prompt": "PART-WEB: write web.txt", "surfaces": ["web.txt"]}]
     world.script([
+        # The plan's first answer cannot run in parts: the same cell is asked again, no climb.
         {"match": "Plan, without changing any file", "do": [
+            {"pass": True, "block": {"parts": [{"id": "api"}], "contract": "c"}},
             {"pass": True, "block": {"parts": parts, "contract": "api.txt and web.txt each say their name"}}]},
         {"match": "PART-API", "do": [{"pass": True, "write": {"api.txt": "api\n"}}]},
         {"match": "PART-WEB", "do": [{"die": True}, {"pass": True, "write": {"web.txt": "web\n"}}]},
@@ -154,4 +158,6 @@ def test_a_workflow_part_that_died_is_resumed_and_the_join_holds_every_part(worl
     files = subprocess.run(["git", "ls-tree", "-r", "--name-only", branch], cwd=world.repo,
                            capture_output=True, text=True, check=True).stdout.split()
     assert {"api.txt", "web.txt"} <= set(files), (branch, files)
+    plans = [c["argv"] for c in world.calls() if c["rule"] == 0]
+    assert len(plans) == 2 and plans[0][plans[0].index("--effort") + 1] == plans[1][plans[1].index("--effort") + 1]
     world.healthy()
