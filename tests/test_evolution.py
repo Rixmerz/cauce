@@ -8,7 +8,7 @@ import pytest
 from cauce import __version__, cli, evolution, hooks, standards
 from cauce.store import Store
 
-from .test_standards import finished, many, stamp
+from .test_standards import NOW, finished, many, stamp
 
 #: The person's time zone in these tests: three hours behind UTC.
 HERE = timezone(timedelta(hours=-3))
@@ -164,6 +164,8 @@ def test_the_command_prints_the_report_and_its_data(store: Store, capsys, monkey
 
 def test_the_stop_hook_settles_and_a_failure_costs_the_turn_nothing(store: Store, monkeypatch, _isolated_home):
     many(store, standards.CALIBRATE_EVERY, ("sonnet/medium", 0, "code_bug", "next_model"), ("opus/high", 1))
+    # The day the fake tasks ended, whatever day the suite runs on: nothing before it to snapshot.
+    monkeypatch.setattr(evolution, "_now", lambda: NOW - timedelta(hours=23))
     hooks.stop({"session_id": "s"}, store)
     assert [c["field"] for c in store.calibrations(repo="r")] == ["start_cell"]
     assert store.snapshots() == [] and store.meta(evolution.SNAPSHOT_KEY)
