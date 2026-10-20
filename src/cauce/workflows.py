@@ -1142,6 +1142,7 @@ def _joining(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step
         for t in _tasks_of(latest.get(s["id"])):
             branch = ((store.final_event(t["id"]) or {}).get("data") or {}).get("branch")
             if branch:
+                _kept_tip(store, t, run["cwd"])  # a part's branch is joined by name: put back when gone
                 branches.append({"part": (_part(t) or {}).get("id") or s["id"], "task": t["id"], "branch": branch})
             started = store.last_event(t["id"], "attempt_started")
             base = base or ((started or {}).get("data") or {}).get("base")
@@ -1276,22 +1277,51 @@ def _before(defn: Mapping[str, Any], step_id: str) -> list[str]:
     return [s["id"] for s in defn["steps"] if s["id"] in seen]
 
 
+def _kept_tip(store: Store, task: Mapping[str, Any], cwd: str | None) -> str | None:
+    """The commit a step's task kept, as the run reads it: its branch's tip. A branch
+    gone while the run still builds on it is put back at the tip its `finished` event
+    kept; one that cannot be is a `WorkflowError`, never a silent start elsewhere.
+    None when the task kept no branch."""
+    data = (store.final_event(task["id"]) or {}).get("data") or {}
+    branch, tip = data.get("branch"), data.get("tip")
+    if not branch or not cwd or not Path(cwd).is_dir():
+        return None
+    try:
+        return isolate.head(Path(cwd), f"refs/heads/{branch}")
+    except isolate.IsolationError:
+        pass
+    if tip and isolate.restore(Path(cwd), branch, tip):
+        store.add_event(task["id"], "branch_restored", branch=branch, tip=tip,
+                        why="a later step of its run builds on it")
+        return tip
+    raise WorkflowError(f"task #{task['id']} kept its work on {branch}, and that branch is gone"
+                        + (f" (its tip {tip[:12]} is not in the repository either)" if tip else "")
+                        + f": `git fsck --lost-found` in {cwd} may find it; restore the branch, "
+                        f"then `cauce workflow retry` the step that needs it")
+
+
 def _base(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step_id: str,
           latest: Mapping[str, dict]) -> str | None:
     """The commit a step starts from: the tip the nearest step before it kept,
     read when it passed. A reading step keeps no branch, so the search goes on
     past it; with none before it, the commit a run queued after other work was
-    released onto (`cauce.after`). None: the checkout's HEAD."""
+    released onto (`cauce.after`). None: the checkout's HEAD. A fix's later round
+    starts from what the round before it kept, never from what it fixed again."""
+    step = next((s for s in defn["steps"] if s["id"] == step_id), {})
+    before = latest.get(step_id)
+    if step.get("ledger") == "fix" and before and before["status"] == "done":
+        tip = _kept_tip(store, before, run["cwd"])
+        if tip:
+            return tip
     for sid in reversed(_before(defn, step_id)):
         # A step run in parts keeps a branch per part: what comes after starts from the
         # integrate step that joins them, unless only one part kept one.
-        kept = [b for b in (((store.final_event(t["id"]) or {}).get("data") or {}).get("branch")
-                            for t in _tasks_of(latest.get(sid))) if b]
-        if len(kept) == 1 and run["cwd"] and Path(run["cwd"]).is_dir():
-            try:
-                return isolate.head(Path(run["cwd"]), kept[0])
-            except isolate.IsolationError:
-                continue
+        kept = [t for t in _tasks_of(latest.get(sid))
+                if ((store.final_event(t["id"]) or {}).get("data") or {}).get("branch")]
+        if len(kept) == 1:
+            tip = _kept_tip(store, kept[0], run["cwd"])
+            if tip:
+                return tip
     return json.loads(run.get("options") or "{}").get("base")
 
 

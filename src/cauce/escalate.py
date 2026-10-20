@@ -424,6 +424,18 @@ def decide(
         return _gated(Move.NEXT_MODEL, target, last.max_turns, why, allow_approval, because,
                       _skipped(ladder, last.cell, target))
 
+    prior = attempts[-2] if len(attempts) >= 2 else None
+    if last.blockers and prior is not None and prior.blockers and prior.cell.model == last.cell.model:
+        # Two corrections in a row on one model, each leaving blockers the check shows: more
+        # of its thinking keeps missing defects of this work, so a stronger model reads it.
+        target = _next_model(ladder, last.cell)
+        if target is not None:
+            why = f"{last.cell.model} left blockers in two corrections in a row"
+            return _gated(Move.NEXT_MODEL, target, last.max_turns, why, allow_approval,
+                          (seen, _correction(last, f"{why}: more effort from it is the bet that already missed "
+                                                   "twice, so a stronger model takes the work"), _arrives(target)),
+                          _skipped(ladder, last.cell, target))
+
     # Effort axis: the work was shallow. The next effort of the same model,
     # and only when this model has run out does the next one start.
     shallow = "the work happened and was shallow: the same model, more thorough"

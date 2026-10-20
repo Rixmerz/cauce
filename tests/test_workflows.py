@@ -1411,3 +1411,78 @@ def test_the_run_command_says_it_fans_out_and_whole_keeps_one_build(git_repo, st
     assert capsys.readouterr().out.startswith("feature would run here")
     assert cli.main(["workflow", "run", "feature", "the export", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["fanned"] == "runs as feature-parallel"
+
+
+def test_a_later_fix_round_starts_from_what_the_round_before_it_kept(git_repo, store: Store, kicks):
+    found = ({"where": "src/chart.py:3", "what": "the animation has no safety timeout",
+              "evidence_class": "deterministic", "cause": "introduced", "proof": "grep -n setTimeout src/chart.py"},)
+    fixed = WorkerResult(True, None, "documented it as known debt", "wrote it down",
+                         verdicts=({"id": "F1", "verdict": "fixed", "proof": "the note is in CLAUDE.md"},))
+    results = [ok("built"), WorkerResult(True, None, "one problem", "read it", findings=found),
+               ok("wrote it down"), fixed, ok("wrote it down again"), fixed]
+    rounds: list[str] = []
+
+    def launch(spec):
+        if "Ledger (fix" in spec.prompt:
+            notes = spec.target_dir / "CLAUDE.md"
+            rounds.append(notes.read_text() if notes.exists() else "")
+            notes.write_text((notes.read_text() if notes.exists() else "") + f"round {len(rounds)}\n")
+        elif "Edit" not in spec.disallowed_tools:
+            (spec.target_dir / "src").mkdir(exist_ok=True)
+            (spec.target_dir / "src" / "chart.py").write_text("x = 1\n")
+        return results.pop(0)
+
+    def runner(text, where, store, options, **kw):
+        return run(text, where, store, options, registry={}, launcher=launch, classifier=kind("implement"),
+                   adapters=[], **kw)
+
+    started = workflows.start(store, "feature", git_repo, {"goal": "the chart"})
+    flow.work(store, runner=runner)
+    # The second round builds on the first one's fix, never on the build alone.
+    assert rounds == ["", "round 1\n"]
+    fixes = [t for t in store.run_tasks(started["id"]) if t["workflow_step"] == "fix"]
+    first_tip = store.last_event(fixes[0]["id"], "finished")["data"]["tip"]
+    assert json.loads(fixes[1]["options"])["ledger"]["base"] == first_tip
+
+
+def test_a_step_whose_branch_was_deleted_brings_it_back_or_stops(git_repo, store: Store, kicks, monkeypatch):
+    from cauce import isolate
+
+    from .conftest import git
+
+    _save(TWO, git_repo)
+    started = workflows.start(store, "two", git_repo, {"goal": "the export"})
+    saw: list[bool] = []
+
+    def launch(spec):
+        saw.append((spec.target_dir / "built.txt").exists())
+        (spec.target_dir / ("built.txt" if not saw[:-1] else "polished.txt")).write_text("x\n")
+        return ok("did it")
+
+    def runner(text, where, store, options, **kw):
+        return run(text, where, store, options, registry={}, launcher=launch, classifier=kind("implement"),
+                   adapters=[], **kw)
+
+    # Something deletes the build's branch before `advance` queues the next step.
+    real = workflows.advance
+
+    def advance(store, task, env=None, kick=None):
+        if task and task.get("workflow_step") == "build" and task["status"] == "done":
+            git(git_repo, "branch", "-D", f"cauce/task-{task['id']}")
+        return real(store, task, env, kick)
+
+    monkeypatch.setattr(workflows, "advance", advance)
+    flow.work(store, runner=runner)
+    build, polish = store.run_tasks(started["id"])
+    # The polish step started on the build's work: the branch was put back at the tip it kept.
+    assert saw == [False, True] and polish["status"] == "done"
+    assert store.last_event(build["id"], "branch_restored")["data"]["branch"] == f"cauce/task-{build['id']}"
+
+    # A branch that cannot be put back stops the run with the reason, never a start on the base.
+    started = workflows.start(store, "two", git_repo, {"goal": "the import"})
+    monkeypatch.setattr(isolate, "restore", lambda *a: False)
+    saw.clear()
+    flow.work(store, runner=runner)
+    build = store.run_tasks(started["id"])[0]
+    assert len(store.run_tasks(started["id"])) == 1
+    assert "is gone" in store.last_event(build["id"], "workflow_error")["data"]["error"]

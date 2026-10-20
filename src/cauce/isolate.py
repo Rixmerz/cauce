@@ -65,6 +65,9 @@ class Workspace:
     base: str
     #: Paths, relative to the checkout, linked (or, a file, copied) into the worktree.
     links: tuple[str, ...] = ()
+    #: Dependency folders left out: the lockfile beside them here differs from the checkout's,
+    #: so what is installed there is not what this commit needs.
+    stale: tuple[str, ...] = ()
 
 
 def _git(cwd: Path, *args: str, check: bool = True, strip: bool = True) -> str:
@@ -101,11 +104,15 @@ def _attached(top: Path, path: Path, branch: str) -> bool:
 
 def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None) -> Workspace:
     """The task's worktree, on its own branch: from HEAD, or from `base` (a
-    commit a workflow step builds on) when it names one that exists."""
+    commit a workflow step builds on). A `base` that cannot be read is refused,
+    never replaced by HEAD: work built on the wrong commit looks like work."""
     top = Path(_git(repo_dir, "rev-parse", "--show-toplevel"))
     head = _git(top, "rev-parse", "HEAD")
     if base:
-        head = _git(top, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}", check=False) or head
+        head = _git(top, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}", check=False)
+        if not head:
+            raise IsolationError(f"the commit this task builds on ({base[:12]}) is not in {top}: "
+                                 "the branch that held it is gone")
     branch = branch_for(task_id)
     path = root / "worktrees" / f"task-{task_id}"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,7 +129,9 @@ def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None
     else:
         _git(top, "worktree", "add", "-b", branch, str(path), head)
         base = head
-    ws = Workspace(top, path, branch, base, _shared(top, path))
+    shared = _shared(top, path)
+    stale = tuple(rel for rel in shared if _stale(top, path, rel))
+    ws = Workspace(top, path, branch, base, tuple(rel for rel in shared if rel not in stale), stale)
     link(ws)
     return ws
 
@@ -157,6 +166,28 @@ def _fork_point(top: Path, head: str, branch: str, path: Path) -> str:
             return found.stdout.strip()
     raise IsolationError(f"the kept branch {branch} cannot be read after a git failure ({cause}); its work "
                          f"stays on it and in {path}: `git -C {top} fsck` names what is damaged")
+
+
+#: The files that say what a dependency folder holds, by the folder's name.
+LOCKFILES = {
+    "node_modules": ("package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock",
+                     "bun.lockb"),
+    ".venv": ("uv.lock", "poetry.lock", "Pipfile.lock", "requirements.txt"),
+    "venv": ("uv.lock", "poetry.lock", "Pipfile.lock", "requirements.txt"),
+}
+
+
+def _stale(top: Path, path: Path, rel: str) -> bool:
+    """Whether a dependency folder of the checkout would be wrong in the worktree: a
+    lockfile beside it differs between the two (the branch moved its dependencies)."""
+    folder = Path(rel)
+    for name in LOCKFILES.get(folder.name, ()):
+        mine, theirs = path / folder.parent / name, top / folder.parent / name
+        if mine.is_file() != theirs.is_file():
+            return True
+        if mine.is_file() and mine.read_bytes() != theirs.read_bytes():
+            return True
+    return False
 
 
 def _shared(top: Path, path: Path) -> tuple[str, ...]:
@@ -679,6 +710,17 @@ def kept_branches(repo_dir: Path) -> dict[int, str]:
         if number.isdigit() and tip:
             found[int(number)] = tip
     return found
+
+
+def restore(repo_dir: Path, branch: str, tip: str) -> bool:
+    """Point `branch` at `tip` again when the branch is gone and the commit is still in
+    the repository: a kept branch something deleted while work still built on it."""
+    if _git(repo_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False):
+        return False
+    if not _git(repo_dir, "rev-parse", "--verify", "--quiet", f"{tip}^{{commit}}", check=False):
+        return False
+    return subprocess.run(["git", "branch", branch, tip], cwd=str(repo_dir), capture_output=True,
+                          check=False).returncode == 0
 
 
 def tree_of(repo_dir: Path, ref: str) -> str:

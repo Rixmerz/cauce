@@ -307,7 +307,10 @@ class Report:
                 wrote = ", ".join(self.check_output[:8]) + (f" and {more} more" if more > 0 else "")
                 lines.append(f"written by the check itself ({len(self.check_output)}, committed as its output; "
                              f"a check that rewrites tracked files may give other files in your checkout): {wrote}")
-        if self.branch and self.status == "done":
+        if self.branch and self.status == "cancelled":
+            lines.append(f"branch {self.branch} keeps what it did before the cancel, unverified: "
+                         f"`git diff HEAD...{self.branch}` shows it; `git branch -D {self.branch}` drops it")
+        elif self.branch and self.status == "done":
             lines.append(f"branch {self.branch} — review it, then merge it; your checkout has none of it until then")
         elif self.branch:
             lines.append(f"branch {self.branch} keeps this task's unverified work: review it with "
@@ -900,6 +903,15 @@ def run(
             if workspace.links:
                 context.append("Linked from the person's checkout and shared with it: "
                                + ", ".join(workspace.links) + ". Use them; do not delete or reinstall them.")
+            if workspace.stale:
+                # Linking them would hand the worker another commit's dependencies.
+                context.append("Not linked from the person's checkout: " + ", ".join(workspace.stale)
+                               + ". The lockfile here differs from the one they were installed from there, so "
+                               "install the dependencies in this directory first (`npm ci`, `uv sync`, as the "
+                               "project does).")
+                say(f"dependencies not linked, their lockfile differs from your checkout's: "
+                    f"{', '.join(workspace.stale)}; the worker installs them (a refused install is allowed "
+                    f"with --allow, e.g. 'Bash(npm ci)')")
             if not resumed:
                 filled = _fill_worktree(store, task["id"], workspace, text, options.carry, say)
                 context += filled
@@ -1314,10 +1326,12 @@ def run(
         if workspace is not None:
             report.isolated = True
             report.changed = list(isolate.changed(workspace))
-            # Work that outgrew its turns is kept too: the task was not wrong, only big.
+            # Work that outgrew its turns is kept too: the task was not wrong, only big. A
+            # cancel stops the work, never throws it away: what it changed stays on its branch.
+            # Nor does a resume that ends short drop what an earlier run of it kept.
             outgrew = report.stop is not None and report.stop.cause == "turns"
             report.branch = isolate.finish(
-                workspace, keep=report.status in KEEPS_WORK or outgrew,
+                workspace, keep=report.status in KEEPS_WORK or outgrew or report.status == "cancelled" or resumed,
                 message=isolate.message(task["id"], title=commit_title(task), subject=subject,
                                         summary=attempts[-1].summary if attempts else "",
                                         status="done" if report.status == "done" else report.status,
@@ -1364,6 +1378,7 @@ def run(
         size = _realized(store, task["id"], report, workspace, time.monotonic() - clock)
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
+                        tip=_tip(workspace, report.branch),
                         changed=report.changed[:CHANGED_KEPT], changed_n=len(report.changed),
                         stop=report.stop.data() if report.stop else None,
                         risk=the_plan.risk.data(), points=the_plan.points.points, realized=size.points,
@@ -1420,6 +1435,17 @@ def verdict_card(store: Store, task_id: int, report: Report, options: Options, v
 
 _STEP_TAG = re.compile(r"^\[[\w.-]+#\d+ [\w.-]+\]\s*")
 _LEAD = re.compile(r"^[A-Z][^:\n]{0,40}:\s+")
+
+
+def _tip(workspace: isolate.Workspace | None, branch: str | None) -> str | None:
+    """The commit a kept branch ends on, kept with the ending: what builds on it can still
+    find the work if the branch is ever deleted."""
+    if workspace is None or not branch:
+        return None
+    try:
+        return isolate.head(workspace.repo_dir, f"refs/heads/{branch}")
+    except (isolate.IsolationError, OSError):
+        return None
 
 
 def commit_title(task: Mapping[str, Any]) -> str:

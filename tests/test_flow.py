@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from cauce import dispatch, flow
+from cauce import dispatch, flow, workflows
 from cauce.escalate import Failure
 from cauce.launch import WorkerResult
 from cauce.orchestrate import Options, run
@@ -545,9 +545,31 @@ def test_prune_deletes_a_finished_copy_of_work_another_branch_keeps(store, git_r
         git(git_repo, "checkout", "-q", "main")
     store.update_task(ids[2], status="blocked")  # the newest may resume: it stays
     pruned = flow.prune(store, [git_repo])
-    assert [(p["task"], p["why"]) for p in pruned] == [(ids[0], f"the same work as cauce/task-{ids[1]}"),
-                                                        (ids[1], f"the same work as cauce/task-{ids[2]}")]
-    assert list(isolate.kept_branches(git_repo)) == [ids[2]]
+    # A copy goes only for a twin that passed: the blocked one may resume, fail and drop its branch.
+    assert [(p["task"], p["why"]) for p in pruned] == [(ids[0], f"the same work as cauce/task-{ids[1]}")]
+    assert list(isolate.kept_branches(git_repo)) == [ids[1], ids[2]]
+
+
+def test_prune_leaves_the_branches_of_a_run_that_is_still_going(store, git_repo):
+    from cauce import flow, isolate
+
+    from .conftest import git
+    from .test_workflows import TWO, _save
+
+    _save(TWO, git_repo)
+    started = workflows.start(store, "two", git_repo, {"goal": "the export"})
+    build = store.run_tasks(started["id"])[0]
+    store.update_task(build["id"], status="done")
+    git(git_repo, "checkout", "-qb", isolate.branch_for(build["id"]))
+    (git_repo / "built.py").write_text("x\n")
+    git(git_repo, "add", "-A")
+    git(git_repo, "commit", "-qm", "built")
+    git(git_repo, "checkout", "-q", "main")
+    git(git_repo, "merge", "-q", "--ff-only", isolate.branch_for(build["id"]))
+    # Merged, so lossless to delete; but the run may still start a step from it or join it.
+    assert flow.prune(store, [git_repo]) == []
+    workflows.cancel(store, started["id"])
+    assert [p["task"] for p in flow.prune(store, [git_repo])] == [build["id"]]
 
 
 def test_a_task_asked_again_points_at_the_one_that_keeps_its_work(git_repo, store):

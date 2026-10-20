@@ -494,16 +494,23 @@ def test_a_cancel_requested_between_attempts_stops_the_run(git_repo, store):
     assert store.get_task(report.task_id)["status"] == "cancelled"
 
 
-def test_a_cancel_in_the_middle_of_an_attempt_cleans_up(git_repo, store):
+def test_a_cancel_in_the_middle_of_an_attempt_keeps_what_it_did(git_repo, store):
     from cauce.orchestrate import Cancelled
 
     def launcher(spec):
         (spec.target_dir / "half.py").write_text("x\n")
+        subprocess.run(["git", "add", "-A"], cwd=spec.target_dir, check=True)
+        subprocess.run(["git", "-c", "user.name=w", "-c", "user.email=w@x", "commit", "-qm", "half"],
+                       cwd=spec.target_dir, check=True)
         raise Cancelled
 
     report = run("x", git_repo, store, registry={}, launcher=launcher, classifier=kind("implement"))
-    assert report.status == "cancelled" and report.branch is None
-    assert "cauce/task-" not in git(git_repo, "branch", "--list")
+    # A cancel stops the work; it never throws away what the worker committed.
+    assert report.status == "cancelled" and report.branch == f"cauce/task-{report.task_id}"
+    assert "half.py" in git(git_repo, "show", "--name-only", "--format=", report.branch)
+    assert "keeps what it did before the cancel" in report.text()
+    finished = store.last_event(report.task_id, "finished")["data"]
+    assert finished["tip"] == git(git_repo, "rev-parse", report.branch).strip()
 
 
 def test_the_fix_that_worked_is_anchored_to_its_commit_and_costs_inform_the_next_plan(git_repo, store):
@@ -1800,3 +1807,16 @@ def test_the_symbols_livespec_reaches_weigh_on_the_points(git_repo, store, tmp_p
     unread = run("parse_amount rounds wrong", git_repo, store, Options(dry_run=True), registry={},
                  classifier=kind("implement"), adapters=[])
     assert unread.plan.points.points == 1
+
+
+def test_a_resume_that_ends_short_keeps_what_the_run_before_it_kept(git_repo, store):
+    first = run("migrate the totals", git_repo, store, registry={}, adapters=[],
+                launcher=Script(WorkerResult(False, Failure.PERMISSION, "refused", denied=("Bash(x)",)),
+                                write="m.py"),
+                classifier=kind("implement"))
+    assert first.status == "blocked" and first.branch
+    again = run("migrate the totals", git_repo, store, registry={}, adapters=[], task_id=first.task_id,
+                launcher=Script(bad(Failure.SPEC_BUG, "no such API")), classifier=kind("implement"))
+    # The resume found the task wrong; what the run before it kept is still on its branch.
+    assert again.status == "replan" and again.branch == first.branch
+    assert "m.py" in git(git_repo, "show", "--name-only", "--format=", first.branch)
