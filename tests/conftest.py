@@ -31,6 +31,7 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # A race is a second worker on a first try: a test that wants one turns it on.
     monkeypatch.setenv("CAUCE_RACE", "off")
     monkeypatch.setenv("CAUCE_ROUTE", "off")
+    monkeypatch.setenv("CAUCE_PRIMER", "off")
     monkeypatch.setenv("CAUCE_ENGRAM", "off")
     monkeypatch.setenv("CAUCE_ENGRAM_WRITE", "off")
     monkeypatch.delenv("CAUCE_SESSION_ID", raising=False)

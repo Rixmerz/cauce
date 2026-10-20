@@ -23,7 +23,7 @@ from pathlib import PurePosixPath
 from cauce import criteria as criteria_mod
 from cauce import points as points_mod
 from cauce import risk as risk_mod
-from cauce.classify import by_rules
+from cauce.classify import by_rules, opens_with_change
 from cauce.matrix import READ_ONLY_KINDS
 
 MAIN, WORKER, PARALLEL = "main", "worker", "parallel"
@@ -48,6 +48,21 @@ _DEICTIC = re.compile(r"\b(esto|eso|aquello|lo (?:de|que) (?:arriba|antes|hablam
 _READS = re.compile(r"^\W*(explain|why|what|how|where|when|which|who|review|audit|investigate|analy[sz]e|compare|"
                     r"summari[sz]e|describe|explica|por qu[eé]|qu[eé]|c[oó]mo|d[oó]nde|cu[aá]l|revisa|audita|"
                     r"investiga|analiza|compara|resume|describe)\b", re.I)
+
+#: A question about the work (whether, what if, is it worth it), asked mid-text as often as at its end:
+#: a question mark after one of these openings is a turn of the conversation, never work to send.
+_ASKS = re.compile(r"(?:^|[.!?¿]\s*)\W*(?:y |tambi[eé]n |pero |entonces )?(?:se )?(?:podr[ií]a\w*|"
+                   r"deber[ií]a\w*|conviene|vale la pena|realmente|ser[ií]a|tendr[ií]a\w*|habr[ií]a|"
+                   r"qu[eé] (?:pasa|tal|opinas|te parece)|y si|could|should|would|is it worth|what if|"
+                   r"does it make sense|do we need|can we)\b[^?]*\?", re.I)
+
+
+def asks(text: str) -> bool:
+    """Whether a request is a question about the work rather than the work: an opening
+    of doubt (could, should, what if, vale la pena…) ending in a question mark, at the
+    start or after a sentence. A request that opens with a verb of change is an order,
+    whatever it asks after it."""
+    return bool(_ASKS.search(text)) and not opens_with_change(text)
 
 
 @dataclass(frozen=True)
@@ -105,10 +120,13 @@ def choose(text: str, *, context_tokens: int | None = None, context_share: float
     words = len(text.split())
     if words < MIN_WORDS:
         return Route(MAIN, ("a turn of the conversation",))
+    if asks(text):
+        return Route(MAIN, ("a question about the work, for this conversation to answer",))
     ruled = by_rules(text)
     # With no rule and no model, a question or an opening of reading is reading; else a build.
     kind = ruled.kind if ruled is not None else (
-        "explore" if _READS.search(text) or text.rstrip().endswith("?") else "implement")
+        "explore" if (_READS.search(text) or text.rstrip().endswith("?")) and not opens_with_change(text)
+        else "implement")
     risk = risk_mod.of_request(text, kind)
     size = points_mod.of_request(text, kind, risk)
     areas = tuple(sorted({area for area, _ in risk_mod.areas(risk)}))

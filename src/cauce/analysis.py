@@ -25,6 +25,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from cauce import cells as cells_mod
 from cauce import usage
 from cauce.store import Store
 
@@ -414,6 +415,7 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "turns": {k: v for k, v in turn_rows.items() if k != "by_day"},
         "daily": daily(found, turn_rows["by_day"]),
         "compactions": compactions(store.session_events(None, COMPACTION_EVENTS, since=since, repo=repo)),
+        "primer": cells_mod.trial(store, repo),
     }
     if keep_runs is None:
         report["runs"] = found
@@ -487,6 +489,15 @@ def text(report: Mapping[str, Any]) -> str:
                 lines.append(f"  {row['move']:<12} {'continued' if row['continued'] else 'fresh':<9} attempts "
                              f"{row['attempts']:>4}  passed {row['passed']:>4}  turns p50 {row['turns_p50'] or '—'}"
                              f"  cost p50 {_usd(row['cost_p50_usd'])}")
+        primer = report.get("primer") or {}
+        if any(row["tasks"] for row in primer.values()):
+            lines += ["", "the cell's primer in the brief (its trial; first tries, calls before the first change):"]
+            for arm, row in primer.items():
+                rate = row["passed_first"] / row["tasks"] if row["tasks"] else None
+                lines.append(f"  {'with it' if arm == 'primer' else 'without it':<11} tasks {row['tasks']:>4}  first "
+                             f"{_rate(rate):>4}  calls before the first change p50 "
+                             f"{row['calls_before_edit_p50'] if row['calls_before_edit_p50'] is not None else '—'}"
+                             f"  input p50 {row['input_tokens_p50'] or '—'}")
         if report["stops"]:
             lines += ["", "stopped by: " + ", ".join(f"{k} {v}" for k, v in report["stops"].items())]
     t = report["turns"]["turns"]

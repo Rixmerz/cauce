@@ -498,3 +498,14 @@ def test_a_plan_with_no_parts_overlapping_ones_or_too_many_is_inconclusive(tmp_p
                 spec(tmp_path, parts=True))
     assert not out.passed and out.failure is Failure.INCONCLUSIVE and out.parts == ()
     assert said in out.summary and out.summary.startswith("claimed a pass, but its plan cannot run in parts")
+
+
+def test_what_the_worker_needed_to_get_oriented_is_read_from_its_block_and_kept_short(tmp_path):
+    lines = ["src/export.py holds the writer", " src/export.py  holds the writer", 3, "",
+             *(f"line {i}" for i in range(9)), "z" * 900]
+    out = parse(proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed", orientation=lines))),
+                spec(tmp_path))
+    assert out.orientation[0] == "src/export.py holds the writer" and len(out.orientation) == launch.MAX_ORIENTATION
+    assert launch.orientation({"orientation": ["w" * 900]}) == ("w" * launch.ORIENTATION_CHARS,)
+    assert launch.orientation({"orientation": "no"}) == () and launch.orientation({}) == ()
+    assert '"orientation"' in launch.RESULT_INSTRUCTIONS
