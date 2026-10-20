@@ -27,7 +27,29 @@
   died is `lost`, and filing what a worker learned is `notes`; "other" went
   from 18% to 1% of the measured time.
 
+- **Each request is told its way.** With no model, cauce reads a request for
+  the way it is best done and says it when that is not the session itself:
+  one worker, or parts side by side. Work done in a session re-reads its
+  whole context every turn, so the choice compares the session's context
+  times a worker's measured turns against what a worker attempt reads here
+  (measured: about 2.3M tokens over 26 turns; the session in which this was
+  built read about 600k each turn); reading, small work and what points back
+  into the conversation stay with the session. Every decision is kept to be
+  measured. The `route` setting (on) turns it off.
+- **Mechanical stops resume without waking the session.** A task that
+  outgrew its turns (with more), lost the network or ran under load through
+  cauce's waits is resumed once on its own, as a dead worker is, before any
+  session hears of it; review, permission and approval stops still reach the
+  orchestrator.
+
 ### Changed
+
+- **Attempts start with room to finish.** A first attempt gets 80 turns, and
+  a feature, UI or test task 120 (were 30 and 60). Measured here, 20 of 110
+  attempts ran out of turns and 15 of those passed on the next one, paying a
+  fresh orientation again (157 minutes and $58); passing features needed 104
+  turns at p90. A cap costs nothing when the work is done early, so a
+  calibration never moves a band's start turns under its kind's.
 
 - **The session reads the verdict instead of redoing the work.** A passing
   ending keeps what the work was held to (`verdict`): each criterion `S#` the

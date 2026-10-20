@@ -186,9 +186,11 @@ Request: $ARGUMENTS
      it for one more round with `--unattended`, or dismiss it with why when the
      blockers are wrong.
 
-   - `replan` because it outgrew its turns — the task is not wrong: continue it
-     with `cauce resume <id> --max-turns 120 --unattended` (its work stays), or
-     split what the report says is left.
+   - `replan` because it outgrew its turns — the task is not wrong. cauce
+     resumes it once on its own with more turns (as it does a worker that died,
+     a network that stayed down, or a machine under load), so you hear of it only
+     when that resume ends; if it stops again, continue it with
+     `cauce resume <id> --max-turns 120 --unattended`, or split what is left.
 
    A resume you start on your own, with nothing the person just granted,
    carries `--unattended`: it refuses what only they can clear (a refused
@@ -225,6 +227,14 @@ Request: $ARGUMENTS
    repeats the work you delegated, at the cost of this session's whole
    context. Open the diff only when the person asks, or when the verdict
    itself says something was not checked or not met.
+
+   **Each request has its way.** cauce reads every request for the way it is
+   best done, with no model, and tells you only when it is not you: a
+   `cauce route:` line says a worker (with what each way would read: the
+   turns times your context here, against a worker's measured reading) or
+   parts side by side. Reading, small work while your context is small, and
+   what points back into this conversation are yours. Follow the line unless
+   the work needs this conversation; it is advice, the call is yours.
 
    **Speed is distributing the load.** Workers that run at once are the
    fastest way through a request, so give cauce work it can run side by side:

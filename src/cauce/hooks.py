@@ -164,7 +164,33 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
             blocks.append("cauce notes: what this project's notes say about this (kept from earlier work; check "
                           "them against the code, and `cauce recall \"<question>\"` for more):\n"
                           + "\n".join(f"- {notes.line(n, text_chars=300)}" for n in known))
+    if routed := _route(store, task["id"], text, cwd, event.get("transcript_path")):
+        blocks.append(routed)
     return _context("UserPromptSubmit", "\n\n".join(blocks)) if blocks else None
+
+
+def _route(store: Store, task_id: int, text: str, cwd: str | None, transcript: str | None) -> str | None:
+    """Which way the request is best done (`cauce.route`): said only when it is not the
+    session itself, the default, and kept on the turn either way, to be measured. Only in
+    an enrolled project, with the `route` setting on; it never costs the turn."""
+    if not cwd or not config.enabled("route", os.environ) or project.find(cwd) is None:
+        return None
+    try:
+        from cauce import compaction, route
+
+        share, tokens = None, None
+        if transcript:
+            context = compaction.read_context(Path(transcript))
+            tokens = context.tokens
+            share = context.tokens / context.window if context.tokens else None
+        footprint = store.worker_footprint(repo.key(cwd))
+        chosen = route.choose(text, context_tokens=tokens, context_share=share, footprint=footprint)
+        store.add_event(task_id, "routed", **chosen.data(), context_tokens=tokens,
+                        worker_tokens=footprint[0] if footprint else None)
+        return chosen.advice() or None
+    except Exception:  # the turn goes on
+        note_error(home(), "route")
+        return None
 
 
 def _handed_back(store: Store, event: Mapping[str, Any], agent_id: str, text: str) -> None:

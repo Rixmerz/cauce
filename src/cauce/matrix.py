@@ -142,13 +142,16 @@ LADDERS: dict[str, tuple[Cell, ...]] = {
 #: to climb both ways it can fail.
 DEFAULT_KIND = "implement"
 
-#: The turns a first attempt starts with. A feature's attempts used 29.7 of 30
-#: on average and a quarter ran out, each costing a fresh worker's orientation;
-#: with 60 they passed. Every other kind uses far fewer than 30.
-DEFAULT_TURNS = 30
+#: The turns a first attempt starts with. A cap is room, not a brake: of 110
+#: attempts measured, 20 ran out of turns and 15 of those passed on the next
+#: attempt, each paying a fresh worker's orientation again. Passing attempts of
+#: every kind but a feature needed under 41 turns (p90 40), so 80 covers them
+#: with room; an attempt that is done stops on its own.
+DEFAULT_TURNS = 80
 #: A feature crosses several parts of the code; UI and test work run, look and run
-#: again: at 30 turns they ran out before a verdict more than any other kind.
-TURNS = {"feature": 60, "ui": 60, "test": 60}
+#: again. A feature's passing attempts needed 59 turns at the median, 104 at p90
+#: and 121 at most: 60 cut seven of them short.
+TURNS = {"feature": 120, "ui": 120, "test": 120}
 
 
 def turns_for(kind: str) -> int:

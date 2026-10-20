@@ -1277,6 +1277,26 @@ class Store:
                     + (f" AND {scope.removeprefix('WHERE ')}" if scope else ""), (new, old, *params))
         return len(ids)
 
+    def worker_footprint(self, repo: str | None, *, limit: int = 50) -> tuple[int, int] | None:
+        """What one worker attempt reads here, as measured: the median input tokens (what the
+        cache served included) and the median turns of the last `limit` attempts in the
+        repository, else anywhere. None with fewer than five measured."""
+        def median(values: list[int]) -> int:
+            values = sorted(values)
+            return values[len(values) // 2]
+
+        for scope, params in ((("AND t.repo = ?", [repo]) if repo else ("AND 0", [])), ("", [])):
+            # An attempt's input tokens hold what the cache served: they are what it read.
+            rows = self._conn.execute(
+                "SELECT json_extract(e.data, '$.input_tokens'), json_extract(e.data, '$.turns') "  # noqa: S608
+                "FROM events e JOIN tasks t ON t.id = e.task_id WHERE e.kind = 'attempt_finished' "
+                f"AND json_extract(e.data, '$.input_tokens') > 0 {scope} ORDER BY e.id DESC LIMIT ?",
+                [*params, limit]).fetchall()
+            measured = [(int(r[0] or 0), int(r[1] or 0)) for r in rows if r[1]]
+            if len(measured) >= 5:
+                return median([m[0] for m in measured]), median([m[1] for m in measured])
+        return None
+
     def quiet_senders(self, repos: Sequence[str], before: str, *, but: str) -> list[str]:
         """Sessions not seen since `before` (or never) that sent work in these projects
         that is still open or ended unheard: whose work an orchestrator takes."""

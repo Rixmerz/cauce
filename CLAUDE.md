@@ -36,7 +36,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -279,7 +279,10 @@ yields the default kind, not a guess.
   kind's turns and passed with more, it starts at the median those passes
   needed (capped at `escalate.MAX_TURNS_CEILING`), and the plan says so. An
   explicit `--max-turns` wins. A calibrated standard (below) takes the place of
-  these rules for its band, and may lower the start, never below the ladder.
+  these rules for its band, and may lower the start cell, never below the
+  ladder, and never the start turns below the kind's (`matrix.turns_for`): a
+  cap is room, an attempt that is done stops on its own, and a lower cap only
+  cuts the slow passes.
 - A task's points are its size on the Fibonacci scale (1, 2, 3, 5, 8, 13),
   estimated when it is planned by a pure function of what the plan knows
   (`points.estimate`: its criteria, kind, risk tier and the areas that raised
@@ -301,7 +304,7 @@ yields the default kind, not a guess.
   ladder's first rung and never a cell that needs an approval. The start turns
   move toward the 75th percentile of what the band's passes needed, one
   `standards.TURNS_STEP` per calibration, capped at
-  `escalate.MAX_TURNS_CEILING`. A band moves one field at a time, and not
+  `escalate.MAX_TURNS_CEILING` and never under the kind's own. A band moves one field at a time, and not
   again before that change is judged. Money moves no standard: a point's cost
   is measured and shown, never a rule's input. `--start` and `--max-turns`
   always win, and the plan says which standard it used and why (its `planned`
@@ -570,12 +573,24 @@ yields the default kind, not a guess.
   pure estimate (`workflows.fanned`), and says so; never a `feature` the person saved,
   and `--whole` keeps one build.
 - A worker that died is noticed at a turn's end, not at the next session: the hooks
-  sweep a running task whose process is gone and resume it once on their own
-  (`dispatch.recover`: `cauce resume --unattended` in the worktree it left, within
-  `AUTO_RESUME_WITHIN_S`, at most `AUTO_RESUMES`, with `autowork` on). Its death is no
-  ending handed to a session; a second one is the orchestrator's. The analysis reads
+  sweep a running task whose process is gone. A task that stopped for a mechanical
+  cause (`dispatch.MECHANICAL`: died, outgrew its turns, a network or a load that
+  outlasted cauce's waits) is resumed once on its own before any session hears of it
+  (`dispatch.recover`, from the hooks and `cauce endings`: `cauce resume --unattended`
+  in the worktree it left, with more turns for one that outgrew them, within
+  `AUTO_RESUME_WITHIN_S`, at most `AUTO_RESUMES`, with `autowork` on). Its stop is no
+  ending handed to a session; a second one is the orchestrator's. A stop that needs
+  judgment or a person (review, permission, approval, a wrong task) is never resumed so. The analysis reads
   the time from an attempt that never finished to its run's end as `lost_s`, never
   as other.
+- Each request is read for its way (`cauce.route`, the `route` setting), with no model:
+  the session itself (a turn, reading, what points back into the conversation), parts
+  side by side (`PARALLEL_POINTS`, `PARALLEL_AREAS` or `PARALLEL_PIECES`), else the
+  cheaper reading: the worker's measured turns times the session's context against a
+  worker attempt's measured input (`Store.worker_footprint`); with no measure, size and
+  a full context decide. The prompt hook says it only when it is not the session, keeps
+  every decision as a `routed` event to be measured, and never costs the turn. It is
+  advice: the session decides.
 - A passing ending keeps its verdict (`orchestrate.verdict_card`): each criterion the
   worker answered with its evidence, the check cauce ran (never the worker's word), the
   independent check's outcome or why it did not run, and the attempts. The ending notice

@@ -12,7 +12,7 @@ from cauce import launch, orchestrate, roles
 from cauce.classify import Classification
 from cauce.escalate import MAX_TURNS_CEILING, Failure
 from cauce.launch import WRITE_TOOLS, WorkerResult
-from cauce.matrix import LADDERS, Cell
+from cauce.matrix import LADDERS, Cell, turns_for
 from cauce.orchestrate import Options, choose_start, run
 
 from .conftest import git
@@ -112,7 +112,7 @@ def test_shallow_failures_climb_effort_and_keep_the_work(git_repo, store):
     assert report.moves[0].startswith("more_effort to sonnet/high: ")
     moved = store.last_event(report.task_id, "moved")["data"]
     assert moved["seq"] == 1 and moved["from_cell"] == "sonnet/medium" and moved["to_cell"] == "sonnet/high"
-    assert moved["axis"] == "effort" and moved["trigger"] == "code_bug" and moved["turns_to"] == 30
+    assert moved["axis"] == "effort" and moved["trigger"] == "code_bug" and moved["turns_to"] == turns_for("implement")
     assert moved["because"][-1].startswith("next: sonnet/high") and moved["spent_usd"] == pytest.approx(0.1)
     assert "budget_left" not in moved
     assert "    · next: sonnet/high (the floor for work that needs judgment)" in report.text()
@@ -650,7 +650,7 @@ def test_a_worker_that_ran_out_of_turns_is_checked_by_cauce_and_a_red_check_reac
     first = store.attempts(report.task_id)[0]
     assert first["failure"] == "turns_exhausted" and "2 tests failed" in first["evidence"]
     assert f"cauce ran `{check}`, which exited 1" in first["summary"]
-    assert specs[1].max_turns == 60 and report.status == "done"
+    assert specs[1].max_turns == 2 * turns_for("refactor") and report.status == "done"
     assert "The output that failed the last attempt, last lines:" in specs[1].prompt
     assert "2 tests failed" in specs[1].prompt
 
@@ -968,16 +968,16 @@ def test_a_worker_that_says_the_environment_stopped_it_after_changing_files_is_n
 def test_a_feature_starts_with_more_turns_and_a_pin_still_wins(git_repo, store):
     feature = Script(ok())
     report = run("add the export", git_repo, store, registry={}, launcher=feature, classifier=kind("feature"))
-    assert feature.specs[0].max_turns == 60
-    assert any("feature work starts with 60 turns" in r for r in report.plan.reasons)
+    assert feature.specs[0].max_turns == turns_for("feature") == 120
+    assert any("feature work starts with 120 turns" in r for r in report.plan.reasons)
     implement = Script(ok())
     run("fix the export", git_repo, store, registry={}, launcher=implement, classifier=kind("implement"))
-    assert implement.specs[0].max_turns == 30
+    assert implement.specs[0].max_turns == turns_for("implement") == 80
     pinned = Script(ok())
     report = run("add the import", git_repo, store, Options(max_turns=45), registry={}, launcher=pinned,
                  classifier=kind("feature"))
     assert pinned.specs[0].max_turns == 45
-    assert not any("starts with 60 turns" in r for r in report.plan.reasons)
+    assert not any("starts with 120 turns" in r for r in report.plan.reasons)
 
 
 def test_more_turns_continue_the_worker_s_own_session_in_its_worktree(git_repo, store):
@@ -989,7 +989,8 @@ def test_more_turns_continue_the_worker_s_own_session_in_its_worktree(git_repo, 
     assert report.status == "done" and report.moves[0].startswith("more_turns")
     first, second = script.specs
     assert first.persist_session and first.resume_session == ""
-    assert second.resume_session == "sess-1" and second.max_turns == 60 and second.cell == first.cell
+    assert second.resume_session == "sess-1" and second.max_turns == 2 * turns_for("implement")
+    assert second.cell == first.cell
     assert second.launch_dir == first.launch_dir and not second.fork_session
     assert second.resume_prompt == launch.CONTINUE_PROMPT
     moved = store.last_event(report.task_id, "moved")["data"]
@@ -1141,15 +1142,15 @@ def test_history_of_tasks_that_outgrew_their_turns_raises_where_turns_start(git_
     from cauce import repo as repos
 
     key = repos.key(git_repo)
-    _ran(store, key, "implement", (30, None))
-    _ran(store, key, "implement", (30, "turns_exhausted"), (60, None))
-    _ran(store, key, "implement", (30, "turns_exhausted"), (120, None))
-    _ran(store, key, "implement", (30, "turns_exhausted"), (60, None))
-    _ran(store, key, "refactor", (30, "turns_exhausted"), (60, None))  # another kind: not this one's
+    _ran(store, key, "implement", (80, None))
+    _ran(store, key, "implement", (80, "turns_exhausted"), (160, None))
+    _ran(store, key, "implement", (80, "turns_exhausted"), (200, None))
+    _ran(store, key, "implement", (80, "turns_exhausted"), (160, None))
+    _ran(store, key, "refactor", (80, "turns_exhausted"), (160, None))  # another kind: not this one's
     script = Script(ok())
     report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
-    assert script.specs[0].max_turns == 60
-    assert "starts with 60 turns: 3 of the last 4 implement tasks here needed more than 30" in report.plan.reasons
+    assert script.specs[0].max_turns == 160
+    assert "starts with 160 turns: 3 of the last 4 implement tasks here needed more than 80" in report.plan.reasons
     # an explicit --max-turns wins, and history never lowers the kind's own
     pinned = Script(ok())
     run("fix the import", git_repo, store, Options(max_turns=30), registry={}, launcher=pinned,
@@ -1157,18 +1158,18 @@ def test_history_of_tasks_that_outgrew_their_turns_raises_where_turns_start(git_
     assert pinned.specs[0].max_turns == 30
     feature = Script(ok())
     report = run("add the export", git_repo, store, registry={}, launcher=feature, classifier=kind("feature"))
-    assert feature.specs[0].max_turns == 60 and not any("needed more than" in r for r in report.plan.reasons)
+    assert feature.specs[0].max_turns == 120 and not any("needed more than" in r for r in report.plan.reasons)
 
 
 def test_one_task_that_needed_more_turns_is_no_history(git_repo, store):
     from cauce import repo as repos
 
     key = repos.key(git_repo)
-    _ran(store, key, "implement", (30, "turns_exhausted"), (60, None))
-    _ran(store, key, "implement", (30, None))
+    _ran(store, key, "implement", (80, "turns_exhausted"), (160, None))
+    _ran(store, key, "implement", (80, None))
     script = Script(ok())
     report = run("fix the export", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
-    assert script.specs[0].max_turns == 30 and not any("needed more than" in r for r in report.plan.reasons)
+    assert script.specs[0].max_turns == 80 and not any("needed more than" in r for r in report.plan.reasons)
 
 
 def test_a_dead_end_that_shares_only_a_word_or_two_stays_out_of_the_brief(git_repo, store):

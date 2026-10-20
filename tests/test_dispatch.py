@@ -432,3 +432,35 @@ def test_no_resume_without_autowork_for_an_old_death_or_one_that_cannot_start(st
     store._conn.execute("UPDATE events SET ts = 'garbled' WHERE task_id = ? AND kind = 'finished'", (task["id"],))
     assert dispatch.recover(store, tmp_path, os.environ, popen=pytest.fail) == []
     assert dispatch._alive(None) is False and dispatch._alive(os.getpid()) and not dispatch._alive(2 ** 22 + 7)
+
+
+def test_mechanical_stops_are_resumed_without_waking_the_session(store: Store, tmp_path, monkeypatch):
+    from cauce import stops
+
+    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    started: list[list[str]] = []
+    made = {}
+    for cause in ("turns", "network", "load", "review", "permission"):
+        task = store.create_task(cause, status=stops.Stop(cause, "r").status, source="cauce", cwd=str(tmp_path),
+                                 session_id="s")
+        stops.record(store, task["id"], stops.Stop(cause, "r"))
+        made[cause] = task["id"]
+    found = dispatch.recover(store, tmp_path, os.environ, popen=lambda argv, **kw: started.append(argv))
+    assert sorted(found) == sorted(made[c] for c in ("turns", "network", "load"))
+    turns = next(a for a in started if a[a.index("resume") + 1] == str(made["turns"]))
+    assert turns[-2:] == ["--max-turns", str(stops.RESUME_TURNS)]
+    # What needs judgment or a person still reaches the session; the rest does not.
+    assert {t["id"] for t in store.unreported("s")} == {made["review"], made["permission"]}
+    assert store.events_of(made["load"], "auto_resumed")[0]["data"]["cause"] == "load"
+
+
+def test_the_endings_command_resumes_a_mechanical_stop_before_it_could_wake(store: Store, tmp_path, monkeypatch,
+                                                                          capsys):
+    from cauce import stops
+
+    calls = []
+    monkeypatch.setattr(dispatch, "recover", lambda *a, **kw: calls.append(1) or [])
+    assert cli.main(["endings", "--session", "s", "--json"]) == 0 and calls == [1]
+    assert cli.main(["endings", "--session", "s", "--peek", "--json"]) == 0 and calls == [1]
+    capsys.readouterr()
+    assert stops.Stop("turns", "r").status == "replan"

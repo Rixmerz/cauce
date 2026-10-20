@@ -81,6 +81,12 @@
       "description": "Where a kind's start rarely passes its first try in this repository (under half, over at least four), its first try runs beside the next rung, each in its own worktree; the first to pass its check is kept and the other stopped. It costs a second worker and saves the climb's wait. Off: one try at a time.",
       "default": true
     },
+    "route": {
+      "type": "boolean",
+      "title": "Choose the way for each request",
+      "description": "Each request is read, with no model, for the way it is best done: by the session itself (small, reading, or about this conversation), by one worker that runs while the session goes on, or in parts side by side (large, or several areas). The session is told only when it is not itself, and decides. Off: the session chooses alone.",
+      "default": true
+    },
     "engram": {
       "type": "boolean",
       "title": "Read the team's engram memory",
