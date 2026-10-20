@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-10-20
+
 ### Added
 
 - **A hard start races the next rung.** Where a kind's start passes its first
