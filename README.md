@@ -620,8 +620,11 @@ unattended `cauce work` starts.
 A run whose process died leaves no task stuck in `running`: a sweep (at session
 start and before every `cauce work`) marks it interrupted and pauses its lane.
 `cauce cancel <id>` stops a run; `cauce events --follow` shows runs as they go.
-`cauce dismiss <id>` takes a task that waits off the board (a resume
-brings it back), and a task that passes takes its stopped copies with it.
+`cauce dismiss <id> --why '<why>'` takes a task that waits off the board,
+keeping the reason on its account (a resume brings it back), and a task that
+passes takes its stopped copies with it. `cauce run … --detach` queues a task
+and starts its lane instead of running it in the terminal; `cauce tasks --all`
+lists every project's tasks.
 
 A turn that delegated to a subagent is not done while the subagent still runs,
 including one started in the background. A cell a person pinned (`--start`)

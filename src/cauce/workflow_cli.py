@@ -18,6 +18,7 @@ from typing import Any
 
 from cauce import after, orchestrator, project, workflows
 from cauce.store import Store
+from cauce.text import clip
 
 NOW_HELP = ("write the change at once even while runs use the workflow (they go on with the copy they started "
             "with); without it the change waits for them")
@@ -64,7 +65,7 @@ def _print_definition(defn: dict[str, Any]) -> None:
         print(f"  a pending change waits: {defn['pending']} (`cauce workflow pending {defn['name']} --apply|--drop`)")
     if defn.get("description"):
         print(f"  {defn['description']}")
-    print(f"  inputs: {', '.join(defn['inputs']) or 'none'}")
+    print(f"  inputs: {workflows.describe_inputs(defn)}")
     for step in defn["steps"]:
         after = f" after {', '.join(step['needs'])}" if step["needs"] else " (first)"
         extra = ", ".join(f"{k} {step[k]}" for k in ("kind", "start", "verify", "max_turns", "fanout")
@@ -102,7 +103,7 @@ def _step_line(step: dict[str, Any]) -> str:
     if step.get("waits"):
         parts.append(step["waits"])
     if step.get("commit"):
-        parts.append(step["commit"][:72])
+        parts.append(_clip(step["commit"], 72))
     if step.get("files"):
         parts.append(_files(step["files"], step.get("files_n")))
     if step.get("behind"):
@@ -128,19 +129,57 @@ def _run_line(run: dict[str, Any]) -> str:
     last = next((s.get("commit") for s in reversed(steps) if s.get("commit")), None)
     rest = [f"step {at['id']} ({n}/{len(steps)}): {_step_line(at)}"]
     if last and last != at.get("commit"):
-        rest.append(f"last commit {last[:60]}")
+        rest.append(f"last commit {_clip(last, 60)}")
     return head + " · " + " · ".join(rest)
 
 
+def _compact_step(step: dict[str, Any]) -> str:
+    """One step on one line: its task, state, cell, attempts, cost so far, branch, and
+    why it stopped when it did."""
+    parts = [step["state"] + (f" #{step['task']}" if step.get("task") else "")]
+    if step.get("cell"):
+        parts.append(step["cell"])
+    if step.get("attempt"):
+        parts.append(f"attempt {step['attempt']}")
+    if step.get("tries", 1) > 1:
+        parts.append(f"try {step['tries']}")
+    if step.get("task"):
+        parts.append(f"${step.get('cost_usd') or 0:.2f}")
+    if step.get("branch") or step.get("kept_branch"):
+        parts.append(f"branch {step.get('branch') or step['kept_branch']}")
+    if step.get("waits"):
+        parts.append(_clip(step["waits"], 100))
+    if step.get("stopped"):
+        parts.append(f"stopped: {_clip(step['stopped'], 120)}")
+    if step.get("behind"):
+        parts.append(step["behind"])
+    return " · ".join(parts)
+
+
+def _detail(step: dict[str, Any]) -> str:
+    """What `--verbose` adds under a step: what it is doing, its commit, its files."""
+    parts = [step["phase"]] if step.get("phase") else []
+    if step.get("commit"):
+        parts.append(step["commit"])
+    if step.get("files"):
+        parts.append(_files(step["files"], step.get("files_n")))
+    return " · ".join(parts)
+
+
 def _print_run(run: dict[str, Any], *, full: bool = False) -> None:
+    """A run step by step, a line each; `full` (`--verbose`) adds its inputs whole and each step's detail."""
     print(f"run #{run['id']} {run['name']} — {run['state']} · ${run['cost_usd']:.2f}{_points(run)} · {run['cwd']}")
     for name, value in run["inputs"].items():
         # An input is often a whole brief: one line of it, unless asked for in full.
         print(f"  {name}: {value if full else _clip(value)}")
     for step in run["steps"]:
-        print(f"  {MARK.get(step['state'], '!')} {step['id']:<14} {_step_line(step)}")
+        print(f"  {MARK.get(step['state'], '!')} {step['id']:<14} {_compact_step(step)}")
+        if full and (more := _detail(step)):
+            print(f"  {'':<16} {more}")
         for part in step.get("parts") or ():
-            print(f"    {MARK.get(part['state'], '!')} {part['id']:<12} {_step_line(part)}")
+            print(f"    {MARK.get(part['state'], '!')} {part['id']:<12} {_compact_step(part)}")
+            if full and (more := _detail(part)):
+                print(f"    {'':<14} {more}")
     if run["waiting"]:
         print(f"  waits on the orchestrator: {', '.join(run['waiting'])} — `cauce show <task>`, then "
               f"`cauce resume <task>` or `cauce workflow retry {run['id']} <step>`")
@@ -162,7 +201,7 @@ def cmd_workflow(args: argparse.Namespace) -> int:
                 print(f"{w['name']:<18} {w['scope']:<8} {body}{hidden}")
                 if not w.get("error"):
                     # What a run asks for, so the first try is the one that starts it.
-                    needs = [f"inputs: {', '.join(w['inputs'])}" if w["inputs"] else "no input"]
+                    needs = [f"inputs: {_specs_line(w)}" if w["inputs"] else "no input"]
                     if w.get("memory"):
                         needs.append(f"memory: {', '.join(w['memory'])}")
                     print(f"{'':<27} {' · '.join(needs)}")
@@ -305,26 +344,60 @@ def _edit_in_editor(args: argparse.Namespace) -> int:
     return 0
 
 
+def _specs_line(entry: dict[str, Any]) -> str:
+    """A listed workflow's inputs, each said required or filled by `--verify`."""
+    specs = entry.get("input_specs") or [{"name": i, "required": True} for i in entry.get("inputs") or ()]
+    return ", ".join(f"{s['name']} ({'required' if s['required'] else 'required, or --verify'})" for s in specs)
+
+
 def _inputs(args: argparse.Namespace, where: Path) -> dict[str, str]:
-    """The run's inputs: `--input name=value`, and the text given without a name
-    for the one input left (`-` reads stdin)."""
+    """The run's inputs: `--input name=value`; an input only a step's check uses,
+    from `--verify` when not named; and the text given without a name for the one
+    input left, else for the one required input left (`-` reads stdin)."""
     inputs = dict(kv.split("=", 1) for kv in args.input or () if "=" in kv)
     bad = [kv for kv in args.input or () if "=" not in kv]
     if bad:
         raise workflows.WorkflowError(f"--input takes name=value, not {bad[0]!r}")
+    if args.text is None and not getattr(args, "verify", None):
+        return inputs
+    defn = workflows.load(args.name, where, args.scope)
+    inputs = workflows.fill_checks(defn, inputs, getattr(args, "verify", None))
     if args.text is not None:
-        defn = workflows.load(args.name, where, args.scope)
         left = [i for i in defn["inputs"] if i not in inputs]
         if len(left) != 1:
-            takes = f"takes {', '.join(defn['inputs'])}" if defn["inputs"] else "takes no input"
+            checks = set(workflows.check_inputs(defn))
+            left = [i for i in left if i not in checks]
+        if len(left) != 1:
+            takes = f"takes {workflows.describe_inputs(defn)}" if defn["inputs"] else "takes no input"
             raise workflows.WorkflowError(f"{args.name} {takes}: name each one, `{workflows.example(defn)}`")
         inputs[left[0]] = sys.stdin.read() if args.text == "-" else args.text
     return inputs
 
 
+class _RunHelp(argparse.Action):
+    """`cauce workflow run <name> --help`: the usage, then what that workflow takes."""
+
+    def __init__(self, option_strings: list[str], dest: str = argparse.SUPPRESS, **kwargs: Any) -> None:
+        super().__init__(option_strings, dest=dest, nargs=0, default=argparse.SUPPRESS, **kwargs)
+
+    def __call__(self, parser: argparse.ArgumentParser, namespace: argparse.Namespace, values: Any,
+                 option_string: str | None = None) -> None:
+        parser.print_help()
+        name = getattr(namespace, "name", None)
+        if name:
+            try:
+                defn = workflows.load(name, _cwd(namespace), getattr(namespace, "scope", None))
+            except (workflows.WorkflowError, OSError) as exc:
+                print(f"\n{name}: {exc}")
+            else:
+                print(f"\n{defn['name']} ({defn['scope']}) takes: {workflows.describe_inputs(defn)}")
+                print(f"  e.g. {workflows.example(defn)}")
+        parser.exit()
+
+
 def _clip(text: str, chars: int = 100) -> str:
-    one = " ".join(str(text).split())
-    return one if len(one) <= chars else one[:chars - 1] + "…"
+    """One line of `text`, cut at a sentence end or a word (`text.clip`)."""
+    return clip(text, chars, one_line=True)
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -526,12 +599,17 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--json", action="store_true")
     scoped(p)
     p = wsub.add_parser("run", help="start a run here: its first steps are queued and the rest follow by themselves",
-                        description="`cauce workflow list` shows what each workflow takes; --dry-run checks it all "
-                                    "first and queues nothing.")
+                        description="`cauce workflow list` (or `cauce workflow run <name> --help`) shows what each "
+                                    "workflow takes; --dry-run checks it all first and queues nothing.",
+                        add_help=False)
+    p.add_argument("-h", "--help", action=_RunHelp, help="this help, and the inputs of the workflow named before it")
     p.add_argument("name")
-    p.add_argument("text", nargs="?", help="the value of the one input not given with --input (- reads stdin)")
+    p.add_argument("text", nargs="?", help="the value of the one input not given with --input, else of the one "
+                                           "required input left (- reads stdin)")
     p.add_argument("--input", action="append", metavar="NAME=VALUE", help="one input by name (repeatable)")
-    p.add_argument("--verify", metavar="CMD", help="the check for every step that writes and names none of its own")
+    p.add_argument("--verify", "--check", dest="verify", metavar="CMD",
+                   help="the check (either spelling) for every step that writes and names none of its own; it also "
+                        "fills an input only a step's own check uses, when that input is not named")
     p.add_argument("--allow", action="append", metavar="RULE", help="a permission rule every step's workers get")
     p.add_argument("--allow-approval", action="store_true", help="steps may reach cells that need approval (Fable)")
     p.add_argument("--add-dir", action="append", default=[], metavar="DIR",
@@ -549,7 +627,8 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
                                        "by step")
     p.add_argument("run", type=int, nargs="?")
     p.add_argument("--all", action="store_true")
-    p.add_argument("--full", action="store_true", help="every run step by step, its inputs whole")
+    p.add_argument("--full", "--verbose", "-v", dest="full", action="store_true",
+                   help="its inputs whole and what each step is doing, its commit and files (every run, without RUN)")
     p.add_argument("--limit", type=int, default=10)
     p.add_argument("--repo")
     p.add_argument("--json", action="store_true")

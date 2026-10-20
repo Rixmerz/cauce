@@ -128,17 +128,20 @@ with `--force`.
 ## Run one
 
 Running spends money, so do it only when the person asked for this work.
-`cauce workflow list` shows what each workflow takes (its inputs, its memory);
-check a run first with `--dry-run`, which queues nothing and says what is
-missing, so the first real start is the one that runs:
+`cauce workflow list` (or `cauce workflow run <name> --help`, or `cauce
+workflow show <name>`) shows what each workflow takes: its inputs, each said
+required, and its memory. An input only a step's own check uses (`"verify":
+"{check}"`) is filled by the run's `--verify` when it is not named. Check a
+run first with `--dry-run`, which queues nothing and says what is missing, so
+the first real start is the one that runs:
 
 ```bash
 cauce workflow run <name> --input goal="..." --input check="..." --dry-run
-cauce workflow run <name> "<value of the one input not named>"
+cauce workflow run <name> "<value of the one required input not named>" [--verify "<check>"]
 cauce workflow run <name> --input goal="..." --input area="..." [--verify "<check>"] [--allow RULE] [--allow-approval] [--after <run>]
 ```
 
-`--verify` is the check of every step that writes and names none of its own;
+`--verify` (or `--check`, the same flag) is the check of every step that writes and names none of its own;
 a reading step never gets it, and a step with no kind gets it once it is
 classified into one that writes. A memory topic a step names that holds no
 note yet in this project is said when the run starts, with the command that
@@ -157,13 +160,16 @@ The run starts the repository's dispatcher. Then, without you:
 
 ```bash
 cauce workflow status [--all]           # one line per run: the step it is at, its attempt, last commit, files
-cauce workflow status <run> [--full]    # each step: state, task, attempt, phase, commit, files
+cauce workflow status <run> [--verbose] # a line a step: state, task, cell, attempt, cost, branch, why it stopped
 ```
 
-The inputs show on one line (`--full` shows them whole). One run shows each
-step's state, its task and attempt, what a running worker is doing, the commit
-a done step kept and the files it touched, the steps waiting on the person,
-and the branch that holds the work so far.
+The inputs show clipped to one line (`--verbose`, or `--full`, shows them
+whole). One run shows a line a step: its state and task, its cell and
+attempt, its cost so far, the branch it kept, why it stopped when it did and
+how far it is behind the base; then the steps waiting on the orchestrator and
+the branch that holds the work so far. `--verbose` adds, under each step, what
+a running worker is doing, the commit a done step kept and the files it
+touched.
 `cauce overview` lists the runs of every project. `cauce show <task>` shows
 one step in depth.
 

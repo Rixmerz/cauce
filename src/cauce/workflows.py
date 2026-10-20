@@ -41,6 +41,7 @@ from cauce import findings as findings_mod
 from cauce.escalate import MAX_TURNS_CEILING
 from cauce.matrix import KINDS, READ_ONLY_KINDS, Cell
 from cauce.store import Store, home
+from cauce.text import clip
 
 SCOPES = ("project", "user", "bundled")
 #: Where a new or copied workflow goes when the caller does not say.
@@ -114,7 +115,7 @@ def listing(cwd: str | Path | None) -> list[dict[str, Any]]:
             try:
                 defn = normalize(_read(path), name)
                 entry.update(description=defn.get("description", ""), steps=[s["id"] for s in defn["steps"]],
-                             inputs=defn.get("inputs", []),
+                             inputs=defn.get("inputs", []), input_specs=input_specs(defn),
                              memory=list(dict.fromkeys(m for s in defn["steps"] for m in s.get("memory") or [])))
             except WorkflowError as exc:
                 entry.update(error=str(exc))
@@ -684,8 +685,45 @@ def _kick(cwd: str, key: str | None) -> bool:
 
 
 def example(defn: Mapping[str, Any]) -> str:
-    """The command that starts a run of `defn`, every input named."""
-    return " ".join([f"cauce workflow run {defn['name']}", *(f"--input {i}='…'" for i in defn["inputs"])])
+    """The command that starts a run of `defn`, every input named: one that only a
+    step's check uses is given as the run's `--verify`."""
+    checks = check_inputs(defn)
+    return " ".join([f"cauce workflow run {defn['name']}",
+                     *(f"--input {i}='…'" for i in defn["inputs"] if i not in checks),
+                     *(["--verify '<check>'"] if checks else [])])
+
+
+def check_inputs(defn: Mapping[str, Any]) -> list[str]:
+    """The inputs only a step's own `verify` uses (no prompt names them): the run's
+    `--verify` fills them when they are not given by name (`fill_checks`)."""
+    steps = defn.get("steps") or ()
+    in_prompts = {used for step in steps for used in INPUT.findall(str(step.get("prompt") or ""))}
+    in_checks = {used for step in steps for used in CHECK_INPUT.findall(str(step.get("verify") or ""))}
+    return [i for i in defn.get("inputs") or () if i in in_checks and i not in in_prompts]
+
+
+def input_specs(defn: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Each input a run takes, and whether it must be named: an input only a step's
+    check uses is required unless the run's `--verify` gives it."""
+    checks = set(check_inputs(defn))
+    return [{"name": i, "required": i not in checks, **({"from_verify": True} if i in checks else {})}
+            for i in defn.get("inputs") or ()]
+
+
+def describe_inputs(defn: Mapping[str, Any]) -> str:
+    """The inputs on one line: `goal (required), check (or --verify)`."""
+    return ", ".join(f"{spec['name']} ({'required' if spec['required'] else 'required, or --verify'})"
+                     for spec in input_specs(defn)) or "none"
+
+
+def fill_checks(defn: Mapping[str, Any], inputs: Mapping[str, str], verify: str | None) -> dict[str, str]:
+    """The inputs with each check input not given by name filled from the run's `--verify`."""
+    out = dict(inputs)
+    if verify and verify.strip():
+        for name in check_inputs(defn):
+            if not str(out.get(name) or "").strip():
+                out[name] = verify
+    return out
 
 
 def prepare(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] | None = None, *,
@@ -699,7 +737,10 @@ def prepare(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] 
     problems = []
     missing = [i for i in defn["inputs"] if not given.get(i, "").strip()]
     if missing:
-        problems.append(f"{name} needs {', '.join(missing)}: `{example(defn)}`")
+        checks = [i for i in missing if i in check_inputs(defn)]
+        problems.append(f"{name} needs {', '.join(missing)}: `{example(defn)}`"
+                        + (f" ({', '.join(checks)} is the command a step checks with: `--verify` gives it)"
+                           if checks else ""))
     extra = sorted(set(given) - set(defn["inputs"]))
     if extra:
         problems.append(f"{name} takes no input {', '.join(extra)}; it takes {defn['inputs'] or 'none'}")
@@ -941,7 +982,7 @@ def _take_back(store: Store, run: Mapping[str, Any], plan: Mapping[str, Any], wh
 
     stops.record(store, plan["id"], stops.Stop("parts", why))
     if plan.get("dispatched"):
-        store.pause_lane(run["repo"], f"task #{plan['id']} ended replan: {why[:200]}")
+        store.pause_lane(run["repo"], f"task #{plan['id']} ended replan: {clip(why, 200, one_line=True)}")
 
 
 def _quoted(text: str) -> str:
@@ -1548,6 +1589,14 @@ def _task_entry(store: Store, run: Mapping[str, Any], task: Mapping[str, Any], d
         cost_usd=round(task.get("cost_usd") or 0, 2), points=task.get("points"), result=task.get("result"),
         branch=(finished or {}).get("data", {}).get("branch") if task["status"] == "done" else None,
         tries=tries, waits=dispatch.waiting(store, task))
+    if task["status"] not in ("queued", "running", "done"):
+        from cauce import stops
+
+        if (stop := stops.of(store, task)) is not None:
+            entry["stopped"] = stop.reason
+        # The work a step that stopped short kept, unverified, on its branch.
+        if kept := ((finished or {}).get("data") or {}).get("branch"):
+            entry["kept_branch"] = kept
     if behind := _behind(store, run, task, finished, live=detail):
         entry["behind"] = behind
     if detail:

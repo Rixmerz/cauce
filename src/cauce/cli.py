@@ -35,6 +35,7 @@ from cauce.classify import classify
 from cauce.escalate import Attempt, Failure
 from cauce.matrix import KINDS, LADDERS, Cell
 from cauce.store import FIX_OUTCOMES, Store, home
+from cauce.text import clip, title_of
 
 
 def _service(value: str) -> str:
@@ -149,7 +150,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         add_dirs=tuple(str(Path(d).expanduser().resolve()) for d in args.add_dir or ()),
         services=tuple(args.service or ()),
     )
-    if args.after is not None and not args.dry_run:
+    if (args.after is not None or getattr(args, "detach", False)) and not args.dry_run:
         return _queue_after(args, options)
     store = Store.open()
     previous = _cancel_on_sigterm()
@@ -167,33 +168,38 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def _queue_after(args: argparse.Namespace, options: orchestrate.Options) -> int:
-    """`cauce run … --after N`: the task is queued, held until #N passes (`cauce.after`),
-    for the dispatcher to run; its ending reaches the session that sent it, as every
-    queued task's does."""
+    """`cauce run … --after N` or `--detach`: the task is queued (held until #N passes,
+    `cauce.after`, with `--after`) and its lane's dispatcher started, as `cauce queue
+    add` does; its ending reaches the session that sent it, as every queued task's does."""
+    flag = "--after" if args.after is not None else "--detach"
     if args.launch_dir:
-        print("--after queues the task, and a queued task starts in its own directory: drop --launch-dir",
+        print(f"{flag} queues the task, and a queued task starts in its own directory: drop --launch-dir",
               file=sys.stderr)
         return 2
     where = Path(args.repo or os.getcwd()).resolve()
     store = Store.open()
     try:
-        try:
-            held = after.target_of(store, args.after)
-        except after.AfterError as exc:
-            print(f"cauce: not queued: {exc}", file=sys.stderr)
-            return 2
-        stored = {**options.stored(), after.KEY: held, **{k: v for k, v in {
+        held = None
+        if args.after is not None:
+            try:
+                held = after.target_of(store, args.after)
+            except after.AfterError as exc:
+                print(f"cauce: not queued: {exc}", file=sys.stderr)
+                return 2
+        stored = {**options.stored(), **({after.KEY: held} if held else {}), **{k: v for k, v in {
             "start": args.start, "max_turns": args.max_turns, "carry": args.carry or None,
             "max_attempts": args.max_attempts if args.max_attempts != orchestrate.Options().max_attempts else None,
         }.items() if v is not None}}
         task = _enqueue_after(store, _text(args.text), where, stored)
         then = dispatch.kick(where, repo.key(where), os.environ)
         said = _held_line(store, task["id"])
-        if note := after.caveat(store, held, task["repo"]):
+        if held and (note := after.caveat(store, held, task["repo"])):
             said += f" ({note})"
     finally:
         store.close()
     print(f"queued #{task['id']} — {task['title']}: {said}. {then}")
+    print(f"watch it: `cauce show {task['id']}`, or `cauce events --task {task['id']} --follow`; "
+          "its ending reaches the session that sent it")
     return 0
 
 
@@ -494,19 +500,36 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dismiss_words(words: list[str]) -> tuple[list[int], str]:
+    """`cauce dismiss 12 13 not needed any more`: the leading numbers (`#12` too)
+    are the tasks, the words after them the reason."""
+    ids: list[int] = []
+    for i, word in enumerate(words):
+        number = word.strip().lstrip("#").rstrip(",")
+        if not number.isdigit():
+            return ids, " ".join(words[i:]).strip()
+        ids.append(int(number))
+    return ids, ""
+
+
 def cmd_dismiss(args: argparse.Namespace) -> int:
     """A task that waits on a person, taken off the board on their word; typed in a
     session (its Bash), it is the orchestrating session's call and says so."""
     via = "session" if args.via == "cli" and os.environ.get("CAUCE_SESSION_ID") else args.via
+    ids, said = _dismiss_words(args.ids)
+    if not ids:
+        print("cauce dismiss: name the tasks first: " + stops.dismiss_command("N"), file=sys.stderr)
+        return 2
+    why = " ".join(part for part in (args.why or "", said) if part.strip())
     store = Store.open()
     try:
-        for task_id in args.ids:
+        for task_id in ids:
             task = store.get_task(task_id)
             if task is None:
                 print(f"no task #{task_id}", file=sys.stderr)
                 return 1
             waited = dispatch.waiting(store, task) if after.held(task) else None
-            if stops.dismiss(store, task, via=via) is None:
+            if stops.dismiss(store, task, via=via, why=why) is None:
                 print(f"task #{task_id} is {task['status']}; only a task that waits "
                       f"({', '.join(stops.DISMISSABLE)}) or on other work (`--after`) is dismissed",
                       file=sys.stderr)
@@ -584,18 +607,35 @@ def cmd_tasks(args: argparse.Namespace) -> int:
     try:
         # cauce's own work by default: a session's turns are no task to resume or count.
         sources = None if args.turns else ("cauce", "queue")
-        tasks = store.list_tasks(repo=_repo_key(args), status=args.status or None, limit=args.limit, source=sources)
+        here = _repo_key(args)
+        tasks = store.list_tasks(repo=here, status=args.status or None, limit=args.limit, source=sources)
         waits = {t["id"]: dispatch.waiting(store, t) for t in tasks}
+        # None here, but work elsewhere: say how much and where to see it.
+        elsewhere = [] if tasks or here is None else store.list_tasks(
+            status=args.status or None, limit=10_000, source=sources)
     finally:
         store.close()
     for t in tasks:
         cell = t["final_cell"] or t["start_cell"] or ""
         mark = {"hook": " (turn)", "delegation": " (subagent)"}.get(t["source"], "")
         size = str(t.get("points") or "-")
-        print(f"#{t['id']:<5} {t['status']:<14} {t['kind'] or '-':<16} {cell:<14} {size:>2} {t['title']}{mark}")
+        where = f"{_project_label(t.get('repo')):<18} " if here is None else ""
+        print(f"#{t['id']:<5} {where}{t['status']:<14} {t['kind'] or '-':<16} {cell:<14} {size:>2} "
+              f"{t['title']}{mark}")
         if waits[t["id"]]:
             print(f"       {waits[t['id']]}")
+    if elsewhere:
+        projects = len({t.get("repo") for t in elsewhere})
+        print(f"no tasks in this project ({here}); {len(elsewhere)} in {projects} other project(s): "
+              "`cauce tasks --all` lists them")
+    elif not tasks:
+        print("no tasks" + (f" in this project ({here})" if here else ""))
     return 0
+
+
+def _project_label(key: str | None) -> str:
+    """A project's key as a row names it: its folder's name."""
+    return Path(key).name if key else "-"
 
 
 def cmd_show(args: argparse.Namespace) -> int:
@@ -631,7 +671,7 @@ def cmd_show(args: argparse.Namespace) -> int:
             print(f"  attempt {a['seq']} {a['cell']}{model} ({a['turns']} turns, ${a['cost_usd']:.2f}) {verdict}"
                   + (f" → {a['move']}: {a['move_reason']}" if a["move"] else ""))
             if a["summary"]:
-                print(f"    {a['summary'][:300]}")
+                print(f"    {clip(a['summary'], 300)}")
             if refused.get(a["seq"]):
                 print(f"    refused: {', '.join(refused[a['seq']])}")
             for check in checks.get(a["seq"], ()):
@@ -667,7 +707,8 @@ def cmd_memory_search(args: argparse.Namespace) -> int:
     for p in found:
         print(f"problem #{p['id']} [{p['state']}] {p['title']}  ({p['repo']})")
         for f in p["fixes"]:
-            print(f"  {f['outcome']:<8} {f['description'][:200]}" + (f" — {f['why'][:120]}" if f["why"] else ""))
+            why = f" — {clip(f['why'], 120)}" if f["why"] else ""
+            print(f"  {f['outcome']:<8} {clip(f['description'], 200)}{why}")
     return 0
 
 
@@ -690,7 +731,7 @@ def cmd_memory_list(args: argparse.Namespace) -> int:
     for p in found:
         print(f"problem #{p['id']} [{p['state']}] {p['title']}  ({p['repo']})")
         for f in p["fixes"]:
-            print(f"  {f['outcome']:<8} {f['description'][:200]}")
+            print(f"  {f['outcome']:<8} {clip(f['description'], 200)}")
     return 0
 
 
@@ -836,7 +877,8 @@ def cmd_memory_forget(args: argparse.Namespace) -> int:
             if problem is None:
                 print(f"no problem #{problem_id}", file=sys.stderr)
                 return 1
-            print(f"forgot problem #{problem_id} and its {len(problem['fixes'])} fix(es): {problem['title'][:100]}")
+            said = title_of(problem["title"], 100)
+            print(f"forgot problem #{problem_id} and its {len(problem['fixes'])} fix(es): {said}")
     finally:
         store.close()
     return 0
@@ -1045,7 +1087,7 @@ def _check_lines(check: dict) -> list[str]:
              + (f", {len(blockers)} blocker(s)" if blockers else "")]
     for label, found in (("blocks", blockers), ("found", others)):
         # One line each: a proof is often a command's output, over several lines.
-        lines += [f"  {label}: {' '.join(findings_mod.text([f]).removeprefix('- ').split())}"[:300] for f in found]
+        lines += [clip(f"  {label}: {' '.join(findings_mod.text([f]).removeprefix('- ').split())}", 300) for f in found]
     return lines
 
 
@@ -1923,6 +1965,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_args(p)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--after", type=_after_ref, metavar="N", help=AFTER_HELP)
+    p.add_argument("--detach", action="store_true",
+                   help="queue it and start its lane's dispatcher instead of running it here; prints its "
+                        "number, and its ending reaches the session that sent it")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("resume", help="run a task that stopped again: from its kept work and the cell it stopped at")
@@ -1957,9 +2002,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("matrix", help="every kind and its ladder").set_defaults(func=cmd_matrix)
 
-    p = sub.add_parser("tasks", help="recent tasks of this repository")
+    p = sub.add_parser("tasks", help="recent tasks of this repository (--all: every project's)")
     p.add_argument("--repo")
-    p.add_argument("--all", action="store_true", help="every repository")
+    p.add_argument("--all", action="store_true", help="every project's tasks, each row naming its project")
     p.add_argument("--status", action="append")
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("--turns", action="store_true", help="the sessions' own turns and subagents too")
@@ -2077,8 +2122,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", type=int)
     p.set_defaults(func=cmd_cancel)
 
-    p = sub.add_parser("dismiss", help="take tasks that wait on you off the board (a resume brings one back)")
-    p.add_argument("ids", type=int, nargs="+")
+    p = sub.add_parser("dismiss", help="take tasks that wait on you off the board (a resume brings one back)",
+                       description="cauce dismiss N [N ...] --why TEXT: the reason is kept on the task's "
+                                   "account; words after the ids are read as the reason too.")
+    p.add_argument("ids", nargs="+", metavar="ID [WHY ...]",
+                   help="the tasks' numbers, then optionally the reason in words")
+    p.add_argument("--why", "--reason", dest="why", default="", help="why it is dismissed, kept on its account")
     p.add_argument("--via", choices=sorted(stops.DISMISS_VIA), default="cli", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_dismiss)
 

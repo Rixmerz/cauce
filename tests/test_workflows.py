@@ -669,7 +669,7 @@ def test_a_run_says_what_it_takes_before_the_first_try(git_repo, store: Store, k
     # The listing says what a run asks for.
     assert cli.main(["workflow", "list"]) == 0
     listed = capsys.readouterr().out
-    assert "inputs: goal, check · memory: topic:conventions" in listed
+    assert "inputs: goal (required), check (required) · memory: topic:conventions" in listed
     # Text without a name fills the one input left; with two left, the error names them all.
     assert cli.main(["workflow", "run", "change", "the export"]) == 1
     assert "--input goal='…' --input check='…'" in capsys.readouterr().err
@@ -722,7 +722,9 @@ def test_the_status_says_how_far_each_run_got_in_a_line(git_repo, store: Store, 
     # One run step by step: its input on one line unless asked for whole.
     assert cli.main(["workflow", "status", str(started["id"])]) == 0
     out = capsys.readouterr().out
-    assert "goal: Build the export" in out and brief.strip() not in out and "attempt 1 at" in out
+    assert "goal: Build the export" in out and brief.strip() not in out
+    # A step a line: its state and task, cell, attempts, cost and branch.
+    assert "done #1 · sonnet/medium · attempt 1 · $0.10 · branch cauce/task-1" in out
     assert cli.main(["workflow", "status", str(started["id"]), "--full"]) == 0
     assert brief.strip() in capsys.readouterr().out
 
@@ -1486,3 +1488,60 @@ def test_a_step_whose_branch_was_deleted_brings_it_back_or_stops(git_repo, store
     build = store.run_tasks(started["id"])[0]
     assert len(store.run_tasks(started["id"])) == 1
     assert "is gone" in store.last_event(build["id"], "workflow_error")["data"]["error"]
+
+
+CHECKED = {"name": "checked", "inputs": ["goal", "check"], "steps": [
+    {"id": "build", "prompt": "Build {goal}", "kind": "implement", "verify": "{check}"},
+    {"id": "review", "prompt": "Review, without changing any file, {goal}", "kind": "review-routine",
+     "needs": ["build"]}]}
+
+
+def test_an_input_only_a_check_uses_comes_from_verify_and_the_text_fills_the_one_required(
+        git_repo, store: Store, kicks, capsys, monkeypatch):
+    monkeypatch.chdir(git_repo)
+    _save(CHECKED, git_repo)
+    assert workflows.input_specs(workflows.load("checked", git_repo)) == [
+        {"name": "goal", "required": True}, {"name": "check", "required": False, "from_verify": True}]
+    assert cli.main(["workflow", "list"]) == 0
+    assert "inputs: goal (required), check (required, or --verify)" in capsys.readouterr().out
+    assert cli.main(["workflow", "show", "checked"]) == 0
+    assert "inputs: goal (required), check (required, or --verify)" in capsys.readouterr().out
+    # `run <name> --help` lists what that workflow takes.
+    with pytest.raises(SystemExit) as stop:
+        cli.main(["workflow", "run", "checked", "--help"])
+    assert stop.value.code == 0
+    helped = capsys.readouterr().out
+    assert "--check CMD" in helped and "checked (user) takes: goal (required)" in helped
+    # The text is the one required input; without a check it says how to give one.
+    assert cli.main(["workflow", "run", "checked", "the export", "--dry-run"]) == 1
+    assert "`--verify` gives it" in capsys.readouterr().err
+    # Either spelling of the run's check fills it.
+    for flag in ("--verify", "--check"):
+        assert cli.main(["workflow", "run", "checked", "the export", flag, "npm test", "--dry-run"]) == 0
+        dry = capsys.readouterr().out
+        assert "goal: the export" in dry and "check: npm test" in dry and "checked by `npm test`" in dry
+    assert cli.main(["workflow", "run", "checked", "the export", "--check", "npm test"]) == 0
+    (build,) = store.run_tasks(store.list_runs()[0]["id"])
+    assert json.loads(build["options"])["verify"] == "npm test"
+
+
+def test_the_status_of_one_run_is_a_line_a_step_with_why_a_step_stopped(
+        git_repo, store: Store, kicks, capsys, monkeypatch):
+    monkeypatch.chdir(git_repo)
+    _save(CHAIN, git_repo)
+    brief = "Build the export of every order. " + "It carries all of its details and every line item. " * 10
+    started = workflows.start(store, "chain", git_repo, {"goal": brief})
+    seen: list[dict] = []
+    flow.work(store, runner=_runner([ok("built it"), bad(Failure.SPEC_BUG, "the orders table has no export"),
+                                     bad(Failure.SPEC_BUG, "the orders table has no export")], seen))
+    assert cli.main(["workflow", "status", str(started["id"])]) == 0
+    out = capsys.readouterr().out
+    goal = next(line for line in out.splitlines() if line.startswith("  goal: "))
+    assert len(goal) <= len("  goal: ") + 100 and goal.endswith("…") and brief.strip() not in out
+    build = next(line for line in out.splitlines() if " build " in line)
+    assert "done #" in build and "attempt 1" in build and "$0.10" in build and "branch cauce/task-" in build
+    review = next(line for line in out.splitlines() if " check " in line)
+    assert "stopped: " in review
+    # The goal whole only when asked for.
+    assert cli.main(["workflow", "status", str(started["id"]), "--verbose"]) == 0
+    assert brief.strip() in capsys.readouterr().out

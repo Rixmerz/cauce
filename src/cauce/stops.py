@@ -281,20 +281,32 @@ def record(store: Any, task_id: int, stop: Stop, *, result: bool = True, **field
     store.add_event(task_id, "finished", status=stop.status, reason=stop.reason, stop=stop.data())
 
 
-def dismiss(store: Any, task: dict[str, Any], *, via: str) -> Stop | None:
+#: The command that dismisses a task, as every notice that offers it prints it.
+DISMISS_COMMAND = "cauce dismiss {id} --why '<why>'"
+
+
+def dismiss_command(task_id: Any) -> str:
+    """`cauce dismiss N --why '<why>'`: the syntax a notice tells a session to type."""
+    return DISMISS_COMMAND.format(id=task_id)
+
+
+def dismiss(store: Any, task: dict[str, Any], *, via: str, why: str = "") -> Stop | None:
     """Take a task that waits on a person off the board, on their word. Its result
-    and attempts stay; the account says what it had stopped on. None when the
-    task waits on no one. Work queued after other work (`after`) waits on it, and is
-    dismissed off the queue."""
+    and attempts stay; the account says what it had stopped on, and why it was
+    dismissed when that was given. None when the task waits on no one. Work queued
+    after other work (`after`) waits on it, and is dismissed off the queue."""
     if task["status"] not in DISMISSABLE and not after.held(task):
         return None
     before = of(store, task)
     by = "orchestrator" if via == "session" else "you"
     said = ("the orchestrating session dismissed it" if by == "orchestrator"
             else f"you dismissed it {DISMISS_VIA.get(via, via)}")
+    why = " ".join(str(why or "").split())
+    if why:
+        said = f"{said}: {why}"
     stop = Stop("dismissed", said, by=by,
                 attempt=before.attempt if before else None,
-                extra={"via": via, "was": task["status"],
+                extra={"via": via, "was": task["status"], **({"why": why} if why else {}),
                        **({"had": before.reason, "had_cause": before.cause} if before else {})})
     record(store, task["id"], stop, result=False)
     # The person did it: no session is told of it as an ending.
