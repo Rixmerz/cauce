@@ -591,7 +591,7 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
         lines += _found_before(store, t)
         if t["status"] == "done":
             branch = data.get("branch")
-            where = (f"; branch {branch}: show `git diff HEAD...{branch}` and merge only when they say so"
+            where = (f"; its work is on branch {branch}, merged only on the person's word"
                      if branch else "; its changes are in the checkout" if changed else "; it changed nothing")
             lines.append(f"  passed at {data.get('final_cell') or t['final_cell']}{where}")
             if t.get("result"):
@@ -599,6 +599,7 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
             if changed:
                 lines.append("  changed: " + ", ".join(changed[:8])
                              + (f" and {total - 8} more" if total > 8 else ""))
+            lines += verdict_lines(data.get("verdict"))
             continue
         stop = stops.view(store, t)
         if stop:
@@ -617,6 +618,33 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
                          "opens the lane; when the queued work does not depend on it, tell the person and "
                          f"run `cauce lanes --unpause {t.get('repo')}` to let them start now")
     return "\n".join(lines), [t["id"] for t in ended]
+
+
+def verdict_lines(verdict: Mapping | None) -> list[str]:
+    """The verdict a passing ending carries (`orchestrate.verdict_card`), for the session that
+    sent the work: what it was held to and how that was checked, so it reports the result
+    instead of re-reading the code or running the tests again. A verdict cauce did not keep
+    (an older ending) says nothing."""
+    if not isinstance(verdict, Mapping):
+        return []
+    lines = []
+    check = verdict.get("check")
+    lines.append(f"  check: `{check['command']}` passed, run by cauce in its worktree" if isinstance(check, Mapping)
+                 else "  check: none was given, so nothing ran it: say so to the person")
+    for c in verdict.get("criteria") or ():
+        mark = "met" if c.get("met") else "NOT met"
+        lines.append(f"  {c.get('id')} {mark}: {c.get('evidence') or 'no evidence given'}")
+    ind = verdict.get("independent") or {}
+    if ind.get("ran"):
+        lines.append("  independent check: " + ("passed" if ind.get("passed") else
+                                                 f"{ind.get('blocking')} blocker(s) left, recorded"))
+    elif ind.get("why"):
+        lines.append(f"  independent check: not run ({ind['why']})")
+    unverified = not isinstance(check, Mapping) or any(not c.get("met") for c in verdict.get("criteria") or ())
+    lines.append("  this verdict is cauce's own record: do not re-read the code or re-run the check to confirm it"
+                 + ("; open the diff only where it says something was not checked or not met" if unverified
+                    else "; open the diff only if the person asks"))
+    return lines
 
 
 #: The most problems that were already there an ending lists.

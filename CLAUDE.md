@@ -576,6 +576,13 @@ yields the default kind, not a guess.
   ending handed to a session; a second one is the orchestrator's. The analysis reads
   the time from an attempt that never finished to its run's end as `lost_s`, never
   as other.
+- A passing ending keeps its verdict (`orchestrate.verdict_card`): each criterion the
+  worker answered with its evidence, the check cauce ran (never the worker's word), the
+  independent check's outcome or why it did not run, and the attempts. The ending notice
+  gives it (`hooks.verdict_lines`) and tells the session not to re-read the code, re-run
+  the check or diff the branch to confirm it: the delegated work is never done twice.
+  The diff is opened only on the person's word, or where the verdict says something was
+  not checked or not met.
 - An ending names the problems the work found that were already there, shown with
   proof (`hooks._found_before`), and the `bugfix` that would take one on `--after` the
   work; nothing is started: the orchestrator decides.

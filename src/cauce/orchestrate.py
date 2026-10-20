@@ -247,6 +247,8 @@ class Report:
     stop: stops.Stop | None = None
     #: Earlier copies of this task, same text, taken off the board by its pass.
     superseded: list[int] = field(default_factory=list)
+    #: What the passing worker answered for each criterion `S#` of the request: id, met, evidence.
+    criteria: tuple[dict[str, Any], ...] = ()
     #: What the passing worker learned, and where each fact was filed in the notes.
     learned: tuple[str, ...] = ()
     noted: list[dict] = field(default_factory=list)
@@ -1208,6 +1210,7 @@ def run(
             if result.passed:
                 report.status, report.final_cell, report.summary = "done", cell.label, result.summary
                 report.learned, report.parts, report.contract = result.learned, result.parts, result.contract
+                report.criteria = result.criteria
                 for adapter, status in the_plan.active:
                     report.impact += adapter.assess(result.changed_paths, repo_dir, status)
                 if len(attempts) > 1:
@@ -1337,6 +1340,8 @@ def run(
                         at=round(time.time(), 3), **gaps,
                         **{k: round(v, 2) for k, v in timing.items()},
                         **({"ledger": settled.data()} if settled else {}),
+                        **({"verdict": verdict_card(store, task["id"], report, options, verifying)}
+                           if status == "done" else {}),
                         **({"parts": list(report.parts), "contract": report.contract}
                            if status == "done" and report.parts else {}))
         store.add_message(task["id"], "worker", report.text())
@@ -1348,6 +1353,36 @@ def run(
             store.add_event(task["id"], "workflow_error", error=str(exc)[:300])
             say(f"cauce: #{task['id']} could not start the work that waits on it: {exc}")
     return report
+
+
+#: The most of one criterion's evidence a verdict keeps.
+CRITERION_EVIDENCE = 240
+
+
+def verdict_card(store: Store, task_id: int, report: Report, options: Options, verifying: bool) -> dict[str, Any]:
+    """What the passing work was held to, kept with its ending so the session that sent it
+    reads the verdict instead of re-reading the code: each criterion `S#` the worker
+    answered with its evidence, the repository's check that cauce ran (never the worker's
+    word), the independent check's outcome or why it did not run, and how many attempts it
+    took. Read from cauce's records and git only."""
+    verified = store.last_event(task_id, "verified")
+    if verified is not None:
+        data = verified["data"] or {}
+        independent = {"ran": True, "passed": bool(data.get("passed")), "blocking": int(data.get("blocking") or 0)}
+    elif options.reviewed_next:
+        independent = {"ran": False, "why": "a blind review step of this workflow reads the change next"}
+    elif not verifying:
+        independent = {"ran": False, "why": "it changed nothing to check, or the verifier is off"}
+    else:
+        independent = {"ran": False, "why": f"its risk ({report.plan.risk.tier}) does not call for one"}
+    return {
+        "criteria": [{"id": str(c.get("id")), "met": bool(c.get("met")),
+                      "evidence": " ".join(str(c.get("evidence") or "").split())[:CRITERION_EVIDENCE]}
+                     for c in report.criteria if isinstance(c, Mapping)],
+        "check": {"command": options.verify, "passed": True} if options.verify else None,
+        "independent": independent,
+        "attempts": len(report.cells),
+    }
 
 
 _STEP_TAG = re.compile(r"^\[[\w.-]+#\d+ [\w.-]+\]\s*")

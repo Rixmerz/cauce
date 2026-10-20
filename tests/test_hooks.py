@@ -305,7 +305,8 @@ def test_work_a_session_sent_is_reported_to_it_once_when_it_ends(store: Store, g
     out = hooks.stop({"session_id": "s"}, store)
     assert out["decision"] == "block"
     notice = out["reason"]
-    assert "#1 [done] write the changelog" in notice and "git diff HEAD...cauce/task-1" in notice
+    assert "#1 [done] write the changelog" in notice and "its work is on branch cauce/task-1" in notice
+    assert "git diff" not in notice
     assert "the worker says: Wrote the 0.5.0 entry." in notice and "changed: CHANGELOG.md" in notice
     assert "passed at haiku; it changed nothing\n  the worker says: slug.js:1" in notice
     assert f"#{big['id']} [replan]" in notice and "stopped by cauce's rules" in notice
@@ -348,7 +349,7 @@ def test_a_resumed_task_is_told_with_its_last_ending_never_an_earlier_one(store:
     store.add_event(t["id"], "finished", status="done", final_cell="sonnet/xhigh", branch="cauce/task-1",
                     changed=changed[:50], changed_n=106)
     notice = hooks.endings(store, "s", claim="stop")[0]
-    assert "passed at sonnet/xhigh; branch cauce/task-1: show `git diff HEAD...cauce/task-1`" in notice
+    assert "passed at sonnet/xhigh; its work is on branch cauce/task-1, merged only on the person's word" in notice
     assert "changed nothing" not in notice and "and 98 more" in notice
     assert store.unreported("s") == []
 
@@ -454,3 +455,24 @@ def test_an_ending_names_what_was_already_broken_and_the_bugfix_that_would_take_
     plain = store.create_task("y", status="done", source="cauce", session_id="s")
     store.add_event(plain["id"], "finished", status="done")
     assert hooks._found_before(store, store.get_task(plain["id"])) == []
+
+
+def test_a_passing_ending_carries_its_verdict_so_the_session_never_redoes_the_work():
+    full = {"criteria": [{"id": "S1", "met": True, "evidence": "test_export passes"},
+                         {"id": "S2", "met": True, "evidence": ""}],
+            "check": {"command": "npm test", "passed": True}, "independent": {"ran": True, "passed": True},
+            "attempts": 1}
+    lines = hooks.verdict_lines(full)
+    assert lines[0] == "  check: `npm test` passed, run by cauce in its worktree"
+    assert "  S1 met: test_export passes" in lines and "  S2 met: no evidence given" in lines
+    assert "  independent check: passed" in lines
+    assert lines[-1].endswith("open the diff only if the person asks") and "do not re-read" in lines[-1]
+    gaps = {"criteria": [{"id": "S1", "met": False, "evidence": "not built"}], "check": None,
+            "independent": {"ran": False, "why": "a blind review step of this workflow reads the change next"}}
+    lines = hooks.verdict_lines(gaps)
+    assert lines[0].startswith("  check: none was given") and "  S1 NOT met: not built" in lines
+    assert "  independent check: not run (a blind review step of this workflow reads the change next)" in lines
+    assert lines[-1].endswith("not checked or not met")
+    blocked = hooks.verdict_lines({**full, "independent": {"ran": True, "passed": False, "blocking": 2}})
+    assert "  independent check: 2 blocker(s) left, recorded" in blocked
+    assert hooks.verdict_lines(None) == [] and hooks.verdict_lines({}) [-1].endswith("not checked or not met")

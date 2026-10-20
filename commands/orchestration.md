@@ -159,8 +159,9 @@ Request: $ARGUMENTS
    account; `changed (from git)` is what the files say. Never tell the user a
    file was created or changed unless that line names it, and remember that a
    branch is not their checkout: nothing is there until it is merged.
-   - `done` with a branch — show the user the summary and `git diff HEAD...<branch>`;
-     merge only when they say so.
+   - `done` with a branch — tell the user the summary and its verdict (the
+     check that passed, each criterion with its evidence); merge only when they
+     say so. Show the diff only if they ask for it.
    - `needs_approval` — the next cell needs a person (Fable). Ask; rerun with
      `--allow-approval` only on a yes.
    - `replan` — the task as written cannot be done, or does not fit. Rewrite or
@@ -213,6 +214,17 @@ Request: $ARGUMENTS
    run at once is cauce's: it adapts to the API, memory, disk and load by
    itself. Never set `max_parallel` to slow it down; that ceiling is the
    person's.
+
+   **Trust the verdict; never redo the work.** The workers are a team that
+   checks itself: the repository's check runs in their worktree, an
+   independent verifier reads risky changes, and a workflow's blind review
+   reads the diff. When work ends, its notice carries the verdict: each
+   criterion `S#` with its evidence, the check that passed, and the
+   independent check's outcome. Report that to the person. Do not re-read the
+   changed files, re-run the tests or diff the branch to confirm it: that
+   repeats the work you delegated, at the cost of this session's whole
+   context. Open the diff only when the person asks, or when the verdict
+   itself says something was not checked or not met.
 
    **Speed is distributing the load.** Workers that run at once are the
    fastest way through a request, so give cauce work it can run side by side:

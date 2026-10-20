@@ -29,6 +29,16 @@
 
 ### Changed
 
+- **The session reads the verdict instead of redoing the work.** A passing
+  ending keeps what the work was held to (`verdict`): each criterion `S#` the
+  worker answered with its evidence, the repository's check cauce ran in its
+  worktree, and the independent check's outcome or why it did not run. The
+  ending notice gives it whole and tells the orchestrator not to re-read the
+  code, re-run the check or diff the branch to confirm it; it no longer asks
+  it to show `git diff`. The diff is opened only when the person asks, or
+  where the verdict says something was not checked or not met. The
+  orchestration guide says the same: the workers are a team that checks
+  itself, and the session that delegated never repeats their work.
 - **No verifier twice.** A workflow step a blind review of its change follows
   (a feature's build, an integrate step and the parts it joins) runs no
   independent verifier of its own: the review reads the same request and diff.
