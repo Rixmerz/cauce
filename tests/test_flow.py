@@ -448,6 +448,11 @@ def test_the_sweep_marks_dead_runs_and_abandoned_prompts(store: Store):
     assert store.get_task(prompt["id"])["result"] is None  # a prompt keeps its own answer
     assert store.last_event(prompt["id"], "finished")["data"]["stop"]["cause"] == "turn"  # a turn, not work to resume
     assert flow.alive(None) is False and flow.alive(1) is True and flow.alive(999999) is False
+    # A subagent whose ending never reached cauce goes after a day, as nothing to resume.
+    gone = flow.sweep(store, now=datetime.now(UTC) + timedelta(hours=25), is_alive=lambda pid: pid == 1)
+    assert gone == [child["id"]] and store.get_task(child["id"])["status"] != "running"
+    stop = store.last_event(child["id"], "finished")["data"]["stop"]
+    assert stop["cause"] == "turn" and "subagent" in stop["reason"]
 
 
 def test_pinned_runs_never_teach_the_router(git_repo, store: Store):

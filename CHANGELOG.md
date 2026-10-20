@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.29.1] - 2026-10-20
+
+### Fixed
+
+- **A subagent whose ending never arrived no longer stays "running".** A
+  background subagent's notice can be lost (a compaction, a closed session),
+  and cauce never swept a delegation, so it was listed as unfinished at every
+  session start, for days. After a day with no sign of life it is now closed as
+  a `turn` stop, nothing to resume, and the session start lists neither it nor
+  an interrupted turn as unfinished work.
+
 ## [0.29.0] - 2026-10-20
 
 ### Added

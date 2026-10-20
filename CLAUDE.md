@@ -375,7 +375,9 @@ yields the default kind, not a guess.
   `environment` before any attempt.
 - A session's turn is recorded for coupling, never as work: `cauce tasks`
   and the board leave it out (`--turns` shows it), a turn that ended without
-  its answer is a `turn` stop with nothing to resume, and a notice cauce put
+  its answer is a `turn` stop with nothing to resume, and so is a subagent
+  whose ending never reached cauce after `flow.DELEGATION_TIMEOUT`; neither is
+  listed as unfinished work. A notice cauce put
   in a session (the endings, a plugin's message) is no turn.
 - A kept commit's subject is the change's: the line the worker proposed
   (`commit`), else the task's title, never a task number; the task and an
