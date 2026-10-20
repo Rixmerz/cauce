@@ -23,6 +23,10 @@
   with the worker's identity, whose `cauce resume` refused, and the task's one
   automatic try was spent. Inside a worker nothing is resumed, and a process
   cauce starts on its own never carries a worker's identity.
+- **A lane paused by a dead worker opens when that task passes.** The
+  dispatcher wrote its pause as `task #N: …` and the release looked for
+  `task #N …`, so a resume that passed left the lane paused and the next
+  workflow step queued behind it for good.
 - **A plan's over-long part says so.** A part whose prompt ran past 6000
   characters was reported as having no prompt; the plan's next attempt is now
   told its length and to leave the how to the part's worker.

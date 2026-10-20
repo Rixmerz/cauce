@@ -807,7 +807,7 @@ class Store:
         on anyone (dismissed, superseded, resumed). A pause on another task stays."""
         cur = self._conn.execute(
             "UPDATE lanes SET paused = 0, reason = NULL, updated_at = ? WHERE repo IS ? AND paused = 1 "
-            "AND reason LIKE ?", (now(), repo, f"task #{task_id} %"))
+            "AND (reason LIKE ? OR reason LIKE ?)", (now(), repo, f"task #{task_id} %", f"task #{task_id}:%"))
         self._conn.commit()
         return cur.rowcount > 0
 
