@@ -262,6 +262,9 @@ def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
     src = str(Path(__file__).resolve().parents[1])
     out["PYTHONPATH"] = src + (os.pathsep + out["PYTHONPATH"] if out.get("PYTHONPATH") else "")
     out.pop("CAUCE_SESSION_ID", None)
+    # Nor a worker's: a process started from inside one (its mod asks for endings) is cauce's.
+    out.pop("CAUCE_WORKER_TASK", None)
+    out.pop("CAUCE_WORKER_ATTEMPT", None)
     return out
 
 
@@ -385,6 +388,8 @@ def recover(store: Store, root: Path, env: Mapping[str, str], *, popen: Callable
     `autowork` off nothing starts. Never in a GET. The tasks resumed."""
     from cauce import stops
 
+    if env.get("CAUCE_WORKER_TASK"):
+        return []  # a worker never starts cauce work, nor resumes it (its mod asks for endings too)
     running = store.list_tasks(status=["running"], limit=500, source=("cauce",))
     if any(t["pid"] and not is_alive(t["pid"]) for t in running):
         from cauce import flow  # only when a worker is gone: it pulls in the orchestrator

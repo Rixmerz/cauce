@@ -15,6 +15,14 @@
   and the plan says so.
 - **"Render" is no page.** The words that put a request in the `ui` area read
   `render…` as rendering, so work on the Render host was kept as UI work.
+- **A worker killed under the dispatcher is resumed by it.** Its workflow
+  waited for some session's next turn to resume it; the dispatcher that sees
+  one of its own runs stop now runs the mechanical resume at once.
+- **A worker never spends another task's resume.** The mod also runs inside
+  a worker's session and asks for endings; that ran the mechanical resume
+  with the worker's identity, whose `cauce resume` refused, and the task's one
+  automatic try was spent. Inside a worker nothing is resumed, and a process
+  cauce starts on its own never carries a worker's identity.
 - **A plan's over-long part says so.** A part whose prompt ran past 6000
   characters was reported as having no prompt; the plan's next attempt is now
   told its length and to leave the how to the part's worker.
