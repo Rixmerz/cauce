@@ -193,9 +193,11 @@ for what you found wrong.
 """.strip()
 
 
-#: The most parts a plan splits into. A part's prompt and the contract have no length limit:
-#: they reach their workers on stdin, and a plan is never thrown away for being thorough.
-MAX_PARTS = 6
+#: The most parts a plan splits into: the machine's level, not this, bounds how many build
+#: at once, and a part that builds on another waits for it. A part's prompt and the contract
+#: have no length limit: they reach their workers on stdin, and a plan is never thrown away
+#: for being thorough.
+MAX_PARTS = 10
 #: A part's id: short, as a branch, a title and a status line show it.
 PART_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
@@ -204,15 +206,24 @@ PARTS_INSTRUCTIONS = """
 Your plan runs in parts, side by side, each built by a worker of its own and
 joined after. Beside the fields above, your result block carries:
 
-- `parts`: 2 to 6 parts (1 when splitting does not pay), in the order they are
+- `parts`: 2 to 10 parts (1 when splitting does not pay), in the order they are
   joined, each `{"id": "short-name", "prompt": "what this part builds",
   "surfaces": ["src/area/**", "tests/test_area.py"]}`. A part's surfaces are the
   only files its worker may change, and no other part's surfaces may reach them:
   never one file, folder or glob in two parts. Its prompt stands on its own (its
   worker reads it, not your reasoning) and lists, verbatim, the request's
   criteria that part answers.
+- A part that builds on another's work (the screens on the endpoints, the
+  endpoints on the schema) says so with `"after": "<that part's id>"`, naming one
+  part listed before it: it starts once that part passes, from what that part
+  built. Parts with no `after` build side by side. Order the work in phases
+  this way rather than leaving a part to guess what another will write.
 - `contract`: what every part must keep the same (the names, types, interfaces,
   schemas or endpoints they share), as text; each part is given it verbatim.
+
+Read only what the split needs: the layout, the entry points, and the schemas
+and interfaces the parts will share. Each part's worker reads its own code, so
+a plan that reads every file spends its turns on their work.
 """.strip()
 
 
@@ -698,7 +709,8 @@ def network_trouble(*texts: str, flaky: bool = False) -> str:
 def read_parts(block: Mapping[str, Any]) -> tuple[tuple[dict[str, Any], ...], str, str]:
     """A plan's parts and their contract, read strictly: (parts, contract, problem). A
     problem (no parts, more than `MAX_PARTS`, a part without its id, prompt or surfaces,
-    surfaces two parts share) leaves nothing read: a plan is never guessed at. Only what
+    surfaces two parts share, an `after` that names no earlier part) leaves nothing read: a
+    plan is never guessed at. Only what
     `PARTS_INSTRUCTIONS` tells the plan is checked; length never is."""
     raw = block.get("parts")
     if not isinstance(raw, list) or not raw:
@@ -726,7 +738,11 @@ def read_parts(block: Mapping[str, Any]) -> tuple[tuple[dict[str, Any], ...], st
             return (), "", f"part {pid!r}: {exc}"
         if len(raw) > 1 and not bound:
             return (), "", f"part {pid!r} declares no surfaces: the parts run side by side only within their own"
-        parts.append({"id": pid, "prompt": prompt.strip(), "surfaces": bound})
+        before = part.get("after")
+        if before is not None and (not isinstance(before, str) or before not in {p["id"] for p in parts}):
+            return (), "", (f"part {pid!r}: its after names {before!r}, which is no part listed before it "
+                            "(`after` is the id of one earlier part)")
+        parts.append({"id": pid, "prompt": prompt.strip(), "surfaces": bound, **({"after": before} if before else {})})
     contract = block.get("contract")
     if len(parts) > 1 and (not isinstance(contract, str) or not contract.strip()):
         return (), "", "it gave no contract: the names, types and interfaces its parts share"

@@ -169,6 +169,29 @@ def fanned(name: str, cwd: str | Path | None, inputs: Mapping[str, str] | None,
                                 "by side, and a plan of one part is the feature run whole; `--whole` keeps one build")
 
 
+#: A goal listing this many items, at the largest size, is several features: said before it runs.
+MANY_FEATURES = 6
+
+
+def many_features(goal: str) -> str | None:
+    """What a run is told of a goal that is several features at once: its items (`criteria`)
+    are `MANY_FEATURES` or more and its estimate is the largest size. Advice, never a refusal:
+    its plan can still order the parts in phases, but one plan for every feature reads every
+    repository before it splits anything."""
+    from cauce import criteria, points, risk
+
+    items = criteria.items(goal)
+    if len(items) < MANY_FEATURES:
+        return None
+    found = risk.of_request(goal, "feature")
+    if points.of_request(goal, "feature", found).points < max(points.SCALE):
+        return None
+    return (f"this goal lists {len(items)} items at the largest size: one plan for all of them reads every "
+            "repository it touches before it can split anything. Runs per feature, or per phase in dependency "
+            "order (each later one `--after run:<N>`), each plan smaller, cost less and show progress sooner; "
+            "this run goes on as asked")
+
+
 def load(name: str, cwd: str | Path | None, scope: str | None = None) -> dict[str, Any]:
     """A saved definition, checked, with where it came from (`scope`, `path`)."""
     where, path = locate(name, cwd, scope)
@@ -896,9 +919,38 @@ def _fan(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Ma
         why = ("its parts' surfaces overlap, so they cannot run side by side: " + "; ".join(overlaps))[:500]
         _take_back(store, run, plan, why)
         return []
-    return [_queue_step(store, run, defn, step, inputs, options, latest,
-                        part={**p, "n": n, "of": len(parts), "plan": plan["id"], "contract": contract})
-            for n, p in enumerate(parts, 1) if only is None or p["id"] in only]
+    before = {_part(t)["id"]: t for t in _tasks_of(latest.get(step["id"])) if _part(t)} if only is not None else {}
+    queued: dict[str, dict] = {}
+    for n, p in enumerate(parts, 1):
+        if only is not None and p["id"] not in only:
+            continue
+        queued[p["id"]] = _queue_step(store, run, defn, step, inputs, options, latest,
+                                      part={**p, "n": n, "of": len(parts), "plan": plan["id"], "contract": contract,
+                                            **_ordered(store, run, p, queued, before)})
+        if p["id"] in before:
+            # A part still held behind the try this retry replaced waits for the retry instead.
+            replaced = {"task": int(before[p["id"]]["id"])}
+            for waiting in before.values():
+                if after.held(waiting) and after.hold(waiting) == replaced:
+                    options = json.loads(waiting.get("options") or "{}")
+                    options[after.KEY] = {"task": int(queued[p["id"]]["id"])}
+                    store.update_task(waiting["id"], options=json.dumps(options))
+    return list(queued.values())
+
+
+def _ordered(store: Store, run: Mapping[str, Any], part: Mapping[str, Any], queued: Mapping[str, dict],
+             before: Mapping[str, dict]) -> dict[str, Any]:
+    """Where a part that builds on another (`after`) starts: held behind that part's task
+    queued with it, so it starts from what that part keeps (`cauce.after`), or, on a retry
+    whose earlier part passed already, from that part's kept tip. {} for a part with none."""
+    dep = part.get("after")
+    if not dep:
+        return {}
+    if dep in queued:
+        return {"hold": {"task": int(queued[dep]["id"])}}
+    done = before.get(dep)
+    tip = _kept_tip(store, done, run["cwd"]) if done is not None and done["status"] == "done" else None
+    return {"start": tip} if tip else {}
 
 
 def _areas(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Mapping[str, Any],
@@ -1005,8 +1057,11 @@ def _part_brief(part: Mapping[str, Any]) -> str:
     """What a part's worker is told of its part, and the contract every part keeps, quoted as context."""
     if int(part.get("of") or 1) > 1:
         lines = [f"Your part: {part['id']} ({part['n']} of {part['of']}), as the plan (task #{part['plan']}) split "
-                 "the work. Build this part only: the other parts are built beside you, each in surfaces of its "
-                 f"own, and joined after.\n{part['prompt']}"]
+                 "the work. Build this part only: the other parts are built beside you or after you, each in "
+                 f"surfaces of its own, and joined after.\n{part['prompt']}"]
+        if part.get("after"):
+            lines.append(f"It builds on part {part['after']}, which was built before it: that part's work is "
+                         "already in your checkout. Use it as it is; it is not yours to change.")
     else:
         lines = [f"The plan for it (task #{part['plan']}):\n{part['prompt']}"]
     if part.get("contract"):
@@ -1104,8 +1159,9 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         attached = memory_text(store, run["repo"], step["memory"])
         if attached:
             body += "\n\n" + attached
-    # An integrate step starts where its parts started, and joins their branches there.
-    base = (joining or {}).get("base") or _base(store, run, defn, step["id"], latest)
+    # An integrate step starts where its parts started, and joins their branches there; a
+    # part that builds on another starts from what that one kept.
+    base = (part or {}).get("start") or (joining or {}).get("base") or _base(store, run, defn, step["id"], latest)
     if area is not None:
         body += "\n\n" + _area_brief(area, options["origin"])
     if str(step.get("kind") or "").startswith("review") and not step.get("ledger") and options.get("origin") \
@@ -1139,8 +1195,9 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         "reviewed_next": True if reviewed_next(defn, step) else None,
         "ledger": held,
         "integrate": {k: joining[k] for k in ("branches", "contract")} if joins and joining else None,
-        # A run queued after other work: its steps wait for that work to pass, as it does.
-        after.KEY: options.get(after.KEY)}.items() if v is not None}
+        # A run queued after other work: its steps wait for that work to pass, as it does; a
+        # part that builds on another part waits for that one.
+        after.KEY: (part or {}).get("hold") or options.get(after.KEY)}.items() if v is not None}
     empty = (held is not None and not held["ids"]) or (joining is not None and not joins)
     task = store.create_task(body, status="done" if empty else "queued", source="queue", author="workflow",
                              repo=run["repo"], cwd=run["cwd"], session_id=run["session_id"],

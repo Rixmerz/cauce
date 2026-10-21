@@ -161,3 +161,38 @@ def test_a_workflow_part_that_died_is_resumed_and_the_join_holds_every_part(worl
     plans = [c["argv"] for c in world.calls() if c["rule"] == 0]
     assert len(plans) == 2 and plans[0][plans[0].index("--effort") + 1] == plans[1][plans[1].index("--effort") + 1]
     world.healthy()
+
+
+def test_a_part_that_builds_on_another_starts_from_its_work_after_it_passes(world):
+    parts = [{"id": "api", "prompt": "PART-API: write api.txt", "surfaces": ["api.txt"]},
+             {"id": "web", "prompt": "PART-WEB: write web.txt from api.txt", "surfaces": ["web.txt"], "after": "api"}]
+    world.script([
+        {"match": "Plan, without changing any file", "do": [
+            {"pass": True, "block": {"parts": parts, "contract": "web.txt repeats api.txt"}}]},
+        {"match": "PART-API", "do": [{"pass": True, "write": {"api.txt": "api\n"}}]},
+        {"match": "PART-WEB", "do": [{"pass": True, "write": {"web.txt": "web on api\n"}}]},
+        {"match": "Review, without changing any file", "do": [{"pass": True, "block": {"findings": []}}]},
+    ])
+    world.cauce("workflow", "run", "feature-parallel", "add the api file and the web file built on it")
+
+    def run_ended(store):
+        run = store.get_run(1)
+        return run if run and run["status"] != "active" else None
+
+    run = world.wait(run_ended, "the workflow run to end")
+    assert run["status"] == "done", run
+    calls = world.calls()
+    api = next(i for i, c in enumerate(calls) if c["rule"] == 1)
+    web = next(i for i, c in enumerate(calls) if c["rule"] == 2)
+    # The web part ran only after the api part passed, from the commit the api part kept.
+    assert api < web
+    store = Store(world.home / "cauce.db")
+    try:
+        part = {json.loads(t["options"])["part"]["id"]: t for t in store.run_tasks(1)
+                if (json.loads(t["options"] or "{}").get("part") or {}).get("id")}
+        released = store.last_event(part["web"]["id"], "released")
+        tip = store.final_event(part["api"]["id"])["data"]["tip"]
+    finally:
+        store.close()
+    assert released is not None and released["data"]["base"] == tip
+    world.healthy()

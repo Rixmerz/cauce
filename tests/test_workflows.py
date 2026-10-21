@@ -1196,6 +1196,49 @@ def test_an_integrate_step_joins_the_parts_with_no_worker_when_they_merge_cleanl
     assert workflows.status(store, started["id"])["state"] == "done" and review["status"] == "done"
 
 
+ORDERED = ({**PLAN_PARTS[0]}, {**PLAN_PARTS[1], "after": "api"})
+
+
+def test_a_part_that_builds_on_another_waits_for_it_and_starts_from_what_it_kept(git_repo, store: Store, kicks):
+    from cauce import after
+
+    _save(JOINED, git_repo)
+    started = workflows.start(store, "joined", git_repo, {"goal": "the orders view"})
+    seen: list[dict] = []
+    # The plan alone runs first; then only the api part can start: the web part is held behind it.
+    flow.work(store, runner=_parts_runner([planned(ORDERED)], seen), max_tasks=1)
+    _plan, api, web = store.run_tasks(started["id"])
+    assert after.hold(web) == {"task": api["id"]} and after.held(web) and not after.held(api)
+    assert "It builds on part api" in web["body"] and "It builds on part" not in api["body"]
+    flow.work(store, runner=_parts_runner([ok("api built"), ok("web built"), ok("no problems")], seen))
+    web = store.get_task(web["id"])
+    # Released onto what the api part kept: its worktree holds the api part's file.
+    assert web["status"] == "done" and store.last_event(web["id"], "released")["data"]["after"] == {"task": api["id"]}
+    assert "api/api.py" in seen[2]["files"] and "api/api.py" not in seen[1]["files"]
+    join = store.run_tasks(started["id"])[3]
+    assert join["status"] == "done" and not store.attempts(join["id"])
+    assert set(store.final_event(join["id"])["data"]["changed"]) == {"api/api.py", "web/web.py"}
+    assert workflows.status(store, started["id"])["state"] == "done"
+
+
+def test_a_retried_part_takes_the_parts_held_behind_it_along(git_repo, store: Store, kicks):
+    from cauce import after
+
+    _save(JOINED, git_repo)
+    started = workflows.start(store, "joined", git_repo, {"goal": "the orders view"})
+    seen: list[dict] = []
+    flow.work(store, runner=_parts_runner([planned(ORDERED), bad(Failure.SPEC_BUG, "no schema")], seen))
+    _plan, api, web = store.run_tasks(started["id"])[:3]
+    assert store.get_task(api["id"])["status"] == "replan" and after.held(store.get_task(web["id"]))
+    retried = workflows.retry(store, started["id"], "build")
+    # Only the api part goes again, and the web part now waits for that try.
+    assert [pid for pid, _ in retried["parts_retried"]] == ["api"]
+    assert after.hold(store.get_task(web["id"])) == {"task": retried["id"]}
+    flow.work(store, runner=_parts_runner([ok("api built"), ok("web built"), ok("no problems")], seen))
+    assert store.get_task(web["id"])["status"] == "done"
+    assert workflows.status(store, started["id"])["state"] == "done"
+
+
 def test_an_integrate_step_of_one_branch_passes_and_what_follows_starts_from_it(git_repo, store: Store, kicks):
     _save(JOINED, git_repo)
     started = workflows.start(store, "joined", git_repo, {"goal": "the orders view"})
@@ -1545,3 +1588,13 @@ def test_the_status_of_one_run_is_a_line_a_step_with_why_a_step_stopped(
     # The goal whole only when asked for.
     assert cli.main(["workflow", "status", str(started["id"]), "--verbose"]) == 0
     assert brief.strip() in capsys.readouterr().out
+
+
+def test_a_goal_that_is_several_features_is_told_before_it_runs():
+    many = "Build the course platform:\n" + "\n".join(
+        f"- feature {n}: its database tables, its API endpoints with permissions and its admin screens"
+        for n in range(7))
+    said = workflows.many_features(many)
+    assert said and "lists 7 items" in said and "--after run:<N>" in said
+    assert workflows.many_features("Build the orders view:\n- it lists orders\n- it pages by 50") is None
+    assert workflows.many_features("- a\n- b\n- c\n- d\n- e\n- f\n- g") is None  # many items, small: no advice

@@ -251,8 +251,15 @@ Request: $ARGUMENTS
      question to Haiku; one long task runs alone.
    - A large feature (`cauce workflow run feature`) runs as `feature-parallel`
      by itself when its goal is big or touches several areas: its plan splits
-     it into parts that build side by side. Pass `--whole` only when the
-     pieces truly cannot be separated.
+     it into parts that build side by side, and a part that builds on another
+     (screens on endpoints, endpoints on a schema) waits for it. Pass `--whole`
+     only when the pieces truly cannot be separated.
+   - A request that is several features at once (each with its own screens,
+     endpoints and data) is several runs, not one: send each feature, or each
+     phase in dependency order (data and API, then the screens on them, then
+     what builds on those), as its own `cauce workflow run feature`, each later
+     one `--after run:<N>` the one it builds on. One plan for all of them reads
+     every repository before it can split anything, and its turns run out there.
    - A start that rarely passes its first try here races the next rung on
      that try (the `race` setting): leave it on.
    - Do not wait on one task to queue the next unless it needs its work; when
