@@ -74,11 +74,60 @@ const STATES = { done: ["ok", "✓", "done"], running: ["run", "●", "running"]
   failed: ["bad", "✕", "failed"], interrupted: ["bad", "✕", "interrupted"], cancelled: ["mute", "–", "cancelled"],
   dismissed: ["mute", "–", "dismissed"] };
 export const tone = (status) => (STATES[status] || ["mute"])[0];
+export const stateWord = (status) => (STATES[status] || [null, null, status || ""])[2];
 // A tab of its own for one piece of work (`cauce ui --tabs`) names it and its state: the
 // state's mark and word, so a row of tabs reads at a glance without the colour.
 export function tabTitle(status, text, said = null) {
   const [, icon, word] = STATES[status] || ["mute", "•", status || ""];
   document.title = `${icon} ${said || word} · ${short(text, 60)} · cauce`;
+  stateIcon(status);
+}
+
+// The tab's favicon wears the state too: the tone's colour from the page's own tokens (so it
+// follows the theme), and a mark of its own per tone, so it does not lean on the colour alone.
+const TONE_VAR = { ok: "--ok", run: "--accent", queue: "--queue", warn: "--warn", bad: "--bad", mute: "--muted" };
+const MARKS = {
+  ok: '<path d="M9.5 16.5l4.5 4.5 8.5-9.5" fill="none" stroke="P" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>',
+  run: '<circle cx="16" cy="16" r="6" fill="P"/>',
+  queue: '<circle cx="16" cy="16" r="5.6" fill="none" stroke="P" stroke-width="3"/>',
+  warn: '<path d="M16 8.5v9" stroke="P" stroke-width="3.6" stroke-linecap="round"/><circle cx="16" cy="23" r="2.2" fill="P"/>',
+  bad: '<path d="M10.5 10.5l11 11m0-11l-11 11" stroke="P" stroke-width="3.4" stroke-linecap="round"/>',
+  mute: '<path d="M10 16h12" stroke="P" stroke-width="3.4" stroke-linecap="round"/>',
+};
+let iconState = null;
+const iconLink = () => document.querySelector('link[rel="icon"]');
+const BOARD_ICON = iconLink()?.getAttribute("href") || "/static/favicon.svg";
+const token = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+
+/** The data: URL of a state's favicon, its colours read from the tokens now (`img-src data:`). */
+export function stateIconUrl(status) {
+  const t = tone(status);
+  const fill = token(TONE_VAR[t] || "--muted", "#4f5b55");
+  const mark = MARKS[t] || MARKS.mute;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="1" y="1" width="30" height="30" rx="8" fill="${fill}"/>${
+    mark.replaceAll("P", token("--panel", "#f7f8f5"))}</svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+/** Tint the tab's favicon by a state; null gives the board its own back. */
+export function stateIcon(status) {
+  iconState = status;
+  const link = iconLink();
+  if (!link) return;
+  link.setAttribute("href", status ? stateIconUrl(status) : BOARD_ICON);
+  link.dataset.state = status || "";
+}
+// A theme switched while the tab is open: the same state, in the new theme's tones.
+globalThis.matchMedia?.("(prefers-color-scheme: dark)")?.addEventListener?.("change", () => {
+  if (iconState) stateIcon(iconState);
+});
+
+// Seconds as a person reads them.
+export function secs(v) {
+  if (v === null || v === undefined) return "—";
+  if (v < 120) return `${Math.round(v)}s`;
+  if (v < 7200) return `${(v / 60).toFixed(1)}m`;
+  return `${(v / 3600).toFixed(1)}h`;
 }
 export function statusBadge(status) {
   if (!status) return null;

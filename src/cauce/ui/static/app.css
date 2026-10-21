@@ -145,6 +145,28 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
 .timeline > li.pass::before { background: var(--ok); border-color: var(--ok); }
 .timeline > li.fail::before { background: var(--panel); border-color: var(--bad); }
 .move { color: var(--accent); font-size: 12.5px; }
+.section-head { justify-content: space-between; margin-bottom: 8px; }
+.section-head h2 { margin: 0; }
+/* Two attempts side by side, the same rows in the same order; stacked on a phone. */
+.compare-box { margin-bottom: 16px; }
+.compare-box label { font-size: 12.5px; color: var(--muted); }
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
+.compare-col { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-top: 4px solid var(--bad);
+               border-radius: var(--radius-sm); background: var(--panel); }
+.compare-col.pass { border-top-color: var(--ok); }
+.compare-col h3 { margin: 0 0 6px; font-size: 14px; }
+.compare-col dl { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; }
+.compare-col dt { color: var(--muted); font-size: 12.5px; }
+.compare-col dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.compare-col dd ul { margin: 0; padding-left: 16px; }
+.compare-col pre { max-height: 260px; overflow: auto; margin: 0; }
+@media (max-width: 640px) { .compare { grid-template-columns: 1fr; } }
+/* What a running worker is doing: its last tool calls, newest last. */
+.calls { margin: 8px 0 0; padding-left: 22px; font-size: 12.5px; }
+.calls li { margin: 2px 0; }
+.calls .meta { display: inline; }
+.calls li.failed-call code { color: var(--bad); }
+button.notify[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .climb { margin: 6px 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--bg);
          border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: 12.5px; }
 .climb ol { margin: 4px 0 0; padding-left: 18px; }
