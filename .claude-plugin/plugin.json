@@ -93,6 +93,12 @@
       "description": "A passing worker says what it had to find before its first change; the next worker of its role or area starts from those lines. Each repository alternates tasks with and without them until each side has 12, then keeps the primer only where it won (fewer calls before the first change, first tries no worse). Off: no primer.",
       "default": true
     },
+    "role_trials": {
+      "type": "boolean",
+      "title": "Improve each role's lessons by trial",
+      "description": "Once a role's workers met enough dead ends and verifier blockers in a repository, Haiku proposes a short list of lessons for that role there (the role's file is never touched). The role's tasks alternate with and without it until each side has 10 first tries; it is kept only where it passed first no worse and did better on one measure, and reverted if it later makes pass-first worse. `cauce roles revisions` shows them. Off: the role's own text alone.",
+      "default": true
+    },
     "engram": {
       "type": "boolean",
       "title": "Read the team's engram memory",

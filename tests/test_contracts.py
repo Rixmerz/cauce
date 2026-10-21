@@ -44,3 +44,21 @@ def test_every_reason_a_lane_is_paused_with_is_one_its_task_releases(store):
         assert re.match(rf"task #{n}[ :]", written), reason
         store.pause_lane(f"r{n}", written)
         assert store.release_lane(f"r{n}", n), reason
+
+
+def test_a_brief_s_revision_arm_is_what_the_trial_reads_back(store):
+    """`revisions.for_brief` writes the arm on the `briefed` event; `revisions.arms` counts it,
+    reading a task's first brief (a resume's is not the one its first try ran under)."""
+    from cauce import revisions
+
+    cand = store.add_role_revision(at="2026-10-01T00:00:00+00:00", repo="r", role="implementer",
+                                   record="proposed", hash="h", lessons=["Run the suite before a pass."],
+                                   version="0.32.0")
+    task = store.create_task("t", status="done", source="cauce", repo="r")
+    _, data = revisions.for_brief(store, "r", "implementer", task["id"])
+    store.add_event(task["id"], "briefed", role="implementer", **data)
+    store.add_event(task["id"], "briefed", role="implementer", revision_trial=cand, revision_arm="nonsense")
+    store.add_attempt(task["id"], cell="sonnet/medium", max_turns=80, passed=1)
+    found = revisions.arms(store, "r", cand)
+    assert found[data["revision_arm"]]["tasks"] == 1 and found[data["revision_arm"]]["briefed"] == 1
+    assert sum(arm["briefed"] for arm in found.values()) == 1
