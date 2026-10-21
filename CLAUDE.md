@@ -36,7 +36,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -47,6 +47,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
 | `src/cauce/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
+| `src/cauce/revisions.py` | a role's lessons per repository, improved by measured trial: proposed by Haiku from the role's dead ends and verifier blockers there, tried in alternating arms, adopted, dropped or reverted, every record appended to `role_revisions`; `cauce roles revisions` reads it |
 | `src/cauce/cells.py` | where a lesson belongs: the area a path or a change is in, the role that met it, or everyone (`scope`); the text a failure is kept and matched by (a workflow step's goal, never its template); the cell's primer (how its workers got oriented) and its trial; no model |
 | `src/cauce/doctor.py` | `cauce doctor`: states the store should never hold, each a bug that shipped turned into a query (broken: stuck now; suspect: over the last days); read only, no model; SessionStart names what is broken |
 | `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away |
@@ -659,6 +660,29 @@ yields the default kind, not a guess.
   `PRIMER_MARGIN` below (`primer_arm`); the `briefed` event keeps the arm and
   why, and `cauce stats` shows both arms. The `primer` setting turns it off;
   tests run with `CAUCE_PRIMER=off`.
+- A role's instructions improve by measured trial, never by edit
+  (`cauce.revisions`, the `role_trials` setting). Every brief records the role
+  and the version of its text (`roles.version`: a hash of its resolved
+  instructions and its skills' names). Once a role's workers in a repository
+  met `revisions.MIN_EVIDENCE` dead ends or verifier blockers since its last
+  revision, Haiku, as an editor, proposes a short list of lessons for that role
+  there, read strictly (`read_lessons`): no answer or a malformed one proposes
+  nothing, and a line that looks like a secret or is `<private>` is never kept.
+  It runs in `evolution.settle`, never in a GET, outside the write lock and
+  under a claim, with at most one candidate per role and repository on trial.
+  The lessons reach a worker in its brief, marked as this role's lessons here,
+  as data, never instructions; the role's file is never written, and the
+  verifier and the surveyor never get one. The role's tasks alternate between
+  the candidate and the current lessons (a resume keeps its first arm) until
+  each arm has `ROLE_TRIAL` first tries; the candidate is adopted only when its
+  pass-first is no worse than `ROLE_MARGIN` below the current arm's and it is
+  better on pass-first, attempts to pass or verifier blockers, else dropped.
+  Once `REVERT_AFTER` first tries ran under an adopted one outside its trial,
+  it is judged once and reverted, as its own record, when its pass-first is
+  more than `REVERT_MARGIN` worse than its trial's current arm. Every proposal
+  and verdict is appended to `role_revisions`, which refuses an update or a
+  delete. Tests run with `CAUCE_ROLE_TRIALS=off`; a test that wants them
+  passes a fake `ask`.
 - A passing ending keeps its verdict (`orchestrate.verdict_card`): each criterion the
   worker answered with its evidence, the check cauce ran (never the worker's word), the
   independent check's outcome or why it did not run, and the attempts. The ending notice

@@ -1,6 +1,19 @@
 # Changelog
 
 ## [Unreleased]
+- **Roles' lessons improve by measured trial.** Every brief records the role a
+  worker wore and the version of its text (`role`, `role_version` on
+  `briefed`). Once a role's workers in a repository met 3 dead ends or verifier
+  blockers, Haiku proposes a short list of lessons for that role there (the
+  role's file is never touched). The role's tasks alternate with and without it
+  until each arm has 10 first tries; it is adopted only when it passed first no
+  worse than 10 points below and did better on pass-first, attempts to pass or
+  verifier blockers, and it is reverted if, over its next 10 first tries, it
+  makes pass-first more than 20 points worse. Every proposal and verdict is
+  appended to `role_revisions`. `cauce roles revisions` and `cauce stats` show
+  them; the new `role_trials` setting (on by default) turns it off. `cauce
+  doctor` gains `candidates-on-trial-at-once`, `revision-judged-twice` and
+  `trial-never-sampled`.
 
 ### Fixed
 
