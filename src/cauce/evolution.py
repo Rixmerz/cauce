@@ -97,6 +97,11 @@ def settle(store: Store, *, now: datetime | None = None, tz: tzinfo | None = Non
 
     cells.backfill(store)
     found = standards.settle(store, now=now)
+    from cauce import revisions
+
+    if revisions.enabled():
+        # A role's lessons here: the verdicts due, and a revision proposed when its evidence is.
+        found = {**found, "roles": revisions.settle(store, now=now)}
     taken = None
     if found["ended"]:
         with store.immediate():

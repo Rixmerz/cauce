@@ -47,6 +47,7 @@ from cauce import (
     plugins,
     project,
     repo,
+    revisions,
     roles,
     runtime,
     standards,
@@ -986,8 +987,18 @@ def run(
             primed = {"primer_arm": arm, "primer_lines": len(lines), "primer_why": why}
             if arm == "primer":
                 context.append(cells.primer_text(lines))
+    # Which role and which version of its text this worker wears, and the role's lessons here:
+    # given or withheld by their trial, and kept either way so the arms can be compared.
+    worn: dict[str, Any] = {}
+    if the_plan.role is not None:
+        worn = {"role": role_name, "role_version": roles.version(the_plan.role)}
+        if revisions.enabled():
+            lessons, given = revisions.for_brief(store, key, role_name, task["id"])
+            worn.update(given)
+            if lessons:
+                context.append(lessons)
     store.add_event(task["id"], "briefed", session=got, dead_ends=len(dead), areas=list(reach),
-                    context_chars=sum(len(line) for line in context), **primed)
+                    context_chars=sum(len(line) for line in context), **primed, **worn)
     # The runtime the project declares goes first on the worker's PATH, and on its
     # check's: a worker given the wrong Node hunts for another and is refused each one.
     run_env = runtime.env_for(workdir)

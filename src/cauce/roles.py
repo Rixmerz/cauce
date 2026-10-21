@@ -48,6 +48,8 @@ from __future__ import annotations
 
 import contextlib
 import fnmatch
+import hashlib
+import json
 import os
 import re
 import subprocess
@@ -464,6 +466,20 @@ class Briefing:
     read_dirs: tuple[Path, ...] = ()
     skills: tuple[str, ...] = ()
     missing: tuple[str, ...] = ()
+
+
+#: How many hex digits of its hash name a version of a role's text.
+VERSION_CHARS = 12
+
+
+def version(role: Role) -> str:
+    """Which version of its text a role is: a short hash of its resolved instructions (name,
+    description, its own text after `extends`) and the names of the skills it carries and
+    offers. A skill's text and where it lives on this machine are left out: the same role
+    copied to another machine is the same version."""
+    payload = json.dumps([role.name, role.description, role.prompt, list(role.skills), list(role.on_demand)],
+                         ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:VERSION_CHARS]
 
 
 def brief(role: Role, env: Mapping[str, str] | None = None) -> Briefing:

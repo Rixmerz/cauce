@@ -26,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cauce import cells as cells_mod
-from cauce import launch, usage
+from cauce import launch, revisions, usage
 from cauce.store import Store
 
 #: The phases of a run, in the order they happen. The first four come before its own wall
@@ -424,6 +424,7 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "daily": daily(found, turn_rows["by_day"]),
         "compactions": compactions(store.session_events(None, COMPACTION_EVENTS, since=since, repo=repo)),
         "primer": cells_mod.trial(store, repo),
+        "role_revisions": revisions.overview(store, repo),
     }
     if keep_runs is None:
         report["runs"] = found
@@ -506,6 +507,9 @@ def text(report: Mapping[str, Any]) -> str:
                              f"{_rate(rate):>4}  calls before the first change p50 "
                              f"{row['calls_before_edit_p50'] if row['calls_before_edit_p50'] is not None else '—'}"
                              f"  input p50 {row['input_tokens_p50'] or '—'}")
+        if report.get("role_revisions"):
+            lines += ["", "the roles' lessons here (a revision on trial, its arms' first tries, and its history):"]
+            lines += ["  " + line for line in revisions.text(report["role_revisions"], lessons=False)]
         if report["stops"]:
             lines += ["", "stopped by: " + ", ".join(f"{k} {v}" for k, v in report["stops"].items())]
     t = report["turns"]["turns"]
