@@ -1,5 +1,5 @@
 import { get } from "./net.js";
-import { cellChip, h, kindChip, repoName, usd } from "./util.js";
+import { cellChip, h, kindChip, repoName, secs, usd } from "./util.js";
 
 // What cauce's runs cost in time and money, and what they got for it: the evidence
 // for changing the router, the briefs and the defaults. Read only; no model.
@@ -32,12 +32,6 @@ function kept(key, fallback, value) {
 
 const pct = (v) => (v === null || v === undefined ? "—" : `${Math.round(v * 100)}%`);
 const rate = (v) => h("td", { class: `num ${v === null || v === undefined ? "" : v >= 0.8 ? "rate-ok" : v < 0.5 ? "rate-bad" : "rate-warn"}` }, pct(v));
-export function secs(v) {
-  if (v === null || v === undefined) return "—";
-  if (v < 120) return `${Math.round(v)}s`;
-  if (v < 7200) return `${(v / 60).toFixed(1)}m`;
-  return `${(v / 3600).toFixed(1)}h`;
-}
 const money = (v) => (v === null || v === undefined ? "—" : usd(v));
 const num = (v) => h("td", { class: "num" }, v ?? "—");
 const head = (...cols) => h("tr", {}, cols.map((c) => (Array.isArray(c) ? h("th", { class: "num" }, c[0]) : h("th", {}, c))));

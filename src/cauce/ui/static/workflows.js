@@ -2,10 +2,12 @@
 // waits on the person — and how far it got; then the workflows it can run. Read here:
 // runs are started, retried and cancelled from a session (`cauce workflow …`).
 import { get } from "./net.js";
+import { notifyButton, watchEnding } from "./notify.js";
 import { curve, label, s } from "./svg.js";
 import { cost, h, short, statusBadge, tabTitle, when } from "./util.js";
 
 const COL = 210, ROW = 64, W = 176, BOX = 46, PAD = 12;
+const STOPPED_RUN = new Set(["waits on the orchestrator", "stalled"]);
 const WAITS = new Set(["failed", "blocked", "replan", "needs_approval", "interrupted", "cancelled", "dismissed"]);
 const stateClass = (state) => (state === "done" ? "done" : state === "running" || state === "queued" ? "now"
   : WAITS.has(state) ? "waits" : "pending");
@@ -57,12 +59,18 @@ function runCard(run, ctx) {
   const bar = h("span", {});
   bar.style.width = `${total ? (100 * done) / total : 0}%`;
   const focus = run.id === ctx.focusRun;
-  if (focus) tabTitle(run.state === "waits on the orchestrator" ? "blocked" : run.state, `${run.name} run #${run.id}`, run.state);
+  if (focus) {
+    // A run that waits or stalled wears a task's waiting state in the tab: its own words say which.
+    tabTitle(STOPPED_RUN.has(run.state) ? "blocked" : run.state, `${run.name} run #${run.id}`, run.state);
+    watchEnding(`run:${run.id}`, run.state, `${run.name} run #${run.id}`,
+      run.waiting.length ? `${run.state} at ${run.waiting.join(", ")}` : run.state);
+  }
   return h("div", { class: `card wf-run${focus ? " focus" : ""}`, id: `run-${run.id}` },
     h("div", { class: "row" },
       h("b", {}, `#${run.id} ${run.name}`), h("span", { class: "chip" }, `v${run.version} · ${run.scope}`),
       h("span", { class: `tag ${stateClass(run.state === "waits on the orchestrator" ? "failed" : run.state)}` }, run.state),
-      h("span", { class: "meta" }, `${cost(run)}${run.points ? ` · ${run.points} points` : ""} · ${when(run.updated_at)}`)),
+      h("span", { class: "meta" }, `${cost(run)}${run.points ? ` · ${run.points} points` : ""} · ${when(run.updated_at)}`),
+      focus ? notifyButton() : null),
     goal ? h("div", { class: "text" }, short(goal, 300)) : null,
     h("div", { class: "progress", title: `${done} of ${total} steps passed` },
       bar, h("em", {}, `${done}/${total}`)),

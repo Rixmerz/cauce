@@ -56,6 +56,23 @@ def recent(task_id: int, attempt: int | None, env: Mapping[str, str] | None = No
     return [str(e.get("sig") or "") for e in _calls(task_id, attempt, env)][-LAST:]
 
 
+#: How many of an attempt's last calls the task page shows.
+SHOWN = 8
+
+
+def calls(task_id: int, attempt: int | None, env: Mapping[str, str] | None = None, *,
+          limit: int = SHOWN) -> list[dict]:
+    """The attempt's last calls as the task page shows them, oldest first: when, the tool, its
+    signature, whether it went through, and the phase it counts toward. Only what a signature
+    keeps: never an argument, nor the hash of one."""
+    out = []
+    for e in _calls(task_id, attempt, env)[-limit:]:
+        sig = str(e.get("sig") or "")
+        out.append({"ts": e.get("ts"), "tool": str(e.get("tool") or ""), "sig": sig, "ok": bool(e.get("ok", 1)),
+                    "kind": kind_of(sig)})
+    return out
+
+
 def session_of(task_id: int, attempt: int | None, env: Mapping[str, str] | None = None) -> str | None:
     """The Claude Code session the attempt's worker runs in, as its last call said; None before
     its first call, or when the log's tail no longer holds one."""

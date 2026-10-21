@@ -796,3 +796,94 @@ def test_tabs_follow_the_session_the_command_runs_in(monkeypatch, capsys):
     monkeypatch.delenv("CAUCE_SESSION_ID")
     assert cli._tabs_sessions(argparse.Namespace(tabs=True, session=None)) == []
     assert "--tabs needs a session" in capsys.readouterr().err
+
+
+# --- a tab's work, live: the worker's last calls, the attempts compared --------------------
+
+def _log_calls(rows):
+    import os
+    from datetime import UTC, datetime
+
+    from cauce import signature
+
+    directory = signature.log_dir(os.environ)
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / f"{datetime.now(UTC):%Y-%m-%d}.ndjson").open("a") as fh:
+        for row in rows:
+            fh.write(json.dumps(row) + "\n")
+
+
+def test_a_running_task_shows_what_its_worker_does_now(store: Store):
+    """The attempt in flight, its phase and its last calls, newest last: a signature and no more,
+    never an argument or its hash."""
+    t = store.create_task("going", status="running", source="cauce", repo="r")
+    store.add_attempt(t["id"], cell="sonnet/low", max_turns=30, passed=0, failure="code_bug")
+    store.add_event(t["id"], "attempt_started", seq=2, cell="sonnet/medium")
+    base = {"task_id": t["id"], "attempt": 2, "session_id": "w", "arg_hash": "abc123", "ok": 1}
+    _log_calls([{**base, "attempt": 1, "ts": "a", "tool": "read", "sig": "read:py"},
+                {**base, "task_id": 999, "ts": "b", "tool": "bash", "sig": "bash:rm"},
+                *({**base, "ts": f"2026-10-21T10:00:{i:02d}", "tool": "read", "sig": "read:py"} for i in range(6)),
+                {**base, "ts": "2026-10-21T10:01:00", "tool": "edit", "sig": "edit:py"},
+                {**base, "ts": "2026-10-21T10:01:01", "tool": "bash", "sig": "bash:pytest", "ok": 0},
+                {**base, "ts": "2026-10-21T10:01:02", "tool": "bash", "sig": "bash:git-status"}])
+    detail = api.task_detail(store, t["id"])
+    calls = detail["recent_calls"]
+    assert detail["attempt_now"] == 2 and detail["phase"] == "checking"
+    assert len(calls) == 8 and [c["sig"] for c in calls[-3:]] == ["edit:py", "bash:pytest", "bash:git-status"]
+    assert all(set(c) == {"ts", "tool", "sig", "ok", "kind"} for c in calls)
+    assert calls[-2]["ok"] is False and calls[-2]["kind"] == "checking" and calls[-3]["kind"] == "implementing"
+    live = api.task_live(store, t["id"])
+    assert live["status"] == "running" and live["recent_calls"] == calls and live["phase"] == "checking"
+    assert "abc123" not in json.dumps(live)
+    # Before its attempt says it started, the attempt after the last recorded one is in flight.
+    other = store.create_task("fresh", status="running", source="cauce", repo="r")
+    fresh = api.task_live(store, other["id"])
+    assert fresh["attempt_now"] == 1 and fresh["recent_calls"] == [] and fresh["phase"] is None
+    # Work that is over has no calls going on.
+    store.update_task(t["id"], status="done")
+    ended = api.task_live(store, t["id"])
+    assert ended["status"] == "done" and ended["recent_calls"] == [] and ended["phase"] is None
+    assert api.task_detail(store, t["id"])["recent_calls"] == []
+    assert api.task_live(store, 999) is None
+
+
+def test_attempts_carry_what_the_comparison_shows(store: Store):
+    """Two attempts side by side: cell, served model, turns, cost, wall time, how each ended, the move
+    after it, the files it changed, its summary and its evidence."""
+    t = store.create_task("fix", status="done", source="cauce", repo="r")
+    store.add_attempt(t["id"], cell="sonnet/low", max_turns=30, passed=0, failure="code_bug", turns=12,
+                      cost_usd=0.2, duration_s=95.0, changed_paths=["a.py"], summary="tried", evidence="1 failed")
+    store.set_move(t["id"], 1, "more_effort", "the work was shallow")
+    store.add_attempt(t["id"], cell="sonnet/high", max_turns=30, passed=1, turns=20, cost_usd=0.5,
+                      duration_s=300.0, changed_paths=["a.py", "b.py"], summary="fixed")
+    first, second = api.task_detail(store, t["id"])["attempts"]
+    for key in ("cell", "served_model", "turns", "max_turns", "cost_usd", "duration_s", "passed", "failure", "move",
+                "changed_paths", "summary", "evidence", "climb"):
+        assert key in first and key in second, key
+    assert first["changed_paths"] == ["a.py"] and second["changed_paths"] == ["a.py", "b.py"]
+    assert first["duration_s"] == 95.0 and first["move"] == "more_effort" and second["passed"] == 1
+
+
+def test_the_live_read_is_served_and_the_favicon_may_be_drawn(ui):
+    srv_store = Store(ui.root / "cauce.db")
+    try:
+        t = srv_store.create_task("going", status="running", source="cauce", repo="r")
+    finally:
+        srv_store.close()
+    res, data = call(ui, "GET", f"/api/tasks/{t['id']}/live")
+    assert res.status == 200 and json.loads(data)["status"] == "running"
+    assert call(ui, "GET", "/api/tasks/999/live")[0].status == 404
+    # A tab's favicon is an SVG data: URL drawn in the page: the policy lets images come from data:.
+    res, _ = call(ui, "GET", "/")
+    assert "img-src 'self' data:" in res.getheader("Content-Security-Policy")
+    assert call(ui, "GET", "/static/notify.js")[0].status == 200
+
+
+def test_the_page_never_parses_html_nor_sets_inline_styles():
+    from pathlib import Path
+
+    static = Path(server.__file__).parent / "static"
+    for path in static.glob("*.js"):
+        text = path.read_text()
+        assert "innerHTML" not in text and "outerHTML" not in text and "insertAdjacentHTML" not in text, path.name
+        assert '"style"' not in text and "style:" not in text, path.name

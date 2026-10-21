@@ -66,6 +66,7 @@ CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' 
 _STATIC_NAME = re.compile(r"^[a-z0-9_-]+\.(js|css|html|svg)$")
 _TASK_ROUTE = re.compile(r"^/api/tasks/(\d+)$")
 _DIFF_ROUTE = re.compile(r"^/api/tasks/(\d+)/diff$")
+_LIVE_ROUTE = re.compile(r"^/api/tasks/(\d+)/live$")
 _CANCEL_ROUTE = re.compile(r"^/api/tasks/(\d+)/cancel$")
 _DISMISS_ROUTE = re.compile(r"^/api/tasks/(\d+)/dismiss$")
 _RESUME_ROUTE = re.compile(r"^/api/tasks/(\d+)/resume$")
@@ -325,6 +326,10 @@ class Handler(BaseHTTPRequestHandler):
         if match := _DIFF_ROUTE.match(path):
             found = api.task_diff(store, int(match.group(1)))
             return self._json(HTTPStatus.OK, found) if found else self._error(HTTPStatus.NOT_FOUND, "no such task")
+        if match := _LIVE_ROUTE.match(path):
+            # What a running task's worker is doing, polled by its page: tool calls write no events.
+            live = api.task_live(store, int(match.group(1)))
+            return self._json(HTTPStatus.OK, live) if live else self._error(HTTPStatus.NOT_FOUND, "no such task")
         if match := _TASK_ROUTE.match(path):
             detail = api.task_detail(store, int(match.group(1)))
             return self._json(HTTPStatus.OK, detail) if detail else self._error(HTTPStatus.NOT_FOUND, "no such task")

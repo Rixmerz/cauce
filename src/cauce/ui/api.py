@@ -290,9 +290,31 @@ def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:
         if finished and finished["data"].get("realized") else None,
         "risk": (finished["data"].get("risk") if finished else None)
         or ((store.last_event(task_id, "planned") or {}).get("data") or {}).get("risk"),
-        "phase": phase.of(task_id, attempts[-1]["seq"] + 1 if attempts else 1) if task["status"] == "running"
-        else None,
+        **_live(store, task, attempts),
     }
+
+
+def _live(store: Store, task: dict[str, Any], attempts: list[dict] | None = None) -> dict[str, Any]:
+    """What a running task's worker is doing now: the attempt in flight, its phase and its last
+    tool calls (`phase.calls`, signatures only), read from the tool-call log's tail. Nothing for a
+    task that is not running: its calls are over."""
+    if task["status"] != "running":
+        return {"attempt_now": None, "phase": None, "recent_calls": []}
+    started = store.last_event(task["id"], "attempt_started")
+    seq = started["data"].get("seq") if started else None
+    if not seq:
+        ran = attempts if attempts is not None else store.attempts(task["id"])
+        seq = ran[-1]["seq"] + 1 if ran else 1
+    return {"attempt_now": seq, "phase": phase.of(task["id"], seq), "recent_calls": phase.calls(task["id"], seq)}
+
+
+def task_live(store: Store, task_id: int) -> dict[str, Any] | None:
+    """The light read a task page polls while its task runs (tool calls write no events): its
+    state and what its worker is doing now. Read only."""
+    task = store.get_task(task_id)
+    if task is None:
+        return None
+    return {"id": task_id, "status": task["status"], "updated_at": task["updated_at"], **_live(store, task)}
 
 
 #: The most of a diff the UI is sent.

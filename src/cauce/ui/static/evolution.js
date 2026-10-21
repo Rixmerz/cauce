@@ -1,6 +1,5 @@
 import { get } from "./net.js";
-import { cellChip, h, kindChip, repoName, usd } from "./util.js";
-import { secs } from "./analysis.js";
+import { cellChip, h, kindChip, repoName, secs, usd } from "./util.js";
 
 // How cauce evolves and why: each metric's trend over the daily snapshots, every change of a
 // standard with its rule, evidence and verdict, and the standards as they stand. Read only:
