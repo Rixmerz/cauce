@@ -91,18 +91,26 @@ def snapshot(store: Store, *, now: datetime | None = None, tz: tzinfo | None = N
 def settle(store: Store, *, now: datetime | None = None, tz: tzinfo | None = None) -> dict[str, Any]:
     """After work ended: the standards settle (`standards.settle`: verdicts, and a calibration
     when one is due), and the first ending of a new day takes the day's snapshot. From the
-    hooks and the dispatcher, never from a GET. `snapshot` is None when none was due."""
+    hooks and the dispatcher, never from a GET. `snapshot` is None when none was due; `notes`
+    says which candidate notes were made current or dropped (`notes.weigh`)."""
     now = now or _now()
-    from cauce import cells
+    from cauce import cells, notes
 
     cells.backfill(store)
     found = standards.settle(store, now=now)
+    from cauce import revisions
+
+    if revisions.enabled():
+        # A role's lessons here: the verdicts due, and a revision proposed when its evidence is.
+        found = {**found, "roles": revisions.settle(store, now=now)}
+    # A worker-learned note proven or dropped by the tasks whose brief carried it.
+    weighed = notes.weigh(store)
     taken = None
     if found["ended"]:
         with store.immediate():
             if json.loads(store.meta(SNAPSHOT_KEY) or "{}").get("day") != _today(now, tz):
                 taken = _take(store, now, tz, False)
-    return {**found, "snapshot": taken}
+    return {**found, "snapshot": taken, "notes": weighed}
 
 
 # --- the report --------------------------------------------------------------------------------

@@ -123,8 +123,32 @@ def _skills(args: argparse.Namespace) -> int:
     return 0
 
 
+def _roles_revisions(args: argparse.Namespace) -> int:
+    """Each role's lessons per repository: the current revision, the one on trial with its arms'
+    counts, and every record of their history. Read only."""
+    from cauce import config, revisions
+    from cauce.store import Store
+
+    key = _key(args) if args.repo else None
+    store = Store.open()
+    try:
+        rows = [r for r in revisions.overview(store, key) if not args.role or r["role"] == args.role]
+    finally:
+        store.close()
+    if args.json:
+        print(revisions.as_json(rows))
+        return 0
+    if not config.enabled("role_trials", os.environ):
+        print("role trials are off (`cauce config role_trials on` turns them on): no revision is proposed or "
+              "given; the records below are history")
+    print("\n".join(revisions.text(rows)) if rows else
+          "no role has a revision yet: one is proposed once a role's workers met "
+          f"{revisions.MIN_EVIDENCE} dead ends or verifier blockers in a repository")
+    return 0
+
+
 _ROLES = {"list": _roles_list, "show": _roles_show, "copy": _roles_copy, "new": _roles_new, "rm": _roles_rm,
-          "check": _roles_check, "skills": _skills}
+          "check": _roles_check, "skills": _skills, "revisions": _roles_revisions}
 
 
 # --- teams -----------------------------------------------------------------------------
@@ -252,6 +276,12 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("name")
     rsub.add_parser("check", help="every role and team, and what is wrong with them")
     rsub.add_parser("skills", help="the skills cauce ships")
+    p = rsub.add_parser("revisions", help="each role's lessons per repository, improved by trial: the current one, "
+                                          "the one on trial and its arms, the history (`cauce config role_trials "
+                                          "off` turns them off)")
+    p.add_argument("--repo", help="one repository (default: every one)")
+    p.add_argument("--role", help="one role")
+    p.add_argument("--json", action="store_true")
 
     top = sub.add_parser("team", help="teams of roles; a project's workers come only from its team")
     top.set_defaults(func=cmd_team, team_command="show", name=None, json=False, repo=None)

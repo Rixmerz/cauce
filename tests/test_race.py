@@ -8,7 +8,8 @@ import time
 
 import pytest
 
-from cauce import isolate, launch, orchestrate, repo, standards
+from cauce import analysis, isolate, launch, orchestrate, repo, standards
+from cauce import racing as racing_mod
 from cauce.escalate import Failure
 from cauce.launch import WorkerResult
 from cauce.matrix import Cell, ladder_for
@@ -214,3 +215,108 @@ def test_adopt_carries_a_lane_s_work_and_fails_loudly_when_it_cannot(git_repo, t
     (ws.path / ".git").unlink()  # the task's worktree is broken: the work cannot land
     with pytest.raises(isolate.IsolationError):
         isolate.adopt(again, ws)
+
+
+# --- whether racing paid: wide or deep, by its own record --------------------------------------------------
+
+THIRD = Cell("opus", "high")
+
+
+def rung_won(store, key, wall=300.0):
+    return finished(store, (START.label, 0, "code_bug", orchestrate.RACED_OUT), (RUNG.label, 1), repo=key, wall=wall)
+
+
+def start_won(store, key, wall=300.0):
+    return finished(store, (START.label, 1, None, "race"), (RUNG.label, 0, "code_bug", orchestrate.RACED_OUT),
+                    repo=key, wall=wall)
+
+
+def neither_won(store, key, wall=900.0):
+    return finished(store, (START.label, 0, "code_bug", "race"), (RUNG.label, 0, "code_bug", "next_model"),
+                    (THIRD.label, 1), repo=key, wall=wall)
+
+
+def climbed(store, key, wall=900.0):
+    return finished(store, (START.label, 0, "code_bug", "more_effort"), (RUNG.label, 1), repo=key, wall=wall)
+
+
+def test_a_race_is_read_from_its_attempts():
+    a = lambda move=None, passed=0: {"move": move, "passed": passed}  # noqa: E731
+    assert racing_mod.outcome([a(racing_mod.RACED_OUT), a(None, 1)]) == racing_mod.RUNG
+    assert racing_mod.outcome([a("race", 1), a(racing_mod.RACED_OUT)]) == racing_mod.START
+    assert racing_mod.outcome([a("race"), a("more_effort"), a(None, 1)]) == racing_mod.NEITHER
+    assert racing_mod.outcome([a("more_effort"), a(None, 1)]) is None
+    assert racing_mod.outcome([a(None, 1)]) is None
+    assert racing_mod.RACED_OUT == orchestrate.RACED_OUT == "raced_out"
+
+
+def test_racing_is_judged_only_after_enough_races(store):
+    for _ in range(racing_mod.JUDGE_AFTER - 1):
+        neither_won(store, "r")
+    record = racing_mod.of(standards.ended(store, repo="r"), "implement")
+    assert record.pays and record.races == racing_mod.JUDGE_AFTER - 1 and record.neither == racing_mod.JUDGE_AFTER - 1
+    assert f"judged after {racing_mod.JUDGE_AFTER}" in record.why
+
+
+def test_a_rung_that_rarely_wins_stops_the_race_and_the_climb_goes_deep(git_repo, store, monkeypatch):
+    monkeypatch.setenv("CAUCE_RACE", "on")
+    key = repo.key(git_repo)
+    ladder = ladder_for("implement")
+    for _ in range(4):
+        neither_won(store, key)
+    start_won(store, key)
+    record = racing_mod.of(standards.ended(store, repo=key), "implement")
+    assert (record.races, record.rung_wins, record.start_wins, record.neither) == (5, 0, 1, 4) and not record.pays
+    rung, why = orchestrate.race_cell(store, key, "implement", ladder, START, Options())
+    assert rung is None and "does not race" in why and "the rung won 0 of 5 races here" in why
+    assert "climbs deep instead" in why
+    # The plan says so in its line, beside no rung.
+    the_plan = orchestrate.plan("add the export", git_repo, store, Options(use_model_classifier=False), {},
+                                classifier=kind("implement"), adapters=())
+    assert the_plan.race is None and the_plan.start == START and why in the_plan.reasons
+
+
+def test_racing_that_pays_keeps_racing_and_says_why(git_repo, store, monkeypatch):
+    monkeypatch.setenv("CAUCE_RACE", "on")
+    key = repo.key(git_repo)
+    for _ in range(4):
+        climbed(store, key, wall=900.0)
+    for _ in range(3):
+        rung_won(store, key, wall=300.0)
+    for _ in range(2):
+        neither_won(store, key, wall=600.0)
+    record = racing_mod.of(standards.ended(store, repo=key), "implement")
+    assert record.pays and record.rung_wins == 3 and record.raced_p50_s == 300.0 and record.climb_p50_s == 900.0
+    rung, why = orchestrate.race_cell(store, key, "implement", ladder_for("implement"), START, Options())
+    assert rung == RUNG and "racing pays: the rung won 3 of 5 races here" in why
+    assert "300s at the median against 900s for climbs" in why
+
+
+def test_races_that_save_no_time_stop_racing(git_repo, store, monkeypatch):
+    monkeypatch.setenv("CAUCE_RACE", "on")
+    key = repo.key(git_repo)
+    for _ in range(4):
+        climbed(store, key, wall=500.0)
+    for _ in range(5):
+        rung_won(store, key, wall=1000.0)
+    record = racing_mod.of(standards.ended(store, repo=key), "implement")
+    assert not record.pays and "racing saved no time" in record.why
+    rung, why = orchestrate.race_cell(store, key, "implement", ladder_for("implement"), START, Options())
+    assert rung is None and "racing saved no time" in why
+    # With too few climbs to compare, time says nothing and the wins decide.
+    assert racing_mod.judge(standards.ended(store, repo=key)[-5:]).pays
+
+
+def test_stats_show_each_repository_and_kind_s_races(store):
+    for _ in range(3):
+        rung_won(store, "/work/shop")
+    start_won(store, "/work/shop")
+    neither_won(store, "/work/shop")
+    finished(store, (START.label, 1), repo="/work/shop", kind="bugfix")
+    report = analysis.compute(store, days=0)
+    assert report["races"] == [{"repo": "/work/shop", "kind": "implement", "races": 5, "rung_wins": 3,
+                                "start_wins": 1, "neither": 1, "raced_p50_s": 300.0, "climb_p50_s": None,
+                                "pays": True, "why": report["races"][0]["why"]}]
+    shown = analysis.text(report)
+    assert "first tries that raced the next rung" in shown
+    assert "shop" in shown and "races   5  rung won   3  start won   1  both failed   1  racing: racing pays" in shown

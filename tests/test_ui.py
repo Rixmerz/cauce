@@ -4,6 +4,7 @@ import http.client
 import http.server
 import json
 import threading
+import time
 
 import pytest
 
@@ -704,3 +705,185 @@ def test_a_card_carries_its_points_and_why(store: Store):
     card = api.board(store, {"r"})["running"][0]
     assert card["id"] == t["id"] and card["points"] == 5 and card["points_why"].startswith("4 criteria")
     assert api.task_detail(store, t["id"])["task"]["points"] == 5
+
+
+# --- a tab for each piece of a session's work ------------------------------------------
+
+def _session_work(store: Store):
+    run = store.create_run(name="feature", scope="bundled", source="x", definition="{}", repo="/w/r b",
+                           session_id="s1")
+    step = store.create_task("a step", status="running", source="queue", repo="/w/r b", session_id="s1",
+                             workflow_run=run["id"])
+    queued = store.create_task("next", status="queued", source="queue", repo="r", session_id="s1")
+    running = store.create_task("going", status="running", source="cauce", repo="r", session_id="s1")
+    store.create_task("ended", status="done", source="cauce", repo="r", session_id="s1")
+    store.create_task("a turn", status="running", source="hook", repo="r", session_id="s1")
+    store.create_task("theirs", status="running", source="cauce", repo="r", session_id="s2")
+    store.create_run(name="old", scope="bundled", source="x", definition="{}", repo="r", session_id="s1",
+                     status="done")
+    return run, step, queued, running
+
+
+def test_a_session_s_work_going_on_is_a_tab_each(store: Store):
+    """Its active runs (their steps inside them), then its own tasks queued or running, oldest
+    first: never a turn, an ended task or another session's work."""
+    run, _step, queued, running = _session_work(store)
+    tabs = api.session_tabs(store, "s1")
+    assert [t["key"] for t in tabs] == [f"run:{run['id']}", f"task:{queued['id']}", f"task:{running['id']}"]
+    assert tabs[0]["fragment"] == f"run={run['id']}&repo=%2Fw%2Fr%20b"
+    assert tabs[1] == {"key": f"task:{queued['id']}", "title": f"#{queued['id']} next",
+                       "fragment": f"task={queued['id']}"}
+    assert api.session_tabs(store, "nobody") == []
+
+
+def test_tabs_open_once_and_at_most_the_limit(store: Store):
+    _session_work(store)
+    opened: list[str] = []
+    seen: set[str] = set()
+    tabs, left = server.open_tabs(store, "http://h/", "s1", seen, opened.append, limit=2)
+    assert len(tabs) == 2 and left == 1 and opened[1].startswith("http://h/#task=")
+    # What was left for the board is never opened later; new work is.
+    assert server.open_tabs(store, "http://h/", "s1", seen, opened.append) == ([], 0)
+    later = store.create_task("later", status="queued", source="queue", repo="r", session_id="s1")
+    assert server.open_tabs(store, "http://h/", "s1", seen, opened.append)[0][0]["key"] == f"task:{later['id']}"
+    assert len(opened) == 3
+    # With no room, nothing opens and everything counts as seen: a server handed over opens only what is new.
+    fresh: set[str] = set()
+    assert server.open_tabs(store, "http://h/", "s1", fresh, opened.append, limit=0) == ([], 4)
+    assert len(opened) == 3 and len(fresh) == 4
+
+
+def test_a_server_follows_a_session_it_is_asked_to(ui, monkeypatch):
+    """The token holder (a second `cauce ui --tabs` that found this server) adds a session;
+    the server opens a tab for its work as it starts, in its own thread, never in the request."""
+    monkeypatch.setattr(server, "FOLLOW_EVERY_S", 0.05)
+    opened: list[str] = []
+    ui.open_tab = opened.append
+    store = Store(ui.root / "cauce.db")
+    old = store.create_task("old", status="running", source="cauce", repo="r", session_id="s1")
+    key = {"X-Cauce-Token": token(ui)}
+    assert call(ui, "POST", "/api/follow", {"session": "s1"})[0].status == 403
+    assert call(ui, "POST", "/api/follow", {"session": "../x"}, headers=key)[0].status == 400
+    res = call(ui, "POST", "/api/follow", {"session": "s1", "seen": [f"task:{old['id']}", 3]}, headers=key)[0]
+    assert res.status == 200 and ui.following == ["s1"]
+    assert server.follow_there(ui.server_address[1], "s1", [], root=ui.root) and ui.following == ["s1"]
+    new = store.create_task("new", status="queued", source="queue", repo="r", session_id="s1")
+    deadline = time.monotonic() + 5
+    while not opened and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert opened == [f"{ui.url()}#task={new['id']}"]
+    store.close()
+    assert not server.follow_there(1, "s1", [], root=ui.root)  # nothing listens there
+
+
+def test_a_server_handed_over_goes_on_following(ui, monkeypatch):
+    ran = []
+    monkeypatch.setattr(server.os, "execv", lambda path, argv: ran.append(argv))
+    ui.following = ["s1", "s2"]
+    ui.hand_over("9.9.9", server.Path("/bin/cauce"))
+    assert ran[0][1:] == ["ui", "--port", str(ui.server_address[1]), "--tabs", "--session", "s1", "--session", "s2"]
+
+
+def test_tabs_follow_the_session_the_command_runs_in(monkeypatch, capsys):
+    import argparse
+
+    from cauce import cli
+
+    monkeypatch.setenv("CAUCE_SESSION_ID", "here")
+    assert cli._tabs_sessions(argparse.Namespace(tabs=False, session=None)) == []
+    assert cli._tabs_sessions(argparse.Namespace(tabs=True, session=None)) == ["here"]
+    assert cli._tabs_sessions(argparse.Namespace(tabs=True, session=["a"])) == ["a"]
+    monkeypatch.delenv("CAUCE_SESSION_ID")
+    assert cli._tabs_sessions(argparse.Namespace(tabs=True, session=None)) == []
+    assert "--tabs needs a session" in capsys.readouterr().err
+
+
+# --- a tab's work, live: the worker's last calls, the attempts compared --------------------
+
+def _log_calls(rows):
+    import os
+    from datetime import UTC, datetime
+
+    from cauce import signature
+
+    directory = signature.log_dir(os.environ)
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / f"{datetime.now(UTC):%Y-%m-%d}.ndjson").open("a") as fh:
+        for row in rows:
+            fh.write(json.dumps(row) + "\n")
+
+
+def test_a_running_task_shows_what_its_worker_does_now(store: Store):
+    """The attempt in flight, its phase and its last calls, newest last: a signature and no more,
+    never an argument or its hash."""
+    t = store.create_task("going", status="running", source="cauce", repo="r")
+    store.add_attempt(t["id"], cell="sonnet/low", max_turns=30, passed=0, failure="code_bug")
+    store.add_event(t["id"], "attempt_started", seq=2, cell="sonnet/medium")
+    base = {"task_id": t["id"], "attempt": 2, "session_id": "w", "arg_hash": "abc123", "ok": 1}
+    _log_calls([{**base, "attempt": 1, "ts": "a", "tool": "read", "sig": "read:py"},
+                {**base, "task_id": 999, "ts": "b", "tool": "bash", "sig": "bash:rm"},
+                *({**base, "ts": f"2026-10-21T10:00:{i:02d}", "tool": "read", "sig": "read:py"} for i in range(6)),
+                {**base, "ts": "2026-10-21T10:01:00", "tool": "edit", "sig": "edit:py"},
+                {**base, "ts": "2026-10-21T10:01:01", "tool": "bash", "sig": "bash:pytest", "ok": 0},
+                {**base, "ts": "2026-10-21T10:01:02", "tool": "bash", "sig": "bash:git-status"}])
+    detail = api.task_detail(store, t["id"])
+    calls = detail["recent_calls"]
+    assert detail["attempt_now"] == 2 and detail["phase"] == "checking"
+    assert len(calls) == 8 and [c["sig"] for c in calls[-3:]] == ["edit:py", "bash:pytest", "bash:git-status"]
+    assert all(set(c) == {"ts", "tool", "sig", "ok", "kind"} for c in calls)
+    assert calls[-2]["ok"] is False and calls[-2]["kind"] == "checking" and calls[-3]["kind"] == "implementing"
+    live = api.task_live(store, t["id"])
+    assert live["status"] == "running" and live["recent_calls"] == calls and live["phase"] == "checking"
+    assert "abc123" not in json.dumps(live)
+    # Before its attempt says it started, the attempt after the last recorded one is in flight.
+    other = store.create_task("fresh", status="running", source="cauce", repo="r")
+    fresh = api.task_live(store, other["id"])
+    assert fresh["attempt_now"] == 1 and fresh["recent_calls"] == [] and fresh["phase"] is None
+    # Work that is over has no calls going on.
+    store.update_task(t["id"], status="done")
+    ended = api.task_live(store, t["id"])
+    assert ended["status"] == "done" and ended["recent_calls"] == [] and ended["phase"] is None
+    assert api.task_detail(store, t["id"])["recent_calls"] == []
+    assert api.task_live(store, 999) is None
+
+
+def test_attempts_carry_what_the_comparison_shows(store: Store):
+    """Two attempts side by side: cell, served model, turns, cost, wall time, how each ended, the move
+    after it, the files it changed, its summary and its evidence."""
+    t = store.create_task("fix", status="done", source="cauce", repo="r")
+    store.add_attempt(t["id"], cell="sonnet/low", max_turns=30, passed=0, failure="code_bug", turns=12,
+                      cost_usd=0.2, duration_s=95.0, changed_paths=["a.py"], summary="tried", evidence="1 failed")
+    store.set_move(t["id"], 1, "more_effort", "the work was shallow")
+    store.add_attempt(t["id"], cell="sonnet/high", max_turns=30, passed=1, turns=20, cost_usd=0.5,
+                      duration_s=300.0, changed_paths=["a.py", "b.py"], summary="fixed")
+    first, second = api.task_detail(store, t["id"])["attempts"]
+    for key in ("cell", "served_model", "turns", "max_turns", "cost_usd", "duration_s", "passed", "failure", "move",
+                "changed_paths", "summary", "evidence", "climb"):
+        assert key in first and key in second, key
+    assert first["changed_paths"] == ["a.py"] and second["changed_paths"] == ["a.py", "b.py"]
+    assert first["duration_s"] == 95.0 and first["move"] == "more_effort" and second["passed"] == 1
+
+
+def test_the_live_read_is_served_and_the_favicon_may_be_drawn(ui):
+    srv_store = Store(ui.root / "cauce.db")
+    try:
+        t = srv_store.create_task("going", status="running", source="cauce", repo="r")
+    finally:
+        srv_store.close()
+    res, data = call(ui, "GET", f"/api/tasks/{t['id']}/live")
+    assert res.status == 200 and json.loads(data)["status"] == "running"
+    assert call(ui, "GET", "/api/tasks/999/live")[0].status == 404
+    # A tab's favicon is an SVG data: URL drawn in the page: the policy lets images come from data:.
+    res, _ = call(ui, "GET", "/")
+    assert "img-src 'self' data:" in res.getheader("Content-Security-Policy")
+    assert call(ui, "GET", "/static/notify.js")[0].status == 200
+
+
+def test_the_page_never_parses_html_nor_sets_inline_styles():
+    from pathlib import Path
+
+    static = Path(server.__file__).parent / "static"
+    for path in static.glob("*.js"):
+        text = path.read_text()
+        assert "innerHTML" not in text and "outerHTML" not in text and "insertAdjacentHTML" not in text, path.name
+        assert '"style"' not in text and "style:" not in text, path.name

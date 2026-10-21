@@ -1,5 +1,5 @@
 import { get } from "./net.js";
-import { cellChip, h, kindChip, repoName, usd } from "./util.js";
+import { cellChip, h, kindChip, repoName, secs, usd } from "./util.js";
 
 // What cauce's runs cost in time and money, and what they got for it: the evidence
 // for changing the router, the briefs and the defaults. Read only; no model.
@@ -32,12 +32,6 @@ function kept(key, fallback, value) {
 
 const pct = (v) => (v === null || v === undefined ? "—" : `${Math.round(v * 100)}%`);
 const rate = (v) => h("td", { class: `num ${v === null || v === undefined ? "" : v >= 0.8 ? "rate-ok" : v < 0.5 ? "rate-bad" : "rate-warn"}` }, pct(v));
-export function secs(v) {
-  if (v === null || v === undefined) return "—";
-  if (v < 120) return `${Math.round(v)}s`;
-  if (v < 7200) return `${(v / 60).toFixed(1)}m`;
-  return `${(v / 3600).toFixed(1)}h`;
-}
 const money = (v) => (v === null || v === undefined ? "—" : usd(v));
 const num = (v) => h("td", { class: "num" }, v ?? "—");
 const head = (...cols) => h("tr", {}, cols.map((c) => (Array.isArray(c) ? h("th", { class: "num" }, c[0]) : h("th", {}, c))));
@@ -147,6 +141,22 @@ export async function renderAnalysis(ctx) {
       h("div", { class: "stat" }, h("b", {}, usd(turns.usd)), h("span", {}, `the turns, at API rates · p50 ${money(turns.usd_p50)}`)),
       h("div", { class: "stat" }, h("b", {}, delegations.count), h("span", {}, `subagent delegations · p50 ${secs(delegations.seconds_p50)}`))),
     r.by_workflow.length ? [h("h2", { class: "section" }, "By workflow"), summaryTable(r.by_workflow, "workflow", "workflow")] : [],
+    (r.races || []).length ? [h("h2", { class: "section" }, "Racing a first try"),
+      h("p", { class: "empty" }, "Where a start rarely passes its first try, the next rung runs beside it; racing stops where it does not pay."),
+      h("table", {}, head("project", "kind", ["races"], ["rung won"], ["start won"], ["both failed"], "racing"),
+        r.races.map((x) => h("tr", {}, h("td", {}, repoName(x.repo)), h("td", {}, kindChip(x.kind)), num(x.races),
+          num(x.rung_wins), num(x.start_wins), num(x.neither), h("td", {}, `${x.pays ? "on" : "off"}: ${x.why}`))))] : [],
+    (r.role_revisions || []).length ? [h("h2", { class: "section" }, "Roles' lessons on trial"),
+      h("p", { class: "empty" }, "A role's lessons in a project, proposed from its dead ends and the verifier's blockers, tried against the current ones."),
+      h("table", {}, head("project", "role", "current", "on trial", "candidate's arm", "current arm"),
+        r.role_revisions.map((x) => {
+          const arm = (a) => (a ? `${a.passed_first}/${a.tasks} first tries · ${a.briefed} briefed` : "—");
+          const c = x.candidate;
+          return h("tr", {}, h("td", {}, repoName(x.repo)), h("td", {}, x.role),
+            h("td", {}, x.current ? `#${x.current.id} (${x.current.lessons.length} lessons)` : "none yet"),
+            h("td", {}, c ? `#${c.id} (${c.lessons.length} lessons, ${c.trial} first tries each)` : "—"),
+            h("td", {}, c ? arm(c.arms.candidate) : "—"), h("td", {}, c ? arm(c.arms.current) : "—"));
+        }))] : [],
     h("h2", { class: "section" }, "By day"),
     r.daily.length ? h("table", {}, head("day", ["turns"], ["runs"], ["passed"], ["hours"], ["cost"]),
       r.daily.map((d) => h("tr", {}, h("td", {}, d.day), num(d.turns), num(d.runs), num(d.passed), num(d.hours), num(usd(d.cost_usd)))))

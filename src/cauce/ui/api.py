@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from cauce import capacity, config, dispatch, flow, habits, phase, project, stops, usage
 from cauce.matrix import LADDERS
@@ -289,9 +290,31 @@ def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:
         if finished and finished["data"].get("realized") else None,
         "risk": (finished["data"].get("risk") if finished else None)
         or ((store.last_event(task_id, "planned") or {}).get("data") or {}).get("risk"),
-        "phase": phase.of(task_id, attempts[-1]["seq"] + 1 if attempts else 1) if task["status"] == "running"
-        else None,
+        **_live(store, task, attempts),
     }
+
+
+def _live(store: Store, task: dict[str, Any], attempts: list[dict] | None = None) -> dict[str, Any]:
+    """What a running task's worker is doing now: the attempt in flight, its phase and its last
+    tool calls (`phase.calls`, signatures only), read from the tool-call log's tail. Nothing for a
+    task that is not running: its calls are over."""
+    if task["status"] != "running":
+        return {"attempt_now": None, "phase": None, "recent_calls": []}
+    started = store.last_event(task["id"], "attempt_started")
+    seq = started["data"].get("seq") if started else None
+    if not seq:
+        ran = attempts if attempts is not None else store.attempts(task["id"])
+        seq = ran[-1]["seq"] + 1 if ran else 1
+    return {"attempt_now": seq, "phase": phase.of(task["id"], seq), "recent_calls": phase.calls(task["id"], seq)}
+
+
+def task_live(store: Store, task_id: int) -> dict[str, Any] | None:
+    """The light read a task page polls while its task runs (tool calls write no events): its
+    state and what its worker is doing now. Read only."""
+    task = store.get_task(task_id)
+    if task is None:
+        return None
+    return {"id": task_id, "status": task["status"], "updated_at": task["updated_at"], **_live(store, task)}
 
 
 #: The most of a diff the UI is sent.
@@ -644,6 +667,24 @@ def workflows_view(store: Store, repo_key: str, *, limit: int = 30) -> dict[str,
                             pending=workflows.pending_path(Path(entry["path"])).is_file())
         definitions.append(item)
     return {"runs": runs, "definitions": definitions, "dir": where}
+
+
+#: What `session_tabs` counts as work going on: what a person waits to see move.
+TAB_STATUSES = ("running", "queued")
+
+
+def session_tabs(store: Store, session_id: str) -> list[dict[str, Any]]:
+    """The work a session sent that is going on, one browser tab each (`cauce ui --tabs`): its
+    active workflow runs, then its tasks queued or running outside them, oldest first. A run's
+    steps are seen in the run's tab, never in tabs of their own. Each names the page's fragment
+    that opens it (`#task=N`, `#run=N&repo=…`)."""
+    tabs = [{"key": f"run:{r['id']}", "title": f"{r['name']} run #{r['id']}",
+             "fragment": f"run={r['id']}&repo={quote(r['repo'] or '', safe='')}"}
+            for r in store.session_runs(session_id)]
+    tasks = store.list_tasks(session_id=session_id, status=TAB_STATUSES, source=("cauce", "queue"), limit=200)
+    tabs += [{"key": f"task:{t['id']}", "title": f"#{t['id']} {t['title']}", "fragment": f"task={t['id']}"}
+             for t in sorted(tasks, key=lambda t: t["id"]) if not t.get("workflow_run")]
+    return tabs
 
 
 #: How many notes and problems the map draws before it says how many it left out.

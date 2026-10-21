@@ -122,6 +122,8 @@ h2.spaced { margin-top: 32px; }
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(760px, 100vw); background: var(--panel);
           border-left: 1px solid var(--line); box-shadow: -24px 0 48px rgb(0 0 0 / .14); overflow-y: auto;
           padding: 22px 26px 48px; z-index: 3; animation: drawer-in .22s ease-out; }
+/* A tab opened for one task (`#task=N`): the task is the page; Escape goes back to the board. */
+.solo .drawer { width: 100vw; border-left: 0; animation: none; }
 @keyframes drawer-in { from { transform: translateX(24px); opacity: 0; } }
 .drawer header { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
 .drawer h1 { font-size: 20px; line-height: 1.3; font-weight: 650; margin: 0 0 8px; overflow-wrap: anywhere; }
@@ -143,6 +145,28 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
 .timeline > li.pass::before { background: var(--ok); border-color: var(--ok); }
 .timeline > li.fail::before { background: var(--panel); border-color: var(--bad); }
 .move { color: var(--accent); font-size: 12.5px; }
+.section-head { justify-content: space-between; margin-bottom: 8px; }
+.section-head h2 { margin: 0; }
+/* Two attempts side by side, the same rows in the same order; stacked on a phone. */
+.compare-box { margin-bottom: 16px; }
+.compare-box label { font-size: 12.5px; color: var(--muted); }
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
+.compare-col { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-top: 4px solid var(--bad);
+               border-radius: var(--radius-sm); background: var(--panel); }
+.compare-col.pass { border-top-color: var(--ok); }
+.compare-col h3 { margin: 0 0 6px; font-size: 14px; }
+.compare-col dl { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; }
+.compare-col dt { color: var(--muted); font-size: 12.5px; }
+.compare-col dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.compare-col dd ul { margin: 0; padding-left: 16px; }
+.compare-col pre { max-height: 260px; overflow: auto; margin: 0; }
+@media (max-width: 640px) { .compare { grid-template-columns: 1fr; } }
+/* What a running worker is doing: its last tool calls, newest last. */
+.calls { margin: 8px 0 0; padding-left: 22px; font-size: 12.5px; }
+.calls li { margin: 2px 0; }
+.calls .meta { display: inline; }
+.calls li.failed-call code { color: var(--bad); }
+button.notify[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .climb { margin: 6px 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--bg);
          border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: 12.5px; }
 .climb ol { margin: 4px 0 0; padding-left: 18px; }
@@ -218,7 +242,7 @@ td.num, th.num { text-align: right; }
 .note .links { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
 .note .link { font-size: 12.5px; padding: 2px 9px; }
 code.anchor { font-family: var(--mono); font-size: 12px; margin-right: 6px; overflow-wrap: anywhere; }
-.tag.review { color: var(--warn); font-size: 12px; font-weight: 600; }
+.tag.review, .tag.candidate { color: var(--warn); font-size: 12px; font-weight: 600; }
 .tag.replaced, .tag.dropped { color: var(--muted); font-size: 12px; font-weight: 600; }
 
 .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--panel);
@@ -228,6 +252,8 @@ code.anchor { font-family: var(--mono); font-size: 12px; margin-right: 6px; over
 
 /* Workflows: a run is a graph of steps, left to right as they depend on each other. */
 .wf-run { margin-bottom: var(--gap); }
+/* The run a tab was opened for (`#run=N`). */
+.wf-run.focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 .wf-scroll, .map-scroll { overflow: auto; max-width: 100%; }
 .wf-graph { display: block; margin-top: 8px; }
 .wf-parts { flex-wrap: wrap; gap: 6px; margin-top: 6px; }

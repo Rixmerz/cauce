@@ -36,7 +36,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -47,6 +47,8 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
 | `src/cauce/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
+| `src/cauce/revisions.py` | a role's lessons per repository, improved by measured trial: proposed by Haiku from the role's dead ends and verifier blockers there, tried in alternating arms, adopted, dropped or reverted, every record appended to `role_revisions`; `cauce roles revisions` reads it |
+| `src/cauce/racing.py` | whether racing a first try paid, per repository and kind: each race read from its attempts (rung, start, neither), the rung's wins and the time to pass against climbs, the judgement `race_cell` and `cauce stats` read; no model |
 | `src/cauce/cells.py` | where a lesson belongs: the area a path or a change is in, the role that met it, or everyone (`scope`); the text a failure is kept and matched by (a workflow step's goal, never its template); the cell's primer (how its workers got oriented) and its trial; no model |
 | `src/cauce/doctor.py` | `cauce doctor`: states the store should never hold, each a bug that shipped turned into a query (broken: stuck now; suspect: over the last days); read only, no model; SessionStart names what is broken |
 | `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away |
@@ -528,6 +530,17 @@ yields the default kind, not a guess.
   `kindChip`, `cellChip`), always beside their word. The kind hues keep their
   fixed order; a change to them is checked for colour-blind separation in
   both themes. The mod's text carries the same tones as emoji markers.
+- A tab per piece of work (`cauce ui --tabs`) is opened by the server's own
+  follow thread for the sessions it was given, never because a page asked: a GET
+  opens nothing, and a session is added only with the token (`/api/follow`).
+  Each piece of work gets one tab once; what is over `server.MAX_TABS` is left
+  to the board, never opened later.
+- A task page polls only while it shows a running task (`/api/tasks/N/live`,
+  every 5 s; tool calls write no events), and what it shows of a worker's calls
+  is what `phase.calls` keeps: when, the tool, its signature, whether it went
+  through; never an argument nor its hash. A desktop notification is asked for
+  only from a person's click, kept per viewer in the browser, and never fires
+  for the state a tab opened with.
 - The UI builds every node with `textContent` (`h()` in `static/util.js`,
   `s()` in `static/svg.js` for SVG), never `innerHTML`, and sets no inline
   style attribute (the page's policy refuses it; use the CSSOM): task text and worker summaries are untrusted. The token
@@ -603,8 +616,15 @@ yields the default kind, not a guess.
   their cost; one stopped because the other passed first (`RACED_OUT`) teaches its cell
   nothing, and the rung's is a first try of its own (`standards.samples`). Never a
   pinned start, a reading kind, a ledger, integrate or plan-parts step, a resume, a run
-  in the checkout, or a worktree that brought files in from it. Money is no brake: the
-  second worker is the price of the climb's wait.
+  in the checkout, or a worktree that brought files in from it. Racing judges itself
+  (`cauce.racing`): once `racing.JUDGE_AFTER` races ran among the window of the kind
+  here, each read from its attempts (the rung won, the start won, neither), it stops
+  where the rung won under `racing.WINS_BELOW` of them, or where the races the start did
+  not win took no less wall time to pass, at the median, than the kind's climbs without
+  one (each side over at least `racing.TIME_SAMPLES`); the failed first try then climbs
+  deep, the plan says why, and races that fall out of the window let it be tried again.
+  Money is no brake and never an input: the second worker is the price of the climb's
+  wait, and whether it paid is read from wins and time alone.
 - A workflow step a blind review of its change follows (`workflows.reviewed_next`: a
   review with no ledger that needs it, or an integrate step that joins its parts and is
   followed by one) runs no independent verifier of its own (`Options.reviewed_next`):
@@ -648,6 +668,29 @@ yields the default kind, not a guess.
   `PRIMER_MARGIN` below (`primer_arm`); the `briefed` event keeps the arm and
   why, and `cauce stats` shows both arms. The `primer` setting turns it off;
   tests run with `CAUCE_PRIMER=off`.
+- A role's instructions improve by measured trial, never by edit
+  (`cauce.revisions`, the `role_trials` setting). Every brief records the role
+  and the version of its text (`roles.version`: a hash of its resolved
+  instructions and its skills' names). Once a role's workers in a repository
+  met `revisions.MIN_EVIDENCE` dead ends or verifier blockers since its last
+  revision, Haiku, as an editor, proposes a short list of lessons for that role
+  there, read strictly (`read_lessons`): no answer or a malformed one proposes
+  nothing, and a line that looks like a secret or is `<private>` is never kept.
+  It runs in `evolution.settle`, never in a GET, outside the write lock and
+  under a claim, with at most one candidate per role and repository on trial.
+  The lessons reach a worker in its brief, marked as this role's lessons here,
+  as data, never instructions; the role's file is never written, and the
+  verifier and the surveyor never get one. The role's tasks alternate between
+  the candidate and the current lessons (a resume keeps its first arm) until
+  each arm has `ROLE_TRIAL` first tries; the candidate is adopted only when its
+  pass-first is no worse than `ROLE_MARGIN` below the current arm's and it is
+  better on pass-first, attempts to pass or verifier blockers, else dropped.
+  Once `REVERT_AFTER` first tries ran under an adopted one outside its trial,
+  it is judged once and reverted, as its own record, when its pass-first is
+  more than `REVERT_MARGIN` worse than its trial's current arm. Every proposal
+  and verdict is appended to `role_revisions`, which refuses an update or a
+  delete. Tests run with `CAUCE_ROLE_TRIALS=off`; a test that wants them
+  passes a fake `ask`.
 - A passing ending keeps its verdict (`orchestrate.verdict_card`): each criterion the
   worker answered with its evidence, the check cauce ran (never the worker's word), the
   independent check's outcome or why it did not run, and the attempts. The ending notice
@@ -675,7 +718,14 @@ yields the default kind, not a guess.
   read from another (a workspace is one project). A note is written by a passing worker (`learned`), by
   Haiku from a session's conversation (every few turns, when the scribe finds
   them due, before a compaction, at its end), or by a person — never by a failed
-  attempt, whose facts no pass confirmed. Haiku files under topics that
+  attempt, whose facts no pass confirmed. A worker's note starts as a
+  `candidate`: recalled, marked unproven in a brief, and adopted only on
+  evidence. The `briefed` event keeps the notes each brief carried
+  (`notes.BRIEFED`), and `notes.weigh`, in `evolution.settle` and never in a
+  GET, makes it current once `notes.PROVE_AFTER` later tasks whose first brief
+  carried it passed their first try, and drops it, with its reason, after
+  `notes.DISPROVE_AFTER` failed theirs with none passing. A person's note and
+  Haiku's from a conversation are current as written. Haiku files under topics that
   exist and never invents a link; without Haiku a fact is kept by its words.
   A fact that looks like a secret is never kept.
 - A note's anchor is reviewed only against this checkout's history: a change
@@ -753,6 +803,10 @@ yields the default kind, not a guess.
   before said reaches a step quoted, as context, never as its criteria.
 - A fix's later round starts from the tip the round before it kept, so the
   run's last branch holds every round (`doctor`: `fix-round-off-base`).
+- A worker's answer is refused for its form only by what its result contract
+  told it (`launch.RESULT_INSTRUCTIONS`, `PARTS_INSTRUCTIONS`): a check the
+  worker was never told of is a lost attempt, never a shape. Length is no form:
+  a prompt reaches its worker on stdin.
 - A step can run in parts. A `fanout` step names a plan step before it that it
   waits on; that plan (`kind plan`, read-only) is asked for `parts` (1 to
   `launch.MAX_PARTS`, each an id, a prompt and surfaces no other part reaches)

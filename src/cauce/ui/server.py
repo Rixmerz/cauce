@@ -37,7 +37,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -55,6 +55,10 @@ SOCKET_TIMEOUT = 10
 SWEEP_EVERY_S = 30
 #: Pruning reads every checkout cauce worked in: seconds, not milliseconds.
 PRUNE_EVERY_S = 600
+#: How often a server that follows a session (`cauce ui --tabs`) looks for new work to open a tab for.
+FOLLOW_EVERY_S = 5
+#: The most tabs opened at once: more is a wall of tabs, and the board lists the rest.
+MAX_TABS = 8
 STREAM_SECONDS = 25
 MAX_STREAMS = 8
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
@@ -62,10 +66,12 @@ CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' 
 _STATIC_NAME = re.compile(r"^[a-z0-9_-]+\.(js|css|html|svg)$")
 _TASK_ROUTE = re.compile(r"^/api/tasks/(\d+)$")
 _DIFF_ROUTE = re.compile(r"^/api/tasks/(\d+)/diff$")
+_LIVE_ROUTE = re.compile(r"^/api/tasks/(\d+)/live$")
 _CANCEL_ROUTE = re.compile(r"^/api/tasks/(\d+)/cancel$")
 _DISMISS_ROUTE = re.compile(r"^/api/tasks/(\d+)/dismiss$")
 _RESUME_ROUTE = re.compile(r"^/api/tasks/(\d+)/resume$")
 _FORGET_ROUTE = re.compile(r"^/api/problems/(\d+)/forget$")
+_SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _SESSION_ROUTE = re.compile(r"^/api/sessions/([A-Za-z0-9_-]{1,128})$")
 _NOTE_ROUTE = re.compile(r"^/api/notes/(\d+)/(ok|drop)$")
 
@@ -91,6 +97,12 @@ class UIServer(ThreadingHTTPServer):
 
     def __init__(self, port: int, root: Path) -> None:
         self.root = root
+        #: The sessions whose work gets a tab of its own as it starts (`cauce ui --tabs`), and
+        #: the work that has had one; `open_tab` opens one (a test passes its own).
+        self.following: list[str] = []
+        self.seen: set[str] = set()
+        self.open_tab: Callable[[str], Any] = _browser_tab
+        self._follow_lock = threading.Lock()
         self.streams = threading.BoundedSemaphore(MAX_STREAMS)
         self.local = threading.local()
         self.stop_event = threading.Event()
@@ -125,6 +137,35 @@ class UIServer(ThreadingHTTPServer):
         finally:
             store.close()
 
+    def follow(self, session_id: str, seen: Iterable[str] = ()) -> None:
+        """Open a tab for each piece of work the session starts from now on; `seen` already has
+        one. The first session followed starts the thread that looks, on a timer, never in a GET."""
+        with self._follow_lock:
+            self.seen.update(seen)
+            if session_id in self.following:
+                return
+            self.following.append(session_id)
+            first = len(self.following) == 1
+        if first:
+            threading.Thread(target=self._follow, daemon=True).start()
+
+    def _follow(self) -> None:
+        store = Store(self.root / "cauce.db")
+        try:
+            while not self.stop_event.wait(FOLLOW_EVERY_S):
+                try:
+                    with self._follow_lock:
+                        sessions = list(self.following)
+                    for session_id in sessions:
+                        open_tabs(store, self.url(), session_id, self.seen, self.open_tab)
+                except Exception:  # logged; the server keeps serving
+                    self.log_error_trace("follow")
+        finally:
+            store.close()
+
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.server_address[1]}/"
+
     def hand_over(self, version: str, launcher: Path) -> None:
         """Become the newer cauce's UI, in this process and on this port: an open
         page keeps its address, and reloads when it sees the version change."""
@@ -132,7 +173,11 @@ class UIServer(ThreadingHTTPServer):
                       f"on port {self.server_address[1]}")
         self.stop_event.set()
         self.socket.close()
-        os.execv(str(launcher), [str(launcher), "ui", "--port", str(self.server_address[1])])  # noqa: S606
+        # The newer server goes on following the session, from the work it finds then: the tabs
+        # open now stay open, and none is opened twice.
+        follow = ["--tabs", *(arg for session in self.following for arg in ("--session", session))]
+        follow = follow if self.following else []
+        os.execv(str(launcher), [str(launcher), "ui", "--port", str(self.server_address[1]), *follow])  # noqa: S606
 
     def log_note(self, text: str) -> None:
         try:
@@ -281,6 +326,10 @@ class Handler(BaseHTTPRequestHandler):
         if match := _DIFF_ROUTE.match(path):
             found = api.task_diff(store, int(match.group(1)))
             return self._json(HTTPStatus.OK, found) if found else self._error(HTTPStatus.NOT_FOUND, "no such task")
+        if match := _LIVE_ROUTE.match(path):
+            # What a running task's worker is doing, polled by its page: tool calls write no events.
+            live = api.task_live(store, int(match.group(1)))
+            return self._json(HTTPStatus.OK, live) if live else self._error(HTTPStatus.NOT_FOUND, "no such task")
         if match := _TASK_ROUTE.match(path):
             detail = api.task_detail(store, int(match.group(1)))
             return self._json(HTTPStatus.OK, detail) if detail else self._error(HTTPStatus.NOT_FOUND, "no such task")
@@ -413,6 +462,15 @@ class Handler(BaseHTTPRequestHandler):
                               if p["repo"] == note["project"] and p["exists"]), "")
                 notes.confirm(store, note["id"], Path(place) if place else None)
             return self._json(HTTPStatus.OK, {"id": note["id"], "state": store.get_note(note["id"])["state"]})
+        if path == "/api/follow":
+            # A tab for each piece of this session's work as it starts (`cauce ui --tabs` from a
+            # second session finds this server on the port and asks it).
+            session = data.get("session")
+            seen = data.get("seen") if isinstance(data.get("seen"), list) else []
+            if not isinstance(session, str) or not _SESSION_ID.match(session):
+                return self._error(HTTPStatus.BAD_REQUEST, "session: a session id")
+            self.server.follow(session, (k for k in seen if isinstance(k, str)))
+            return self._json(HTTPStatus.OK, {"following": session})
         if path == "/api/workflows/attach":
             # A person's press: one note of this project into a step's brief. A
             # workflow in use keeps it as a pending revision.
@@ -486,6 +544,39 @@ def occupant(port: int) -> dict[str, Any] | None:
         data = {}
     version = data.get("version") if isinstance(data, dict) else None
     return {"cauce": True, "version": version if isinstance(version, str) else None}
+
+
+def _browser_tab(url: str) -> Any:
+    import webbrowser
+
+    return webbrowser.open_new_tab(url)
+
+
+def follow_there(port: int, session_id: str, seen: Iterable[str], root: Path | None = None) -> bool:
+    """Ask the cauce UI that holds `port` to follow a session too: the token file is the key."""
+    token = ensure_token(root or home())
+    body = json.dumps({"session": session_id, "seen": sorted(seen)}).encode()
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+    try:
+        conn.request("POST", "/api/follow", body=body, headers={
+            "Host": f"127.0.0.1:{port}", "Content-Type": "application/json", "X-Cauce-Token": token})
+        return conn.getresponse().status == HTTPStatus.OK
+    except (OSError, http.client.HTTPException):
+        return False
+    finally:
+        conn.close()
+
+
+def open_tabs(store: Store, url: str, session_id: str, seen: set[str], open_tab: Callable[[str], Any], *,
+              limit: int = MAX_TABS) -> tuple[list[dict], int]:
+    """Open a tab for each piece of the session's work going on (`api.session_tabs`) that `seen`
+    does not hold yet, at most `limit`, and add it there. Returns the tabs opened and how many
+    more were left for the board: those are never opened later."""
+    fresh = [t for t in api.session_tabs(store, session_id) if t["key"] not in seen]
+    for tab in fresh[:limit]:
+        open_tab(f"{url}#{tab['fragment']}")
+    seen.update(t["key"] for t in fresh)
+    return fresh[:limit], max(0, len(fresh) - limit)
 
 
 def serve(port: int = 8790, root: Path | None = None, *, ready: threading.Event | None = None) -> UIServer:

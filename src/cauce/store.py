@@ -168,11 +168,19 @@ CREATE TABLE IF NOT EXISTS evolution (
   pass_first REAL, climbed REAL, version TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS evolution_day ON evolution (day, repo, kind);
+CREATE TABLE IF NOT EXISTS role_revisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, repo TEXT NOT NULL, role TEXT NOT NULL,
+  record TEXT NOT NULL, revision INTEGER, hash TEXT NOT NULL, role_version TEXT,
+  lessons TEXT NOT NULL DEFAULT '[]', evidence TEXT NOT NULL DEFAULT '{}', reason TEXT NOT NULL DEFAULT '',
+  version TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS role_revisions_role ON role_revisions (repo, role, id);
 """
 
 #: The records of how cauce evolves are append-only: a change, its verdict and a day's
-#: snapshot are written once, and what came after is a new record, never an edit.
-_APPEND_ONLY = ("calibrations", "calibration_verdicts", "evolution")
+#: snapshot are written once, and what came after is a new record, never an edit. So is
+#: each record of a role's revision (`cauce.revisions`).
+_APPEND_ONLY = ("calibrations", "calibration_verdicts", "evolution", "role_revisions")
 _APPEND_ONLY_TRIGGERS = "".join(
     f"CREATE TRIGGER IF NOT EXISTS {table}_{verb}_refused BEFORE {verb.upper()} ON {table} "
     f"BEGIN SELECT RAISE(ABORT, '{table} is append-only'); END;\n"
@@ -745,6 +753,12 @@ class Store:
                                   [*params, limit]).fetchall()
         return [dict(r) for r in rows]
 
+    def session_runs(self, session_id: str, *, status: str = "active") -> list[dict]:
+        """The workflow runs a session started, oldest first."""
+        rows = self._conn.execute("SELECT * FROM workflow_runs WHERE session_id = ? AND status = ? ORDER BY id",
+                                  (session_id, status)).fetchall()
+        return [dict(r) for r in rows]
+
     def runs_from(self, source: str) -> list[dict]:
         """The runs still active that were started from this definition file."""
         rows = self._conn.execute("SELECT * FROM workflow_runs WHERE source = ? AND status = 'active' ORDER BY id",
@@ -1034,6 +1048,44 @@ class Store:
             row.update(passed_first=bool(first and first[0]), input_tokens=int(first[1]) if first else 0,
                        calls_before_edit=edit)
         return [r for r in out.values() if r["input_tokens"] or r["passed_first"]]
+
+    def briefs(self, repo: str) -> list[dict]:
+        """Each task of a repository with its first `briefed` event (a resume's brief is not
+        the one its first try ran under): the task's id and status, and the brief's time and data."""
+        rows = self._conn.execute(
+            "SELECT e.task_id, e.ts, e.data, t.status FROM events e JOIN tasks t ON t.id = e.task_id "
+            "WHERE e.kind = 'briefed' AND t.repo = ? ORDER BY e.id", (repo,)).fetchall()
+        out: dict[int, dict] = {}
+        for task_id, ts, raw, status in rows:
+            out.setdefault(int(task_id), {"task_id": int(task_id), "status": status, "ts": ts,
+                                          "data": json.loads(raw)})
+        return list(out.values())
+
+    def role_dead_ends(self, repo: str, role: str, *, since: str = "") -> list[dict]:
+        """What a role's workers tried here that failed (`failed` or `partial` fixes kept with
+        the role's cell), after `since`, oldest first: the problem's title, the fix and why."""
+        return [dict(r) for r in self._conn.execute(
+            "SELECT f.id, f.task_id, f.created_at, f.description, f.why, f.outcome, p.title FROM fixes f "
+            "JOIN problems p ON p.id = f.problem_id WHERE f.repo = ? AND f.role = ? "
+            "AND f.outcome IN ('failed', 'partial') AND f.created_at > ? ORDER BY f.id", (repo, role, since))]
+
+    def add_role_revision(self, **record: Any) -> int:
+        """One record of a role's revision (proposed, adopted, dropped, kept, reverted), appended:
+        never edited, never removed."""
+        for key in ("lessons", "evidence"):
+            if key in record and not isinstance(record[key], str):
+                record[key] = json.dumps(record[key], ensure_ascii=False)
+        cur = self._conn.execute(f"INSERT INTO role_revisions ({', '.join(record)}) "  # noqa: S608
+                                 f"VALUES ({', '.join('?' * len(record))})", list(record.values()))
+        return int(cur.lastrowid)
+
+    def role_revisions(self, *, repo: str | None = None, role: str | None = None, since: str = "") -> list[dict]:
+        """The records of the roles' revisions, oldest first, their lessons and evidence read back."""
+        rows = self._conn.execute(
+            "SELECT * FROM role_revisions WHERE (? IS NULL OR repo = ?) AND (? IS NULL OR role = ?) AND at >= ? "
+            "ORDER BY id", (repo, repo, role, role, since)).fetchall()
+        return [{**dict(r), "lessons": json.loads(r["lessons"] or "[]"),
+                 "evidence": json.loads(r["evidence"] or "{}")} for r in rows]
 
     def session_events(self, session_id: str | None, kinds: Sequence[str], *, since: str = "",
                        repo: str | None = None) -> list[dict]:
@@ -1659,13 +1711,13 @@ class Store:
 
     def add_note(self, project: str, topic: str, title: str, text: str, *, author: str, filed_by: str,
                  source: str = "", task_id: int | None = None, session_id: str | None = None,
-                 proposed_topic: str | None = None) -> int:
+                 proposed_topic: str | None = None, state: str = "current") -> int:
         stamp = now()
         cur = self._conn.execute(
             "INSERT INTO notes (project, topic, title, text, author, filed_by, source, task_id, session_id, "
-            "proposed_topic, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (project, topic, title, text, author, filed_by, source, task_id, session_id, proposed_topic, stamp,
-             stamp))
+            "proposed_topic, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (project, topic, title, text, author, filed_by, source, task_id, session_id, proposed_topic, state,
+             stamp, stamp))
         note_id = int(cur.lastrowid)
         self._index("note", note_id, project, f"{title}\n{text}")
         return note_id

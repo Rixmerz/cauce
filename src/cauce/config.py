@@ -52,6 +52,10 @@ DEFAULTS: dict[str, Any] = {
     # or in parts side by side (`cauce.route`); the session decides.
     "route": True,
     "primer": True,
+    # A role's lessons in each repository improve by measured trial: an editor (Haiku) proposes
+    # them from what the role's workers met there, its tasks alternate with and without them,
+    # and they are kept only where they won (`cauce.revisions`). Off: the role's own text alone.
+    "role_trials": True,
     # engram (the team's memory, when its server runs): searched into the brief,
     # and handed to workers read-only. See `cauce.adapters.engram`.
     "engram": True,

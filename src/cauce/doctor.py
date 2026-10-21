@@ -49,7 +49,12 @@ FIXED_IN = {
     "turns-under-the-kind": "0.29.2",
     "format-failure-climbed": "0.30.1",
     "fix-round-off-base": "0.31.0",
+    "revision-judged-twice": "0.32.0",
+    "trial-never-sampled": "0.32.0",
+    "note-proven-unbriefed": "0.32.0",
 }
+#: A candidate revision this old whose trial briefed no task, while its role's tasks here were briefed.
+TRIAL_UNSAMPLED = timedelta(days=3)
 #: Statuses a task leaves the board with: nothing it paused waits on it any more.
 _ENDED = ("done", "dismissed", "superseded", "cancelled")
 
@@ -325,10 +330,95 @@ def fix_rounds_off_their_base(store: Store, *, since: str, **_) -> Iterable[Find
         yield _history("fix-round-off-base", before, None)
 
 
+def candidates_on_trial_at_once(store: Store, **_) -> Iterable[Finding]:
+    """Two revisions of one role on trial in one repository: each would take the other's arm."""
+    from cauce import revisions
+
+    for repo, role in sorted({(r["repo"], r["role"]) for r in store.role_revisions()}):
+        open_ = [p for p in revisions.state(store, repo, role)["proposals"] if p["trial"] is None]
+        if len(open_) > 1:
+            yield Finding("candidates-on-trial-at-once", BROKEN,
+                          f"{role} has {len(open_)} revisions on trial at once here: "
+                          + ", ".join(f"#{p['id']}" for p in open_),
+                          "the newest is the one briefed; the others wait on a verdict they never get",
+                          None, repo)
+
+
+def revisions_judged_twice(store: Store, *, since: str | None, **_) -> Iterable[Finding]:
+    """A role's revision given two verdicts of one kind: adopted and dropped, or kept and reverted."""
+    before: list[int] = []
+    rows = store.role_revisions(since=since or "")
+    for revision in sorted({r["revision"] for r in rows if r["revision"] is not None}):
+        mine = [r for r in rows if r["revision"] == revision]
+        for pair in (("adopted", "dropped"), ("kept", "reverted")):
+            twice = [r for r in mine if r["record"] in pair]
+            if len(twice) < 2:
+                continue
+            if _fixed("revision-judged-twice", twice[-1]["version"]):
+                before.append(revision)
+                continue
+            yield Finding("revision-judged-twice", SUSPECT,
+                          f"{twice[0]['role']}'s revision #{revision} was judged {len(twice)} times: "
+                          + ", ".join(r["record"] for r in twice),
+                          "the first verdict stands; a second settle judged it again", None, twice[0]["repo"])
+    if before:
+        yield _history("revision-judged-twice", before, None)
+
+
+def trials_never_sampled(store: Store, *, now: datetime, **_) -> Iterable[Finding]:
+    """A revision on trial for days whose arms hold no task while its role's tasks here were
+    briefed since: the trial is never given, and nothing is ever judged."""
+    from cauce import revisions
+
+    before: list[int] = []
+    for repo, role in sorted({(r["repo"], r["role"]) for r in store.role_revisions()}):
+        candidate = revisions.state(store, repo, role)["candidate"]
+        at = _ts(candidate["at"]) if candidate else None
+        if candidate is None or at is None or now - at < TRIAL_UNSAMPLED:
+            continue
+        briefs = store.briefs(repo)
+        sampled = any(b["data"].get("revision_trial") == candidate["id"] for b in briefs)
+        since = [b for b in briefs if b["data"].get("role") == role and str(b["ts"]) > candidate["at"]]
+        if sampled or not since:
+            continue
+        if _fixed("trial-never-sampled", candidate["version"]):
+            before.append(candidate["id"])
+            continue
+        yield Finding("trial-never-sampled", SUSPECT,
+                      f"{role}'s revision #{candidate['id']} has been on trial since {candidate['at'][:10]}, and none "
+                      f"of the {len(since)} {role} task(s) briefed here since was put in an arm",
+                      "check that `role_trials` is on where the workers run (`cauce config role_trials`)", None, repo)
+    if before:
+        yield _history("trial-never-sampled", before, None)
+
+
+def notes_proven_unbriefed(store: Store, *, since: str | None, **_) -> Iterable[Finding]:
+    """A worker-learned note made current as proven, though fewer tasks than proving takes
+    kept a brief that carried it: it was promoted on a guess, not on evidence. Proving
+    exists since the release that names this rule, so every such note is a sign."""
+    from cauce import notes
+
+    briefs: dict[int, set[int]] | None = None
+    for project in store.note_projects():
+        for note in store.notes(project, states=["current"], limit=100_000):
+            if note["author"] != "worker" or not str(note["state_reason"] or "").startswith(notes.PROVEN) or (
+                    since and str(note["updated_at"]) < since):
+                continue
+            briefs = notes.carried(store) if briefs is None else briefs
+            read = [t for t, ids in briefs.items() if note["id"] in ids and t != note["task_id"]]
+            if len(read) < notes.PROVE_AFTER:
+                yield Finding("note-proven-unbriefed", SUSPECT,
+                              f"note #{note['id']} was made current as proven, but {len(read)} task(s) kept a brief "
+                              f"that carried it (proving takes {notes.PROVE_AFTER})",
+                              f"check it with `cauce notes` and drop it if it does not hold (#{note['id']})",
+                              note["task_id"], project)
+
+
 RULES: tuple[Callable[..., Iterable[Finding]], ...] = (
     lanes_paused_on_ended, running_with_no_process, queued_with_no_dispatcher, resumes_that_never_ran,
     parts_that_lost_their_mark, joins_short_of_their_parts, attempts_with_no_session, turns_under_the_kind,
-    format_failures_that_climbed, fix_rounds_off_their_base,
+    format_failures_that_climbed, fix_rounds_off_their_base, candidates_on_trial_at_once, revisions_judged_twice,
+    trials_never_sampled, notes_proven_unbriefed,
 )
 
 

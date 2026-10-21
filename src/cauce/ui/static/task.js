@@ -1,13 +1,28 @@
 import { toast } from "./main.js";
 import { get, post } from "./net.js";
+import { notifyButton, watchEnding } from "./notify.js";
 import { stopSection } from "./stop.js";
-import { cellChip, cost, h, kindChip, pointsChip, repoName, statusBadge, TURNS_TITLE, usd, when } from "./util.js";
+import {
+  cellChip, cost, h, kindChip, pointsChip, repoName, secs, short, stateIcon, stateWord, statusBadge, tabTitle, TURNS_TITLE, usd, when,
+} from "./util.js";
 
 const drawer = () => document.getElementById("drawer");
+const solo = () => document.body.classList.contains("solo");
+// How often the page asks what a running task's worker is doing: tool calls write no events.
+const POLL_MS = 5000;
+let polling = null;
 
 function close() {
+  clearTimeout(polling);
   drawer().hidden = true;
   drawer().replaceChildren();
+  // A tab opened for this task becomes the board: its address, title and favicon say so.
+  if (solo()) {
+    document.body.classList.remove("solo");
+    history.replaceState(null, "", location.pathname);
+    document.title = "cauce";
+    stateIcon(null);
+  }
 }
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
 
@@ -69,7 +84,107 @@ function attempt(a) {
     a.capabilities.length ? h("div", { class: "meta" }, `capabilities: ${a.capabilities.join(", ")}`) : null);
 }
 
+// What the worker of a running task is doing now: its phase and its last tool calls, as their
+// signatures keep them (a tool and a verb, never an argument), newest last.
+const clock = (iso) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? String(iso ?? "") : d.toLocaleTimeString();
+};
+
+function liveSection(live) {
+  const calls = live.recent_calls || [];
+  return h("div", { class: "section live-now", "aria-live": "polite" },
+    h("h2", {}, `Now · attempt ${live.attempt_now ?? "?"}`),
+    h("div", { class: "row" }, live.phase ? h("span", { class: `chip phase p-${live.phase}` }, live.phase)
+      : h("span", { class: "meta" }, "no tool call yet in this attempt")),
+    calls.length ? h("ol", { class: "calls" }, calls.map((c) => h("li", { class: c.ok ? "" : "failed-call" },
+      h("span", { class: "meta" }, clock(c.ts)), " ", h("code", {}, c.sig), " ",
+      h("span", { class: "meta" }, c.kind), c.ok ? null : h("span", { class: "badge t-bad" }, "✕ failed")))) : null);
+}
+
+function poll(id) {
+  clearTimeout(polling);
+  polling = setTimeout(async () => {
+    const el = drawer();
+    if (el.hidden || Number(el.dataset.task) !== id) return;
+    const live = await get(`/api/tasks/${id}/live`).catch(() => null);
+    if (el.hidden || Number(el.dataset.task) !== id) return;
+    if (live && live.status !== el.dataset.status) {
+      openTask(id, true);
+      return;
+    }
+    if (live) el.querySelector(".live-now")?.replaceWith(liveSection(live));
+    poll(id);
+  }, POLL_MS);
+}
+
+// Two attempts side by side: which pair each task's page compares, kept across its re-renders.
+const comparing = new Map();
+
+function moveAfter(a) {
+  const c = a.climb;
+  if (c?.to) return [`${DIAL[c.axis] || c.axis}: `, cellChip(c.from), " → ", cellChip(c.to)];
+  if (c || a.move) return `${a.move || c.axis}: no further attempt`;
+  return a.passed ? "none: it passed" : "—";
+}
+
+function compareColumn(a) {
+  const row = (label, ...value) => [h("dt", {}, label), h("dd", {}, ...value)];
+  return h("div", { class: `compare-col ${a.passed ? "pass" : "fail"}` },
+    h("h3", {}, `Attempt #${a.seq}`),
+    h("dl", {},
+      row("cell", cellChip(a.cell)),
+      row("served by", a.served_model || "—"),
+      row("turns", `${a.turns}${a.max_turns ? ` of ${a.max_turns}` : ""}`),
+      row("cost", usd(a.cost_usd)),
+      row("wall time", a.duration_s ? secs(a.duration_s) : "—"),
+      row("ended", h("span", { class: `badge ${a.passed ? "t-ok" : "t-bad"}` },
+        h("span", { class: "icon", "aria-hidden": "true" }, a.passed ? "✓" : "✕"), a.passed ? "pass" : (a.failure || "fail"))),
+      row("move after", moveAfter(a)),
+      row("changed", a.changed_paths.length ? h("ul", {}, a.changed_paths.map((p) => h("li", {}, h("code", {}, p))))
+        : "nothing"),
+      row("summary", a.summary ? h("div", { class: "text" }, a.summary) : "—"),
+      row("check evidence", a.evidence?.trim() ? h("pre", {}, a.evidence) : "—")));
+}
+
+function compareView(taskId, attempts) {
+  const pair = comparing.get(taskId);
+  const bySeq = new Map(attempts.map((a) => [a.seq, a]));
+  const pick = (side, label) => {
+    const id = `cmp-${taskId}-${side}`;
+    return h("label", { for: id }, `${label} `,
+      h("select", { id, onchange: (e) => {
+        pair[side] = Number(e.target.value);
+        e.target.closest(".compare-box").replaceWith(compareView(taskId, attempts));
+      } }, attempts.map((a) => {
+        const opt = h("option", { value: a.seq }, `#${a.seq} ${a.cell}`);
+        opt.selected = a.seq === pair[side];
+        return opt;
+      })));
+  };
+  return h("div", { class: "compare-box" },
+    h("div", { class: "row" }, pick("a", "Left"), pick("b", "Right")),
+    h("div", { class: "compare" }, [pair.a, pair.b].map((seq) => compareColumn(bySeq.get(seq) || attempts[0]))));
+}
+
+function attemptsSection(taskId, attempts) {
+  const box = h("div", {});
+  const draw = () => box.replaceChildren(comparing.has(taskId) ? compareView(taskId, attempts) : []);
+  const toggle = attempts.length >= 2 ? h("button", { type: "button", "aria-expanded": String(comparing.has(taskId)),
+    onclick: () => {
+      if (comparing.has(taskId)) comparing.delete(taskId);
+      else comparing.set(taskId, { a: attempts.at(-2).seq, b: attempts.at(-1).seq });
+      toggle.setAttribute("aria-expanded", String(comparing.has(taskId)));
+      toggle.textContent = comparing.has(taskId) ? "Close the comparison" : "Compare";
+      draw();
+    } }, comparing.has(taskId) ? "Close the comparison" : "Compare") : null;
+  draw();
+  return h("div", { class: "section" }, h("div", { class: "row section-head" }, h("h2", {}, "Attempts"), toggle), box,
+    h("ul", { class: "timeline" }, attempts.map(attempt)));
+}
+
 export async function openTask(id, quiet = false) {
+  clearTimeout(polling);
   const d = await get(`/api/tasks/${id}`);
   const t = d.task;
   const el = drawer();
@@ -142,8 +257,10 @@ export async function openTask(id, quiet = false) {
           h("span", { title: "cauce's workers" }, `workers ${cost(t)}`),
           t.turns_usd ? h("span", { title: TURNS_TITLE }, `turns ${usd(t.turns_usd)}`) : null,
           t.pinned ? h("span", { class: "chip" }, "pinned") : null, h("span", {}, when(t.created_at)))),
-      h("div", { class: "row" }, ...actions, h("button", { onclick: close, "aria-label": "close" }, "✕"))),
+      h("div", { class: "row" }, ...actions, solo() ? notifyButton() : null,
+        h("button", { onclick: close, "aria-label": "close" }, "✕"))),
     stopSection(d.stop),
+    t.status === "running" ? liveSection(d) : null,
     h("div", { class: "section" }, h("h2", {}, "Task"), h("div", { class: "text" }, t.body)),
     t.parallel_reason ? h("div", { class: "section" }, h("h2", {}, "Dispatch"),
       h("div", {}, t.waits ? `${t.waits[0].toUpperCase()}${t.waits.slice(1)}` : t.parallel
@@ -158,7 +275,7 @@ export async function openTask(id, quiet = false) {
       h("div", { class: "meta" }, `started at ${d.plan.start}, because:`),
       h("ul", {}, (d.plan.reasons || []).map((r) => h("li", {}, r))),
       (d.plan.neighbours || []).map((n) => h("div", { class: "meta" }, n))) : null,
-    d.attempts.length ? h("div", { class: "section" }, h("h2", {}, "Attempts"), h("ul", { class: "timeline" }, d.attempts.map(attempt))) : null,
+    d.attempts.length ? attemptsSection(t.id, d.attempts) : null,
     (d.checks || []).length ? h("div", { class: "section" }, h("h2", {}, "Independent checks"),
       d.checks.map((c) => h("div", { class: "fix" },
         h("span", { class: `badge ${c.blocking ? "t-bad" : c.passed ? "t-ok" : "t-mute"}` },
@@ -187,4 +304,11 @@ export async function openTask(id, quiet = false) {
   ].filter(Boolean));
   if (!quiet) el.scrollTop = 0;
   el.hidden = false;
+  el.dataset.status = t.status;
+  if (t.status === "running") poll(id);
+  if (solo() && Number(el.dataset.task) === t.id) {
+    tabTitle(t.status, `#${t.id} ${t.title}`);
+    watchEnding(`task:${t.id}`, t.status, `#${t.id} ${short(t.title, 80)}`,
+      `${stateWord(t.status)}${d.stop?.reason ? `: ${short(d.stop.reason, 160)}` : ""}`);
+  }
 }

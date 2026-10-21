@@ -484,6 +484,11 @@ def test_a_plan_that_runs_in_parts_is_read_strictly(tmp_path):
     one = parse(proc(envelope(block(verdict="pass", summary="one", evidence="e",
                                     parts=[{"id": "all", "prompt": "Build it"}]))), asked)
     assert one.passed and one.parts == ({"id": "all", "prompt": "Build it", "surfaces": []},) and one.contract == ""
+    # A thorough plan is never thrown away for its length: the plan is not told of one, and its
+    # parts reach their workers on stdin.
+    long = parse(proc(envelope(block(verdict="pass", summary="planned", evidence="e", contract="c" * 20_000,
+                                     parts=[PARTS[0], {**PARTS[1], "prompt": "x" * 9_000}]))), asked)
+    assert long.passed and len(long.parts[1]["prompt"]) == 9_000 and len(long.contract) == 20_000
     # A step not asked for parts ignores them.
     assert parse(proc(envelope(block(verdict="pass", summary="s", evidence="e", parts=PARTS))),
                  spec(tmp_path)).parts == ()
@@ -499,7 +504,6 @@ def test_a_plan_that_runs_in_parts_is_read_strictly(tmp_path):
     ([PARTS[0], {**PARTS[1], "surfaces": []}], "c", "part 'web' declares no surfaces"),
     ([PARTS[0], {**PARTS[1], "id": "api"}], "c", "two parts are called 'api'"),
     ([PARTS[0], {**PARTS[1], "prompt": " "}], "c", "part 'web' has no prompt"),
-    ([PARTS[0], {**PARTS[1], "prompt": "x" * 6001}], "c", "part 'web': its prompt is 6001 characters, over 6000"),
     ([PARTS[0], {**PARTS[1], "id": "Web Page"}], "c", "part 2 has no id"),
     ([PARTS[0], {**PARTS[1], "surfaces": ["../up"]}], "c", "part 'web': a surface stays inside the project"),
     ([PARTS[0], "web"], "c", "part 2 is not an object"),

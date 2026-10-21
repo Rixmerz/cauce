@@ -2,6 +2,69 @@
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-10-21
+
+### Added
+
+- **A tab for each piece of a session's work.** `cauce ui --open --tabs` (and
+  `/cauce`, `/cauce:ui`) opens the board and one tab per workflow run and per
+  task the session has queued or running outside a run (at most eight; the
+  board lists the rest), then one more for each piece of work the session sends
+  while the board serves. A tab opens straight on its work (`#task=N`, the task
+  as the page; `#run=N&repo=…`, the run marked among its project's workflows),
+  follows it live, and names its state in its title (`● running · #12 …`).
+  Escape takes a task's tab back to the board. A second session that finds the
+  board already serving asks it to follow that session too (`POST /api/follow`,
+  with the token), and a server handed over to a newer cauce goes on following.
+- **A tab's work at a glance.** A task's or run's tab shows its state in its
+  favicon as well as its title (a mark per state, colours that follow the
+  theme; the board keeps its own). "Notify me when it ends", in that tab's
+  header, asks for the browser's permission on its click and then shows a
+  desktop notification when the work stops running, saying how it ended. A
+  running task's page shows its worker's phase and last eight tool calls
+  (signatures only), refreshed every 5 s through `GET /api/tasks/N/live`, and a
+  task with two or more attempts compares any two side by side: cell, served
+  model, turns, cost, wall time, how each ended, the move after it, the files
+  it changed, its summary and its check's evidence.
+- **Roles' lessons improve by measured trial.** Every brief records the role a
+  worker wore and the version of its text (`role`, `role_version` on
+  `briefed`). Once a role's workers in a repository met 3 dead ends or verifier
+  blockers, Haiku proposes a short list of lessons for that role there (the
+  role's file is never touched). The role's tasks alternate with and without it
+  until each arm has 10 first tries; it is adopted only when it passed first no
+  worse than 10 points below and did better on pass-first, attempts to pass or
+  verifier blockers, and it is reverted if, over its next 10 first tries, it
+  makes pass-first more than 20 points worse. Every proposal and verdict is
+  appended to `role_revisions`. `cauce roles revisions` and `cauce stats` show
+  them; the new `role_trials` setting (on by default) turns it off. `cauce
+  doctor` gains `candidates-on-trial-at-once`, `revision-judged-twice` and
+  `trial-never-sampled`.
+- **A first try races the next rung only where racing paid.** Once 5 races ran
+  among a repository's last tasks of a kind, racing stops there when the rung
+  won under a quarter of them, or when races took no less wall time to pass
+  than comparable climbs; the failed first try then climbs deep instead, and
+  the plan says why (`cauce.racing`). `cauce stats` lists, per repository and
+  kind, the races run, rung wins, start wins, both failed, and whether racing
+  is on there and why.
+- **What a worker learned is adopted only with evidence.** A passing worker's
+  note starts as a `candidate`: recalled, and marked unproven in a brief. It
+  becomes current once 2 later tasks whose brief carried it passed their first
+  try, and is dropped after 3 failed theirs with none passing. The `briefed`
+  event keeps the notes a brief carried (`notes`). A person's notes and those
+  filed from a conversation are unchanged. The Notes view (with a filter) and
+  `cauce notes` show the state; `cauce doctor` gains `note-proven-unbriefed`.
+- The Analysis screen shows racing's record per project and kind, and each
+  role's lessons on trial with both arms' first tries.
+
+### Fixed
+
+- **A plan is never thrown away for its length.** A plan whose part prompt
+  ran over 6,000 characters (or whose contract ran over 8,000) was read as
+  unfinished and asked again, though the plan was never told of either
+  limit and the parts reach their workers on stdin, which has no such cap.
+  Both limits are gone: a part is checked for its id, its prompt and its
+  surfaces, never for how much it says.
+
 ## [0.31.0] - 2026-10-20
 
 ### Fixed

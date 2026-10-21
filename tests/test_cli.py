@@ -475,6 +475,8 @@ def test_ui_command_serves_until_interrupted(monkeypatch, capsys):
         def __init__(self):
             import threading
             self.stop_event = threading.Event()
+            self.seen: set = set()
+            self.followed: list = []
 
         def serve_forever(self):
             raise KeyboardInterrupt
@@ -482,11 +484,28 @@ def test_ui_command_serves_until_interrupted(monkeypatch, capsys):
         def server_close(self):
             pass
 
-    monkeypatch.setattr(server, "serve", lambda port: Fake())
+        def open_tab(self, url):
+            opened.append(url)
+
+        def follow(self, session):
+            self.followed.append(session)
+
+    fake = Fake()
+    monkeypatch.setattr(server, "serve", lambda port: fake)
     opened = []
     monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
     assert cli.main(["ui", "--open"]) == 0
     assert "http://127.0.0.1:4321/" in capsys.readouterr().out and opened
+
+    # --tabs: the session's work going on gets its tabs, and the server follows the session.
+    store = Store.open()
+    task = store.create_task("going", status="running", source="cauce", repo="r", session_id="s9")
+    store.close()
+    opened.clear()
+    assert cli.main(["ui", "--open", "--tabs", "--session", "s9"]) == 0
+    out = capsys.readouterr().out
+    assert opened == ["http://127.0.0.1:4321/", f"http://127.0.0.1:4321/#task={task['id']}"]
+    assert f"tab: #{task['id']} going" in out and fake.followed == ["s9"]
 
 
 def test_resume_continues_a_stopped_task_with_what_it_was_refused_granted(capsys, git_repo, monkeypatch):
@@ -606,6 +625,17 @@ def test_ui_on_a_port_this_cauce_already_serves_opens_it(monkeypatch, capsys):
     monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
     assert cli.main(["ui", "--port", "8791", "--open"]) == 0
     assert "already at http://127.0.0.1:8791/" in capsys.readouterr().out and opened
+
+    # With --tabs it opens the session's tabs itself, then asks that server to follow the session.
+    store = Store.open()
+    task = store.create_task("going", status="queued", source="queue", repo="r", session_id="s9")
+    store.close()
+    tabs, asked = [], []
+    monkeypatch.setattr("webbrowser.open_new_tab", lambda url: tabs.append(url))
+    monkeypatch.setattr(server, "follow_there", lambda port, session, seen: asked.append((session, seen)) or False)
+    assert cli.main(["ui", "--port", "8791", "--open", "--tabs", "--session", "s9"]) == 0
+    assert tabs == [f"http://127.0.0.1:8791/#task={task['id']}"] and asked == [("s9", {f"task:{task['id']}"})]
+    assert "could not be asked" in capsys.readouterr().err
 
     def broken(port):
         raise OSError(errno.EACCES, "Permission denied")

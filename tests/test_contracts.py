@@ -29,6 +29,26 @@ def test_every_option_a_resume_stores_reads_back_the_same():
     assert set(lost) <= RUN_TIME, lost
 
 
+def test_the_notes_a_brief_carried_are_the_ones_weighing_reads_back(git_repo, store, monkeypatch):
+    """`orchestrate` keeps on `briefed` the notes the worker was shown; `notes.weigh` proves or
+    drops a candidate from that field alone."""
+    from cauce import notes, repo
+    from cauce.orchestrate import run
+
+    from .test_orchestrate import Script, kind, ok
+
+    monkeypatch.setenv("CAUCE_NOTES", "on")
+    key = repo.key(git_repo)
+    note = store.add_note(key, "business", "Prices in cents", "Prices are stored in cents in every table",
+                          author="worker", filed_by="haiku", state=notes.CANDIDATE)
+    script = Script(ok())
+    report = run("change how prices are stored in cents", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"), notes_ask=lambda *a, **kw: (None, 0.0, ""))
+    assert f"#{note} [business] Prices in cents" in script.specs[0].prompt and "(unproven:" in script.specs[0].prompt
+    assert store.last_event(report.task_id, "briefed")["data"][notes.BRIEFED] == [note]
+    assert notes.carried(store) == {report.task_id: {note}}
+
+
 #: Options a run is given by whoever starts it, never kept on the task.
 RUN_TIME: set[str] = set()
 
@@ -44,3 +64,21 @@ def test_every_reason_a_lane_is_paused_with_is_one_its_task_releases(store):
         assert re.match(rf"task #{n}[ :]", written), reason
         store.pause_lane(f"r{n}", written)
         assert store.release_lane(f"r{n}", n), reason
+
+
+def test_a_brief_s_revision_arm_is_what_the_trial_reads_back(store):
+    """`revisions.for_brief` writes the arm on the `briefed` event; `revisions.arms` counts it,
+    reading a task's first brief (a resume's is not the one its first try ran under)."""
+    from cauce import revisions
+
+    cand = store.add_role_revision(at="2026-10-01T00:00:00+00:00", repo="r", role="implementer",
+                                   record="proposed", hash="h", lessons=["Run the suite before a pass."],
+                                   version="0.32.0")
+    task = store.create_task("t", status="done", source="cauce", repo="r")
+    _, data = revisions.for_brief(store, "r", "implementer", task["id"])
+    store.add_event(task["id"], "briefed", role="implementer", **data)
+    store.add_event(task["id"], "briefed", role="implementer", revision_trial=cand, revision_arm="nonsense")
+    store.add_attempt(task["id"], cell="sonnet/medium", max_turns=80, passed=1)
+    found = revisions.arms(store, "r", cand)
+    assert found[data["revision_arm"]]["tasks"] == 1 and found[data["revision_arm"]]["briefed"] == 1
+    assert sum(arm["briefed"] for arm in found.values()) == 1
