@@ -14,6 +14,20 @@
   them; the new `role_trials` setting (on by default) turns it off. `cauce
   doctor` gains `candidates-on-trial-at-once`, `revision-judged-twice` and
   `trial-never-sampled`.
+- **A first try races the next rung only where racing paid.** Once 5 races ran
+  among a repository's last tasks of a kind, racing stops there when the rung
+  won under a quarter of them, or when races took no less wall time to pass
+  than comparable climbs; the failed first try then climbs deep instead, and
+  the plan says why (`cauce.racing`). `cauce stats` lists, per repository and
+  kind, the races run, rung wins, start wins, both failed, and whether racing
+  is on there and why.
+- **What a worker learned is adopted only with evidence.** A passing worker's
+  note starts as a `candidate`: recalled, and marked unproven in a brief. It
+  becomes current once 2 later tasks whose brief carried it passed their first
+  try, and is dropped after 3 failed theirs with none passing. The `briefed`
+  event keeps the notes a brief carried (`notes`). A person's notes and those
+  filed from a conversation are unchanged. The Notes view (with a filter) and
+  `cauce notes` show the state; `cauce doctor` gains `note-proven-unbriefed`.
 
 ### Fixed
 

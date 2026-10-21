@@ -143,3 +143,24 @@ def test_a_fix_round_that_did_not_start_on_the_round_before_is_suspect(store: St
     found = rules(store, now=LATER, alive=lambda pid: True).get("fix-round-off-base", [])
     # Only the round that started where round 1 started is off its base.
     assert [(f.severity, f.task_id) for f in found] == [(doctor.SUSPECT, first["id"] + 1)]
+
+
+def test_a_note_made_current_as_proven_with_too_few_briefs_that_carried_it_is_suspect(store: Store):
+    from cauce import notes
+
+    writer = store.create_task("x", status="done", source="cauce", repo="r")
+    note = store.add_note("r", "code", "t", "Totals are rounded half up", author="worker", filed_by="haiku",
+                          task_id=writer["id"], state=notes.CANDIDATE)
+    reader = store.create_task("y", status="done", source="cauce", repo="r")
+    store.add_event(reader["id"], "briefed", **{notes.BRIEFED: [note]})
+    store.add_event(writer["id"], "briefed", **{notes.BRIEFED: [note]})  # its own brief proves nothing
+    store.update_note(note, state="current", state_reason=notes.PROVEN + "in the brief of a guess")
+    found = rules(store, now=LATER, alive=lambda pid: True)["note-proven-unbriefed"]
+    assert [(f.severity, f.repo) for f in found] == [(doctor.SUSPECT, "r")] and f"note #{note}" in found[0].what
+    assert doctor.FIXED_IN["note-proven-unbriefed"] == "0.32.0"
+    # Proven by the tasks that read it, or a note a person confirmed: nothing to say.
+    more = store.create_task("z", status="done", source="cauce", repo="r")
+    store.add_event(more["id"], "briefed", **{notes.BRIEFED: [note]})
+    person = store.add_note("r", "code", "u", "Invoices are numbered per tenant", author="person", filed_by="person")
+    store.update_note(person, state="current", state_reason=None)
+    assert "note-proven-unbriefed" not in rules(store, now=LATER, alive=lambda pid: True)

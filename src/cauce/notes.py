@@ -25,6 +25,13 @@ session compacts or ends, Haiku reads what was said since the last time; and a
 person keeps one with `cauce note`. They are read back by topic, by the code a
 task touches and by full-text search inside the project, never another one.
 
+What a worker learned is a claim one pass made, not yet a fact: it starts as a
+`candidate`, read back marked unproven, and the tasks whose brief carried it
+decide (`weigh`, run when work settles, never in a GET): current after
+`PROVE_AFTER` of them passed their first try, dropped after `DISPROVE_AFTER`
+failed theirs with none passing. A person's note, and one Haiku filed from a
+conversation, is current as it is written.
+
 Haiku files, and fails closed: when it cannot run, a fact is still kept, under
 the topic its words point to (`filed_by: rule`), with no links.
 """
@@ -61,9 +68,20 @@ ALIASES = {
     "ops": "environment",
 }
 LINKS = ("depends_on", "explains", "replaces", "contradicts", "example_of")
-STATES = ("current", "review", "replaced", "dropped")
-#: The states recall reads: a note to review is shown, marked as such.
-LIVE = ("current", "review")
+STATES = ("current", "candidate", "review", "replaced", "dropped")
+#: The states recall reads: a note to review, or a candidate, is shown marked as such.
+LIVE = ("current", "candidate", "review")
+#: What a passing worker learned starts here: read back, marked unproven, until the tasks
+#: whose brief carried it say whether it holds (`weigh`).
+CANDIDATE = "candidate"
+#: A candidate becomes current once this many later tasks whose brief carried it passed their
+#: first try; it is dropped once this many failed theirs with none passing.
+PROVE_AFTER = 2
+DISPROVE_AFTER = 3
+#: The `briefed` event's field that lists the notes a brief carried.
+BRIEFED = "notes"
+#: How the reason of a candidate made current begins (`doctor` reads it).
+PROVEN = "proven: "
 AUTHORS = ("person", "worker", "session")
 
 #: Words that point a text at a topic: cheap routing for the hooks, and the
@@ -199,9 +217,11 @@ def add(
     repo_dir: Path | None = None,
     commit: str | None = None,
     proposed_topic: str | None = None,
+    state: str = "current",
 ) -> tuple[int, bool]:
     """Keep a note: (its id, whether it is new). A note that says what a live one
-    in the same topic already says is that one, with the new anchors and links."""
+    in the same topic already says is that one, with the new anchors and links.
+    A worker's starts as a `candidate` (`file_facts`)."""
     fact = clean_fact(text)
     if fact is None:
         raise ValueError("a note needs a fact of a few words, and never a secret")
@@ -209,7 +229,7 @@ def add(
     if existing is None:
         note_id = store.add_note(project, topic, (title or "").strip()[:120] or title_of(fact, 80), fact,
                                  author=author, filed_by=filed_by, source=source, task_id=task_id,
-                                 session_id=session_id, proposed_topic=proposed_topic)
+                                 session_id=session_id, proposed_topic=proposed_topic, state=state)
     else:
         note_id = existing
     for to_id, kind in links:
@@ -389,6 +409,55 @@ def confirm(store: Store, note_id: int, repo_dir: Path | None) -> dict | None:
     return store.update_note(note_id, state="current", state_reason=None)
 
 
+def carried(store: Store) -> dict[int, set[int]]:
+    """Per task, the notes its first brief carried (the `briefed` event's `BRIEFED`); a task
+    whose first brief kept no such field is left out."""
+    out: dict[int, set[int]] = {}
+    seen: set[int] = set()
+    for event in store.events_of_kinds(["briefed"]):
+        task_id = int(event["task_id"])
+        if task_id in seen:
+            continue
+        seen.add(task_id)
+        ids = event["data"].get(BRIEFED)
+        if isinstance(ids, list):
+            out[task_id] = {int(i) for i in ids if isinstance(i, int)}
+    return out
+
+
+def weigh(store: Store) -> dict[str, list[int]]:
+    """Settle the candidates by the tasks whose first brief carried them, other than the one
+    that wrote them, once those ended: current after `PROVE_AFTER` passed their first try
+    (`standards.samples`), dropped after `DISPROVE_AFTER` failed theirs with none passing.
+    From `evolution.settle`, never from a GET. Which notes moved, by the state they took."""
+    moved: dict[str, list[int]] = {"current": [], "dropped": []}
+    candidates = [n for p in store.note_projects() for n in store.notes(p, states=[CANDIDATE], limit=100_000)]
+    if not candidates:
+        return moved
+    from cauce import standards
+
+    briefs = carried(store)
+    ended = {t.id: t for t in standards.ended(store)}
+    with store.immediate():
+        for note in candidates:
+            passed, failed = [], []
+            for task_id in sorted(t for t, ids in briefs.items() if note["id"] in ids and t != note["task_id"]):
+                task = ended.get(task_id)
+                first = standards.samples(task.attempts)[:1] if task is not None else []
+                if first:
+                    (passed if first[0][1] else failed).append(task_id)
+            if len(passed) >= PROVE_AFTER:
+                store.update_note(note["id"], state="current", state_reason=PROVEN + "in the brief of "
+                                  + ", ".join(f"#{t}" for t in passed) + ", which passed their first try")
+                moved["current"].append(int(note["id"]))
+            elif not passed and len(failed) >= DISPROVE_AFTER:
+                store.update_note(note["id"], state="dropped", state_reason="unproven: in the brief of "
+                                  + ", ".join(f"#{t}" for t in failed) + ", which failed their first try, and of "
+                                  "none that passed")
+                moved["dropped"].append(int(note["id"]))
+    return moved
+
+
 # --- reading ------------------------------------------------------------------
 
 
@@ -483,6 +552,8 @@ def line(note: Mapping[str, Any], *, text_chars: int = 400) -> str:
     out = f"#{note['id']} [{note['topic']}] {note['title']}: {note['text'][:text_chars]}"
     if note["state"] == "review":
         out += f" (TO REVIEW: {note.get('state_reason') or 'its code changed'})"
+    elif note["state"] == CANDIDATE:
+        out += " (unproven: a worker learned it and no later task confirmed it yet)"
     if note.get("anchors"):
         out += " · about " + ", ".join(
             (f"{a['symbol']} ({a['path']})" if a["symbol"] else a["path"]) for a in note["anchors"][:3])
@@ -687,7 +758,8 @@ def _file_one(store: Store, project: str, fact: str, entry: Mapping[str, Any] | 
         note_id, new = add(store, project, fact, topic=topic, author=author, filed_by=filed_by, title=title,
                            source=source, task_id=task_id, session_id=session_id, links=links, paths=paths,
                            symbols=symbols, repo_dir=repo_dir, commit=commit,
-                           proposed_topic=proposed if proposed and proposed not in names else None)
+                           proposed_topic=proposed if proposed and proposed not in names else None,
+                           state=CANDIDATE if author == "worker" else "current")
     except ValueError:
         return None
     note = store.get_note(note_id)

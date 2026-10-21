@@ -242,7 +242,7 @@ td.num, th.num { text-align: right; }
 .note .links { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
 .note .link { font-size: 12.5px; padding: 2px 9px; }
 code.anchor { font-family: var(--mono); font-size: 12px; margin-right: 6px; overflow-wrap: anywhere; }
-.tag.review { color: var(--warn); font-size: 12px; font-weight: 600; }
+.tag.review, .tag.candidate { color: var(--warn); font-size: 12px; font-weight: 600; }
 .tag.replaced, .tag.dropped { color: var(--muted); font-size: 12px; font-weight: 600; }
 
 .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--panel);

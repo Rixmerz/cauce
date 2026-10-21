@@ -26,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cauce import cells as cells_mod
-from cauce import launch, revisions, usage
+from cauce import launch, racing, revisions, usage
 from cauce.store import Store
 
 #: The phases of a run, in the order they happen. The first four come before its own wall
@@ -425,6 +425,8 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "compactions": compactions(store.session_events(None, COMPACTION_EVENTS, since=since, repo=repo)),
         "primer": cells_mod.trial(store, repo),
         "role_revisions": revisions.overview(store, repo),
+        # Whether racing a first try paid, per repository and kind (`cauce.racing`): its own window.
+        "races": racing.table(store, repo),
     }
     if keep_runs is None:
         report["runs"] = found
@@ -510,6 +512,12 @@ def text(report: Mapping[str, Any]) -> str:
         if report.get("role_revisions"):
             lines += ["", "the roles' lessons here (a revision on trial, its arms' first tries, and its history):"]
             lines += ["  " + line for line in revisions.text(report["role_revisions"], lessons=False)]
+        if report.get("races"):
+            lines += ["", "first tries that raced the next rung (each repository's last tasks of the kind):"]
+            for row in report["races"]:
+                lines.append(f"  {_name(row['repo']):<16} {row['kind']:<12} races {row['races']:>3}  rung won "
+                             f"{row['rung_wins']:>3}  start won {row['start_wins']:>3}  both failed "
+                             f"{row['neither']:>3}  {'racing' if row['pays'] else 'not racing'}: {row['why']}")
         if report["stops"]:
             lines += ["", "stopped by: " + ", ".join(f"{k} {v}" for k, v in report["stops"].items())]
     t = report["turns"]["turns"]
@@ -518,6 +526,10 @@ def text(report: Mapping[str, Any]) -> str:
                   f"  ${t['usd']:.2f}  interrupted {t['interrupted']}"]
     lines += _compaction_lines(report.get("compactions") or [])
     return "\n".join(lines)
+
+
+def _name(repo: str | None) -> str:
+    return str(repo or "-").rstrip("/").rsplit("/", 1)[-1]
 
 
 def _compaction_lines(rows: Sequence[Mapping[str, Any]]) -> list[str]:

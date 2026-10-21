@@ -51,6 +51,7 @@ FIXED_IN = {
     "fix-round-off-base": "0.31.0",
     "revision-judged-twice": "0.32.0",
     "trial-never-sampled": "0.32.0",
+    "note-proven-unbriefed": "0.32.0",
 }
 #: A candidate revision this old whose trial briefed no task, while its role's tasks here were briefed.
 TRIAL_UNSAMPLED = timedelta(days=3)
@@ -391,11 +392,33 @@ def trials_never_sampled(store: Store, *, now: datetime, **_) -> Iterable[Findin
         yield _history("trial-never-sampled", before, None)
 
 
+def notes_proven_unbriefed(store: Store, *, since: str | None, **_) -> Iterable[Finding]:
+    """A worker-learned note made current as proven, though fewer tasks than proving takes
+    kept a brief that carried it: it was promoted on a guess, not on evidence. Proving
+    exists since the release that names this rule, so every such note is a sign."""
+    from cauce import notes
+
+    briefs: dict[int, set[int]] | None = None
+    for project in store.note_projects():
+        for note in store.notes(project, states=["current"], limit=100_000):
+            if note["author"] != "worker" or not str(note["state_reason"] or "").startswith(notes.PROVEN) or (
+                    since and str(note["updated_at"]) < since):
+                continue
+            briefs = notes.carried(store) if briefs is None else briefs
+            read = [t for t, ids in briefs.items() if note["id"] in ids and t != note["task_id"]]
+            if len(read) < notes.PROVE_AFTER:
+                yield Finding("note-proven-unbriefed", SUSPECT,
+                              f"note #{note['id']} was made current as proven, but {len(read)} task(s) kept a brief "
+                              f"that carried it (proving takes {notes.PROVE_AFTER})",
+                              f"check it with `cauce notes` and drop it if it does not hold (#{note['id']})",
+                              note["task_id"], project)
+
+
 RULES: tuple[Callable[..., Iterable[Finding]], ...] = (
     lanes_paused_on_ended, running_with_no_process, queued_with_no_dispatcher, resumes_that_never_ran,
     parts_that_lost_their_mark, joins_short_of_their_parts, attempts_with_no_session, turns_under_the_kind,
     format_failures_that_climbed, fix_rounds_off_their_base, candidates_on_trial_at_once, revisions_judged_twice,
-    trials_never_sampled,
+    trials_never_sampled, notes_proven_unbriefed,
 )
 
 

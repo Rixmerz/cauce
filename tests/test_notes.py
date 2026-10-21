@@ -467,6 +467,108 @@ def test_the_hook_process_answers_precompact_with_nothing(tmp_path, git_repo):
     assert proc.returncode == 0 and proc.stdout == ""
 
 
+def _briefed(store: Store, task_id: int, *ids: int) -> None:
+    store.add_event(task_id, "briefed", session=None, dead_ends=0, areas=[], context_chars=0,
+                    **{notes.BRIEFED: list(ids)})
+
+
+def test_a_worker_s_note_starts_as_a_candidate_and_its_line_says_it_is_unproven(store: Store):
+    def ask(*a, **kw):
+        return None, 0.0, "no haiku"
+
+    filed = notes.file_facts(store, "p", ["Prices are stored in cents in every table"], author="worker",
+                             source="task #1", task_id=1, ask=ask)
+    note = store.get_note(filed[0]["id"])
+    assert note["state"] == notes.CANDIDATE and notes.CANDIDATE in notes.STATES and notes.CANDIDATE in notes.LIVE
+    # Live for recall, marked as unproven in a brief.
+    found = notes.recall(store, "p", "prices cents")
+    assert [n["id"] for n in found] == [note["id"]]
+    assert "(unproven:" in notes.line(found[0]) and "(unproven:" in "\n".join(notes.brief_lines(found))
+    # A session's or a person's note is current as written.
+    said = notes.file_facts(store, "p", ["Invoices are numbered per tenant"], author="session", source="s", ask=ask)
+    assert store.get_note(said[0]["id"])["state"] == "current"
+    kept, _ = notes.add(store, "p", "Deploys go out on Tuesdays only", topic="environment", author="person",
+                        filed_by="person")
+    assert store.get_note(kept)["state"] == "current" and "unproven" not in notes.line(notes.expand(store, [kept])[0])
+
+
+def test_a_candidate_is_proven_by_later_tasks_that_passed_their_first_try(store: Store):
+    from .test_standards import finished
+
+    writer = finished(store, ("sonnet/medium", 1))
+    note = store.add_note("r", "code", "t", "Totals are rounded half up", author="worker", filed_by="haiku",
+                          task_id=writer, state=notes.CANDIDATE)
+    _briefed(store, writer, note)  # its own task proves nothing
+    first = finished(store, ("sonnet/medium", 1))
+    _briefed(store, first, note)
+    climbed = finished(store, ("sonnet/medium", 0, "code_bug", "more_effort"), ("sonnet/high", 1))
+    _briefed(store, climbed, note)
+    assert notes.weigh(store) == {"current": [], "dropped": []}
+    assert store.get_note(note)["state"] == notes.CANDIDATE
+    # A task still running says nothing yet.
+    running = store.create_task("x", status="running", source="cauce", repo="r", kind="implement")
+    _briefed(store, running["id"], note)
+    assert notes.weigh(store)["current"] == []
+    second = finished(store, ("sonnet/medium", 0, "turns_exhausted", "more_turns"), ("sonnet/medium", 1))
+    _briefed(store, second, note)
+    assert notes.weigh(store) == {"current": [note], "dropped": []}
+    proven = store.get_note(note)
+    assert proven["state"] == "current" and proven["state_reason"].startswith(notes.PROVEN)
+    assert f"#{first}, #{second}" in proven["state_reason"]
+    # Settled once: a current note is no candidate any more.
+    assert notes.weigh(store) == {"current": [], "dropped": []}
+
+
+def test_a_candidate_whose_readers_failed_their_first_try_is_dropped_and_one_pass_keeps_it(store: Store):
+    from .test_standards import finished
+
+    lone = store.add_note("r", "code", "t", "The cache is warmed by a cron job", author="worker", filed_by="haiku",
+                          state=notes.CANDIDATE)
+    mixed = store.add_note("r", "code", "u", "The queue retries three times", author="worker", filed_by="haiku",
+                           state=notes.CANDIDATE)
+    readers = [finished(store, ("sonnet/medium", 0, "code_bug", "more_effort"), ("sonnet/high", 0))
+               for _ in range(notes.DISPROVE_AFTER)]
+    for task_id in readers:
+        _briefed(store, task_id, lone, mixed)
+    passed = finished(store, ("sonnet/medium", 1))
+    _briefed(store, passed, mixed)
+    # A first try that only met the environment says nothing.
+    env = finished(store, ("sonnet/medium", 0, "environment", "retry"), ("sonnet/medium", 0, "environment"))
+    _briefed(store, env, mixed)
+    assert notes.weigh(store) == {"current": [], "dropped": [lone]}
+    gone = store.get_note(lone)
+    assert gone["state"] == "dropped" and gone["state_reason"].startswith("unproven: in the brief of")
+    assert store.get_note(mixed)["state"] == notes.CANDIDATE
+    assert notes.recall(store, "r", "cache cron") == []
+
+
+def test_settle_weighs_the_candidates(store: Store):
+    from cauce import evolution
+
+    from .test_standards import finished
+
+    note = store.add_note("r", "code", "t", "Totals are rounded half up", author="worker", filed_by="haiku",
+                          state=notes.CANDIDATE)
+    for _ in range(notes.PROVE_AFTER):
+        _briefed(store, finished(store, ("sonnet/medium", 1)), note)
+    assert evolution.settle(store)["notes"] == {"current": [note], "dropped": []}
+
+
+def test_the_notes_view_and_cli_show_a_candidate_with_its_word(store: Store, git_repo, capsys):
+    from cauce import repo
+    from cauce.ui import api
+
+    key = repo.key(git_repo)
+    note = store.add_note(key, "code", "Totals", "Totals are rounded half up", author="worker", filed_by="haiku",
+                          state=notes.CANDIDATE)
+    view = api.notes_view(store, key)
+    assert [n["state"] for n in view["notes"]] == [notes.CANDIDATE]
+    assert [n["id"] for n in api.notes_view(store, key, state=notes.CANDIDATE)["notes"]] == [note]
+    assert api.notes_view(store, key, state="review")["notes"] == []
+    cli._print_notes(notes.expand(store, [note]), False)
+    assert f"#{note} [code] [candidate] Totals" in capsys.readouterr().out
+
+
 def test_security_alerts_are_read_from_what_a_worker_learned_and_found_with_secrets_masked():
     from cauce.notes import security_alerts
 

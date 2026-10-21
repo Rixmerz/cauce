@@ -46,6 +46,7 @@ from cauce import (
     notes,
     plugins,
     project,
+    racing,
     repo,
     revisions,
     roles,
@@ -570,7 +571,7 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
                                       reading=kind in READ_ONLY_KINDS), role, registry, repo_dir)
     names = tuple(dict.fromkeys([*selected.names, *(a.name for a, _ in active)]))
     race, race_why = race_cell(store, key, kind, ladder, start, options)
-    if race is not None:
+    if race_why:
         reasons.append(race_why)
     return Plan(kind, classification, ladder, start, reasons + neighbour_notes, names,
                 tuple(context), tuple(statuses), tuple(active), tuple(known), role, team, why,
@@ -592,7 +593,9 @@ def race_cell(store: Store, key: str | None, kind: str, ladder: Sequence[Cell], 
     the first that passes its check is kept (the other is stopped). Money is no brake, so the
     second worker is the price of the time. Never a pinned start, a reading kind, a step that
     decides a ledger, joins parts or plans them, work in the person's checkout, or with
-    `race` off."""
+    `race` off. Racing judges itself (`racing.judge`): where its record says it rarely
+    paid here, the start does not race, the climb goes deep instead, and the reason says
+    so beside no rung."""
     if (not key or options.start is not None or kind in READ_ONLY_KINDS or not options.isolate
             or options.launch_dir or options.ledger or options.integrate or options.parts
             or not config.enabled("race", os.environ)):
@@ -601,12 +604,18 @@ def race_cell(store: Store, key: str | None, kind: str, ladder: Sequence[Cell], 
     rung = next((c for c in after if not c.needs_approval), None)
     if rung is None:
         return None, ""
-    window = [t for t in standards.ended(store, repo=key) if t.kind == kind][-standards.WINDOW:]
+    mine = [t for t in standards.ended(store, repo=key) if t.kind == kind]
+    window = mine[-standards.WINDOW:]
     passed, tried = standards.rates(window).get(start.label, [0, 0])
     if tried < RACE_SAMPLES or passed / tried >= RACE_BELOW:
         return None, ""
+    record = racing.judge(window, mine)
+    if not record.pays:
+        return None, (f"its first try does not race {start.label} against {rung.label}, though {passed} of {tried} "
+                      f"first tries at {start.label} passed here: {record.why}")
     return rung, (f"its first try races {start.label} against {rung.label}: {passed} of {tried} first tries at "
-                  f"{start.label} passed here; the first to pass its check is kept, the other stopped")
+                  f"{start.label} passed here; the first to pass its check is kept, the other stopped"
+                  + (f" ({record.why})" if record.races else ""))
 
 
 @dataclass
@@ -624,7 +633,7 @@ class Raced:
 
 
 #: The move a race's stopped try is kept with: it says nothing of its cell (`standards.samples`).
-RACED_OUT = "raced_out"
+RACED_OUT = racing.RACED_OUT
 
 
 def _record_raced(store: Store, task_id: int, raced: Raced, turns: int, capabilities: Sequence[str],
@@ -989,6 +998,8 @@ def run(
                 context.append(cells.primer_text(lines))
     # Which role and which version of its text this worker wears, and the role's lessons here:
     # given or withheld by their trial, and kept either way so the arms can be compared.
+    # The notes the brief carries are kept too, so a worker-learned one is proven or dropped by
+    # the tasks that read it (`notes.weigh`), never by a guess.
     worn: dict[str, Any] = {}
     if the_plan.role is not None:
         worn = {"role": role_name, "role_version": roles.version(the_plan.role)}
@@ -998,7 +1009,8 @@ def run(
             if lessons:
                 context.append(lessons)
     store.add_event(task["id"], "briefed", session=got, dead_ends=len(dead), areas=list(reach),
-                    context_chars=sum(len(line) for line in context), **primed, **worn)
+                    context_chars=sum(len(line) for line in context), **primed, **worn,
+                    **({notes.BRIEFED: [int(n["id"]) for n in the_plan.notes]} if the_plan.notes else {}))
     # The runtime the project declares goes first on the worker's PATH, and on its
     # check's: a worker given the wrong Node hunts for another and is refused each one.
     run_env = runtime.env_for(workdir)

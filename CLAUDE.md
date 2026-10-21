@@ -48,6 +48,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
 | `src/cauce/revisions.py` | a role's lessons per repository, improved by measured trial: proposed by Haiku from the role's dead ends and verifier blockers there, tried in alternating arms, adopted, dropped or reverted, every record appended to `role_revisions`; `cauce roles revisions` reads it |
+| `src/cauce/racing.py` | whether racing a first try paid, per repository and kind: each race read from its attempts (rung, start, neither), the rung's wins and the time to pass against climbs, the judgement `race_cell` and `cauce stats` read; no model |
 | `src/cauce/cells.py` | where a lesson belongs: the area a path or a change is in, the role that met it, or everyone (`scope`); the text a failure is kept and matched by (a workflow step's goal, never its template); the cell's primer (how its workers got oriented) and its trial; no model |
 | `src/cauce/doctor.py` | `cauce doctor`: states the store should never hold, each a bug that shipped turned into a query (broken: stuck now; suspect: over the last days); read only, no model; SessionStart names what is broken |
 | `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away |
@@ -615,8 +616,15 @@ yields the default kind, not a guess.
   their cost; one stopped because the other passed first (`RACED_OUT`) teaches its cell
   nothing, and the rung's is a first try of its own (`standards.samples`). Never a
   pinned start, a reading kind, a ledger, integrate or plan-parts step, a resume, a run
-  in the checkout, or a worktree that brought files in from it. Money is no brake: the
-  second worker is the price of the climb's wait.
+  in the checkout, or a worktree that brought files in from it. Racing judges itself
+  (`cauce.racing`): once `racing.JUDGE_AFTER` races ran among the window of the kind
+  here, each read from its attempts (the rung won, the start won, neither), it stops
+  where the rung won under `racing.WINS_BELOW` of them, or where the races the start did
+  not win took no less wall time to pass, at the median, than the kind's climbs without
+  one (each side over at least `racing.TIME_SAMPLES`); the failed first try then climbs
+  deep, the plan says why, and races that fall out of the window let it be tried again.
+  Money is no brake and never an input: the second worker is the price of the climb's
+  wait, and whether it paid is read from wins and time alone.
 - A workflow step a blind review of its change follows (`workflows.reviewed_next`: a
   review with no ledger that needs it, or an integrate step that joins its parts and is
   followed by one) runs no independent verifier of its own (`Options.reviewed_next`):
@@ -710,7 +718,14 @@ yields the default kind, not a guess.
   read from another (a workspace is one project). A note is written by a passing worker (`learned`), by
   Haiku from a session's conversation (every few turns, when the scribe finds
   them due, before a compaction, at its end), or by a person — never by a failed
-  attempt, whose facts no pass confirmed. Haiku files under topics that
+  attempt, whose facts no pass confirmed. A worker's note starts as a
+  `candidate`: recalled, marked unproven in a brief, and adopted only on
+  evidence. The `briefed` event keeps the notes each brief carried
+  (`notes.BRIEFED`), and `notes.weigh`, in `evolution.settle` and never in a
+  GET, makes it current once `notes.PROVE_AFTER` later tasks whose first brief
+  carried it passed their first try, and drops it, with its reason, after
+  `notes.DISPROVE_AFTER` failed theirs with none passing. A person's note and
+  Haiku's from a conversation are current as written. Haiku files under topics that
   exist and never invents a link; without Haiku a fact is kept by its words.
   A fact that looks like a secret is never kept.
 - A note's anchor is reviewed only against this checkout's history: a change
