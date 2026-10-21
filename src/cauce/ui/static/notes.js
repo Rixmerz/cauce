@@ -3,7 +3,7 @@
 import { get, post } from "./net.js";
 import { h, when } from "./util.js";
 
-const STATES = [["", "live"], ["review", "to review"], ["replaced", "replaced"], ["dropped", "dropped"]];
+const STATES = [["", "live"], ["candidate", "candidate (unproven)"], ["review", "to review"], ["replaced", "replaced"], ["dropped", "dropped"]];
 
 function anchors(note) {
   if (!note.anchors.length) return null;
@@ -20,14 +20,14 @@ function links(note, focus) {
 
 function actions(note, ctx, reload) {
   const out = [];
-  if (note.state === "review") {
+  if (note.state === "review" || note.state === "candidate") {
     out.push(h("button", { onclick: async () => {
       await post(`/api/notes/${note.id}/ok`);
-      ctx.toast(`#${note.id} is current again`);
+      ctx.toast(`#${note.id} is current${note.state === "review" ? " again" : ""}`);
       reload();
     } }, "Checked: still true"));
   }
-  if (note.state === "current" || note.state === "review") {
+  if (note.state === "current" || note.state === "review" || note.state === "candidate") {
     const drop = h("button", { class: "danger", onclick: async () => {
       if (drop.dataset.armed !== "1") {
         drop.dataset.armed = "1";
@@ -54,6 +54,8 @@ function card(note, ctx, reload, focus) {
       note.why ? h("span", { class: "meta" }, note.why) : null),
     showText ? h("div", { class: "text" }, note.text) : null,
     note.state === "review" && note.state_reason ? h("div", { class: "asks" }, `to review: ${note.state_reason}`) : null,
+    note.state === "candidate" ? h("div", { class: "meta" },
+      "unproven: a worker learned it; it becomes current once later tasks that read it pass their first try") : null,
     anchors(note),
     links(note, focus),
     h("div", { class: "meta" }, h("span", {}, note.author), h("span", {}, `filed by ${note.filed_by}`),

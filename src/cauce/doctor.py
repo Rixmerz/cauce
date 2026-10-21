@@ -49,6 +49,7 @@ FIXED_IN = {
     "turns-under-the-kind": "0.29.2",
     "format-failure-climbed": "0.30.1",
     "fix-round-off-base": "0.31.0",
+    "note-proven-unbriefed": "0.32.0",
 }
 #: Statuses a task leaves the board with: nothing it paused waits on it any more.
 _ENDED = ("done", "dismissed", "superseded", "cancelled")
@@ -325,10 +326,32 @@ def fix_rounds_off_their_base(store: Store, *, since: str, **_) -> Iterable[Find
         yield _history("fix-round-off-base", before, None)
 
 
+def notes_proven_unbriefed(store: Store, *, since: str | None, **_) -> Iterable[Finding]:
+    """A worker-learned note made current as proven, though fewer tasks than proving takes
+    kept a brief that carried it: it was promoted on a guess, not on evidence. Proving
+    exists since the release that names this rule, so every such note is a sign."""
+    from cauce import notes
+
+    briefs: dict[int, set[int]] | None = None
+    for project in store.note_projects():
+        for note in store.notes(project, states=["current"], limit=100_000):
+            if note["author"] != "worker" or not str(note["state_reason"] or "").startswith(notes.PROVEN) or (
+                    since and str(note["updated_at"]) < since):
+                continue
+            briefs = notes.carried(store) if briefs is None else briefs
+            read = [t for t, ids in briefs.items() if note["id"] in ids and t != note["task_id"]]
+            if len(read) < notes.PROVE_AFTER:
+                yield Finding("note-proven-unbriefed", SUSPECT,
+                              f"note #{note['id']} was made current as proven, but {len(read)} task(s) kept a brief "
+                              f"that carried it (proving takes {notes.PROVE_AFTER})",
+                              f"check it with `cauce notes` and drop it if it does not hold (#{note['id']})",
+                              note["task_id"], project)
+
+
 RULES: tuple[Callable[..., Iterable[Finding]], ...] = (
     lanes_paused_on_ended, running_with_no_process, queued_with_no_dispatcher, resumes_that_never_ran,
     parts_that_lost_their_mark, joins_short_of_their_parts, attempts_with_no_session, turns_under_the_kind,
-    format_failures_that_climbed, fix_rounds_off_their_base,
+    format_failures_that_climbed, fix_rounds_off_their_base, notes_proven_unbriefed,
 )
 
 

@@ -1659,13 +1659,13 @@ class Store:
 
     def add_note(self, project: str, topic: str, title: str, text: str, *, author: str, filed_by: str,
                  source: str = "", task_id: int | None = None, session_id: str | None = None,
-                 proposed_topic: str | None = None) -> int:
+                 proposed_topic: str | None = None, state: str = "current") -> int:
         stamp = now()
         cur = self._conn.execute(
             "INSERT INTO notes (project, topic, title, text, author, filed_by, source, task_id, session_id, "
-            "proposed_topic, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (project, topic, title, text, author, filed_by, source, task_id, session_id, proposed_topic, stamp,
-             stamp))
+            "proposed_topic, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (project, topic, title, text, author, filed_by, source, task_id, session_id, proposed_topic, state,
+             stamp, stamp))
         note_id = int(cur.lastrowid)
         self._index("note", note_id, project, f"{title}\n{text}")
         return note_id

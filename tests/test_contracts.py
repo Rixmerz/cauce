@@ -29,6 +29,26 @@ def test_every_option_a_resume_stores_reads_back_the_same():
     assert set(lost) <= RUN_TIME, lost
 
 
+def test_the_notes_a_brief_carried_are_the_ones_weighing_reads_back(git_repo, store, monkeypatch):
+    """`orchestrate` keeps on `briefed` the notes the worker was shown; `notes.weigh` proves or
+    drops a candidate from that field alone."""
+    from cauce import notes, repo
+    from cauce.orchestrate import run
+
+    from .test_orchestrate import Script, kind, ok
+
+    monkeypatch.setenv("CAUCE_NOTES", "on")
+    key = repo.key(git_repo)
+    note = store.add_note(key, "business", "Prices in cents", "Prices are stored in cents in every table",
+                          author="worker", filed_by="haiku", state=notes.CANDIDATE)
+    script = Script(ok())
+    report = run("change how prices are stored in cents", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"), notes_ask=lambda *a, **kw: (None, 0.0, ""))
+    assert f"#{note} [business] Prices in cents" in script.specs[0].prompt and "(unproven:" in script.specs[0].prompt
+    assert store.last_event(report.task_id, "briefed")["data"][notes.BRIEFED] == [note]
+    assert notes.carried(store) == {report.task_id: {note}}
+
+
 #: Options a run is given by whoever starts it, never kept on the task.
 RUN_TIME: set[str] = set()
 
