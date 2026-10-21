@@ -426,6 +426,8 @@ def _run(args: argparse.Namespace) -> int:
     try:
         if fanned and not args.json:
             print(f"cauce: {fanned}")
+        if not args.json and (big := workflows.many_features(str(inputs.get("goal") or ""))):
+            print(f"cauce: {big}")
         if args.dry_run:
             if args.after is not None:
                 after.target(store, run_id=args.after)  # the run it would wait for is checked too

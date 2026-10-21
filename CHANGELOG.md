@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-10-21
+
+### Added
+
+- **Parts that build on each other.** A plan's part may name one part listed
+  before it (`after`): it is queued with the others, waits for that part to
+  pass and starts from what it kept, so a large feature runs in phases (data
+  and API, then the screens on them) instead of being forced into parts that
+  all build side by side. A retry that runs the earlier part again takes the
+  parts held behind it along. A plan may give up to 10 parts (it was 6): the
+  machine's level, not the plan, bounds how many build at once.
+- **A plan reads what the split needs.** Plans are told to read the layout and
+  the interfaces the parts share, not every file: each part's worker reads its
+  own code.
+- **A goal that is several features is told so.** `cauce workflow run` says,
+  before it starts, that a goal listing six items or more at the largest size
+  costs less as runs per feature or per phase (`--after run:<N>`); the run
+  goes on as asked. The orchestration guidance says the same.
+
 ## [0.32.0] - 2026-10-21
 
 ### Added

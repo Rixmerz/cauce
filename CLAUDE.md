@@ -629,6 +629,9 @@ yields the default kind, not a guess.
   review with no ledger that needs it, or an integrate step that joins its parts and is
   followed by one) runs no independent verifier of its own (`Options.reviewed_next`):
   the review reads the request and the diff as the verifier would, and the plan says so.
+- A goal of `workflows.MANY_FEATURES` items or more at the largest size is told,
+  before its run starts, that runs per feature or per phase (`--after run:<N>`)
+  cost less than one plan for all; advice, and the run goes on as asked.
 - `cauce workflow run feature` runs as `feature-parallel` when its goal is
   `workflows.FAN_OUT_POINTS` or more, or touches `FAN_OUT_AREAS` areas, by the plan's
   pure estimate (`workflows.fanned`), and says so; never a `feature` the person saved,
@@ -811,8 +814,14 @@ yields the default kind, not a guess.
   waits on; that plan (`kind plan`, read-only) is asked for `parts` (1 to
   `launch.MAX_PARTS`, each an id, a prompt and surfaces no other part reaches)
   and their `contract`, read strictly (`launch.read_parts`: no parts, more than
-  six, a part without surfaces beside another, or surfaces that may touch are
-  `inconclusive`, never a guess). When the plan passes, `advance` queues one
+  `MAX_PARTS`, a part without surfaces beside another, surfaces that may touch,
+  or an `after` that names no earlier part are `inconclusive`, never a guess).
+  A part that builds on another names it (`after`, one part listed before it):
+  it is queued with the others, held behind that part's task (`cauce.after`),
+  and starts from what that part kept once it passes; a retry that runs that
+  part again moves the hold to the retry, and a retried part whose earlier part
+  passed starts from its kept tip. The plan is told to read the layout and the
+  interfaces the parts share, never every file: each part's worker reads its own. When the plan passes, `advance` queues one
   task per part in its transaction: the step's prompt, its inputs quoted as
   context (a part's criteria are its own prompt's; the review judges the whole
   request), the part's prompt, the contract verbatim and quoted, the part's

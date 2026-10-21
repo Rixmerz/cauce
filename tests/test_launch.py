@@ -484,6 +484,11 @@ def test_a_plan_that_runs_in_parts_is_read_strictly(tmp_path):
     one = parse(proc(envelope(block(verdict="pass", summary="one", evidence="e",
                                     parts=[{"id": "all", "prompt": "Build it"}]))), asked)
     assert one.passed and one.parts == ({"id": "all", "prompt": "Build it", "surfaces": []},) and one.contract == ""
+    # A part that builds on an earlier one says so: it is kept with the part.
+    ordered = parse(proc(envelope(block(verdict="pass", summary="planned", evidence="e", contract="c",
+                                        parts=[PARTS[0], {**PARTS[1], "after": "api"}]))), asked)
+    assert ordered.passed and ordered.parts[1]["after"] == "api" and "after" not in ordered.parts[0]
+    assert '"after"' in launch.PARTS_INSTRUCTIONS and "Read only what the split needs" in launch.PARTS_INSTRUCTIONS
     # A thorough plan is never thrown away for its length: the plan is not told of one, and its
     # parts reach their workers on stdin.
     long = parse(proc(envelope(block(verdict="pass", summary="planned", evidence="e", contract="c" * 20_000,
@@ -497,8 +502,10 @@ def test_a_plan_that_runs_in_parts_is_read_strictly(tmp_path):
 @pytest.mark.parametrize("parts, contract, said", [
     (None, "c", "it gave no parts"),
     ([], "c", "it gave no parts"),
-    ([*PARTS, *({"id": f"p{i}", "prompt": "x", "surfaces": [f"p{i}/**"]} for i in range(5))], "c",
-     "7 parts; a plan splits into at most 6"),
+    ([*PARTS, *({"id": f"p{i}", "prompt": "x", "surfaces": [f"p{i}/**"]} for i in range(9))], "c",
+     "11 parts; a plan splits into at most 10"),
+    ([PARTS[0], {**PARTS[1], "after": "nope"}], "c", "part 'web': its after names 'nope', which is no part listed"),
+    ([{**PARTS[0], "after": "web"}, PARTS[1]], "c", "part 'api': its after names 'web'"),
     ([PARTS[0], {**PARTS[1], "surfaces": ["src/**"]}], "c",
      "its parts' surfaces overlap: api's src/api/** and web's src/**"),
     ([PARTS[0], {**PARTS[1], "surfaces": []}], "c", "part 'web' declares no surfaces"),
