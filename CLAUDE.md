@@ -533,6 +533,12 @@ yields the default kind, not a guess.
   opens nothing, and a session is added only with the token (`/api/follow`).
   Each piece of work gets one tab once; what is over `server.MAX_TABS` is left
   to the board, never opened later.
+- A task page polls only while it shows a running task (`/api/tasks/N/live`,
+  every 5 s; tool calls write no events), and what it shows of a worker's calls
+  is what `phase.calls` keeps: when, the tool, its signature, whether it went
+  through; never an argument nor its hash. A desktop notification is asked for
+  only from a person's click, kept per viewer in the browser, and never fires
+  for the state a tab opened with.
 - The UI builds every node with `textContent` (`h()` in `static/util.js`,
   `s()` in `static/svg.js` for SVG), never `innerHTML`, and sets no inline
   style attribute (the page's policy refuses it; use the CSSOM): task text and worker summaries are untrusted. The token

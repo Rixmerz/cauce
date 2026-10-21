@@ -23,6 +23,16 @@
   Escape takes a task's tab back to the board. A second session that finds the
   board already serving asks it to follow that session too (`POST /api/follow`,
   with the token), and a server handed over to a newer cauce goes on following.
+- **A tab's work at a glance.** A task's or run's tab shows its state in its
+  favicon as well as its title (a mark per state, colours that follow the
+  theme; the board keeps its own). "Notify me when it ends", in that tab's
+  header, asks for the browser's permission on its click and then shows a
+  desktop notification when the work stops running, saying how it ended. A
+  running task's page shows its worker's phase and last eight tool calls
+  (signatures only), refreshed every 5 s through `GET /api/tasks/N/live`, and a
+  task with two or more attempts compares any two side by side: cell, served
+  model, turns, cost, wall time, how each ended, the move after it, the files
+  it changed, its summary and its check's evidence.
 
 ## [0.31.0] - 2026-10-20
 
