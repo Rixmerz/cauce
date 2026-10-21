@@ -1,6 +1,31 @@
 # Changelog
 
 ## [Unreleased]
+
+## [0.32.0] - 2026-10-21
+
+### Added
+
+- **A tab for each piece of a session's work.** `cauce ui --open --tabs` (and
+  `/cauce`, `/cauce:ui`) opens the board and one tab per workflow run and per
+  task the session has queued or running outside a run (at most eight; the
+  board lists the rest), then one more for each piece of work the session sends
+  while the board serves. A tab opens straight on its work (`#task=N`, the task
+  as the page; `#run=N&repo=…`, the run marked among its project's workflows),
+  follows it live, and names its state in its title (`● running · #12 …`).
+  Escape takes a task's tab back to the board. A second session that finds the
+  board already serving asks it to follow that session too (`POST /api/follow`,
+  with the token), and a server handed over to a newer cauce goes on following.
+- **A tab's work at a glance.** A task's or run's tab shows its state in its
+  favicon as well as its title (a mark per state, colours that follow the
+  theme; the board keeps its own). "Notify me when it ends", in that tab's
+  header, asks for the browser's permission on its click and then shows a
+  desktop notification when the work stops running, saying how it ended. A
+  running task's page shows its worker's phase and last eight tool calls
+  (signatures only), refreshed every 5 s through `GET /api/tasks/N/live`, and a
+  task with two or more attempts compares any two side by side: cell, served
+  model, turns, cost, wall time, how each ended, the move after it, the files
+  it changed, its summary and its check's evidence.
 - **Roles' lessons improve by measured trial.** Every brief records the role a
   worker wore and the version of its text (`role`, `role_version` on
   `briefed`). Once a role's workers in a repository met 3 dead ends or verifier
@@ -28,6 +53,8 @@
   event keeps the notes a brief carried (`notes`). A person's notes and those
   filed from a conversation are unchanged. The Notes view (with a filter) and
   `cauce notes` show the state; `cauce doctor` gains `note-proven-unbriefed`.
+- The Analysis screen shows racing's record per project and kind, and each
+  role's lessons on trial with both arms' first tries.
 
 ### Fixed
 
@@ -37,29 +64,6 @@
   limit and the parts reach their workers on stdin, which has no such cap.
   Both limits are gone: a part is checked for its id, its prompt and its
   surfaces, never for how much it says.
-
-### Added
-
-- **A tab for each piece of a session's work.** `cauce ui --open --tabs` (and
-  `/cauce`, `/cauce:ui`) opens the board and one tab per workflow run and per
-  task the session has queued or running outside a run (at most eight; the
-  board lists the rest), then one more for each piece of work the session sends
-  while the board serves. A tab opens straight on its work (`#task=N`, the task
-  as the page; `#run=N&repo=…`, the run marked among its project's workflows),
-  follows it live, and names its state in its title (`● running · #12 …`).
-  Escape takes a task's tab back to the board. A second session that finds the
-  board already serving asks it to follow that session too (`POST /api/follow`,
-  with the token), and a server handed over to a newer cauce goes on following.
-- **A tab's work at a glance.** A task's or run's tab shows its state in its
-  favicon as well as its title (a mark per state, colours that follow the
-  theme; the board keeps its own). "Notify me when it ends", in that tab's
-  header, asks for the browser's permission on its click and then shows a
-  desktop notification when the work stops running, saying how it ended. A
-  running task's page shows its worker's phase and last eight tool calls
-  (signatures only), refreshed every 5 s through `GET /api/tasks/N/live`, and a
-  task with two or more attempts compares any two side by side: cell, served
-  model, turns, cost, wall time, how each ended, the move after it, the files
-  it changed, its summary and its check's evidence.
 
 ## [0.31.0] - 2026-10-20
 

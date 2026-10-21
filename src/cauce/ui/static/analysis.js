@@ -141,6 +141,22 @@ export async function renderAnalysis(ctx) {
       h("div", { class: "stat" }, h("b", {}, usd(turns.usd)), h("span", {}, `the turns, at API rates · p50 ${money(turns.usd_p50)}`)),
       h("div", { class: "stat" }, h("b", {}, delegations.count), h("span", {}, `subagent delegations · p50 ${secs(delegations.seconds_p50)}`))),
     r.by_workflow.length ? [h("h2", { class: "section" }, "By workflow"), summaryTable(r.by_workflow, "workflow", "workflow")] : [],
+    (r.races || []).length ? [h("h2", { class: "section" }, "Racing a first try"),
+      h("p", { class: "empty" }, "Where a start rarely passes its first try, the next rung runs beside it; racing stops where it does not pay."),
+      h("table", {}, head("project", "kind", ["races"], ["rung won"], ["start won"], ["both failed"], "racing"),
+        r.races.map((x) => h("tr", {}, h("td", {}, repoName(x.repo)), h("td", {}, kindChip(x.kind)), num(x.races),
+          num(x.rung_wins), num(x.start_wins), num(x.neither), h("td", {}, `${x.pays ? "on" : "off"}: ${x.why}`))))] : [],
+    (r.role_revisions || []).length ? [h("h2", { class: "section" }, "Roles' lessons on trial"),
+      h("p", { class: "empty" }, "A role's lessons in a project, proposed from its dead ends and the verifier's blockers, tried against the current ones."),
+      h("table", {}, head("project", "role", "current", "on trial", "candidate's arm", "current arm"),
+        r.role_revisions.map((x) => {
+          const arm = (a) => (a ? `${a.passed_first}/${a.tasks} first tries · ${a.briefed} briefed` : "—");
+          const c = x.candidate;
+          return h("tr", {}, h("td", {}, repoName(x.repo)), h("td", {}, x.role),
+            h("td", {}, x.current ? `#${x.current.id} (${x.current.lessons.length} lessons)` : "none yet"),
+            h("td", {}, c ? `#${c.id} (${c.lessons.length} lessons, ${c.trial} first tries each)` : "—"),
+            h("td", {}, c ? arm(c.arms.candidate) : "—"), h("td", {}, c ? arm(c.arms.current) : "—"));
+        }))] : [],
     h("h2", { class: "section" }, "By day"),
     r.daily.length ? h("table", {}, head("day", ["turns"], ["runs"], ["passed"], ["hours"], ["cost"]),
       r.daily.map((d) => h("tr", {}, h("td", {}, d.day), num(d.turns), num(d.runs), num(d.passed), num(d.hours), num(usd(d.cost_usd)))))
