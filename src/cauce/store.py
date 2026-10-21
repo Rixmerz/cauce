@@ -745,6 +745,12 @@ class Store:
                                   [*params, limit]).fetchall()
         return [dict(r) for r in rows]
 
+    def session_runs(self, session_id: str, *, status: str = "active") -> list[dict]:
+        """The workflow runs a session started, oldest first."""
+        rows = self._conn.execute("SELECT * FROM workflow_runs WHERE session_id = ? AND status = ? ORDER BY id",
+                                  (session_id, status)).fetchall()
+        return [dict(r) for r in rows]
+
     def runs_from(self, source: str) -> list[dict]:
         """The runs still active that were started from this definition file."""
         rows = self._conn.execute("SELECT * FROM workflow_runs WHERE source = ? AND status = 'active' ORDER BY id",

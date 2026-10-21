@@ -643,5 +643,6 @@ test('/cauce starts the web board detached and says where it is; no pane, no ban
   expect(ran.text).toBe('cauce board: http://127.0.0.1:8790/')
   expect(seen.panes).toHaveLength(0)
   const spawned = seen.argv.find(args => args[0] === '-c')
-  expect(spawned?.[1]).toContain('ui --open')
+  expect(spawned?.[1]).toContain('ui --open --tabs --session "$1"')
+  expect(spawned?.[3]).toBeTruthy()
 })

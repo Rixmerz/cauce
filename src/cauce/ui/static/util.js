@@ -74,6 +74,12 @@ const STATES = { done: ["ok", "✓", "done"], running: ["run", "●", "running"]
   failed: ["bad", "✕", "failed"], interrupted: ["bad", "✕", "interrupted"], cancelled: ["mute", "–", "cancelled"],
   dismissed: ["mute", "–", "dismissed"] };
 export const tone = (status) => (STATES[status] || ["mute"])[0];
+// A tab of its own for one piece of work (`cauce ui --tabs`) names it and its state: the
+// state's mark and word, so a row of tabs reads at a glance without the colour.
+export function tabTitle(status, text, said = null) {
+  const [, icon, word] = STATES[status] || ["mute", "•", status || ""];
+  document.title = `${icon} ${said || word} · ${short(text, 60)} · cauce`;
+}
 export function statusBadge(status) {
   if (!status) return null;
   const [t, icon, word] = STATES[status] || ["mute", "•", status];

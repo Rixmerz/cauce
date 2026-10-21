@@ -5,8 +5,14 @@ description: Open cauce's board — what needs you, what is running and what it 
 Start the board in the background and tell the user where it is:
 
 ```bash
-cauce ui --open
+cauce ui --open --tabs
 ```
+
+`--tabs` opens one more tab for each piece of work this session has going on
+(each workflow run, and each task queued or running outside a run, at most
+eight), and one for each it sends later while the board serves. Each tab shows
+its state in its title. Leave `--tabs` out when the user asks for the board
+alone.
 
 Run it with `run_in_background`, so the session stays usable; it serves until
 the session ends or the user stops it, and it follows plugin updates by itself.

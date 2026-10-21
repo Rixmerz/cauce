@@ -122,6 +122,8 @@ h2.spaced { margin-top: 32px; }
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(760px, 100vw); background: var(--panel);
           border-left: 1px solid var(--line); box-shadow: -24px 0 48px rgb(0 0 0 / .14); overflow-y: auto;
           padding: 22px 26px 48px; z-index: 3; animation: drawer-in .22s ease-out; }
+/* A tab opened for one task (`#task=N`): the task is the page; Escape goes back to the board. */
+.solo .drawer { width: 100vw; border-left: 0; animation: none; }
 @keyframes drawer-in { from { transform: translateX(24px); opacity: 0; } }
 .drawer header { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
 .drawer h1 { font-size: 20px; line-height: 1.3; font-weight: 650; margin: 0 0 8px; overflow-wrap: anywhere; }
@@ -228,6 +230,8 @@ code.anchor { font-family: var(--mono); font-size: 12px; margin-right: 6px; over
 
 /* Workflows: a run is a graph of steps, left to right as they depend on each other. */
 .wf-run { margin-bottom: var(--gap); }
+/* The run a tab was opened for (`#run=N`). */
+.wf-run.focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 .wf-scroll, .map-scroll { overflow: auto; max-width: 100%; }
 .wf-graph { display: block; margin-top: 8px; }
 .wf-parts { flex-wrap: wrap; gap: 6px; margin-top: 6px; }

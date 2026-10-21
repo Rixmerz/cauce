@@ -4,6 +4,7 @@ import http.client
 import http.server
 import json
 import threading
+import time
 
 import pytest
 
@@ -704,3 +705,94 @@ def test_a_card_carries_its_points_and_why(store: Store):
     card = api.board(store, {"r"})["running"][0]
     assert card["id"] == t["id"] and card["points"] == 5 and card["points_why"].startswith("4 criteria")
     assert api.task_detail(store, t["id"])["task"]["points"] == 5
+
+
+# --- a tab for each piece of a session's work ------------------------------------------
+
+def _session_work(store: Store):
+    run = store.create_run(name="feature", scope="bundled", source="x", definition="{}", repo="/w/r b",
+                           session_id="s1")
+    step = store.create_task("a step", status="running", source="queue", repo="/w/r b", session_id="s1",
+                             workflow_run=run["id"])
+    queued = store.create_task("next", status="queued", source="queue", repo="r", session_id="s1")
+    running = store.create_task("going", status="running", source="cauce", repo="r", session_id="s1")
+    store.create_task("ended", status="done", source="cauce", repo="r", session_id="s1")
+    store.create_task("a turn", status="running", source="hook", repo="r", session_id="s1")
+    store.create_task("theirs", status="running", source="cauce", repo="r", session_id="s2")
+    store.create_run(name="old", scope="bundled", source="x", definition="{}", repo="r", session_id="s1",
+                     status="done")
+    return run, step, queued, running
+
+
+def test_a_session_s_work_going_on_is_a_tab_each(store: Store):
+    """Its active runs (their steps inside them), then its own tasks queued or running, oldest
+    first: never a turn, an ended task or another session's work."""
+    run, _step, queued, running = _session_work(store)
+    tabs = api.session_tabs(store, "s1")
+    assert [t["key"] for t in tabs] == [f"run:{run['id']}", f"task:{queued['id']}", f"task:{running['id']}"]
+    assert tabs[0]["fragment"] == f"run={run['id']}&repo=%2Fw%2Fr%20b"
+    assert tabs[1] == {"key": f"task:{queued['id']}", "title": f"#{queued['id']} next",
+                       "fragment": f"task={queued['id']}"}
+    assert api.session_tabs(store, "nobody") == []
+
+
+def test_tabs_open_once_and_at_most_the_limit(store: Store):
+    _session_work(store)
+    opened: list[str] = []
+    seen: set[str] = set()
+    tabs, left = server.open_tabs(store, "http://h/", "s1", seen, opened.append, limit=2)
+    assert len(tabs) == 2 and left == 1 and opened[1].startswith("http://h/#task=")
+    # What was left for the board is never opened later; new work is.
+    assert server.open_tabs(store, "http://h/", "s1", seen, opened.append) == ([], 0)
+    later = store.create_task("later", status="queued", source="queue", repo="r", session_id="s1")
+    assert server.open_tabs(store, "http://h/", "s1", seen, opened.append)[0][0]["key"] == f"task:{later['id']}"
+    assert len(opened) == 3
+    # With no room, nothing opens and everything counts as seen: a server handed over opens only what is new.
+    fresh: set[str] = set()
+    assert server.open_tabs(store, "http://h/", "s1", fresh, opened.append, limit=0) == ([], 4)
+    assert len(opened) == 3 and len(fresh) == 4
+
+
+def test_a_server_follows_a_session_it_is_asked_to(ui, monkeypatch):
+    """The token holder (a second `cauce ui --tabs` that found this server) adds a session;
+    the server opens a tab for its work as it starts, in its own thread, never in the request."""
+    monkeypatch.setattr(server, "FOLLOW_EVERY_S", 0.05)
+    opened: list[str] = []
+    ui.open_tab = opened.append
+    store = Store(ui.root / "cauce.db")
+    old = store.create_task("old", status="running", source="cauce", repo="r", session_id="s1")
+    key = {"X-Cauce-Token": token(ui)}
+    assert call(ui, "POST", "/api/follow", {"session": "s1"})[0].status == 403
+    assert call(ui, "POST", "/api/follow", {"session": "../x"}, headers=key)[0].status == 400
+    res = call(ui, "POST", "/api/follow", {"session": "s1", "seen": [f"task:{old['id']}", 3]}, headers=key)[0]
+    assert res.status == 200 and ui.following == ["s1"]
+    assert server.follow_there(ui.server_address[1], "s1", [], root=ui.root) and ui.following == ["s1"]
+    new = store.create_task("new", status="queued", source="queue", repo="r", session_id="s1")
+    deadline = time.monotonic() + 5
+    while not opened and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert opened == [f"{ui.url()}#task={new['id']}"]
+    store.close()
+    assert not server.follow_there(1, "s1", [], root=ui.root)  # nothing listens there
+
+
+def test_a_server_handed_over_goes_on_following(ui, monkeypatch):
+    ran = []
+    monkeypatch.setattr(server.os, "execv", lambda path, argv: ran.append(argv))
+    ui.following = ["s1", "s2"]
+    ui.hand_over("9.9.9", server.Path("/bin/cauce"))
+    assert ran[0][1:] == ["ui", "--port", str(ui.server_address[1]), "--tabs", "--session", "s1", "--session", "s2"]
+
+
+def test_tabs_follow_the_session_the_command_runs_in(monkeypatch, capsys):
+    import argparse
+
+    from cauce import cli
+
+    monkeypatch.setenv("CAUCE_SESSION_ID", "here")
+    assert cli._tabs_sessions(argparse.Namespace(tabs=False, session=None)) == []
+    assert cli._tabs_sessions(argparse.Namespace(tabs=True, session=None)) == ["here"]
+    assert cli._tabs_sessions(argparse.Namespace(tabs=True, session=["a"])) == ["a"]
+    monkeypatch.delenv("CAUCE_SESSION_ID")
+    assert cli._tabs_sessions(argparse.Namespace(tabs=True, session=None)) == []
+    assert "--tabs needs a session" in capsys.readouterr().err

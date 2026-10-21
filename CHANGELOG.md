@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **A tab for each piece of a session's work.** `cauce ui --open --tabs` (and
+  `/cauce`, `/cauce:ui`) opens the board and one tab per workflow run and per
+  task the session has queued or running outside a run (at most eight; the
+  board lists the rest), then one more for each piece of work the session sends
+  while the board serves. A tab opens straight on its work (`#task=N`, the task
+  as the page; `#run=N&repo=…`, the run marked among its project's workflows),
+  follows it live, and names its state in its title (`● running · #12 …`).
+  Escape takes a task's tab back to the board. A second session that finds the
+  board already serving asks it to follow that session too (`POST /api/follow`,
+  with the token), and a server handed over to a newer cauce goes on following.
+
 ## [0.31.0] - 2026-10-20
 
 ### Fixed

@@ -528,6 +528,11 @@ yields the default kind, not a guess.
   `kindChip`, `cellChip`), always beside their word. The kind hues keep their
   fixed order; a change to them is checked for colour-blind separation in
   both themes. The mod's text carries the same tones as emoji markers.
+- A tab per piece of work (`cauce ui --tabs`) is opened by the server's own
+  follow thread for the sessions it was given, never because a page asked: a GET
+  opens nothing, and a session is added only with the token (`/api/follow`).
+  Each piece of work gets one tab once; what is over `server.MAX_TABS` is left
+  to the board, never opened later.
 - The UI builds every node with `textContent` (`h()` in `static/util.js`,
   `s()` in `static/svg.js` for SVG), never `innerHTML`, and sets no inline
   style attribute (the page's policy refuses it; use the CSSOM): task text and worker summaries are untrusted. The token

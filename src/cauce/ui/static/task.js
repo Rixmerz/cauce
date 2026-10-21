@@ -1,13 +1,19 @@
 import { toast } from "./main.js";
 import { get, post } from "./net.js";
 import { stopSection } from "./stop.js";
-import { cellChip, cost, h, kindChip, pointsChip, repoName, statusBadge, TURNS_TITLE, usd, when } from "./util.js";
+import { cellChip, cost, h, kindChip, pointsChip, repoName, statusBadge, tabTitle, TURNS_TITLE, usd, when } from "./util.js";
 
 const drawer = () => document.getElementById("drawer");
 
 function close() {
   drawer().hidden = true;
   drawer().replaceChildren();
+  // A tab opened for this task becomes the board: its address and title say so.
+  if (document.body.classList.contains("solo")) {
+    document.body.classList.remove("solo");
+    history.replaceState(null, "", location.pathname);
+    document.title = "cauce";
+  }
 }
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
 
@@ -187,4 +193,5 @@ export async function openTask(id, quiet = false) {
   ].filter(Boolean));
   if (!quiet) el.scrollTop = 0;
   el.hidden = false;
+  if (document.body.classList.contains("solo") && Number(el.dataset.task) === t.id) tabTitle(t.status, `#${t.id} ${t.title}`);
 }

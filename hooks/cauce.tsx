@@ -509,11 +509,14 @@ export const register: Register = (on, options) => {
 
   // The board is the web UI: one place to see and press, not a second, poorer
   // copy in the terminal. `cauce ui` serves until stopped, so it is started
-  // detached; when one already serves, it says where and exits.
+  // detached; when one already serves, it says where and exits. Each piece of
+  // work this session has going on, and each one it sends later, gets a tab.
   on('command.run', { command: 'cauce' }, async $ => {
     const bin = `${$.plugin.root}/bin/cauce`
+    const session = await $.session.id()
     try {
-      await $.process.run(['/bin/sh', '-c', 'nohup "$0" ui --open >/dev/null 2>&1 &', bin], { timeoutMs: 10_000 })
+      await $.process.run(['/bin/sh', '-c', 'nohup "$0" ui --open --tabs --session "$1" >/dev/null 2>&1 &', bin, session],
+                          { timeoutMs: 10_000 })
     } catch (error) {
       return { text: `cauce: the board did not start (${String(error)}); run \`cauce ui --open\`` }
     }

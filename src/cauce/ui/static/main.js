@@ -28,6 +28,8 @@ const picker = document.getElementById("project");
 let current = "board";
 let project = null;
 let pending = null;
+// The run a tab was opened for (`#run=N`): its card is marked and names the tab.
+let focusRun = null;
 
 function remembered(key, value) {
   try {
@@ -45,7 +47,7 @@ export function toast(text) {
   el._timer = setTimeout(() => { el.hidden = true; }, 3500);
 }
 
-const ctx = () => ({ project, openTask, openSession, refresh: () => show(current), toast });
+const ctx = () => ({ project, openTask, openSession, refresh: () => show(current), toast, focusRun });
 
 export async function show(name = current) {
   // A new view says it is on its way at once: Spend reads every session's
@@ -76,6 +78,36 @@ async function loadProjects() {
   project = list.some((p) => p.repo === keep) ? keep : (list[0]?.repo ?? null);
   if (project) picker.value = project;
 }
+
+// One piece of work in a tab of its own (`cauce ui --tabs`): `#task=N` opens that task over
+// its project's board, `#run=N&repo=<key>` that run among its project's workflows. Not
+// remembered as the person's project: a tab for one task changes nothing in the others.
+async function fromAddress() {
+  const want = new URLSearchParams(location.hash.slice(1));
+  const task = Number(want.get("task")) || null;
+  const run = Number(want.get("run")) || null;
+  const choose = (repo) => {
+    if (repo && [...picker.options].some((o) => o.value === repo)) { project = repo; picker.value = repo; }
+  };
+  if (task) {
+    const found = await get(`/api/tasks/${task}`).catch(() => null);
+    if (!found) return false;
+    choose(found.task.repo);
+    document.body.classList.add("solo");
+    await show("board");
+    await openTask(task);
+    return true;
+  }
+  if (run) {
+    choose(want.get("repo"));
+    focusRun = run;
+    await show("workflows");
+    document.getElementById(`run-${run}`)?.scrollIntoView({ block: "start" });
+    return true;
+  }
+  return false;
+}
+window.addEventListener("hashchange", () => { fromAddress(); });
 
 picker.addEventListener("change", () => {
   project = picker.value;
@@ -119,4 +151,4 @@ await loadProjects();
 // The stream starts after the newest event the board knows; with no project yet there are no events.
 (project ? get(`/api/board?repo=${encodeURIComponent(project)}`) : Promise.resolve({ last_event: 0 }))
   .then((b) => live.start(b.last_event)).catch(() => live.start(0));
-show("board");
+if (!(await fromAddress())) show("board");
