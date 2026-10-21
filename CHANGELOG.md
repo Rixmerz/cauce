@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A plan is never thrown away for its length.** A plan whose part prompt
+  ran over 6,000 characters (or whose contract ran over 8,000) was read as
+  unfinished and asked again, though the plan was never told of either
+  limit and the parts reach their workers on stdin, which has no such cap.
+  Both limits are gone: a part is checked for its id, its prompt and its
+  surfaces, never for how much it says.
+
 ### Added
 
 - **A tab for each piece of a session's work.** `cauce ui --open --tabs` (and

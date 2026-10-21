@@ -758,6 +758,10 @@ yields the default kind, not a guess.
   before said reaches a step quoted, as context, never as its criteria.
 - A fix's later round starts from the tip the round before it kept, so the
   run's last branch holds every round (`doctor`: `fix-round-off-base`).
+- A worker's answer is refused for its form only by what its result contract
+  told it (`launch.RESULT_INSTRUCTIONS`, `PARTS_INSTRUCTIONS`): a check the
+  worker was never told of is a lost attempt, never a shape. Length is no form:
+  a prompt reaches its worker on stdin.
 - A step can run in parts. A `fanout` step names a plan step before it that it
   waits on; that plan (`kind plan`, read-only) is asked for `parts` (1 to
   `launch.MAX_PARTS`, each an id, a prompt and surfaces no other part reaches)

@@ -193,10 +193,9 @@ for what you found wrong.
 """.strip()
 
 
-#: The most parts a plan splits into, and how long a part's prompt and the contract may be.
+#: The most parts a plan splits into. A part's prompt and the contract have no length limit:
+#: they reach their workers on stdin, and a plan is never thrown away for being thorough.
 MAX_PARTS = 6
-PART_CHARS = 6000
-CONTRACT_CHARS = 8000
 #: A part's id: short, as a branch, a title and a status line show it.
 PART_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
@@ -699,7 +698,8 @@ def network_trouble(*texts: str, flaky: bool = False) -> str:
 def read_parts(block: Mapping[str, Any]) -> tuple[tuple[dict[str, Any], ...], str, str]:
     """A plan's parts and their contract, read strictly: (parts, contract, problem). A
     problem (no parts, more than `MAX_PARTS`, a part without its id, prompt or surfaces,
-    surfaces two parts share) leaves nothing read: a plan is never guessed at."""
+    surfaces two parts share) leaves nothing read: a plan is never guessed at. Only what
+    `PARTS_INSTRUCTIONS` tells the plan is checked; length never is."""
     raw = block.get("parts")
     if not isinstance(raw, list) or not raw:
         return (), "", "it gave no parts"
@@ -716,10 +716,7 @@ def read_parts(block: Mapping[str, Any]) -> tuple[tuple[dict[str, Any], ...], st
             return (), "", f"two parts are called {pid!r}"
         prompt = part.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
-            return (), "", f"part {pid!r} has no prompt (text, at most {PART_CHARS} characters)"
-        if len(prompt) > PART_CHARS:
-            return (), "", (f"part {pid!r}: its prompt is {len(prompt)} characters, over {PART_CHARS}: say what the "
-                            "part builds and leave the how to its worker")
+            return (), "", f"part {pid!r} has no prompt"
         given = part.get("surfaces") or []
         try:
             if not isinstance(given, list):
@@ -733,8 +730,6 @@ def read_parts(block: Mapping[str, Any]) -> tuple[tuple[dict[str, Any], ...], st
     contract = block.get("contract")
     if len(parts) > 1 and (not isinstance(contract, str) or not contract.strip()):
         return (), "", "it gave no contract: the names, types and interfaces its parts share"
-    if isinstance(contract, str) and len(contract) > CONTRACT_CHARS:
-        return (), "", f"its contract is over {CONTRACT_CHARS} characters"
     overlaps = surfaces.overlapping({p["id"]: p["surfaces"] for p in parts})
     if overlaps:
         return (), "", "its parts' surfaces overlap: " + "; ".join(overlaps)
