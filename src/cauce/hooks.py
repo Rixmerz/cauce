@@ -713,8 +713,14 @@ def verdict_lines(verdict: Mapping | None) -> list[str]:
         return []
     lines = []
     check = verdict.get("check")
-    lines.append(f"  check: `{check['command']}` passed, run by cauce in its worktree" if isinstance(check, Mapping)
-                 else "  check: none was given, so nothing ran it: say so to the person")
+    if isinstance(check, Mapping) and check.get("state"):
+        lines.append(f"  check: `{check['command']}` {check['state']}: it fails at the base commit "
+                     f"{str(check.get('base') or '')[:12]} too, with the same {check.get('failures')} failure(s), "
+                     "so the work stood; they were there before it")
+    elif isinstance(check, Mapping):
+        lines.append(f"  check: `{check['command']}` passed, run by cauce in its worktree")
+    else:
+        lines.append("  check: none was given, so nothing ran it: say so to the person")
     for c in verdict.get("criteria") or ():
         mark = "met" if c.get("met") else "NOT met"
         lines.append(f"  {c.get('id')} {mark}: {c.get('evidence') or 'no evidence given'}")
@@ -735,6 +741,16 @@ def verdict_lines(verdict: Mapping | None) -> list[str]:
 FOUND_BEFORE_SHOWN = 3
 
 
+def _failing_at_base(data: Mapping) -> dict[str, str]:
+    """A `check_preexisting` event as a problem that was already there: where (the base) and
+    what (the command and its first failing lines), for the bugfix an ending offers."""
+    failures = [str(x) for x in data.get("failures") or ()]
+    more = int(data.get("n") or len(failures)) - 3
+    what = f"`{data.get('command')}` fails at the base too: " + "; ".join(failures[:3]) + (
+        f"; and {more} more" if more > 0 else "")
+    return {"where": f"base {str(data.get('base') or '')[:12]}", "what": what}
+
+
 def _found_before(store: Store, ended: Mapping) -> list[str]:
     """Problems the work found that were already there, shown with proof: never this change's
     to fix, never a blocker, and so never fixed unless somebody starts it. The ending names
@@ -748,6 +764,16 @@ def _found_before(store: Store, ended: Mapping) -> list[str]:
             if isinstance(f, Mapping) and f.get("cause") == "pre-existing" and f.get("evidence_class") == \
                     "deterministic":
                 found.setdefault(findings_mod.key(f), f)
+        # A check that failed only as it does at the base: its failures are problems that were
+        # already there too, shown by cauce's own run of the check on both commits.
+        # Only when the passing attempt's own check was that one (its verdict says so): an earlier
+        # attempt's is not what the work ended with.
+        check = (((final or {}).get("data") or {}).get("verdict") or {}).get("check")
+        kept = store.last_event(task["id"], "check_preexisting") \
+            if isinstance(check, Mapping) and check.get("state") else None
+        if kept is not None and not int(kept["data"].get("added") or 0):
+            found.setdefault(f"check:{kept['data'].get('command')}:{kept['data'].get('base')}",
+                             _failing_at_base(kept["data"]))
     if not found:
         return []
     after_ref = f"run:{ended['workflow_run']}" if ended.get("workflow_run") else f"task:{ended['id']}"

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from cauce import repo
+from cauce.text import clip
 
 #: How many scripts deep a command is followed.
 DEPTH = 4
@@ -426,3 +427,70 @@ def left_out(where: Path, verify: str, services: Sequence[str] = ()) -> tuple[st
     more = len(missing) - JOBS_NAMED
     named = "; ".join(missing[:JOBS_NAMED]) + (f"; and {more} more" if more > 0 else "")
     return f"CI also runs: {named}, which this check does not", unreadable
+
+
+# --- a check whose exit says nothing ---------------------------------------------------
+
+#: Commands that end a pipeline and exit 0 whatever came before them: the pipeline's exit is theirs.
+_FILTERS = frozenset({"grep", "egrep", "fgrep", "tail", "head", "tee", "sed", "awk", "cat", "sort", "uniq", "wc"})
+#: What ends a check so that it always exits 0.
+_SWALLOWED = re.compile(r"(\|\|\s*(?:true|:|exit\s+0)|;\s*(?:true|exit\s+0))\s*$")
+#: `set -o pipefail`, `set -euo pipefail`, `set -e -o pipefail`.
+_PIPEFAIL = re.compile(r"\bset\s+(?:-[a-z]+\s+)*-[a-z]*o\s+pipefail\b")
+
+
+def _pipeline(part: str) -> list[str]:
+    """A command's stages, split at each `|` outside quotes that is no `||`."""
+    stages, start, quote, i = [], 0, "", 0
+    while i < len(part):
+        c = part[i]
+        if quote:
+            quote = "" if c == quote else quote
+        elif c in "'\"":
+            quote = c
+        elif part.startswith("||", i):
+            i += 2
+            continue
+        elif c == "|":
+            stages.append(part[start:i])
+            start = i + 1
+        i += 1
+    return [s.strip() for s in [*stages, part[start:]] if s.strip()]
+
+
+def weak_line(command: str) -> str | None:
+    """What makes one shell line's exit say nothing of what it checks, or None: a pipeline
+    whose last command is a filter (`grep -v`, `tail`, `tee`…) with no `pipefail` set,
+    or an ending that swallows the exit (`|| true`, `; exit 0`). A pure reading."""
+    line = _CONTINUED.sub(" ", command).strip()
+    if found := _SWALLOWED.search(line):
+        return " ".join(found.group(1).split())
+    if _PIPEFAIL.search(line):
+        return None
+    for part in _parts(line):
+        stages = _pipeline(part)
+        if len(stages) < 2:
+            continue
+        words = stages[-1].split()
+        name = Path(words[0]).name if words else ""
+        if name in _FILTERS:
+            return f"{name} -v" if name in ("grep", "egrep", "fgrep") and "-v" in words[1:] else name
+    return None
+
+
+def weak(command: str, where: Path | None = None) -> str | None:
+    """The plan's warning for a check whose green proves nothing, or None: the command, or a
+    script it runs (`where`'s package.json and deno.json), exits as a filter at the end of
+    its pipeline does, or always exits 0. A warning, never a refusal."""
+    bodies = runs(command, where) if where is not None else [command]
+    for i, body in enumerate(bodies):
+        why = weak_line(body)
+        if why is None:
+            continue
+        via = "" if i == 0 else f" (through a script it runs: `{clip(body, 80, one_line=True)}`)"
+        if why.startswith(("||", ";")):
+            return (f"this task's check `{command}` always exits 0 (`{why}`){via}: a failure never reaches cauce, "
+                    "so a green check proves nothing; drop it")
+        return (f"this task's check `{command}` exits as its last command (`{why}`) does{via}: a failure before "
+                "it never reaches cauce, so a green check proves nothing; add `set -o pipefail` or drop the pipe")
+    return None

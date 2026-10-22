@@ -355,6 +355,34 @@ def race_lane(ws: Workspace, root: Path) -> Workspace:
     return lane
 
 
+@contextlib.contextmanager
+def at_base(repo_dir: Path, base: str, root: Path) -> Iterator[Path]:
+    """A temporary detached worktree of `repo_dir` at `base`, with the checkout's ignored
+    dependency folders linked in as a task's are (one whose lockfile differs at `base` is
+    left out, `Workspace.stale`): where cauce runs a check on the commit a task started
+    from. Removed when the block ends, whatever happened in it."""
+    top = Path(_git(repo_dir, "rev-parse", "--show-toplevel"))
+    commit = _git(top, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}", check=False)
+    if not commit:
+        raise IsolationError(f"the base commit {base[:12]} is not in {top}")
+    path = root / "worktrees" / f"base-{commit[:12]}-{os.getpid()}-{time.monotonic_ns()}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _git(top, "worktree", "add", "--detach", str(path), commit)
+    ws = Workspace(top, path, "", commit)
+    try:
+        deps = tuple(rel for rel in _shared(top, path) if Path(rel).name in DEPENDENCY_DIRS)
+        ws = Workspace(top, path, "", commit, tuple(rel for rel in deps if not _stale(top, path, rel)),
+                       tuple(rel for rel in deps if _stale(top, path, rel)))
+        link(ws)
+        yield path
+    finally:
+        # The links go first: removing the worktree must never reach through them into the checkout.
+        unlink(ws)
+        _git(top, "worktree", "remove", "--force", str(path), check=False)
+        shutil.rmtree(path, ignore_errors=True)
+        _git(top, "worktree", "prune", check=False)
+
+
 def adopt(src: Workspace, dst: Workspace) -> tuple[str, ...]:
     """Make the task's worktree hold what a race's lane did: `dst` back to its base, and
     `src`'s change against that base applied on it, uncommitted, as a worker leaves its

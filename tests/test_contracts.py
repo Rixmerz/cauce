@@ -82,3 +82,22 @@ def test_a_brief_s_revision_arm_is_what_the_trial_reads_back(store):
     found = revisions.arms(store, "r", cand)
     assert found[data["revision_arm"]]["tasks"] == 1 and found[data["revision_arm"]]["briefed"] == 1
     assert sum(arm["briefed"] for arm in found.values()) == 1
+
+
+def test_a_check_that_failed_only_as_at_the_base_reads_back_in_the_ending(git_repo, store):
+    """`orchestrate` writes `check_preexisting` and the verdict card's `check.state`; the ending
+    notice reads both back (`hooks.verdict_lines`, `hooks._found_before`) from those fields alone."""
+    from cauce import hooks
+    from cauce.orchestrate import FAILING_AT_BASE, run
+
+    from .test_orchestrate import Script, kind, ok
+
+    report = run("add the export", git_repo, store, Options(verify="echo 'FAIL old.test.js'; exit 1"), registry={},
+                 launcher=Script(ok(), write="f.py"), classifier=kind("implement"))
+    check = store.final_event(report.task_id)["data"]["verdict"]["check"]
+    kept = store.last_event(report.task_id, "check_preexisting")["data"]
+    assert check["state"] == FAILING_AT_BASE and check["base"] == kept["base"] and check["failures"] == kept["n"]
+    assert any(FAILING_AT_BASE in line and kept["base"][:12] in line for line in hooks.verdict_lines(
+        {"check": check}))
+    offered = hooks._found_before(store, store.get_task(report.task_id))
+    assert kept["failures"][0] in offered[1] and f"base {kept['base'][:12]}" in offered[1]

@@ -196,3 +196,29 @@ def test_a_part_that_builds_on_another_starts_from_its_work_after_it_passes(worl
         store.close()
     assert released is not None and released["data"]["base"] == tip
     world.healthy()
+
+
+def test_a_check_that_fails_at_the_base_the_same_way_does_not_fail_the_work(world):
+    """A real run: the check's coverage thresholds of files the task never touched failed at
+    the base too, and the red check was read as the work's bug. It is compared with the base."""
+    (world.repo / "check.sh").write_text(
+        "echo 'FAIL legacy/old.test.js'\n"
+        "echo 'Jest: \"legacy/old.js\" coverage threshold for lines (80%) not met: 41.2%'\n"
+        "if [ -f feature.txt ] && ! grep -q ok feature.txt; then echo 'FAIL src/feature.test.js'; fi\n"
+        "exit 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=world.repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "a check that already fails"], cwd=world.repo, check=True)
+    world.script([{"match": "add the feature file", "do": [{"pass": True, "write": {"feature.txt": "ok\n"}}]}])
+    world.cauce("queue", "add", "--kind", "implement", "--verify", "sh check.sh", "add the feature file to the app")
+    ended = world.wait(_task(("done", "failed", "blocked", "review", "replan")), "the task to end")
+    assert ended["status"] == "done", ended
+    store = Store(world.home / "cauce.db")
+    try:
+        kept = store.last_event(ended["id"], "check_preexisting")
+        verdict = store.final_event(ended["id"])["data"]["verdict"]
+    finally:
+        store.close()
+    assert kept is not None and kept["data"]["n"] == 2 and kept["data"]["added"] == 0
+    assert verdict["check"]["state"] == "failing at base, unchanged"
+    assert len(world.calls()) == 1  # no climb: the pass stood on its first try
+    world.healthy()
