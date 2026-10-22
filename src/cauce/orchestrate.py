@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import hashlib
 import json
 import os
 import re
@@ -23,6 +24,7 @@ import socket
 import statistics
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor
@@ -288,6 +290,8 @@ class Report:
     contract: str = ""
     #: Security problems the passing worker named (`alerts`), secrets masked.
     alerts: list[str] = field(default_factory=list)
+    #: cauce's check failed only as it does at the base (`Baseline.found`): what it found, else None.
+    preexisting: dict[str, Any] | None = None
 
     def checked_text(self) -> str:
         """What checked the work, said as it is: "unverified" only when no check cauce ran passed."""
@@ -354,6 +358,8 @@ class Report:
             lines.append(f"these changes are in your checkout (the run had no worktree), {self.checked_text()}")
         elif self.task_id and self.status != "done" and self.changed:
             lines.append("nothing of it was kept")
+        if said := preexisting_line(self.preexisting):
+            lines.append(said)
         lines += self.impact
         if self.superseded:
             lines.append("off the board: " + ", ".join(f"#{i}" for i in self.superseded)
@@ -535,6 +541,8 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     neighbour_notes += _unmet(text, registry, served=bool(options.services), verify=check, where=repo_dir)
     if check and kind not in READ_ONLY_KINDS:
         neighbour_notes += _beside_ci(repo_dir, check, options.services)
+    if check and (weak := ci.weak(check, repo_dir)):
+        neighbour_notes.append(weak)
     if spans := _spans(repo_dir, options.add_dirs):
         neighbour_notes.append(spans)
     for lag in models.lagging(store):
@@ -679,7 +687,7 @@ def _launch(launcher: Launcher, spec: launch.LaunchSpec, runner: launch.Stoppabl
 
 
 def _race(launcher: Launcher, spec: launch.LaunchSpec, start: Cell, rung: Cell, workspace: isolate.Workspace,
-          verify: str | None) -> Raced | None:
+          verify: str | None, baseline: Baseline | None = None) -> Raced | None:
     """Run the start and the rung side by side, each in its own worktree, each checked in it:
     the first that passes is kept and the other stopped. The task's worktree ends holding the
     kept try's work. None when the second worktree cannot be made: the try runs alone."""
@@ -698,7 +706,7 @@ def _race(launcher: Launcher, spec: launch.LaunchSpec, start: Cell, rung: Cell, 
     def side(i: int, run_spec: launch.LaunchSpec, where: Path) -> launch.WorkerResult:
         found = _launch(launcher, run_spec, runners[i])
         if found.passed and verify and not runners[i].stopped:
-            found = _verified(found, verify, where)
+            found = _verified(found, verify, where, baseline)
         return found
 
     try:
@@ -767,7 +775,7 @@ def turns_from_history(runs: Sequence[Sequence[tuple[int, bool, str | None]]], k
 #: How the plan's reasons a person should hear before the work starts begin: what
 #: the task needs and workers lack, and what stopped workers here before.
 WARNINGS = ("this task needs", "this task mentions", "this task spans", "workers here were refused before", "task #",
-            "CI also runs")
+            "CI also runs", "this task's check")
 
 
 def warnings(reasons: Sequence[str]) -> list[str]:
@@ -1027,6 +1035,10 @@ def run(
     deciding = options.ledger if options.ledger and options.ledger.get("role") in ledger_mod.WORDS else None
     settled: ledger_mod.Outcome | None = None
     base_commit = workspace.base if workspace else _head(repo_dir)
+    # A red check is compared with the same check at the commit the work started from:
+    # what failed there too was not this work's doing (`_against_base`).
+    baseline = Baseline(store, task["id"], workspace.repo_dir if workspace else repo_dir, base_commit, home(),
+                        must_fix=the_plan.kind in _REPRODUCES) if base_commit and options.verify else None
     # Turns are the one room dial, and they have one ceiling: a number asked for from
     # outside (a resume, a model's tool call) never raises it.
     cell, turns = the_plan.start, min(options.max_turns or the_plan.turns or turns_for(the_plan.kind),
@@ -1085,7 +1097,7 @@ def run(
         if ready and options.integrate:
             # The parts' branches are joined before any worker: one is needed only for a conflict,
             # or for a check that fails on the joined work.
-            joined, ready = _integrate(store, task["id"], workspace, options, report, context, say)
+            joined, ready = _integrate(store, task["id"], workspace, options, report, context, say, baseline)
         while ready:
             # A try after the network dropped, or the load timed its tests out, is no
             # attempt at the work: it does not count toward the ceiling, and its own
@@ -1175,7 +1187,7 @@ def run(
                                 model=models.pinned(the_plan.race.model) or the_plan.race.model, max_turns=turns,
                                 since_start_s=round(time.monotonic() - clock, 2))
                 say(f"cauce: #{task['id']} attempt {nth} races {the_plan.race.label} beside {cell.label}")
-                raced = _race(launcher, spec, cell, the_plan.race, workspace, options.verify)
+                raced = _race(launcher, spec, cell, the_plan.race, workspace, options.verify, baseline)
             if raced is not None:
                 # What follows (the independent check, the next attempt) works in the task's worktree,
                 # which holds the kept try's work: the spec keeps its place, with the kept try's cell.
@@ -1203,16 +1215,28 @@ def run(
             # worker's: it is committed with the work, and said, since a check that rewrites
             # tracked files may not give the same files on the person's checkout.
             before = isolate.fingerprint(workspace.path) if workspace is not None and options.verify else None
+            if baseline is not None and not (raced is not None and raced.checked):
+                baseline.found = None
             if result.passed and options.verify and not (raced is not None and raced.checked):
-                result = _verified(result, options.verify, workdir)
+                result = _verified(result, options.verify, workdir, baseline)
             elif _settles(result, options.verify) and (
                     isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
-                result = _settled(result, options.verify, workdir)
+                result = _settled(result, options.verify, workdir, baseline)
             stands = ""
             if result.failure in REPLAN and not result.denied and (
                     isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
                 # A worker that did the work and names a point it cannot settle: does the work stand?
-                stands = _stands(result, options.verify, workdir)
+                stands = _stands(result, options.verify, workdir, baseline)
+                if stands == "cauce" and _only_the_base(result, options.verify, baseline):
+                    # Its open point is the check's failures, and they were all there before
+                    # the work: nothing is left to decide, and the work passes as it stands.
+                    result = dataclasses.replace(
+                        result, passed=True, failure=None, verdict="pass",
+                        summary=f"{result.summary} (cauce: the check's failures it names all fail at the base "
+                                "too, so they were there before this work and no decision is left)")
+                    stands = ""
+            # What the report and the verdict say of a check that failed only as it does at the base.
+            report.preexisting = baseline.found if baseline is not None and (result.passed or stands) else None
             if before is not None and workspace is not None and \
                     (wrote := isolate.rewritten(before, isolate.fingerprint(workspace.path))):
                 report.check_output = sorted({*report.check_output, *wrote})
@@ -1501,10 +1525,23 @@ def verdict_card(store: Store, task_id: int, report: Report, options: Options, v
         "criteria": [{"id": str(c.get("id")), "met": bool(c.get("met")),
                       "evidence": " ".join(str(c.get("evidence") or "").split())[:CRITERION_EVIDENCE]}
                      for c in report.criteria if isinstance(c, Mapping)],
-        "check": {"command": options.verify, "passed": True} if options.verify else None,
+        "check": _check_card(options.verify, report.preexisting) if options.verify else None,
         "independent": independent,
         "attempts": len(report.cells),
     }
+
+
+#: What a verdict card says of a check that fails only as it does at the base.
+FAILING_AT_BASE = "failing at base, unchanged"
+
+
+def _check_card(command: str, found: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The verdict card's check: passed, or failing at the base too with the same failures
+    (`Baseline.found`): it stood as a pass, and the card says which it was."""
+    if not found:
+        return {"command": command, "passed": True}
+    return {"command": command, "passed": True, "state": FAILING_AT_BASE, "base": str(found.get("base") or ""),
+            "failures": int(found.get("n") or 0), "fixed": int(found.get("fixed") or 0)}
 
 
 _STEP_TAG = re.compile(r"^\[[\w.-]+#\d+ [\w.-]+\]\s*")
@@ -1558,7 +1595,8 @@ def _join_message(task_id: int, options: Options) -> Callable[[str], str]:
 
 
 def _integrate(store: Store, task_id: int, workspace: isolate.Workspace | None, options: Options, report: Report,
-               context: list[str], say: Callable[[str], None]) -> tuple[dict[str, Any] | None, bool]:
+               context: list[str], say: Callable[[str], None],
+               baseline: Baseline | None = None) -> tuple[dict[str, Any] | None, bool]:
     """Join an integrate step's branches in its worktree, in the plan's order. A clean join
     whose check (the run's `--verify`) passes, or that has none, passes with no worker; a
     conflict, or a check that fails on the joined work, goes to one, told what and why.
@@ -1597,7 +1635,8 @@ def _integrate(store: Store, task_id: int, workspace: isolate.Workspace | None, 
     if not options.verify:
         report.status, report.summary = "done", summary + "; no check was given: the review that follows reads it"
         return joined, False
-    code, output = _check(options.verify, workspace.path)
+    code, full = _run_check(options.verify, workspace.path)
+    output = full[-CHECK_OUTPUT_KEPT:]
     if code == 0:
         report.status, report.summary = "done", f"{summary}; `{options.verify}` passed on the joined work"
         return joined, False
@@ -1605,9 +1644,17 @@ def _integrate(store: Store, task_id: int, workspace: isolate.Workspace | None, 
         report.stop = stops.Stop("environment", f"{summary}, but `{options.verify}` could not run here ({why})")
         report.status, report.summary = "blocked", report.stop.reason
         return joined, False
+    before, compared = _against_base(baseline, options.verify, full, workspace.path) \
+        if _ran_and_failed(code, full) else (False, "")
+    if before:
+        report.preexisting = baseline.found if baseline is not None else None
+        report.status, report.summary = "done", (f"{summary}; `{options.verify}` fails on the joined work only as it "
+                                                 "does at the base")
+        return joined, False
     context.append(f"The parts merged cleanly ({clean}), but the run's check `{options.verify}` fails on the joined "
                    "work. Make it pass where the parts meet, keeping the contract; change what a part does only as "
-                   f"far as that needs. Its output:\n{output[-1500:]}" + contract)
+                   f"far as that needs. Its output:\n{output[-1500:]}" + (f"\n\n{compared}" if compared else "")
+                   + contract)
     return joined, True
 
 
@@ -2259,14 +2306,149 @@ def _equip(selection: caps.Selection, the_plan: Plan, repo_dir: Path, workdir: P
     return caps.Selection(servers, tuple(hints), tuple(names), selection.read_dirs)
 
 
-def _check(command: str, workdir: Path) -> tuple[int | None, str]:
-    """The repository's own check: (exit code, or None on a timeout; its output)."""
+def _run_check(command: str, workdir: Path) -> tuple[int | None, str]:
+    """The repository's own check: (exit code, or None on a timeout; its whole output)."""
     try:
         proc = subprocess.run(command, shell=True, cwd=str(workdir), capture_output=True, text=True,  # noqa: S602
                               timeout=VERIFY_TIMEOUT_S, check=False, env={**os.environ, **runtime.env_for(workdir)})
     except subprocess.TimeoutExpired:
         return None, ""
-    return proc.returncode, (proc.stdout + proc.stderr).strip()[-3000:]
+    return proc.returncode, (proc.stdout + proc.stderr).strip()
+
+
+#: How much of a check's output an attempt's evidence keeps.
+CHECK_OUTPUT_KEPT = 3000
+
+
+#: Where a check's run at a base commit is kept (`Store.meta`), and for how long: a task's
+#: later attempts, its verifier rounds and its sibling parts on the same base read it there.
+BASE_RUN_META, BASE_RUN_KEPT_S = "check_base:", 24 * 3600
+#: How many failing lines a `check_preexisting` event and an attempt's evidence name.
+FAILURES_SHOWN = 10
+
+
+@dataclass
+class Baseline:
+    """What a red check is compared with: the same command at the commit the task's work
+    started from (`isolate.at_base`). `must_fix` is work whose job is to make a failure go
+    away (`_REPRODUCES`): the same failures, untouched, are not its pass."""
+    store: Store
+    task_id: int
+    repo_dir: Path
+    base: str
+    root: Path
+    must_fix: bool = False
+    #: The last check's account when its failures were all there at the base, else None.
+    found: dict[str, Any] | None = None
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _owner: int = field(default_factory=threading.get_ident, repr=False)
+
+    @contextlib.contextmanager
+    def _db(self):
+        """The store, or one of its own on another thread (a race checks each try in its own)."""
+        if threading.get_ident() == self._owner:
+            yield self.store
+            return
+        other = Store(self.store.path)
+        try:
+            yield other
+        finally:
+            other.close()
+
+    def at_base(self, command: str) -> dict[str, Any]:
+        """The command's run at the base: {"code", "failures", "cannot"}, from the store's
+        meta when it ran there in the last `BASE_RUN_KEPT_S`, else run now and kept. A run
+        that timed out, could not run, lost the network or timed its tests out is `cannot`:
+        it cannot tell what was there before."""
+        digest = hashlib.sha256(f"{self.repo_dir}\0{self.base}\0{command}".encode()).hexdigest()[:32]
+        key = BASE_RUN_META + digest
+        with self._lock:
+            with self._db() as db:
+                kept = db.meta(key)
+            if kept is not None and not _expired(kept):
+                return json.loads(kept)
+            try:
+                with isolate.at_base(self.repo_dir, self.base, self.root) as path:
+                    code, output = _run_check(command, path)
+                    failures = launch.check_failures(output, roots=(path,))
+            except (isolate.IsolationError, OSError) as exc:
+                return {"code": None, "failures": [],
+                        "cannot": clip(f"no worktree could be made at the base ({exc})", 300, one_line=True)}
+            cannot = ("it timed out" if code is None else "" if code == 0 else
+                      cannot_run(code, output) or launch.check_timed_out(output) or launch.check_offline(output))
+            found = {"at": time.time(), "code": code, "failures": sorted(failures), "cannot": cannot}
+            if not (code and (launch.check_timed_out(output) or launch.check_offline(output))):
+                # A loaded machine or a dropped network is a moment's: the next try runs it again.
+                with self._db() as db:
+                    db.set_meta(key, json.dumps(found))
+                    db.drop_meta([k for k, v in db.metas(BASE_RUN_META).items() if _expired(v)])
+            return found
+
+
+def _expired(kept: str) -> bool:
+    """A base's run kept longer than `BASE_RUN_KEPT_S`, or that cannot be read."""
+    try:
+        return time.time() - float(json.loads(kept).get("at") or 0) >= BASE_RUN_KEPT_S
+    except (ValueError, AttributeError, TypeError):
+        return True
+
+
+def _against_base(baseline: Baseline | None, command: str, output: str, workdir: Path) -> tuple[bool, str]:
+    """Whether a check that ran and failed on the work failed the same way at the base
+    (`launch.preexisting`), and what the next attempt reads of the comparison. Fails closed:
+    when the base passes, could not run, or no failing line can be read from either output,
+    the failure is the work's."""
+    if baseline is None:
+        return False, ""
+    baseline.found = None
+    work = launch.check_failures(output, roots=(workdir, baseline.repo_dir))
+    if not work:
+        return False, ("cauce could not read which tests or files failed from its output, so it cannot tell "
+                       "whether they failed before this work: the failure is read as this work's")
+    at = baseline.at_base(command)
+    short = baseline.base[:12]
+    if at.get("cannot"):
+        return False, (f"at the base commit {short} the same check could not tell ({at['cannot']}): the failure "
+                       "is read as this work's")
+    if at.get("code") == 0:
+        return False, f"at the base commit {short} the same check passes: every failure here is this work's"
+    base = frozenset(at.get("failures") or ())
+    new, old = sorted(work - base), sorted(work & base)
+
+    def listed(lines: Sequence[str]) -> str:
+        more = len(lines) - FAILURES_SHOWN
+        return "\n".join(f"  - {clip(x, 200, one_line=True)}" for x in lines[:FAILURES_SHOWN]) + (
+            f"\n  - and {more} more" if more > 0 else "")
+
+    if launch.preexisting(work, base, must_fix=baseline.must_fix):
+        baseline.found = {"command": command, "base": baseline.base, "n": len(work), "base_n": len(base),
+                          "fixed": len(base - work), "added": 0,
+                          "failures": [clip(x, 200, one_line=True) for x in sorted(work)[:FAILURES_SHOWN]]}
+        with baseline._db() as db:
+            db.add_event(baseline.task_id, "check_preexisting", **baseline.found)
+        return True, ""
+    if not new:
+        # Only work that must make a failure go away gets here: the same failures stand.
+        return False, (f"this task's job is to make a failure go away, and the same {len(work)} failure(s) fail "
+                       f"at the base commit {short} as here: none of them is gone yet\n{listed(old)}")
+    said = f"compared with the same check at the base commit {short}: {len(new)} failing line(s) are new with this " \
+           f"work, focus on them:\n{listed(new)}"
+    if old:
+        said += f"\n{len(old)} already failed at the base, before this work (not this task's to fix):\n{listed(old)}"
+    return False, said
+
+
+def preexisting_line(found: Mapping[str, Any] | None) -> str:
+    """The report's line for a check whose failures were all there before the work."""
+    if not found:
+        return ""
+    fixed, n, command = int(found.get("fixed") or 0), int(found.get("n") or 0), found.get("command")
+    failures = f"{n} failure{'' if n == 1 else 's'}"
+    if not fixed:
+        return (f"`{command}` fails at the base too, with the same {failures}: they were there before this work, "
+                "not caused by it")
+    return (f"`{command}` fails at the base too: its {failures} here were all there before this work, not caused "
+            f"by it, and {fixed} more that failed at the base pass now")
 
 
 #: What a check prints when it could not run at all — its script, its manifest
@@ -2294,12 +2476,18 @@ def cannot_run(code: int | None, output: str) -> str | None:
     return None
 
 
-def _verified(result: launch.WorkerResult, command: str, workdir: Path) -> launch.WorkerResult:
+def _verified(result: launch.WorkerResult, command: str, workdir: Path,
+              baseline: Baseline | None = None) -> launch.WorkerResult:
     """A claimed pass checked by the repository's own command. The worker does not
     grade itself: a red check turns the pass into a code bug, with the check's
     output as the evidence the next attempt reads. A check that could not run at
-    all is the environment's, never a pass and never a bug in the work."""
-    code, output = _check(command, workdir)
+    all is the environment's, never a pass and never a bug in the work. A red check
+    whose every failing line also fails at the base (`baseline`) was there before the
+    work: the pass stands, and that is recorded and said (`_against_base`)."""
+    if baseline is not None:
+        baseline.found = None
+    code, full = _run_check(command, workdir)
+    output = full[-CHECK_OUTPUT_KEPT:]
     if code is None:
         return dataclasses.replace(result, passed=False, failure=Failure.INCONCLUSIVE,
                                    summary=f"`{command}` timed out after the claimed pass")
@@ -2325,8 +2513,12 @@ def _verified(result: launch.WorkerResult, command: str, workdir: Path) -> launc
             result, passed=False, failure=Failure.ENVIRONMENT, evidence=output, network=dropped,
             summary=f"claimed a pass, but `{command}` lost the network ({dropped}): {result.summary}",
         )
+    before, compared = _against_base(baseline, command, full, workdir)
+    if before:
+        return result
     return dataclasses.replace(
-        result, passed=False, failure=Failure.CODE_BUG, evidence=output,
+        result, passed=False, failure=Failure.CODE_BUG,
+        evidence=f"{output}\n\n{compared}" if compared else output,
         summary=f"claimed a pass, but `{command}` exited {code}: {result.summary}",
     )
 
@@ -2349,15 +2541,33 @@ def _settles(result: launch.WorkerResult, command: str | None) -> bool:
     return result.failure in _UNCHECKED
 
 
-def _settled(result: launch.WorkerResult, command: str, workdir: Path) -> launch.WorkerResult:
-    code, output = _check(command, workdir)
+def _ran_and_failed(code: int | None, output: str) -> bool:
+    """A check that ran and failed on the work: not a timeout, not one that could not run,
+    not a loaded machine's or a dropped network's. Only such a failure is compared with the base."""
+    return bool(code) and cannot_run(code, output) is None and not launch.check_timed_out(output) \
+        and not launch.check_offline(output)
+
+
+def _settled(result: launch.WorkerResult, command: str, workdir: Path,
+             baseline: Baseline | None = None) -> launch.WorkerResult:
+    if baseline is not None:
+        baseline.found = None
+    code, full = _run_check(command, workdir)
+    output = full[-CHECK_OUTPUT_KEPT:]
     if result.failure is Failure.PERMISSION:
         cause = f"the worker was refused {', '.join(result.denied[:3])}"
     else:
         cause = "the worker ran out of turns before checking its work"
+    before, compared = _against_base(baseline, command, full, workdir) if _ran_and_failed(code, full) \
+        else (False, "")
+    if before:
+        return dataclasses.replace(
+            result, passed=True, failure=None, evidence=output,
+            summary=f"{result.summary} ({cause}; `{command}` failed only as it does at the base, in its place)")
     if code != 0:
         why = "timed out" if code is None else f"exited {code}"
-        return dataclasses.replace(result, evidence=f"`{command}` {why}:\n{output}".strip(),
+        evidence = f"`{command}` {why}:\n{output}".strip() + (f"\n\n{compared}" if compared else "")
+        return dataclasses.replace(result, evidence=evidence,
                                    summary=f"{result.summary} ({cause}; cauce ran `{command}`, which {why})")
     return dataclasses.replace(
         result, passed=True, failure=None, evidence=output or f"`{command}` exited 0",
@@ -2365,14 +2575,38 @@ def _settled(result: launch.WorkerResult, command: str, workdir: Path) -> launch
     )
 
 
-def _stands(result: launch.WorkerResult, command: str | None, workdir: Path) -> str:
+def _only_the_base(result: launch.WorkerResult, command: str | None, baseline: Baseline | None) -> bool:
+    """A worker that stopped on a point (`spec_bug`, `architecture_bug`) whose point is the
+    check failing on what already failed at the base: the check's failures were all there
+    before the work (`baseline.found`), the worker names the check or one of those failures,
+    and every criterion it answered is met. Anything else stays a decision."""
+    if not command or baseline is None or not baseline.found:
+        return False
+    if any(not c.get("met") for c in result.criteria):
+        return False
+    said = f"{result.summary}\n{result.evidence}"
+    failing = [str(line) for line in baseline.found.get("failures") or ()]
+    return command in said or any(_named(line, said) for line in failing)
+
+
+def _named(line: str, said: str) -> bool:
+    """A failing line a worker's words name: its longest path or test name appears in them."""
+    words = sorted((w for w in re.split(r"[\s:'\"()]+", line) if len(w) >= 6), key=len, reverse=True)
+    return bool(words) and words[0] in said
+
+
+def _stands(result: launch.WorkerResult, command: str | None, workdir: Path,
+            baseline: Baseline | None = None) -> str:
     """Whether the work of a worker that reported a failure of the task (`spec_bug`,
     `architecture_bug`) stands anyway: "cauce" when the repository's check, run by cauce,
     passes on it; "worker" when there is none to run and the worker's own check is its
     evidence (shown, with at most the one criterion the open point leaves unmet); "" otherwise."""
     if command:
-        code, _ = _check(command, workdir)
-        return "cauce" if code == 0 else ""
+        if baseline is not None:
+            baseline.found = None
+        code, output = _run_check(command, workdir)
+        return "cauce" if code == 0 or (_ran_and_failed(code, output) and _against_base(
+            baseline, command, output, workdir)[0]) else ""
     unmet = sum(1 for c in result.criteria if not c.get("met"))
     return "worker" if result.evidence.strip() and unmet <= 1 and unmet < max(len(result.criteria), 1) else ""
 

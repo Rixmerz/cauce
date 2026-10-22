@@ -187,7 +187,7 @@ _APPEND_ONLY_TRIGGERS = "".join(
     for table in _APPEND_ONLY for verb in ("update", "delete"))
 
 #: Events that keep the version that wrote them: what `cauce doctor` reads a bug from.
-VERSIONED = frozenset({"planned", "attempt_started", "moved", "finished"})
+VERSIONED = frozenset({"planned", "attempt_started", "moved", "finished", "check_preexisting"})
 
 #: Words a query and a problem must share for a strict match.
 STRICT_OVERLAP = 3
@@ -661,6 +661,15 @@ class Store:
     def set_meta(self, key: str, value: str) -> None:
         self._conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET "
                            "value = excluded.value", (key, value))
+
+    def metas(self, prefix: str) -> dict[str, str]:
+        """Every meta value whose key starts with `prefix`."""
+        rows = self._conn.execute("SELECT key, value FROM meta WHERE substr(key, 1, ?) = ?",
+                                  (len(prefix), prefix)).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def drop_meta(self, keys: Sequence[str]) -> None:
+        self._conn.executemany("DELETE FROM meta WHERE key = ?", [(k,) for k in keys])
 
     def standard(self, repo: str, kind: str, band: int) -> dict | None:
         row = self._conn.execute("SELECT * FROM standards WHERE repo = ? AND kind = ? AND band = ?",

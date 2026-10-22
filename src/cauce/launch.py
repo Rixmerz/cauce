@@ -45,6 +45,7 @@ from cauce import ledger as ledger_mod
 from cauce.escalate import REPLAN, Failure
 from cauce.isolate import is_artifact
 from cauce.matrix import Cell
+from cauce.text import clip
 
 RESULT_FENCE = "cauce-result"
 #: Where a block opens. Its JSON is decoded straight from there, not cut at the next
@@ -152,6 +153,11 @@ When you are done, end your reply with exactly one fenced block:
   runs in: start it in the background and stop it before you finish. You have
   no browser unless your tools include one; without it, answer `fail` with
   `environment` and say so, never describe a page you did not open.
+- A check that fails the same way without your change (tests, lint or coverage
+  of code you did not touch, or were told not to) is not yours to fix and no
+  reason to stop: when your own work is done, answer `pass`, and name those
+  failures in `summary` as already failing before your change. cauce runs the
+  check at the base too and tells the two apart.
 - Do not list the files you changed; they are read from git.
 - `commit` is the subject of the commit that keeps your work, as the project's
   own history writes them (`Fix rounding of the checkout total`, or
@@ -678,6 +684,116 @@ def check_timed_out(output: str) -> str:
     if failed and len(timeouts) < failed * LOAD_SHARE:
         return ""
     return LOAD_TIMEOUT.search(output).group(0).strip()[:120]
+
+
+#: Escape sequences a runner colours its output with.
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
+#: How long something took, which differs between two runs of the same failure:
+#: `(123 ms)`, `(0.01s)`, `[12ms]`, ` in 4.2s`, and a line's trailing `0.012s` or `3ms`.
+_DURATION = re.compile(r"\s*[(\[]\d+(?:\.\d+)?\s*(?:ms|s|sec|m)[)\]]"
+                       r"|\s+in\s+\d+(?:\.\d+)?\s*(?:ms|s|sec|seconds)\b"
+                       r"|(?<=\S)\s+\d+(?:\.\d+)?\s?(?:ms|s)$")
+#: A word that names a file (`src/a.ts`, `app.py`), for another tool's `error` line.
+_PATHISH = re.compile(r"[\w.@-]+/[\w./@-]+|\b[\w-]+\.(?:[jt]sx?|mjs|cjs|py|go|rs|rb|java|kt|vue|svelte|php|cs|"
+                      r"css|scss|json|ya?ml)\b")
+#: The lines a runner prints for one failure, each with how it is kept: a test file or a
+#: test (jest, vitest, mocha, pytest, go test, deno), a type error (tsc), a coverage
+#: threshold not met (jest, istanbul, nyc), a lint error (eslint). Counts and summaries
+#: ("Tests: 2 failed") are no failure of their own: they change when one is fixed.
+_FAILURE_SHAPES: tuple[tuple[re.Pattern[str], Callable[[re.Match[str]], str]], ...] = (
+    # jest and vitest: `FAIL src/a.test.ts`, `FAIL src/a.test.ts > suite > test`; go: `FAIL pkg`.
+    (re.compile(r"^FAIL\s+(\S.*)$"), lambda m: f"FAIL {m.group(1)}"),
+    # go test: `--- FAIL: TestName (0.00s)`.
+    (re.compile(r"^--- FAIL:\s+(\S+)"), lambda m: f"--- FAIL: {m.group(1)}"),
+    # jest's failed test, vitest's: `✕ adds two`, `× adds two`.
+    (re.compile(r"^(?:✕|×|✗)\s+(\S.*)$"), lambda m: f"✕ {m.group(1)}"),
+    # jest's failure heading: `● suite › test`, `● Test suite failed to run` (never its console).
+    (re.compile(r"^●\s+(?!Console\b)(\S.*)$"), lambda m: f"● {m.group(1)}"),
+    # pytest's short summary: `FAILED tests/test_a.py::test_x - assert 1 == 2`, and its errors.
+    (re.compile(r"^(FAILED|ERROR)\s+(\S+::\S+|\S+\.py)(?=\s|$)"), lambda m: f"{m.group(1)} {m.group(2)}"),
+    # mocha's numbered failure: `1) suite adds two:` (the number moves when another is fixed).
+    (re.compile(r"^\d+\)\s+(\S.*?):?$"), lambda m: f"mocha: {m.group(1)}"),
+    # deno test: `adds two ... FAILED`, and the `name => ./a_test.ts:3:6` line under FAILURES.
+    (re.compile(r"^(\S.*?) \.\.\. FAILED\b"), lambda m: f"{m.group(1)} ... FAILED"),
+    (re.compile(r"^(\S.*?) => (\S+:\d+:\d+)$"), lambda m: f"{m.group(1)} => {m.group(2)}"),
+    # tsc: `src/a.ts(12,5): error TS2322: ...` and `src/a.ts:12:5 - error TS2322: ...`.
+    (re.compile(r"^(\S+?)(?:\((\d+),(\d+)\)|:(\d+):(\d+))\s*[:-]\s*error (TS\d+): (.*)$"),
+     lambda m: f"{m.group(1)}:{m.group(2) or m.group(4)}:{m.group(3) or m.group(5)} error {m.group(6)}: "
+               f"{m.group(7)}"),
+    # jest: `Jest: "src/app/x.ts" coverage threshold for lines (80%) not met: 61.5%`.
+    (re.compile(r"^(.*\bcoverage threshold for .*\bnot met\b.*)$", re.IGNORECASE), lambda m: m.group(1)),
+    # istanbul / nyc: `ERROR: Coverage for lines (61.5%) does not meet global threshold (80%)`.
+    (re.compile(r"^(?:ERROR:\s*)?(Coverage for .*\bdoes not meet\b.*threshold.*)$", re.IGNORECASE),
+     lambda m: m.group(1)),
+    # eslint's unix format: `src/a.ts:12:5: 'x' is unused [Error/no-unused-vars]`.
+    (re.compile(r"^(\S+:\d+:\d+):?\s+(.*\b[Ee]rror\b.*)$"), lambda m: f"{m.group(1)} {m.group(2)}"),
+    # eslint's compact format: `src/a.ts: line 12, col 5, Error - 'x' is unused (no-unused-vars)`.
+    (re.compile(r"^(\S+): line (\d+), col (\d+), Error - (.*)$"),
+     lambda m: f"{m.group(1)}:{m.group(2)}:{m.group(3)} error {m.group(4)}"),
+)
+#: eslint's stylish format names the file on a line of its own and each error under it.
+_STYLISH_FILE = re.compile(r"^(?:/|\./|[\w@.-]+/)\S*\.\w+$")
+_STYLISH_ERROR = re.compile(r"^(\d+:\d+)\s+error\s+(.*)$")
+#: deno lint: `error[no-unused-vars]: ...`, its file on the `--> path:1:7` line after.
+_DENO_LINT = re.compile(r"^error\[([\w-]+)\]:\s*(.*)$")
+_DENO_AT = re.compile(r"^-->\s*(\S+:\d+:\d+)$")
+#: Any other `error` line that names a file: a linter's or a compiler's. Never a package
+#: manager's own (`error Command failed with exit code 1`).
+_ERROR_LINE = re.compile(r"^(?:ERROR|error)\b[:\s]")
+_MANAGER = re.compile(r"^error Command failed\b|^error An unexpected error\b", re.IGNORECASE)
+#: The most failing lines kept from one output, and how long each may be.
+FAILURES_KEPT, FAILURE_CHARS = 500, 300
+
+
+def check_failures(output: str, roots: Sequence[str | Path] = ()) -> frozenset[str]:
+    """The lines of a check's output that each report one failure, normalized so two runs
+    of the same failure read the same: colour codes and durations dropped, the directories
+    the check ran in (`roots`: a worktree, the base's copy) taken off the paths, whitespace
+    collapsed. Empty when no line reads as a failure: the output cannot tell what failed."""
+    text = _ANSI.sub("", output or "")
+    for root in sorted({str(r).rstrip("/") for r in roots if str(r).strip("/")}, key=len, reverse=True):
+        text = text.replace(root + "/", "").replace(root, ".")
+    found: set[str] = set()
+    current_file = pending_lint = ""
+    for raw in text.splitlines():
+        line = " ".join(_DURATION.sub("", raw).split())
+        if not line:
+            current_file = ""
+            continue
+        if pending_lint and (at := _DENO_AT.match(line)):
+            found.add(f"{at.group(1)} {pending_lint}")
+            pending_lint = ""
+            continue
+        if deno := _DENO_LINT.match(line):
+            pending_lint = f"error[{deno.group(1)}]: {deno.group(2)}"
+            continue
+        if _STYLISH_FILE.match(line):
+            current_file = line
+            continue
+        if current_file and (stylish := _STYLISH_ERROR.match(line)):
+            found.add(f"{current_file}:{stylish.group(1)} error {stylish.group(2)}")
+            continue
+        for shape, keep in _FAILURE_SHAPES:
+            if hit := shape.match(line):
+                found.add(keep(hit))
+                break
+        else:
+            if _ERROR_LINE.match(line) and not _MANAGER.match(line) and _PATHISH.search(line):
+                found.add(line)
+        if len(found) >= FAILURES_KEPT:
+            break
+    return frozenset(clip(" ".join(f.split()), FAILURE_CHARS) for f in found)
+
+
+def preexisting(work: frozenset[str], base: frozenset[str] | None, *, must_fix: bool = False) -> bool:
+    """Whether a red check's failures were all there before the work: the base's check failed
+    too (`base` is its failing lines, None when it passed or could not tell), the work's run
+    names at least one failing line, and every one is among the base's: the work fixed some,
+    added none. Work whose job is to make a failure go away (`must_fix`) must also have fixed
+    at least one of them: the same failures, untouched, are not its pass."""
+    if not work or not base or not work <= base:
+        return False
+    return not must_fix or work < base
 
 
 def api_limit(text: str) -> tuple[str, float | None]:

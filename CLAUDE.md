@@ -69,7 +69,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; a step that fans out over a plan's parts, one that joins their branches, a large change's review by area; `workflow_cli.py` is `cauce workflow …` |
 | `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
 | `src/cauce/services.py` | the servers a task needs up (`--service 'cmd@port'`): started in the task's directory, waited for, stopped with their process group when the run ends |
-| `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified |
+| `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified; `at_base`, a temporary worktree at a task's base for comparing its check |
 | `commands/orchestration.md` | the one entry point a user types |
 | `commands/habits.md` | review the habit candidates for this repository and install the ones the person picks |
 | `commands/workflow.md` | make, change, copy, run and watch workflows |
@@ -259,6 +259,25 @@ yields the default kind, not a guess.
   told) and it is shown, not suspected; a pre-existing one is reported, never
   a blocker. A finding is `deterministic` only with its proof (the command or
   hunk that shows it); one claimed without it is read as `inferential`.
+- A red check is compared with the base before it is the work's failure: one
+  that ran and failed (not a timeout, not `cannot_run`, not load or offline)
+  runs again at the task's base in a temporary detached worktree
+  (`isolate.at_base`, dependencies linked as a task's, stale ones left out,
+  always removed), its result kept in the store's meta for a day per
+  repository, base and command, never in a GET. Failures are compared, never
+  exit codes (`launch.check_failures`): the pass stands only when the work's
+  failing lines are a non-empty subset of the base's (`launch.preexisting`; a
+  `_REPRODUCES` kind must clear at least one), recorded as `check_preexisting`,
+  said in the report and on the verdict card (`failing at base, unchanged`),
+  and the ending offers its bugfix without starting it. A base that passes or
+  cannot tell, an unreadable output, or a new failing line keeps it a
+  `code_bug`, fail closed, and the evidence names which lines are new. A worker
+  that stopped on a point (`spec_bug`, `architecture_bug`) whose work stands
+  only because the check's failures were all at the base, that names the check
+  or one of those failures, and that leaves no criterion unmet passes
+  (`orchestrate._only_the_base`); any other point stays a `decision`.
+- A check whose exit is a pipeline filter's without `pipefail`, or that always
+  exits 0, is said in the plan (`ci.weak`): a warning, never a refusal.
 - Reviewers never vote: their findings are added together, so one is enough
   and there is no tie. A row only one saw and could only read from the code is
   decided by a refuter with its own proof, never by a count; a row it cannot

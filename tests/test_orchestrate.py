@@ -944,7 +944,8 @@ def test_a_check_that_cannot_run_is_the_environment_and_stops_the_work_it_let_ru
     "AssertionError: 2 != 3",
 ])
 def test_a_check_that_ran_and_failed_is_still_a_bug_in_the_work(git_repo, store, output):
-    check = f"printf '%s\\n' {shlex.quote(output)}; exit 1"
+    # It fails only on the work (the base has no f.py): a failure the base shares would be no bug of it.
+    check = f"if [ -f f.py ]; then printf '%s\\n' {shlex.quote(output)}; exit 1; fi"
     script = Script(ok("fixed"), ok("fixed for real"), write="f.py")
     report = run("fix the total", git_repo, store, Options(verify=check, max_attempts=2), registry={}, launcher=script,
                  classifier=kind("implement"))

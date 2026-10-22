@@ -52,6 +52,7 @@ FIXED_IN = {
     "revision-judged-twice": "0.32.0",
     "trial-never-sampled": "0.32.0",
     "note-proven-unbriefed": "0.32.0",
+    "preexisting-that-was-not": "0.34.0",
 }
 #: A candidate revision this old whose trial briefed no task, while its role's tasks here were briefed.
 TRIAL_UNSAMPLED = timedelta(days=3)
@@ -414,11 +415,41 @@ def notes_proven_unbriefed(store: Store, *, since: str | None, **_) -> Iterable[
                               note["task_id"], project)
 
 
+#: Kinds whose change must make a failure go away (`orchestrate._REPRODUCES`): failing at
+#: the base is their pass only when they fixed at least one of the failures.
+_MUST_FIX = frozenset({"debug-repro", "debug-unclear"})
+
+
+def preexisting_that_was_not(store: Store, *, since: str | None, **_) -> Iterable[Finding]:
+    """A check whose failures were called pre-existing though they were not all there at the
+    base: the work added a failing line, the work's run named none, it named more than the
+    base's, or a fix that must clear a failure fixed none. A red check let through."""
+    before: list[int] = []
+    for event in store.events_of_kinds(["check_preexisting"], since=since):
+        data = event["data"]
+        task = store.get_task(event["task_id"])
+        n, base_n = int(data.get("n") or 0), int(data.get("base_n") or 0)
+        wrong = int(data.get("added") or 0) > 0 or n == 0 or n > base_n or (
+            task is not None and task.get("kind") in _MUST_FIX and not int(data.get("fixed") or 0))
+        if not wrong:
+            continue
+        if _fixed("preexisting-that-was-not", data.get("version")):
+            before.append(event["task_id"])
+            continue
+        yield Finding("preexisting-that-was-not", SUSPECT,
+                      f"#{event['task_id']}'s red `{data.get('command')}` was let through as failing at the base "
+                      f"({n} failure(s) here, {base_n} at the base, {int(data.get('added') or 0)} new)",
+                      f"read the task's attempts with `cauce show {event['task_id']}`: the comparison with the base "
+                      "let a failure of the work pass", event["task_id"], task["repo"] if task else None)
+    if before:
+        yield _history("preexisting-that-was-not", before, None)
+
+
 RULES: tuple[Callable[..., Iterable[Finding]], ...] = (
     lanes_paused_on_ended, running_with_no_process, queued_with_no_dispatcher, resumes_that_never_ran,
     parts_that_lost_their_mark, joins_short_of_their_parts, attempts_with_no_session, turns_under_the_kind,
     format_failures_that_climbed, fix_rounds_off_their_base, candidates_on_trial_at_once, revisions_judged_twice,
-    trials_never_sampled, notes_proven_unbriefed,
+    trials_never_sampled, notes_proven_unbriefed, preexisting_that_was_not,
 )
 
 
