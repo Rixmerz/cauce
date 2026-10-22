@@ -286,6 +286,30 @@ def test_a_check_that_fails_at_the_base_with_the_same_lines_lets_the_pass_stand(
     assert "FAIL legacy/old.test.js" in found[1]
 
 
+def test_a_worker_that_stops_only_on_failures_already_at_the_base_passes(git_repo, store):
+    from cauce.escalate import Failure
+
+    check = "echo 'FAILED test_legacy.py::test_legacy_broken'; exit 1"
+    stopped = WorkerResult(False, Failure.SPEC_BUG, f"Fixed mul. `{check}` still fails on test_legacy.py, which "
+                           "the task forbids touching.", evidence="test_calc.py passes", cost_usd=0.1)
+    report = run("fix mul so it returns the product", git_repo, store, Options(verify=check), registry={},
+                 launcher=Script(stopped, write="f.py"), classifier=kind("implement"))
+    assert report.status == "done" and len(store.attempts(report.task_id)) == 1
+    assert store.last_event(report.task_id, "check_preexisting") is not None
+    assert "no decision is left" in store.attempts(report.task_id)[0]["summary"]
+
+
+def test_a_worker_s_open_point_about_something_else_stays_a_decision(git_repo, store):
+    from cauce.escalate import Failure
+
+    check = "echo 'FAILED test_legacy.py::test_legacy_broken'; exit 1"
+    stopped = WorkerResult(False, Failure.SPEC_BUG, "Built it, but the request says two things about the "
+                           "rounding: which one wins?", evidence="it builds", cost_usd=0.1)
+    report = run("add the export button", git_repo, store, Options(verify=check), registry={},
+                 launcher=Script(stopped, write="f.py"), classifier=kind("implement"))
+    assert report.status == "blocked" and "decision" in report.text()
+
+
 def test_a_check_whose_work_adds_a_failing_line_is_the_work_s_and_says_which_is_new(git_repo, store):
     check = "echo 'FAIL legacy/old.test.js'; if [ -f f.py ]; then echo 'FAIL src/f.test.js'; fi; exit 1"
     report = run("add the export button", git_repo, store, Options(verify=check, max_attempts=1), registry={},

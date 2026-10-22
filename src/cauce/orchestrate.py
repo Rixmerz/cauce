@@ -1227,6 +1227,14 @@ def run(
                     isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
                 # A worker that did the work and names a point it cannot settle: does the work stand?
                 stands = _stands(result, options.verify, workdir, baseline)
+                if stands == "cauce" and _only_the_base(result, options.verify, baseline):
+                    # Its open point is the check's failures, and they were all there before
+                    # the work: nothing is left to decide, and the work passes as it stands.
+                    result = dataclasses.replace(
+                        result, passed=True, failure=None, verdict="pass",
+                        summary=f"{result.summary} (cauce: the check's failures it names all fail at the base "
+                                "too, so they were there before this work and no decision is left)")
+                    stands = ""
             # What the report and the verdict say of a check that failed only as it does at the base.
             report.preexisting = baseline.found if baseline is not None and (result.passed or stands) else None
             if before is not None and workspace is not None and \
@@ -2565,6 +2573,26 @@ def _settled(result: launch.WorkerResult, command: str, workdir: Path,
         result, passed=True, failure=None, evidence=output or f"`{command}` exited 0",
         summary=f"{result.summary} ({cause}; `{command}` passed in its place)",
     )
+
+
+def _only_the_base(result: launch.WorkerResult, command: str | None, baseline: Baseline | None) -> bool:
+    """A worker that stopped on a point (`spec_bug`, `architecture_bug`) whose point is the
+    check failing on what already failed at the base: the check's failures were all there
+    before the work (`baseline.found`), the worker names the check or one of those failures,
+    and every criterion it answered is met. Anything else stays a decision."""
+    if not command or baseline is None or not baseline.found:
+        return False
+    if any(not c.get("met") for c in result.criteria):
+        return False
+    said = f"{result.summary}\n{result.evidence}"
+    failing = [str(line) for line in baseline.found.get("failures") or ()]
+    return command in said or any(_named(line, said) for line in failing)
+
+
+def _named(line: str, said: str) -> bool:
+    """A failing line a worker's words name: its longest path or test name appears in them."""
+    words = sorted((w for w in re.split(r"[\s:'\"()]+", line) if len(w) >= 6), key=len, reverse=True)
+    return bool(words) and words[0] in said
 
 
 def _stands(result: launch.WorkerResult, command: str | None, workdir: Path,

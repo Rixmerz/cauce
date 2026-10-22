@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-10-22
+
+### Fixed
+
+- **A check that already failed at the base no longer fails the work.** A red
+  `--verify` check is compared with the same check at the commit the task
+  started from. When every failing line of the work's run (tests, type errors,
+  lint errors, coverage thresholds, read from jest, vitest, pytest, mocha, go
+  test, deno, tsc, eslint and istanbul output) also failed at the base, the
+  pass stands: recorded as a `check_preexisting` event, said in the report,
+  marked `failing at base, unchanged` on the verdict card, and the ending
+  offers a bugfix for those failures without starting one. Before, coverage
+  thresholds that already failed on files the task never touched made it
+  climb and stop as replan. A base that passes or cannot tell, or a failing
+  line the work added, keeps it a `code_bug`, and the next attempt is told
+  which lines are new. A `debug-repro`/`debug-unclear` task must clear at least
+  one. The base's run is cached for a day per repository, base and command.
+  `cauce doctor` gains `preexisting-that-was-not`. A worker that stops on a
+  point (`spec_bug`, `architecture_bug`) whose point is only those failures
+  passes instead of waiting on a decision, and workers are told that a check
+  failing the same way without their change is no reason to stop.
+
+### Added
+
+- **A check whose exit says nothing is said.** The plan warns when a check is a
+  pipeline whose last command is `grep`, `grep -v`, `tail`, `head`, `tee`,
+  `sed`, `awk`, `cat`, `sort`, `uniq` or `wc` without `set -o pipefail`, or
+  ends in `|| true`, `|| :`, `; true` or `; exit 0`, reading the npm/deno
+  scripts it runs too. A warning, never a refusal.
+
 ## [0.33.0] - 2026-10-21
 
 ### Added

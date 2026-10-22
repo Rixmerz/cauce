@@ -153,6 +153,11 @@ When you are done, end your reply with exactly one fenced block:
   runs in: start it in the background and stop it before you finish. You have
   no browser unless your tools include one; without it, answer `fail` with
   `environment` and say so, never describe a page you did not open.
+- A check that fails the same way without your change (tests, lint or coverage
+  of code you did not touch, or were told not to) is not yours to fix and no
+  reason to stop: when your own work is done, answer `pass`, and name those
+  failures in `summary` as already failing before your change. cauce runs the
+  check at the base too and tells the two apart.
 - Do not list the files you changed; they are read from git.
 - `commit` is the subject of the commit that keeps your work, as the project's
   own history writes them (`Fix rounding of the checkout total`, or
