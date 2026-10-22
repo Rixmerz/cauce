@@ -95,8 +95,10 @@ def worker_of(store: Store, task: dict[str, Any], steps: int) -> dict[str, Any] 
             "started_at": started["ts"], "alive": flow.alive(task.get("pid"))}
 
 
-def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
-    """Every lane's state; with `repos`, only those repositories' tasks and lanes."""
+def board(store: Store, repos: set[str] | None = None, session: str | None = None) -> dict[str, Any]:
+    """Every lane's state; with `repos`, only those repositories' tasks and lanes. With
+    `session`, the counts say how many of the waits are that session's work (`mine`): a
+    project's board holds every session's, and a status line counts the one it is in."""
     tasks = store.list_tasks(limit=500, source=TASK_SOURCES)
     needs, running, done = [], [], []
     for t in tasks:
@@ -157,6 +159,7 @@ def board(store: Store, repos: set[str] | None = None) -> dict[str, Any]:
                      "lanes": {k or "": v.data() for k, v in shared.items() if repos is None or k in repos}},
         "counts": {"needs_you": sum(1 for n in needs if n["waits_on"] == "person"),
                    "orchestrator": sum(1 for n in needs if n["waits_on"] == "orchestrator"), "running": len(running),
+                   **({"mine": sum(1 for n in needs if n.get("session_id") == session)} if session else {}),
                    "workers": sum(1 for r in running if r.get("worker")),
                    "queued": sum(len(v["tasks"]) for v in queued.values()), "done": len(done),
                    "answering": len(answering)},

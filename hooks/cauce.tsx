@@ -94,9 +94,11 @@ async function cauce(
   }
 }
 
-/** The board of one project, as `cauce board --full --repo` answers it. */
-async function board($: EngineInterface, cwd: string): Promise<CauceBoard | null> {
-  const full = json<CauceBoard>(await cauce($, ['board', '--full', '--repo', cwd]))
+/** The board of one project, as `cauce board --full --repo` answers it; with
+ * `session`, its counts say how many waits are that session's work. */
+async function board($: EngineInterface, cwd: string, session?: string): Promise<CauceBoard | null> {
+  const full = json<CauceBoard>(await cauce($, ['board', '--full', '--repo', cwd,
+    ...(session ? ['--session', session] : [])]))
   return full && full.counts ? full : null
 }
 
@@ -117,7 +119,7 @@ let compactionDue = true
 
 async function refresh($: EngineInterface): Promise<void> {
   const cwd = await $.session.cwd()
-  const found = await board($, cwd)
+  const found = await board($, cwd, await $.session.id())
   $.ui.status(statusLine(found?.counts, found?.running ?? []))
 }
 

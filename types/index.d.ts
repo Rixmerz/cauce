@@ -25,7 +25,7 @@ export type CauceCard = {
 }
 
 export type CauceBoard = {
-  counts: { needs_you: number; orchestrator?: number; running: number; queued: number }
+  counts: { needs_you: number; orchestrator?: number; mine?: number; running: number; queued: number }
   needs_you: CauceCard[]
   running: CauceCard[]
   queued: { repo: string; paused: boolean; reason: string | null; tasks: CauceCard[] }[]

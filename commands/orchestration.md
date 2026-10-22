@@ -34,9 +34,18 @@ Request: $ARGUMENTS
    check or should be remembered goes to cauce. A fork is never the check of
    your own work: it saw your reasoning.
 
-2. **Split it when it has independent parts.** One `cauce run` per part. Parts
-   that touch different files can run at the same time (each gets its own
-   worktree); run them as background commands and collect the reports.
+2. **Split it when it has independent parts.** One `cauce run` per part, each
+   with its own `--surface`. Parts whose surfaces cannot touch run at the same
+   time (each gets its own worktree); run them as background commands and
+   collect the reports. A part that builds on another goes `--after` it. A
+   build that lists six items or more (40 words or more), is the largest size, or names three
+   pieces in folders of their own is refused before any worker starts (exit 5,
+   `not started: this request is several tasks`): split it as it says, or
+   send it as `cauce workflow run feature --goal …`, whose plan splits it.
+   `--whole` runs it as one task when you know it is one. Two parts without
+   surfaces that change the same file conflict when both merge: an ending
+   that says `other work here changes the same files` names them; merge one
+   first.
    Never send copies of the same task to compare answers: each costs a full
    run and they say the same thing — cauce already stops a task whose cells
    agree. Parts that share state a run uses up (a demo user, its quiz
@@ -152,7 +161,10 @@ Request: $ARGUMENTS
    worker picks it up at once, in its own process that outlives this session;
    its output says so. Work that needs another task's result first is queued
    with `--after <task>`: it starts when that task passes, on the branch it
-   kept; never sleep or poll to start it yourself. Only when it says `cauce work` runs the queue (the
+   kept; never sleep or poll to start it yourself. When that task stops short,
+   its ending says what waits on it; dismissing it takes what waits off the
+   queue too, and each comes back to you as an ending (`cauce resume N` starts
+   one on the base). Only when it says `cauce work` runs the queue (the
    person turned `autowork` off) start `cauce work` in the background. Whether
    a queued task runs beside the others or waits its turn is decided there,
    not here.

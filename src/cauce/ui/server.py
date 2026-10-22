@@ -546,6 +546,49 @@ def occupant(port: int) -> dict[str, Any] | None:
     return {"cauce": True, "version": version if isinstance(version, str) else None}
 
 
+def older(found: Mapping[str, Any] | None) -> bool:
+    """An occupant that is a cauce UI older than this one (one from before 0.4.1 says no version)."""
+    if not found or not found.get("cauce"):
+        return False
+    theirs = link.parse_version(str(found.get("version") or "0"))
+    return theirs is not None and theirs < (link.parse_version(__version__) or ())
+
+
+def listener(port: int, run: Callable[..., Any] = subprocess.run) -> int | None:
+    """The process listening on a loopback port, when `lsof` can say and it is a cauce UI by
+    its command line; None otherwise. Never a guess: a process that is not cauce's is left alone."""
+    try:
+        found = run(["lsof", "-nP", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"], capture_output=True, text=True,
+                    timeout=5, check=False).stdout.split()
+        pid = int(found[0]) if len(found) == 1 else None
+        if pid is None or pid == os.getpid():
+            return None
+        command = run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True, timeout=5,
+                      check=False).stdout
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return pid if re.search(r"\bcauce\b", command) and re.search(r"\bui\b", command) else None
+
+
+def take_over(port: int, *, run: Callable[..., Any] = subprocess.run,
+              kill: Callable[[int, int], None] = os.kill, wait_s: float = 5.0) -> int | None:
+    """Stop the older cauce UI that holds `port`, so this one serves it: the pid stopped once the
+    port is free, else None (it could not be found as cauce's, or did not let go)."""
+    pid = listener(port, run)
+    if pid is None:
+        return None
+    try:
+        kill(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return None
+    deadline = time.monotonic() + wait_s
+    while time.monotonic() < deadline:
+        if occupant(port) is None:
+            return pid
+        time.sleep(0.1)
+    return None
+
+
 def _browser_tab(url: str) -> Any:
     import webbrowser
 

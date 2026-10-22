@@ -154,7 +154,38 @@ class Route:
                 "areas": list(self.areas)}
 
 
-def _pieces(text: str) -> int:
+#: A build request listing this many items, in at least `SPLIT_WORDS` words, is several tasks:
+#: `cauce run` and `queue add` ask it split. A list of one-word items is one small task.
+SPLIT_ITEMS, SPLIT_WORDS = 6, 40
+#: The kinds a request is asked split in: work that builds, where one worker outgrows its turns.
+SPLIT_KINDS = frozenset({"feature", "implement"})
+
+
+def split_first(text: str, kind: str | None = None) -> str | None:
+    """Why a request should be sent as several tasks before one worker starts it, or None:
+    a build (`kind`, else read by rules, with no model) that lists `SPLIT_ITEMS` items or
+    more in `SPLIT_WORDS` words or more, is the largest size, or lists `PARALLEL_PIECES`
+    pieces in folders of their own.
+    One worker on all of it outgrows its turns, and the climb that follows (more turns,
+    another model) costs more than the parts would. Pure."""
+    if kind is None:
+        ruled = by_rules(text)
+        kind = asks_for_change(text, ruled).kind if ruled is not None else (
+            "implement" if opens_with_change(text) else None)
+    if kind not in SPLIT_KINDS:
+        return None
+    items = len(criteria_mod.items(text))
+    size = points_mod.of_request(text, kind, risk_mod.of_request(text, kind)).points
+    pieces = listed_pieces(text)
+    why = [f"{items} listed items"] if items >= SPLIT_ITEMS and len(text.split()) >= SPLIT_WORDS else []
+    if size >= max(points_mod.SCALE):
+        why.append(f"{size} points")
+    if pieces >= PARALLEL_PIECES:
+        why.append(f"{pieces} pieces in folders of their own")
+    return ", ".join(why) or None
+
+
+def listed_pieces(text: str) -> int:
     """How many of the request's listed items name a file in a top-level folder of their own."""
     tops = set()
     for item in criteria_mod.items(text):
@@ -195,7 +226,7 @@ def choose(text: str, *, context_tokens: int | None = None, context_share: float
     risk = risk_mod.of_request(text, kind)
     size = points_mod.of_request(text, kind, risk)
     areas = tuple(sorted({area for area, _ in risk_mod.areas(risk)}))
-    pieces = _pieces(text)
+    pieces = listed_pieces(text)
     base = dict(kind=kind, points=size.points, areas=areas)
     if kind in READ_ONLY_KINDS:
         return Route(MAIN, (f"{kind}: reading, which the session holding the code does best",), **base)

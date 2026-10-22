@@ -2,6 +2,52 @@
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-10-22
+
+### Fixed
+
+- **Work queued after a task that is dismissed no longer waits forever.**
+  Dismissing a task takes what was queued `--after` it off the queue too:
+  each is cancelled by cauce with why, and reaches the session that queued it
+  as an ending whose line (`cauce resume N`) starts it on the base. So does
+  cancelling a workflow run for what waits on it. Work held behind a task that
+  a later one with the same text superseded waits on that one instead and
+  starts on what it kept; work held behind a task whose change already landed
+  on the checkout's branch starts on the base. The ending of a task that
+  stopped short names what waits on it. `cauce doctor` gains
+  `held-behind-gone`, and a queued task cancelled before it started now
+  resumes, as its line always said.
+- **A plan no longer repeats one old refusal to every task.** The rules
+  workers were refused are read from the repository's latest 40 attempts, and
+  only a rule refused in two tasks or more is named.
+- **A first try no longer races a second worker where the start's failures
+  ran out of turns.** When at least half of the failed first tries at the
+  start cell here outgrew their turns, the start does not race the next rung:
+  another cell gets no more room. The plan says why.
+
+### Added
+
+- **A build that is several tasks is asked split before any worker starts.**
+  `cauce run` and `cauce queue add` (and the mod's `queue`) refuse a `feature`
+  or `implement` request that lists six items or more in 40 words or more, is the largest size,
+  or names three pieces in folders of their own, with exit 5 and how to split
+  it: one task per piece with its own `--surface`, or `cauce workflow run
+  feature`, whose plan splits it. `--whole` runs it as one task.
+- **Two pieces of work that change the same file are said.** An ending names
+  the other tasks in the repository, running or with a kept branch from the
+  last three days, that changed the same files, and says merging both
+  conflicts there.
+- **A session hears when it runs an older cauce than the one installed.** A
+  command forwarded from an older plugin says that the session's skills,
+  hooks and `/cauce:*` text are still that version's; the prompt hook says it
+  once per session and version.
+- **`cauce ui` takes its port from an older cauce UI.** One it finds by its
+  command line (`lsof`, `ps`) is stopped and replaced; anything else on the
+  port is left alone, as before.
+- **The status line counts this session's waits first.** `cauce board
+  --session` counts the waits that are that session's work (`mine`), and the
+  mod's status line shows the rest of the project's apart.
+
 ## [0.34.0] - 2026-10-22
 
 ### Fixed

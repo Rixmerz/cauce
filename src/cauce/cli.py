@@ -86,6 +86,8 @@ def _kind(value: str) -> str:
 #: A run's exit: 0 passed, 1 stopped short of it, 2 a usage error, 3 refused because only a
 #: person can clear what stopped it, 4 the work is done and kept but one point needs a decision.
 EXIT_DECISION = 4
+#: `cauce run` and `queue add` exit with it when a request is several tasks: nothing was started.
+EXIT_SPLIT = 5
 
 
 def _exit(report: orchestrate.Report) -> int:
@@ -110,7 +112,13 @@ def _behind(env: dict[str, str] | None = None) -> str | None:
     every fix an update brought until it reloads."""
     from cauce import link
 
+    loaded = link.parse_version(link.LOADED or "")
     mine = link.parse_version(__version__)
+    if loaded and mine and loaded < mine:
+        # Forwarded here: the command runs this version, the session's skills and hooks do not.
+        return (f"cauce: this session loaded cauce {link.LOADED}; the commands it types run {__version__}, but its "
+                f"skills, hooks and /cauce:* text are still {link.LOADED}'s. Run /reload-plugins, or `/cauce:relay` "
+                "then /clear, so its instructions are this version's too")
     newest = max((version for version, _ in link.installed(os.environ if env is None else env)), default=None)
     if not mine or not newest or newest <= mine:
         return None
@@ -132,8 +140,30 @@ def _surfaces(values: list[str] | None) -> tuple[str, ...]:
         raise SystemExit(f"cauce: {exc}") from exc
 
 
+def _split_first(args: argparse.Namespace, text: str) -> int | None:
+    """`EXIT_SPLIT`, said, when a build request is several tasks and `--whole` was not passed:
+    one worker outgrows its turns on all of it, and the climb after costs more than the parts."""
+    if getattr(args, "whole", False) or getattr(args, "dry_run", False):
+        return None
+    from cauce import route
+
+    why = route.split_first(text, args.kind)
+    if why is None:
+        return None
+    print(f"cauce: not started: this request is several tasks ({why}). One worker on all of it outgrows its "
+          "turns, then climbs to more turns and stronger models, which costs more than the parts would. Send "
+          "one `cauce run` per piece, each with its own `--surface` (pieces whose surfaces cannot touch run side "
+          "by side; one that builds on another goes `--after` it), or `cauce workflow run feature --goal "
+          "'<the request>'`, whose plan splits it. `--whole` runs it as one task anyway.", file=sys.stderr)
+    return EXIT_SPLIT
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     _warn_behind()
+    if args.text == "-":
+        args.text = sys.stdin.read()  # read once: the split check and the run read the same text
+    if (split := _split_first(args, args.text)) is not None:
+        return split
     if args.role:
         from cauce import roles
 
@@ -268,7 +298,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
     previous = _cancel_on_sigterm()
     try:
         task = store.get_task(args.id)
-        if task is None or task["source"] != "cauce" or not task["cwd"]:
+        # A queued task cancelled before it started (taken off the queue, or behind work that
+        # left the board) resumes too: it runs here, from the base, as it would have.
+        if task is None or task["source"] not in ("cauce", "queue") or not task["cwd"]:
             print(f"no task #{args.id} that cauce ran", file=sys.stderr)
             return 1
         if task["status"] == "running" and not flow.alive(task["pid"]):
@@ -540,13 +572,17 @@ def cmd_dismiss(args: argparse.Namespace) -> int:
                 print(f"no task #{task_id}", file=sys.stderr)
                 return 1
             waited = dispatch.waiting(store, task) if after.held(task) else None
-            if stops.dismiss(store, task, via=via, why=why) is None:
+            if (stop := stops.dismiss(store, task, via=via, why=why)) is None:
                 print(f"task #{task_id} is {task['status']}; only a task that waits "
                       f"({', '.join(stops.DISMISSABLE)}) or on other work (`--after`) is dismissed",
                       file=sys.stderr)
                 return 1
             print(f"took task #{task_id} off the queue (it {waited})" if waited
                   else f"dismissed task #{task_id}; `cauce resume {task_id}` brings it back")
+            if along := stop.extra.get("took_along"):
+                print(f"and took {', '.join(f'#{n}' for n in along)} off the queue: queued after #{task_id}, "
+                      "they would never start; each is reported as an ending, and `cauce resume N` starts one "
+                      "on the base")
             dispatch.reopened(task, os.environ)
     finally:
         store.close()
@@ -1106,6 +1142,10 @@ def cmd_queue(args: argparse.Namespace) -> int:
     store = Store.open()
     try:
         if args.queue_command == "add":
+            if args.text == "-":
+                args.text = sys.stdin.read()
+            if (split := _split_first(args, args.text)) is not None:
+                return split
             where = Path(args.repo or os.getcwd()).resolve()
             options = {k: v for k, v in {"verify": args.verify, "kind": args.kind,
                                          "start": args.start, "allow_tools": args.allow,
@@ -1769,7 +1809,14 @@ def cmd_ui(args: argparse.Namespace) -> int:
     except OSError as exc:
         if exc.errno != errno.EADDRINUSE:
             raise
-        return _ui_port_taken(args)
+        found = server.occupant(args.port)
+        # An older cauce UI holds it: it serves that version's board, so this one takes its place.
+        stopped = server.take_over(args.port) if server.older(found) else None
+        if stopped is None:
+            return _ui_port_taken(args)
+        print(f"stopped the cauce UI {found.get('version') or 'from before 0.4.1'} that held port {args.port} "
+              f"(pid {stopped}): it served that version's board", flush=True)
+        ui = server.serve(args.port)
     url = f"http://127.0.0.1:{ui.server_address[1]}/"
     print(f"cauce UI at {url} (Ctrl-C stops it)", flush=True)
     if args.open:
@@ -1880,7 +1927,7 @@ def cmd_board(args: argparse.Namespace) -> int:
     keys = {d: repo.key(Path(d).resolve()) for d in args.repo or []}
     store = Store.open()
     try:
-        board = api.board(store, repos=set(keys.values()) if args.repo else None)
+        board = api.board(store, repos=set(keys.values()) if args.repo else None, session=args.session)
     finally:
         store.close()
     if args.full:
@@ -1965,6 +2012,8 @@ ALLOW_HELP = ("a permission rule the workers get, e.g. 'Bash(npm run build:*)' o
               "refused whatever its settings do not allow; a blocked task's report prints the rules it needs")
 AFTER_HELP = ("queue it held until task N (or task:N) or workflow run run:N passes, then start it on the branch "
               "that work kept (on the base when that branch is merged); nothing is merged or rebased")
+WHOLE_HELP = ("run a build that lists many items, or the largest size, as one task: without it, cauce asks for it "
+              "split (exit 5) and starts nothing")
 
 
 def _after_ref(value: str) -> dict[str, int]:
@@ -2018,6 +2067,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--detach", action="store_true",
                    help="queue it and start its lane's dispatcher instead of running it here; prints its "
                         "number, and its ending reaches the session that sent it")
+    p.add_argument("--whole", action="store_true", help=WHOLE_HELP)
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("resume", help="run a task that stopped again: from its kept work and the cell it stopped at")
@@ -2080,6 +2130,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--service", action="append", metavar="CMD@PORT", type=_service,
                    help="a server the task needs up, started before the work and stopped after (repeatable)")
     p.add_argument("--after", type=_after_ref, metavar="N", help=AFTER_HELP)
+    p.add_argument("--whole", action="store_true", help=WHOLE_HELP)
     p.add_argument("--json", action="store_true", help="print the queued task as JSON")
     p.set_defaults(func=cmd_queue)
     p = qsub.add_parser("list", help="what is waiting (this repository; --all for every one)")
@@ -2426,6 +2477,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="the counts as JSON")
     p.add_argument("--full", action="store_true", help="the whole board as JSON")
     p.add_argument("--repo", action="append", help="only this repository (repeatable)")
+    p.add_argument("--session", help="also count the waits that are this session's work (`mine`)")
     p.set_defaults(func=cmd_board)
 
     p = sub.add_parser("prune", help="delete the branches cauce kept whose work landed: merged, squash-merged, "

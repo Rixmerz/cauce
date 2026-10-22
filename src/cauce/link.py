@@ -88,6 +88,11 @@ def installed(env: Mapping[str, str]) -> list[tuple[tuple[int, ...], Path]]:
     return sorted(found)
 
 
+#: The version a command was forwarded from (`forward_to`): the plugin the session that typed
+#: it loaded, whose skills and hooks it still reads. None when it was not forwarded.
+LOADED: str | None = None
+
+
 def forward_to(argv: list[str], env: Mapping[str, str], own: str, version: str) -> Path | None:
     """The newer installed cauce a command should run instead of this copy, or None.
 

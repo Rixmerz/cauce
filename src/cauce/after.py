@@ -17,6 +17,13 @@ releases nothing: what waits on it stays held and says why, until a resume of it
 passes, or the person dismisses or cancels what waits. A chain is released one
 link at a time: each link waits on the one before it, and on nothing else.
 
+Work that leaves the board without passing takes what waits on it along
+(`abandon`): a task dismissed, or a run cancelled, will never pass, so what is
+held behind it leaves the queue too, cancelled by cauce with why, and the session
+that queued it hears of it as an ending. A task superseded by a later one with the
+same text that passed hands what waits on it to that one (`hand_on`), and one
+whose change already landed on the checkout's branch releases it onto the base.
+
 Light: the dispatcher, its views and `stops` read it.
 """
 from __future__ import annotations
@@ -272,6 +279,69 @@ def _start(kept: tuple[str | None, list[str], str, str | None], where: Path | No
                       "so this starts on the base")
     return tip, (f"queued after {who}, which passed: this starts on {branch} ({tip[:12]}), the branch it kept; "
                  "nothing is merged or rebased")
+
+
+def behind(store: Store, wanted: Mapping[str, int]) -> list[dict]:
+    """The queued tasks held behind a task (`{"task": N}`) or a run (`{"run": N}`), oldest first."""
+    want = {k: int(v) for k, v in wanted.items()}
+    return [t for t in reversed(store.list_tasks(status=["queued"], limit=1000)) if hold(t) == want]
+
+
+#: The cause a held task leaves the queue with when what it waited for left the board unpassed.
+ABANDONED = "after"
+
+
+def abandon(store: Store, wanted: Mapping[str, int], why: str) -> list[int]:
+    """Work held behind work that left the board without passing (a task dismissed, a run
+    cancelled): nothing will release it now, so it leaves the queue, cancelled by cauce with
+    `why`, its hold dropped. It is never marked reported: the session that queued it hears
+    of it as an ending, and a resume starts it on the base. The ids taken off."""
+    from cauce import stops  # stops reads holds: imported here, not at the top
+
+    want = {k: int(v) for k, v in wanted.items()}
+    gone = []
+    for t in behind(store, want):
+        options = json.loads(t.get("options") or "{}")
+        options.pop(KEY, None)
+        store.update_task(t["id"], options=json.dumps(options))
+        stops.record(store, t["id"], stops.Stop(ABANDONED, why, by="cauce", extra={"after": want}),
+                     result=False)
+        run = store.get_run(int(t["workflow_run"])) if t.get("workflow_run") else None
+        if run is not None and run["status"] == "active" and hold(run) == want:
+            # A whole run held behind it never starts either.
+            store.update_run(run["id"], status="cancelled", reason=why)
+        gone.append(t["id"])
+    return gone
+
+
+def hand_on(store: Store, task_id: int, to: Mapping[str, Any]) -> list[int]:
+    """Work held behind a task superseded by `to`, a later one with the same text that
+    passed: it waits on `to` instead, and the end of `to`'s run releases it onto what `to`
+    kept (`workflows.advance`), as it releases what was queued after `to` itself. The ids moved."""
+    moved = []
+    for t in behind(store, {"task": task_id}):
+        options = json.loads(t.get("options") or "{}")
+        options[KEY] = {"task": int(to["id"])}
+        store.update_task(t["id"], options=json.dumps(options))
+        store.add_event(t["id"], "after_moved", was={"task": task_id}, now={"task": int(to["id"])},
+                        why=f"#{task_id} was superseded by #{to['id']}, which passed the same work")
+        moved.append(t["id"])
+    return moved
+
+
+def landed(store: Store, task_id: int, into: str) -> list[dict]:
+    """Work held behind a task whose change is already on the checkout's branch (`into`):
+    released onto the base, which holds that change. The tasks released."""
+    freed = []
+    for t in behind(store, {"task": task_id}):
+        with store.immediate():
+            now = store.get_task(t["id"])
+            if now is None or not held(now):
+                continue
+            _free(store, now, {"task": task_id}, None,
+                  f"#{task_id}'s change is already in {into}: it starts on the base, which holds it")
+        freed.append(now)
+    return freed
 
 
 def release(store: Store, *, task: Mapping[str, Any] | None = None,
