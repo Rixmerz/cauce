@@ -608,8 +608,69 @@ def test_ui_on_a_taken_port_says_who_holds_it(monkeypatch, capsys, found, code, 
 
     monkeypatch.setattr(server, "serve", taken)
     monkeypatch.setattr(server, "occupant", lambda port: found)
+    monkeypatch.setattr(server, "take_over", lambda port: None)  # it could not be stopped
     assert cli.main(["ui", "--port", "8791"]) == code
     assert says in capsys.readouterr().err
+
+
+def test_ui_takes_the_port_from_an_older_cauce_ui(monkeypatch, capsys):
+    from cauce.ui import server
+
+    served = []
+
+    class Up:
+        server_address = ("127.0.0.1", 8791)
+        def __init__(self):
+            self.seen: set = set()
+            self.stop_event = __import__("threading").Event()
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+
+    def serve(port):
+        served.append(port)
+        if len(served) == 1:
+            raise OSError(errno.EADDRINUSE, "Address already in use")
+        return Up()
+
+    monkeypatch.setattr(server, "serve", serve)
+    monkeypatch.setattr(server, "occupant", lambda port: {"cauce": True, "version": "0.31.0"})
+    monkeypatch.setattr(server, "take_over", lambda port: 4242)
+    assert cli.main(["ui", "--port", "8791"]) == 0
+    out = capsys.readouterr().out
+    assert "stopped the cauce UI 0.31.0 that held port 8791 (pid 4242)" in out and served == [8791, 8791]
+
+
+def test_only_an_older_cauce_ui_found_by_its_command_line_is_stopped(monkeypatch):
+    from cauce import __version__
+    from cauce.ui import server
+
+    assert server.older({"cauce": True, "version": "0.31.0"}) and server.older({"cauce": True, "version": None})
+    assert not server.older({"cauce": True, "version": __version__}) and not server.older({"cauce": False})
+    assert not server.older({"cauce": True, "version": "999.0.0"}) and not server.older(None)
+
+    class Ran:
+        def __init__(self, out):
+            self.stdout = out
+
+    def run_as(command_line, pids="4242\n"):
+        return lambda argv, **kw: Ran(pids if argv[0] == "lsof" else command_line)
+
+    assert server.listener(8791, run_as("/usr/bin/python3 -m cauce ui --port 8791\n")) == 4242
+    assert server.listener(8791, run_as("node server.js\n")) is None
+    assert server.listener(8791, run_as("python -m cauce ui", pids="1\n2\n")) is None
+    assert server.listener(8791, run_as("python -m cauce ui", pids="")) is None
+    killed = []
+    gone = iter([{"cauce": True}, None])
+    monkeypatch.setattr(server, "occupant", lambda port: next(gone))
+    assert server.take_over(8791, run=run_as("python -m cauce ui\n"), kill=lambda pid, sig: killed.append(pid)) == 4242
+    assert killed == [4242]
+    monkeypatch.setattr(server, "occupant", lambda port: {"cauce": True})
+    assert server.take_over(8791, run=run_as("python -m cauce ui\n"), kill=lambda pid, sig: None, wait_s=0.2) is None
+    assert server.take_over(8791, run=run_as("vim\n"), kill=lambda pid, sig: killed.append(pid)) is None
 
 
 def test_ui_on_a_port_this_cauce_already_serves_opens_it(monkeypatch, capsys):
@@ -1387,3 +1448,25 @@ def test_clip_cuts_at_a_sentence_or_a_word_never_inside_a_bracket():
     assert words.endswith("word…") and len(words) <= 50
     assert len(clip("x" * 100, 30)) == 30
     assert clip("a\n  b c", 10, one_line=True) == "a b c"
+
+
+def test_run_and_queue_add_ask_a_build_of_many_items_split_and_start_nothing(git_repo, capsys, monkeypatch):
+    big = ("Implement the student side:\n- the opinion form and grade before each quiz opens\n"
+           "- a quiz per module and a final exam module\n- submodules the server locks, by 403 or a locked state\n"
+           "- the start screen with the calendar the API returns\n- the questions and answers forum\n"
+           "- the library of resources, with links")
+    started = []
+    monkeypatch.setattr(orchestrate, "run", lambda *a, **kw: started.append(a) or (_ for _ in ()).throw(
+        AssertionError("started")))
+    assert cli.main(["run", big, "--repo", str(git_repo)]) == cli.EXIT_SPLIT
+    err = capsys.readouterr().err
+    assert err.startswith("cauce: not started: this request is several tasks (6 listed items)")
+    assert "--surface" in err and "cauce workflow run feature" in err and "--whole" in err
+    assert cli.main(["queue", "add", big, "--repo", str(git_repo)]) == cli.EXIT_SPLIT
+    store = Store.open()
+    try:
+        assert store.list_tasks(status=["queued"]) == [] and started == []
+    finally:
+        store.close()
+    # --whole is the session's word that it is one task
+    assert cli.main(["queue", "add", big, "--repo", str(git_repo), "--whole"]) == 0

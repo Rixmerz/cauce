@@ -69,6 +69,8 @@ CAUSES = {
     "landed": ("dismissed", "cauce"),
     # A plan whose parts cannot run side by side (their surfaces may touch): its pass is taken back.
     "parts": ("replan", "cauce"),
+    # Held behind work (`--after`) that left the board without passing: it never started.
+    after.ABANDONED: ("cancelled", "cauce"),
 }
 
 #: Endings a person may dismiss: they wait on someone, and nothing else takes
@@ -248,6 +250,8 @@ def what_to_do(stop: Stop) -> str:
         "landed": "nothing: its work is already in the checkout's branch",
         "parts": "its parts may touch the same files, so they cannot run side by side: plan again (resume it, "
                  "or `cauce workflow retry` its step)",
+        after.ABANDONED: "it never started: the work it waited for left the board without passing. Resume it to "
+                         "start it on the base, queue it again after other work, or leave it",
     }.get(stop.cause, "read the attempts")
 
 
@@ -302,7 +306,9 @@ def dismiss(store: Any, task: dict[str, Any], *, via: str, why: str = "") -> Sto
     """Take a task that waits on a person off the board, on their word. Its result
     and attempts stay; the account says what it had stopped on, and why it was
     dismissed when that was given. None when the task waits on no one. Work queued
-    after other work (`after`) waits on it, and is dismissed off the queue."""
+    after other work (`after`) waits on it, and is dismissed off the queue; work
+    queued after this task will never be released by it, and leaves the queue with
+    it (`after.abandon`), its ids kept on the account (`took_along`)."""
     if task["status"] not in DISMISSABLE and not after.held(task):
         return None
     before = of(store, task)
@@ -312,9 +318,12 @@ def dismiss(store: Any, task: dict[str, Any], *, via: str, why: str = "") -> Sto
     why = " ".join(str(why or "").split())
     if why:
         said = f"{said}: {why}"
+    along = [] if after.held(task) else after.abandon(
+        store, {"task": int(task["id"])}, f"it waited for #{task['id']} to pass, which left the board: {said}")
     stop = Stop("dismissed", said, by=by,
                 attempt=before.attempt if before else None,
                 extra={"via": via, "was": task["status"], **({"why": why} if why else {}),
+                       **({"took_along": along} if along else {}),
                        **({"had": before.reason, "had_cause": before.cause} if before else {})})
     record(store, task["id"], stop, result=False)
     # The person did it: no session is told of it as an ending.
@@ -341,6 +350,8 @@ def supersede(store: Any, task: dict[str, Any]) -> list[int]:
         # The pass's own report names it; no session is told of it twice.
         store.add_event(other["id"], "reported", via="superseded")
         store.release_lane(other.get("repo"), other["id"])
+        # What waited on the copy waits on the work that passed, and starts on what it kept.
+        after.hand_on(store, other["id"], task)
         gone.append(other["id"])
     return gone
 
@@ -377,6 +388,8 @@ def landed(store: Any, top: Path) -> list[int]:
                                            **({"had_cause": before.cause} if before else {})}), result=False)
         store.add_event(task_id, "reported", via="landed")
         store.release_lane(task.get("repo"), task_id)
+        # What waited on it starts on the base, which holds its change.
+        after.landed(store, task_id, into)
         gone.append(task_id)
     return gone
 
@@ -429,7 +442,9 @@ def view(store: Any, task: dict[str, Any]) -> dict[str, Any] | None:
     stop = of(store, task)
     if stop is None:
         return None
-    resumable = task.get("source") == "cauce" and bool(task.get("cwd"))
+    # A queued task cancelled before it started runs from the base when resumed (`cli.cmd_resume`).
+    resumable = bool(task.get("cwd")) and (task.get("source") == "cauce" or (
+        task.get("source") == "queue" and stop.status == "cancelled"))
     todo = what_to_do(stop) if resumable or stop.status not in ("cancelled", "dismissed") else (
         "it never ran: queue it again if you still want it")
     rules = list(stop.allow or allow.from_refusals(stop.denied)) if stop.cause == "permission" else []

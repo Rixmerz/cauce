@@ -170,3 +170,20 @@ def test_the_corpus_of_real_requests_goes_where_each_belongs():
         if item["expect"] == "work" and (talked or (found.mode == route.MAIN and len(item["text"].split()) >= 8)):
             wrong.append(f"is work, kept here ({found.reasons[0]}): {item['text'][:80]}")
     assert wrong == []
+
+
+def test_a_build_that_lists_many_items_is_asked_split_before_a_worker_starts():
+    big = ("Implement the student side of the platform:\n- the opinion form and grade before each quiz opens\n"
+           "- a quiz per module and a final exam module\n- submodules the server locks, by 403 or a locked state\n"
+           "- the start screen with the calendar the API returns\n- the questions and answers forum\n"
+           "- the library of resources\n- module covers read from coverPath")
+    assert route.split_first(big) == "7 listed items"
+    # a list of one-word items is one small task
+    assert route.split_first("Implement the calculator:\n- mul\n- div\n- pow\n- mod\n- sqrt\n- abs") is None
+    # a reading request, a small change and a short list are one task
+    assert route.split_first("Explain why the forum is slow:\n- a\n- b\n- c\n- d\n- e\n- f") is None
+    assert route.split_first("fix the typo in README") is None
+    assert route.split_first("Add the export:\n- CSV\n- JSON\n- a test") is None
+    assert route.split_first(big, "review-routine") is None
+    pieces = ("Add the screens:\n- api/users.py\n- web/users.tsx\n- docs/users.md")
+    assert route.split_first(pieces, "feature") == "3 pieces in folders of their own"

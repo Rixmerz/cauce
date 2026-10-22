@@ -40,11 +40,11 @@ import subprocess
 import sys
 import traceback
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TextIO
 
-from cauce import config, orchestrator, project, repo, stops
+from cauce import after, config, orchestrator, project, repo, stops
 from cauce import findings as findings_mod
 from cauce.notes import _SECRET
 from cauce.store import OPEN_FOR_A_RELAY, Store, home
@@ -177,7 +177,45 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
                           + "\n".join(f"- {notes.line(n, text_chars=300)}" for n in known))
     if routed := _route(store, task["id"], text, cwd, event.get("transcript_path")):
         blocks.append(routed)
+    if newer := _newer_plugin(store.path.parent, str(session_id), os.environ):
+        blocks.append(newer)
     return _context("UserPromptSubmit", "\n\n".join(blocks)) if blocks else None
+
+
+#: The sessions told of a newer install, kept in the cauce home; the newest ones only.
+NEWER_SAID, NEWER_KEPT = "newer-plugin.json", 200
+
+
+def _newer_plugin(root: Path, session_id: str, env: Mapping[str, str]) -> str | None:
+    """Once per session and installed version: a session keeps the plugin it loaded, so after
+    an update the commands it types run the newest cauce (`link.forward_to`) while its skills,
+    hooks and /cauce:* text stay the old one's. Said, never acted on; it never costs the turn."""
+    try:
+        from cauce import __version__, link
+
+        mine = link.parse_version(__version__)
+        newest = max((version for version, _ in link.installed(env)), default=None)
+        if not mine or not newest or newest <= mine:
+            return None
+        said = ".".join(map(str, newest))
+        path = root / "work" / NEWER_SAID
+        try:
+            seen = json.loads(path.read_text())
+        except (OSError, ValueError):
+            seen = {}
+        seen = seen if isinstance(seen, dict) else {}
+        if seen.get(session_id) == said:
+            return None
+        seen.pop(session_id, None)
+        seen[session_id] = said
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(dict(list(seen.items())[-NEWER_KEPT:])))
+    except Exception:  # the turn goes on
+        note_error(root, "newer plugin")
+        return None
+    return (f"cauce: cauce {said} is installed, and this session loaded {__version__}: the commands it types run "
+            f"{said}, but its skills, hooks and /cauce:* text stay {__version__}'s until it reloads. Tell the person "
+            "once: /reload-plugins, or `/cauce:relay` then /clear, picks up the new one.")
 
 
 def _route(store: Store, task_id: int, text: str, cwd: str | None, transcript: str | None) -> str | None:
@@ -660,6 +698,7 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
         lines += _went_past(store, t)
         lines += _behind(store, t)
         lines += _found_before(store, t)
+        lines += _overlaps(store, t)
         if t["status"] == "done":
             branch = data.get("branch")
             commit = f" (commit {str(data['commit'])[:12]})" if data.get("commit") else ""
@@ -696,6 +735,12 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
         if stop:
             whose = "ask the person for it here" if stops.waits_on(store, t) == "person" else "yours to decide"
             lines.append(f"  next ({whose}): {stop['todo']}" + (f": {stop['next']}" if stop["next"] else ""))
+        if held := after.behind(store, {"task": int(t["id"])}):
+            # Queued after this work: it starts only when a resume of this passes.
+            lines.append(f"  {len(held)} queued task(s) wait for it to pass: "
+                         + ", ".join(f"#{h['id']} {clip(str(h['title'] or ''), 60, one_line=True)}"
+                                     for h in held[:4])
+                         + "; a resume of it to a pass releases them, and dismissing it takes them off the queue")
         waiting = store.lane_paused_on(t.get("repo"), t["id"])
         if waiting:
             lines.append(f"  its lane is paused on it: {waiting} queued task(s) wait. Dismissing or resuming it "
@@ -788,6 +833,57 @@ def _found_before(store: Store, ended: Mapping) -> list[str]:
                      f"--after {after_ref}`")
     if len(found) > len(shown):
         lines.append(f"    and {len(found) - len(shown)} more: `cauce show {ended['id']}`")
+    return lines
+
+
+#: How long work that stopped or passed beside an ending still counts as work to merge beside it.
+OVERLAP_DAYS = 3
+#: The most other tasks, and files of each, an ending names.
+OVERLAP_SHOWN = 4
+
+
+def _overlaps(store: Store, ended: Mapping) -> list[str]:
+    """Other work in the same repository that changed files this work changed: a task running
+    beside it, or one whose kept branch still waits to be merged. Merging both conflicts there,
+    so the ending names each and the files, before the person meets it in a merge. Steps of
+    one workflow run build on each other and are never named; nothing is merged or changed."""
+    mine = set((ended.get("finished_data") or {}).get("changed") or ())
+    if not mine or not ended.get("repo") or not ended.get("cwd") or not Path(str(ended["cwd"])).is_dir():
+        return []
+    from cauce import isolate
+
+    since = (datetime.now(UTC) - timedelta(days=OVERLAP_DAYS)).isoformat(timespec="seconds")
+    top = repo.toplevel(Path(str(ended["cwd"]))) or Path(str(ended["cwd"]))
+    try:
+        kept = isolate.kept_branches(top)
+    except Exception:  # an ending never fails on what git could not say
+        kept = {}
+    hits: list[tuple[dict, list[str]]] = []
+    for other in store.list_tasks(repo=ended["repo"], source=("cauce", "queue"), limit=300,
+                                  status=["running", "done", *stops.DISMISSABLE]):
+        if other["id"] == ended["id"] or (other.get("updated_at") or "") < since or (
+                ended.get("workflow_run") and other.get("workflow_run") == ended.get("workflow_run")):
+            continue
+        if other["status"] == "running":
+            tries = store.attempts(other["id"])
+            paths = json.loads(tries[-1]["changed_paths"] or "[]") if tries else []
+        elif other["id"] in kept:
+            paths = (((store.final_event(other["id"]) or {}).get("data")) or {}).get("changed") or []
+        else:
+            continue
+        both = sorted(mine & set(paths))
+        if both:
+            hits.append((other, both))
+    if not hits:
+        return []
+    lines = ["  other work here changes the same files, so merging both conflicts there; merge one first and "
+             "reconcile the other with it (nothing was merged):"]
+    for other, both in hits[:OVERLAP_SHOWN]:
+        state = "running now" if other["status"] == "running" else f"{other['status']}, branch kept"
+        lines.append(f"    #{other['id']} ({state}) {clip(str(other['title'] or ''), 60, one_line=True)}: "
+                     + ", ".join(both[:4]) + (f" and {len(both) - 4} more" if len(both) > 4 else ""))
+    if len(hits) > OVERLAP_SHOWN:
+        lines.append(f"    and {len(hits) - OVERLAP_SHOWN} more task(s)")
     return lines
 
 

@@ -168,6 +168,23 @@ def test_a_start_races_only_where_its_first_tries_rarely_pass(git_repo, store, m
     assert orchestrate.race_cell(store, key, "implement", ladder, START, Options())[0] is None
 
 
+def test_a_start_whose_failed_first_tries_ran_out_of_turns_does_not_race(git_repo, store, monkeypatch):
+    monkeypatch.setenv("CAUCE_RACE", "on")
+    key = repo.key(git_repo)
+    ladder = ladder_for("implement")
+    for _ in range(2):
+        finished(store, (START.label, 0, "turns_exhausted", "more_turns"), (START.label, 0, "turns_exhausted"),
+                 repo=key)
+    finished(store, (START.label, 0, "code_bug", "more_effort"), (RUNG.label, 1), repo=key)
+    finished(store, (START.label, 1), repo=key)
+    rung, why = orchestrate.race_cell(store, key, "implement", ladder, START, Options())
+    assert rung is None and "2 of the 3 that failed ran out of turns, which another cell does not fix" in why
+    # when most of them failed on the work itself, it races
+    for _ in range(2):
+        finished(store, (START.label, 0, "code_bug", "more_effort"), (RUNG.label, 1), repo=key)
+    assert orchestrate.race_cell(store, key, "implement", ladder, START, Options())[0] == RUNG
+
+
 def test_a_start_that_passes_often_does_not_race(git_repo, store, monkeypatch):
     monkeypatch.setenv("CAUCE_RACE", "on")
     key = repo.key(git_repo)

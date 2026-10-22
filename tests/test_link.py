@@ -142,6 +142,17 @@ def test_a_session_behind_the_newest_install_is_told_to_reload(tmp_path):
     assert cli._behind({"CLAUDE_CONFIG_DIR": str(tmp_path / "none")}) is None
 
 
+def test_a_command_forwarded_from_an_older_plugin_says_the_session_s_skills_are_that_one_s(tmp_path, monkeypatch):
+    from cauce import __version__
+
+    monkeypatch.setattr(link, "LOADED", "0.31.0")
+    warning = cli._behind({"CLAUDE_CONFIG_DIR": str(tmp_path / "none")})
+    assert warning.startswith(f"cauce: this session loaded cauce 0.31.0; the commands it types run {__version__}")
+    assert "skills, hooks and /cauce:* text are still 0.31.0's" in warning and "/cauce:relay" in warning
+    monkeypatch.setattr(link, "LOADED", __version__)
+    assert cli._behind({"CLAUDE_CONFIG_DIR": str(tmp_path / "none")}) is None
+
+
 def _copy(config: Path, version: str, script: str | None = None) -> Path:
     root = config / "plugins" / "cache" / "market" / "cauce" / version
     (root / ".claude-plugin").mkdir(parents=True)
@@ -176,7 +187,10 @@ def test_an_old_launcher_execs_the_newest_once(tmp_path):
     (old / "bin" / "cauce").write_text((Path(__file__).resolve().parents[1] / "bin" / "cauce").read_text())
     env = {**os.environ, "CLAUDE_CONFIG_DIR": str(config), "CAUCE_PYTHON": sys.executable}
     ran = subprocess.run([str(old / "bin" / "cauce"), "matrix"], env=env, capture_output=True, text=True, check=False)
-    assert ran.stdout.strip() == "newest ran: matrix forwarded=1"
+    from cauce import __version__
+
+    # the newest copy is told which version forwarded to it: the one the session loaded
+    assert ran.stdout.strip() == f"newest ran: matrix forwarded={__version__}"
     hook = subprocess.run([str(old / "bin" / "cauce"), "hook", "Nope"], env={**env, "CAUCE_HOOKS_OFF": "1"},
                           input="{}", capture_output=True, text=True, check=False)
     assert "newest ran" not in hook.stdout

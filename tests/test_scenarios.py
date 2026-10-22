@@ -222,3 +222,21 @@ def test_a_check_that_fails_at_the_base_the_same_way_does_not_fail_the_work(worl
     assert verdict["check"]["state"] == "failing at base, unchanged"
     assert len(world.calls()) == 1  # no climb: the pass stood on its first try
     world.healthy()
+
+
+def test_work_queued_after_a_task_that_is_dismissed_leaves_the_queue_with_it(world):
+    world.script([{"match": "write the schema file", "do": [
+        {"block": {"verdict": "fail", "failure": "spec_bug", "summary": "the schema it names does not exist"}}]}])
+    world.cauce("queue", "add", "--kind", "implement", "write the schema file for the totals")
+    first = world.wait(_task(("queued", "running")), "the first task to be queued")
+    world.cauce("queue", "add", "--kind", "implement", "--after", str(first["id"]), "use the schema in the report")
+    world.wait(lambda store: store.get_task(first["id"])["status"] not in ("queued", "running"), "the first to stop")
+    said = world.cauce("dismiss", str(first["id"]), "--why", "the schema is not needed")
+    assert "off the queue" in said
+    store = Store(world.home / "cauce.db")
+    try:
+        held = next(t for t in store.list_tasks(limit=5) if t["id"] != first["id"])
+        assert held["status"] == "cancelled" and json.loads(held["options"]).get("after") is None
+    finally:
+        store.close()
+    world.healthy()

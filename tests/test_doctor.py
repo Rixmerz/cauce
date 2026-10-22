@@ -43,6 +43,18 @@ def test_running_with_its_process_gone_and_queued_work_nobody_started_are_broken
     assert "queued-with-no-dispatcher" not in rules(store, now=datetime.now(UTC), alive=lambda pid: True)
 
 
+def test_work_held_behind_work_that_left_the_board_is_broken(store: Store):
+    gone = store.create_task("x", status="dismissed", source="cauce", repo="r")
+    live = store.create_task("y", status="blocked", source="cauce", repo="r")
+    stuck = store.enqueue("after x", repo="r", cwd="/", options={"after": {"task": gone["id"]}})
+    store.enqueue("after y", repo="r", cwd="/", options={"after": {"task": live["id"]}})
+    lost = store.enqueue("after a run", repo="r", cwd="/", options={"after": {"run": 99}})
+    found = rules(store, now=LATER, alive=lambda pid: True)["held-behind-gone"]
+    assert sorted(f.task_id for f in found) == [stuck["id"], lost["id"]]
+    assert all(f.severity == doctor.BROKEN and f.fix.startswith(f"cauce dismiss {f.task_id}") for f in found)
+    assert "left the board" in next(f for f in found if f.task_id == stuck["id"]).what
+
+
 def test_an_automatic_resume_that_started_no_attempt_is_broken(store: Store):
     task = store.create_task("x", status="interrupted", source="cauce", repo="r")
     store.add_event(task["id"], "auto_resumed", cause="died", after="killed")

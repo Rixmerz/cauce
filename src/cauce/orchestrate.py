@@ -617,6 +617,13 @@ def race_cell(store: Store, key: str | None, kind: str, ladder: Sequence[Cell], 
     passed, tried = standards.rates(window).get(start.label, [0, 0])
     if tried < RACE_SAMPLES or passed / tried >= RACE_BELOW:
         return None, ""
+    outgrew, failed = _outgrew(window, start.label)
+    if failed and outgrew * 2 >= failed:
+        # Out of turns is room, never the cell: a rung beside it outgrows the same turns.
+        return None, (f"its first try does not race {start.label} against {rung.label}, though {passed} of {tried} "
+                      f"first tries at {start.label} passed here: {outgrew} of the {failed} that failed ran out of "
+                      "turns, which another cell does not fix; work this size passes in smaller tasks or with more "
+                      "turns")
     record = racing.judge(window, mine)
     if not record.pays:
         return None, (f"its first try does not race {start.label} against {rung.label}, though {passed} of {tried} "
@@ -624,6 +631,20 @@ def race_cell(store: Store, key: str | None, kind: str, ladder: Sequence[Cell], 
     return rung, (f"its first try races {start.label} against {rung.label}: {passed} of {tried} first tries at "
                   f"{start.label} passed here; the first to pass its check is kept, the other stopped"
                   + (f" ({record.why})" if record.races else ""))
+
+
+def _outgrew(tasks: Sequence[standards.Ended], label: str) -> tuple[int, int]:
+    """Of the tasks whose first try ran on `label` and failed, how many ran out of turns on it,
+    and how many failed: a race gives the try another cell, never more room."""
+    outgrew = failed = 0
+    for task in tasks:
+        first = standards.samples(task.attempts) if not task.pinned else []
+        if not first or first[0][0] != label or first[0][1]:
+            continue
+        failed += 1
+        outgrew += any(a.get("failure") == Failure.TURNS_EXHAUSTED.value and a.get("cell") == label
+                       for a in task.attempts)
+    return outgrew, failed
 
 
 @dataclass
@@ -1841,23 +1862,34 @@ def _spans(repo_dir: Path, add_dirs: Sequence[str]) -> str | None:
             f"tracked in that folder; {choice}")
 
 
+#: The repository's latest attempts a refusal is read from: an older one is history, not a warning.
+REFUSALS_WINDOW = 40
+#: The tasks a rule must have been refused in, within that window, before a plan names it.
+REFUSED_IN_TASKS = 2
+
+
 def _refused_here(store: Store, key: str | None, granted: Sequence[str], mode: str) -> list[tuple[str, int]]:
-    """The rules workers in this repository lacked most often, past refusals read
+    """The rules workers in this repository lacked most often lately, past refusals read
     back to rules when an older run did not record them, the granted ones aside.
 
-    Only refusals in the mode the next worker runs in: what `acceptEdits`
-    refused, auto mode may well let through. An attempt that did not record its
-    mode ran before auto mode, under `acceptEdits`."""
+    Only refusals among the repository's latest `REFUSALS_WINDOW` attempts, of a rule
+    refused in `REFUSED_IN_TASKS` tasks or more: one task's refusal is that task's, and
+    is not repeated to every task after it. Only in the mode the next worker runs in:
+    what `acceptEdits` refused, auto mode may well let through. An attempt that did not
+    record its mode ran before auto mode, under `acceptEdits`."""
     if not key:
         return []
     counts: dict[str, int] = {}
-    for row in store.refusals(key):
+    tasks: dict[str, set[int]] = {}
+    for row in store.refusals(key, limit=REFUSALS_WINDOW):
         if (row.get("mode") or grants.FALLBACK_MODE) != mode:
             continue
         for rule in dict.fromkeys(row["allow"] or allow_rules.from_refusals(row["denied"])):
             if rule not in granted:
                 counts[rule] = counts.get(rule, 0) + 1
-    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:8]
+                tasks.setdefault(rule, set()).add(int(row["task_id"]))
+    shown = {rule: n for rule, n in counts.items() if len(tasks[rule]) >= REFUSED_IN_TASKS}
+    return sorted(shown.items(), key=lambda kv: (-kv[1], kv[0]))[:8]
 
 
 def _cause(decision: Decision, attempt: Attempt) -> str:

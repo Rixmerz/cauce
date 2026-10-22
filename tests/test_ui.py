@@ -36,6 +36,10 @@ def test_the_board_sorts_work_by_what_it_needs(store: Store):
     assert b["counts"] == {"needs_you": 1, "orchestrator": 1, "running": 1, "workers": 0, "queued": 1, "done": 1,
                            "answering": 0}
     assert b["last_event"] == store.last_event_id()
+    # a status line counts the waits its own session sent apart from the project's
+    store.update_task(done["id"], session_id="mine")
+    assert api.board(store, session="mine")["counts"]["mine"] == 1
+    assert api.board(store, session="nobody")["counts"]["mine"] == 0
 
 
 def test_prompts_answered_in_sessions_are_not_cards(store: Store):

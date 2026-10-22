@@ -683,18 +683,28 @@ def test_the_plan_names_the_rules_workers_here_were_refused_before(git_repo, sto
                                denied=("Bash(npx tsc --noEmit; npm run build)",),
                                allow=("Bash(npx tsc:*)", "Bash(npm run build:*)"), permission_mode="auto")
         run(f"task {i}", git_repo, store, registry={}, launcher=Script(refusal), classifier=kind("implement"))
-    old = store.create_task("older", status="blocked", source="cauce", repo=str(git_repo.resolve()))
-    store.add_event(old["id"], "attempt_finished", seq=1, denied=["Bash(make lint)"])  # before rules were kept
+    for _ in range(2):
+        old = store.create_task("older", status="blocked", source="cauce", repo=str(git_repo.resolve()))
+        store.add_event(old["id"], "attempt_finished", seq=1, denied=["Bash(make lint)"])  # before rules were kept
+    once = store.create_task("one task's", status="blocked", source="cauce", repo=str(git_repo.resolve()))
+    store.add_event(once["id"], "attempt_finished", seq=1, denied=["Bash(git checkout main)"],
+                    permission_mode="auto")
     dry = run("next", git_repo, store, Options(dry_run=True, allow_tools=("Bash(npm run build:*)",)), registry={},
               classifier=kind("implement"))
     note = next(r for r in dry.plan.reasons if r.startswith("workers here were refused before"))
     assert "Bash(npx tsc:*) ×2" in note and "npm run build" not in note
-    # what acceptEdits refused, before auto mode, is not what auto mode will refuse
-    assert "make lint" not in note
+    # what acceptEdits refused, before auto mode, is not what auto mode will refuse; one task's refusal is its own
+    assert "make lint" not in note and "git checkout" not in note
     monkeypatch.setenv("CAUCE_MODE", "acceptEdits")
     dry = run("next", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"))
     note = next(r for r in dry.plan.reasons if r.startswith("workers here were refused before"))
-    assert note.startswith("workers here were refused before: Bash(make lint:*) ×1.")
+    assert note.startswith("workers here were refused before: Bash(make lint:*) ×2.")
+    # work since ages them out
+    monkeypatch.setattr(orchestrate, "REFUSALS_WINDOW", 1)
+    later = store.create_task("later", status="done", source="cauce", repo=str(git_repo.resolve()))
+    store.add_event(later["id"], "attempt_finished", seq=1)
+    dry = run("next", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"))
+    assert not any(r.startswith("workers here were refused before") for r in dry.plan.reasons)
     blocked = store.list_tasks(status=["blocked"])[-1]
     assert "--allow 'Bash(npx tsc:*)' --allow 'Bash(npm run build:*)'" in store.get_task(blocked["id"])["result"]
 

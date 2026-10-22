@@ -1693,6 +1693,8 @@ def cancel(store: Store, run_id: int, *, via: str = "cli") -> list[int]:
                 with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
                     os.kill(int(task["pid"]), signal.SIGTERM)
             stopped.append(task["id"])
+    # Work queued after this run will never be released by it: it leaves the queue too.
+    after.abandon(store, {"run": run_id}, f"it waited for run #{run_id} to pass, which was cancelled {via}")
     return stopped
 
 

@@ -627,6 +627,11 @@ test('the status entry counts the board and clears when it is empty', async ($, 
   board = JSON.stringify({ ...BOARD, running: [{ ...BOARD.running[0], phase: 'checking' }] })
   await clock.advance(15_000)
   expect(seen.status.at(-1)).toBe('cauce · 🟣 3 for the orchestrator · 🔵 1 running (checking) · ⚪ 1 queued')
+  // the waits this session sent come first, the rest of the project's apart
+  board = JSON.stringify({ ...BOARD, counts: { ...BOARD.counts, mine: 1 } })
+  await clock.advance(15_000)
+  expect(seen.status.at(-1)).toBe('cauce · 🟣 1 for the orchestrator · 2 more in the project · 🔵 1 running · ⚪ 1 queued')
+  expect(seen.argv.some(a => a[0] === 'board' && a.includes('--session') && a.includes('sess-1'))).toBe(true)
   board = EMPTY_BOARD
   await clock.advance(15_000)
   expect(seen.status.at(-1)).toBe(undefined)

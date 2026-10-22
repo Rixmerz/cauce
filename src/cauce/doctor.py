@@ -157,6 +157,27 @@ def queued_with_no_dispatcher(store: Store, *, now: datetime, **_) -> Iterable[F
                       task["id"], task["repo"])
 
 
+def held_behind_gone(store: Store, **_) -> Iterable[Finding]:
+    """Work queued after work that left the board without passing (dismissed, superseded,
+    landed, or a run cancelled or gone): nothing will ever release it."""
+    for task in store.list_tasks(status=["queued"], limit=1000):
+        wanted = after.hold(task) or {}
+        if "run" in wanted:
+            run = store.get_run(int(wanted["run"]))
+            gone = None if run is not None and run["status"] != "cancelled" else (
+                f"run #{wanted['run']}, which " + ("no longer exists" if run is None else "was cancelled"))
+        elif "task" in wanted:
+            other = store.get_task(int(wanted["task"]))
+            gone = None if other is not None and other["status"] != "dismissed" else (
+                f"#{wanted['task']}, which " + ("no longer exists" if other is None else "left the board"))
+        else:
+            continue
+        if gone:
+            yield Finding("held-behind-gone", BROKEN, f"#{task['id']} is queued after {gone}: nothing releases it",
+                          f"cauce dismiss {task['id']} --why 'what it waited for is gone', then queue it again "
+                          "if it is still wanted", task["id"], task["repo"])
+
+
 def resumes_that_never_ran(store: Store, *, now: datetime, since: str, **_) -> Iterable[Finding]:
     """An automatic resume that started no attempt: refused, or died before one."""
     for event in store.events_of_kinds(["auto_resumed"], since=since):
@@ -446,7 +467,8 @@ def preexisting_that_was_not(store: Store, *, since: str | None, **_) -> Iterabl
 
 
 RULES: tuple[Callable[..., Iterable[Finding]], ...] = (
-    lanes_paused_on_ended, running_with_no_process, queued_with_no_dispatcher, resumes_that_never_ran,
+    lanes_paused_on_ended, running_with_no_process, queued_with_no_dispatcher, held_behind_gone,
+    resumes_that_never_ran,
     parts_that_lost_their_mark, joins_short_of_their_parts, attempts_with_no_session, turns_under_the_kind,
     format_failures_that_climbed, fix_rounds_off_their_base, candidates_on_trial_at_once, revisions_judged_twice,
     trials_never_sampled, notes_proven_unbriefed, preexisting_that_was_not,

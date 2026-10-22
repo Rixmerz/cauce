@@ -384,6 +384,14 @@ yields the default kind, not a guess.
 - A worker gets a model alias unless a person pinned it (`cauce config model`).
   cauce never hard-codes a model id; the model that served an attempt is read
   from the CLI's `modelUsage`, never assumed from the alias.
+- A plan names the rules workers here were refused only from the repository's latest
+  `orchestrate.REFUSALS_WINDOW` attempts, and only one refused in `REFUSED_IN_TASKS` tasks or
+  more: one task's refusal is not repeated to every task after it.
+- A session keeps the plugin it loaded: a command it types runs the newest install
+  (`link.forward_to`, which keeps the version it came from in `link.LOADED`) and says the
+  session's skills and hooks are still that version's; the prompt hook says a newer install
+  once per session and version. `cauce ui` stops an older cauce UI on its port, found by
+  its command line, never another program.
 - cauce suggests permission rules and never grants one: `allow.py` only
   writes text a person passes with `--allow` or keeps with `cauce allow` or
   `cauce resume --keep` (stored in their cauce home, never in a repository;
@@ -620,7 +628,8 @@ yields the default kind, not a guess.
   clear (`stops.PERSON_ONLY`: a refused command's rule, an approval, a gone
   directory; or past `stops.UNATTENDED_ATTEMPTS`) and a branch to merge;
   every other stop is the orchestrator's to decide. Nothing shows as waiting on
-  the person: the status line counts every wait as the orchestrator's, the
+  the person: the status line counts every wait as the orchestrator's (the
+  session's own first, `board --session`, and the rest of the project's apart), the
   board lists the ones it must ask the person for apart, and the `tasks` tool
   and the endings tell it to ask in its conversation and run the line on a yes. The orchestrator
   gains no power: it still resumes `--unattended`, and a dismissal it types is
@@ -629,7 +638,9 @@ yields the default kind, not a guess.
   least `RACE_SAMPLES` first tries of its kind in the repository, `standards.rates`)
   races the next rung that needs no approval on that try (`race_cell`, the `race`
   setting): each in its own worktree (`isolate.race_lane`), each checked there, the
-  first to pass kept and the other stopped (`launch.Stoppable`, its process group).
+  first to pass kept and the other stopped (`launch.Stoppable`, its process group). A start whose failed first
+  tries here mostly ran out of turns (`orchestrate._outgrew`, at least half) never races: another cell gets no more
+  room, and the plan says so.
   A rung that wins has its work carried into the task's worktree (`isolate.adopt`);
   when neither passes, the climb goes on from the rung. Both tries are attempts with
   their cost; one stopped because the other passed first (`RACED_OUT`) teaches its cell
@@ -648,6 +659,14 @@ yields the default kind, not a guess.
   review with no ledger that needs it, or an integrate step that joins its parts and is
   followed by one) runs no independent verifier of its own (`Options.reviewed_next`):
   the review reads the request and the diff as the verifier would, and the plan says so.
+- A build (`feature`, `implement`) that lists `route.SPLIT_ITEMS` items or more (in `SPLIT_WORDS`
+  words or more), is the
+  largest size, or names `PARALLEL_PIECES` pieces in folders of their own is several
+  tasks: `cauce run` and `cauce queue add` start nothing and exit `EXIT_SPLIT` with how
+  to split it (`route.split_first`, pure); `--whole` is the session's word that it is one.
+- An ending names other work in its repository (running, or a kept branch of the last
+  `hooks.OVERLAP_DAYS`) that changed the same files: merging both conflicts there. Said,
+  never acted on; steps of one run are never named.
 - A goal of `workflows.MANY_FEATURES` items or more at the largest size is told,
   before its run starts, that runs per feature or per phase (`--after run:<N>`)
   cost less than one plan for all; advice, and the run goes on as asked.
@@ -792,8 +811,13 @@ yields the default kind, not a guess.
   rebased. Work that waited on work in another repository (numbers are global)
   starts on its own base, is given that checkout to read (`add_dirs`), and its
   plan names the branch kept there (`after.reads`). Work that stops short releases nothing: what waits stays held and
-  says how it stopped, until a resume of it passes; `cauce dismiss` or a
-  cancel takes held work off the queue, each with its `stops.Stop`. A chain
+  says how it stopped (its ending names what waits on it), until a resume of it passes; `cauce dismiss` or a
+  cancel takes held work off the queue, each with its `stops.Stop`. Work that
+  leaves the board unpassed takes what waits on it along (`after.abandon`): a
+  dismissed task or a cancelled run cancels it, cause `after`, by cauce, never
+  marked reported, so its session hears of it and `cauce resume N` starts it
+  on the base; a superseded task hands it to the one that passed
+  (`after.hand_on`), and a landed one releases it onto the base. A chain
   is released one link at a time. `--after N` is a task (`task:N`), `run:N` a
   run; work in another repository is named with it and its title. A step's
   try that `cauce workflow retry` queued again is superseded by the retry

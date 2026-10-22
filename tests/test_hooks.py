@@ -465,6 +465,35 @@ def test_an_ending_names_what_was_already_broken_and_the_bugfix_that_would_take_
     assert hooks._found_before(store, store.get_task(plain["id"])) == []
 
 
+def test_an_ending_names_other_work_that_changes_the_same_files(store: Store, git_repo):
+    from .conftest import git
+
+    def kept(text: str, status: str, changed: list[str]) -> dict:
+        task = store.create_task(text, status=status, source="queue", session_id="s", repo="r", cwd=str(git_repo))
+        git(git_repo, "branch", f"cauce/task-{task['id']}")
+        store.add_event(task["id"], "finished", status=status, changed=changed, branch=f"cauce/task-{task['id']}")
+        return task
+
+    beside = kept("add the curriculum API", "done", ["src/api.service.spec.ts", "src/api.service.ts"])
+    elsewhere = kept("add the forum", "done", ["src/forum.ts"])
+    running = store.create_task("add the admin screens", status="running", source="cauce", repo="r",
+                                cwd=str(git_repo))
+    store.add_attempt(running["id"], cell="sonnet/medium", max_turns=40, passed=0,
+                      changed_paths=["src/api.service.spec.ts"])
+    unkept = store.create_task("gone", status="done", source="cauce", repo="r", cwd=str(git_repo))
+    store.add_event(unkept["id"], "finished", status="done", changed=["src/api.service.spec.ts"], branch="x")
+    mine = kept("add the student screens", "done", ["src/api.service.spec.ts", "src/student.ts"])
+    ended = {**store.get_task(mine["id"]), "finished_data": store.final_event(mine["id"])["data"]}
+    lines = hooks._overlaps(store, ended)
+    assert lines[0].startswith("  other work here changes the same files, so merging both conflicts there")
+    assert any(f"#{beside['id']} (done, branch kept) add the curriculum API: src/api.service.spec.ts" in line
+               for line in lines)
+    assert any(f"#{running['id']} (running now)" in line for line in lines)
+    assert not any(f"#{elsewhere['id']} " in line or f"#{unkept['id']} " in line for line in lines)
+    alone = {**store.get_task(elsewhere["id"]), "finished_data": {"changed": ["src/forum.ts"]}}
+    assert hooks._overlaps(store, alone) == []
+
+
 def test_a_passing_ending_carries_its_verdict_so_the_session_never_redoes_the_work():
     full = {"criteria": [{"id": "S1", "met": True, "evidence": "test_export passes"},
                          {"id": "S2", "met": True, "evidence": ""}],
@@ -500,3 +529,22 @@ def test_a_command_line_flag_or_a_bare_slash_command_is_no_turn(store: Store, tm
     out = hooks.session_start({"session_id": "s2", "source": "resume"}, store, tmp_path)
     text = out["hookSpecificOutput"]["additionalContext"] if out else ""
     assert f"#{real['id']} [running]" in text and f"#{old['id']}" not in text
+
+
+def test_a_session_hears_once_that_a_newer_cauce_is_installed(tmp_path):
+    from cauce import __version__
+
+    from .test_link import _plugin
+
+    config = tmp_path / "config"
+    env = {"CLAUDE_CONFIG_DIR": str(config)}
+    _plugin(config, __version__)
+    assert hooks._newer_plugin(tmp_path, "s", env) is None
+    _plugin(config, "999.0.0")
+    said = hooks._newer_plugin(tmp_path, "s", env)
+    assert said.startswith(f"cauce: cauce 999.0.0 is installed, and this session loaded {__version__}")
+    assert "/reload-plugins" in said and "/cauce:relay" in said
+    assert hooks._newer_plugin(tmp_path, "s", env) is None  # once
+    assert hooks._newer_plugin(tmp_path, "t", env) is not None  # each session hears it
+    _plugin(config, "999.1.0")
+    assert "999.1.0" in hooks._newer_plugin(tmp_path, "s", env)  # and each newer version

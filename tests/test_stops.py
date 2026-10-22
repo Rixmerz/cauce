@@ -162,6 +162,11 @@ def test_the_view_says_who_in_words_and_what_to_do(store: Store):
     never = store.enqueue("never ran", repo="r", cwd="/x")
     stops.record(store, never["id"], stops.Stop("cancelled", "you cancelled it", by="you"))
     view = stops.view(store, store.get_task(never["id"]))
+    # a queued task cancelled before it started runs from the base on a resume
+    assert view["next"] == f"cauce resume {never['id']}" and view["todo"] == "resume it if you still want it"
+    dropped = store.enqueue("dismissed off the queue", repo="r", cwd="/x", options={"after": {"task": ran["id"]}})
+    stops.dismiss(store, store.get_task(dropped["id"]), via="cli")
+    view = stops.view(store, store.get_task(dropped["id"]))
     assert view["next"] is None and view["todo"].startswith("it never ran")
     assert stops.read(None) is None and stops.read({"reason": "no cause"}) is None
     assert stops.what_to_do(stops.Stop("mystery", "x")) == "read the attempts"

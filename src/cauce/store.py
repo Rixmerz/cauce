@@ -1469,12 +1469,13 @@ class Store:
         return out
 
     def refusals(self, repo: str, *, limit: int = 200) -> list[dict]:
-        """The latest attempts in a repository the permission settings refused
-        something to: what was refused, and the rules if they were recorded."""
+        """Of the repository's latest `limit` attempts, the ones the permission settings
+        refused something to: what was refused, and the rules if they were recorded. A
+        refusal ages out as work goes on, however rare attempts with one are."""
         rows = self._conn.execute(
-            "SELECT e.task_id, e.data FROM events e JOIN tasks t ON t.id = e.task_id "
-            "WHERE t.repo = ? AND e.kind = 'attempt_finished' AND e.data LIKE '%\"denied\": [\"%' "
-            "ORDER BY e.id DESC LIMIT ?", (repo, limit))
+            "SELECT task_id, data FROM (SELECT e.id, e.task_id, e.data FROM events e "
+            "JOIN tasks t ON t.id = e.task_id WHERE t.repo = ? AND e.kind = 'attempt_finished' "
+            "ORDER BY e.id DESC LIMIT ?) WHERE data LIKE '%\"denied\": [\"%' ORDER BY id DESC", (repo, limit))
         out = []
         for task_id, raw in rows:
             data = json.loads(raw)
