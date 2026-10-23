@@ -219,6 +219,7 @@ def queued_options(task: dict, defaults: Options) -> Options:
         integrate=raw.get("integrate") or defaults.integrate,
         touches=tuple(raw.get("touches") or defaults.touches),
         reviewed_next=bool(raw.get("reviewed_next")) or defaults.reviewed_next,
+        whole=bool(raw.get("whole")) or defaults.whole,
     )
 
 
@@ -240,8 +241,26 @@ def by_surfaces(task: dict, ahead: list[dict]) -> dispatch.Decision | None:
         if touched is not None:
             return dispatch.Decision(False, f"#{t['id']} already changed {touched}, inside its surfaces")
     if not mine or not theirs or any(not s for _, s in theirs):
-        return None
+        return _by_names(task, mine, ahead)
     return dispatch.Decision(True, "its surfaces cannot touch those of the work ahead")
+
+
+def _by_names(task: dict, mine: tuple[str, ...], ahead: list[dict]) -> dispatch.Decision | None:
+    """Where surfaces were not declared, the files the requests name: a task waits when what
+    it names may touch what work ahead declares or names, or a file a running task already
+    changed. Never a reason to start beside it: in doubt, the dispatcher's judgment decides."""
+    named = mine or dispatch.named_surfaces(task)
+    if not named:
+        return None
+    for t in ahead:
+        theirs = dispatch.declared_surfaces(t) or dispatch.named_surfaces(t)
+        if theirs and not surfaces.disjoint(named, theirs):
+            return dispatch.Decision(False, f"the files it names may be the ones #{t['id']} changes "
+                                            f"({', '.join(named[:3])}): it waits rather than both change them")
+        touched = next((p for p in t.get("changed") or () if surfaces.allows(named, p)), None)
+        if touched is not None:
+            return dispatch.Decision(False, f"#{t['id']} already changed {touched}, which it names")
+    return None
 
 
 def with_changes(store: Store, task: dict) -> dict:

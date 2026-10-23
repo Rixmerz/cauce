@@ -147,8 +147,24 @@ def _roles_revisions(args: argparse.Namespace) -> int:
     return 0
 
 
+def _roles_import(args: argparse.Namespace) -> int:
+    written, skipped = roles.import_agents(Path(args.source).expanduser(), dry_run=args.dry_run)
+    verb = "would import" if args.dry_run else "imported"
+    print(f"{verb} {len(written)} role(s) into your cauce home; {len(skipped)} file(s) skipped")
+    for name, path in written[:40]:
+        print(f"  {name:<28} {path}")
+    if len(written) > 40:
+        print(f"  and {len(written) - 40} more (`cauce roles list`)")
+    for path, why in skipped[:20]:
+        print(f"  skipped {path}: {why}")
+    if written and not args.dry_run:
+        print("A role works only where a team names it: add the few your projects need, "
+              "`cauce team change <team> --add <role>` (`cauce team insights` says what each project asks for).")
+    return 0
+
+
 _ROLES = {"list": _roles_list, "show": _roles_show, "copy": _roles_copy, "new": _roles_new, "rm": _roles_rm,
-          "check": _roles_check, "skills": _skills, "revisions": _roles_revisions}
+          "check": _roles_check, "skills": _skills, "revisions": _roles_revisions, "import": _roles_import}
 
 
 # --- teams -----------------------------------------------------------------------------
@@ -272,6 +288,10 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--disallow", action="append", help="a built-in tool it takes away")
     p.add_argument("--match", action="append", help="a path or glob that makes it the one picked in a project")
     p.add_argument("--prompt", help="its own instructions, after its parent's; - reads them from stdin")
+    p = rsub.add_parser("import", help="Claude Code agents (a file, or a folder of them) as roles of yours: their "
+                        "instructions kept, their model dropped, their tool list as tools taken away")
+    p.add_argument("source", help="an agent .md file, or a folder of them (e.g. ~/.claude/agents)")
+    p.add_argument("--dry-run", action="store_true", help="say what it would import, write nothing")
     p = rsub.add_parser("rm", help="remove a role of yours (never a bundled one)")
     p.add_argument("name")
     rsub.add_parser("check", help="every role and team, and what is wrong with them")

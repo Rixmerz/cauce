@@ -615,3 +615,90 @@ def remove(name: str) -> Path:
     with contextlib.suppress(OSError):
         target.unlink()
     return target
+
+
+#: Words in an agent's name or description, and the kinds a role made of it serves; the first
+#: that matches wins, and an agent none matches builds (`implement`, `feature`).
+_AGENT_KINDS = (
+    (re.compile(r"\b(review\w*|audit\w*|critic\w*)\b", re.I), ("review-routine", "review-critical")),
+    (re.compile(r"\b(test\w*|qa|e2e)\b", re.I), ("test",)),
+    (re.compile(r"\b(debug\w*|troubleshoot\w*|incident\w*|bug\s*fix\w*)\b", re.I), ("debug-repro", "debug-unclear")),
+    (re.compile(r"\b(doc\w*|writer|technical writ\w*)\b", re.I), ("docs",)),
+    (re.compile(r"\b(architect\w*|plan\w*|design\s+system\w*)\b", re.I), ("plan",)),
+    (re.compile(r"\b(refactor\w*|clean\s*up|legacy|moderni\w*)\b", re.I), ("refactor",)),
+    (re.compile(r"\b(ui|ux|front-?end|css|react|vue|angular|svelte)\b", re.I), ("ui", "feature")),
+    (re.compile(r"\b(research\w*|explor\w*|analy\w*|search\w*)\b", re.I), ("explore",)),
+)
+#: The built-in tools an agent's `tools` list can leave out, and a role then takes away.
+_TAKEABLE = ("Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch")
+#: The most characters of an agent's description a role keeps (examples and all go).
+_AGENT_DESCRIPTION = 240
+
+
+def from_agent(text: str, *, fallback: str) -> tuple[str, str] | None:
+    """A Claude Code agent file as a role of the person's: (name, the role's file text), or None
+    when it is no agent. Its description and instructions are kept; its `model` is dropped (the
+    ladder chooses); its `tools`, which a role cannot add, become the built-in tools it takes
+    away; its kinds are read from its name and description."""
+    from cauce.text import clip
+
+    try:
+        meta, body = split_frontmatter(text)
+    except RoleError:
+        return None
+    if not meta or not body.strip():
+        return None
+    raw = str(meta.get("name") or fallback).lower()
+    name = re.sub(r"[^a-z0-9_-]+", "-", raw).strip("-_")[:64]
+    if not name or not NAME.match(name):
+        return None
+    said = " ".join(str(meta.get("description") or "").replace("\\n", " ").split())
+    said = re.split(r"<example>|Examples?:", said, maxsplit=1)[0].strip() or f"imported agent {name}"
+    description = clip(said, _AGENT_DESCRIPTION, one_line=True)
+    found = f"{name.replace('-', ' ')} {description}"
+    kinds = next((k for pattern, k in _AGENT_KINDS if pattern.search(found)), ("implement", "feature"))
+    tools = meta.get("tools")
+    listed = {t.strip() for t in (tools.split(",") if isinstance(tools, str) else tools or ()) if str(t).strip()}
+    takes = [t for t in _TAKEABLE if listed and t not in listed]
+    lines = ["---", f"name: {name}", f"description: {description}", f"kinds: [{', '.join(kinds)}]"]
+    if takes:
+        lines.append(f"disallowed_tools: [{', '.join(takes)}]")
+    lines += [f"derived_from: agent:{fallback}", "---", "", body.strip(), ""]
+    return name, "\n".join(lines)
+
+
+def import_agents(source: Path, *, dry_run: bool = False) -> tuple[list[tuple[str, Path]], list[tuple[str, str]]]:
+    """Claude Code agents (one file, or a folder of them, read only) as roles in the person's
+    cauce home: (the roles written, as name and file; the files skipped, with why). A role of
+    the same name is never replaced. A role is used only where a team names it, so importing
+    one changes no worker until a team takes it (`cauce team change … --add`)."""
+    files = [source] if source.is_file() else sorted(source.rglob("*.md")) if source.is_dir() else []
+    if not files:
+        raise RoleError(f"no agent file at {source}")
+    catalog = load()
+    written: list[tuple[str, Path]] = []
+    skipped: list[tuple[str, str]] = []
+    for path in files:
+        try:
+            made = from_agent(path.read_text(encoding="utf-8", errors="replace"), fallback=path.stem)
+        except OSError as exc:
+            skipped.append((str(path), f"unreadable: {exc}"))
+            continue
+        if made is None:
+            skipped.append((str(path), "no agent: no frontmatter or no instructions"))
+            continue
+        name, text = made
+        target = dirs()["user"] / f"{name}.md"
+        if name in catalog.roles or target.exists() or any(n == name for n, _ in written):
+            skipped.append((str(path), f"a role {name!r} exists already"))
+            continue
+        try:
+            parse(text, scope="user", expected=name)
+        except RoleError as exc:
+            skipped.append((str(path), str(exc)))
+            continue
+        if not dry_run:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        written.append((name, target))
+    return written, skipped

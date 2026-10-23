@@ -48,6 +48,10 @@ def next_action(script: list[dict], brief: str, state: Path) -> tuple[int, dict]
 
 def main() -> int:
     argv = sys.argv[1:]
+    if argv == ["--help"]:
+        # cauce asks which lean flags this CLI knows (`launch.lean_flags`).
+        print("  --disable-slash-commands\n  --exclude-dynamic-system-prompt-sections")
+        return 0
     brief = sys.stdin.read()
     for flag in ("--append-system-prompt-file",):
         if flag in argv:

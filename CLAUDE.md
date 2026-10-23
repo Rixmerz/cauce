@@ -45,6 +45,9 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, as many at once as the machine's level allots each lane (`pick`), the stale sweep; a detached dispatcher at its task limit hands queued work to a fresh one |
 | `src/cauce/capacity.py` | how many workers this machine runs at once: the level, kept in the cauce home, that starts at what the machine holds and rises or halves on the API's and the machine's own signals, and its allotment to the lanes by reserve and lending; stdlib |
 | `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
+| `src/cauce/split.py` | a request that is several tasks, as its pieces (`cauce split`): by its listed items with no model, else Haiku read strictly as a plan's parts; `--queue` starts them on what the task kept |
+| `src/cauce/merging.py` | kept branches merged into the person's checkout on their word (`cauce merge`: the ones that touch no other first, the check after each, a conflict aborted), and a draft pull request with the verdict (`cauce pr`) |
+| `src/cauce/guides/` | the orchestration skill's detail, a topic at a time (`cauce guide <topic>`): the skill itself stays short |
 | `src/cauce/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
 | `src/cauce/revisions.py` | a role's lessons per repository, improved by measured trial: proposed by Haiku from the role's dead ends and verifier blockers there, tried in alternating arms, adopted, dropped or reverted, every record appended to `role_revisions`; `cauce roles revisions` reads it |
@@ -167,6 +170,12 @@ yields the default kind, not a guess.
   attempt ceiling (nor `cli.UNATTENDED_ATTEMPTS`) and is no answer for a
   repeated pair; one that stays down stops the task as `network`, its work
   kept.
+- A build the plan sizes at `orchestrate.SPLIT_POINTS` or more, outside a workflow run and
+  not sent `--whole`, that outgrows its turns is several pieces, not one that needs more
+  room: it stops as `split` (`escalate.decide`'s `several`), its work kept, and the ending
+  offers `cauce split N` (`--queue` starts the pieces on that work, and what waited for it
+  waits for the last piece). `dispatch.recover` never resumes it; a resume gives it more
+  turns as one piece.
 - Out of turns is room, never a bug: a finding of the independent check in
   work whose worker ran out of turns before its own check earns the same cell
   more turns, never more effort or another model, and is no dead end.
@@ -277,7 +286,15 @@ yields the default kind, not a guess.
   or one of those failures, and that leaves no criterion unmet passes
   (`orchestrate._only_the_base`); any other point stays a `decision`.
 - A check whose exit is a pipeline filter's without `pipefail`, or that always
-  exits 0, is said in the plan (`ci.weak`): a warning, never a refusal.
+  exits 0, is said in the plan (`ci.weak`): a warning, never a refusal. So is one
+  that runs a tool a project script runs with more (`ng test` against `npm test`'s
+  `ng test --code-coverage`, `ci.bypassed`): what the script adds is not checked.
+- A red check with at most `orchestrate.FLAKY_MAX` failing tests runs once more
+  (`_steady_check`); one that passes then is flaky: the pass stands, a `check_flaky`
+  event names the tests, they are kept per repository in the store's meta, and the
+  ending says so. Anything else is the first run's failure, unchanged.
+- A writing worker's brief names the command that runs only the tests near its change
+  (`ci.related`: jest, vitest, pytest), to run as it goes; the full check runs at the end.
 - Reviewers never vote: their findings are added together, so one is enough
   and there is no tie. A row only one saw and could only read from the code is
   decided by a refuter with its own proof, never by a count; a row it cannot
@@ -387,6 +404,24 @@ yields the default kind, not a guess.
 - A plan names the rules workers here were refused only from the repository's latest
   `orchestrate.REFUSALS_WINDOW` attempts, and only one refused in `REFUSED_IN_TASKS` tasks or
   more: one task's refusal is not repeated to every task after it.
+- A worker is lean (`lean`, `launch.lean_flags`): no subagent tool (its description lists
+  every agent defined, read each turn), no skill listing (its role's skills are in its
+  brief), and the per-machine prompt sections after the shared part; only the flags the
+  installed CLI lists in its `--help` are passed. Tests run with `CAUCE_LEAN=off`.
+- Merging is the person's: `cauce merge` merges kept branches into the branch checked out
+  only on their command, one merge commit each, aborts a conflict (never resolves it by
+  guess) and stops where the check fails, the merge in place; `cauce pr` pushes and opens a
+  draft pull request only on their command. A worker runs neither.
+- Where a task declared no surfaces, the files its text names (`dispatch.named_surfaces`)
+  hold it back from work ahead that declares or names files they may touch, or already
+  changed one; never a reason to start beside it, and never enforced on the worker.
+- `cauce roles import` reads Claude Code agents (a file or a folder, read only) into the
+  person's roles: their instructions kept, `model` dropped, their tool list as the built-in
+  tools taken away, their kinds read from their name and description; a role of the same
+  name is never replaced, and an imported role reaches no worker until a team names it.
+- An ending of four or more at once tells each pass in one line (`hooks.verdict_summary`).
+  `cauce stats --expensive` names the runs over their kind's p90 cost and why, from what
+  they recorded.
 - A session keeps the plugin it loaded: a command it types runs the newest install
   (`link.forward_to`, which keeps the version it came from in `link.LOADED`) and says the
   session's skills and hooks are still that version's; the prompt hook says a newer install

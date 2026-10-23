@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -533,3 +534,21 @@ def test_what_the_worker_needed_to_get_oriented_is_read_from_its_block_and_kept_
     assert launch.orientation({"orientation": ["w" * 900]}) == ("w" * launch.ORIENTATION_CHARS,)
     assert launch.orientation({"orientation": "no"}) == () and launch.orientation({}) == ()
     assert '"orientation"' in launch.RESULT_INSTRUCTIONS
+
+
+def test_a_lean_worker_gets_no_subagent_tool_nor_skill_listing_and_only_flags_its_cli_knows(tmp_path, monkeypatch):
+    from cauce import launch
+
+    monkeypatch.setenv("CAUCE_LEAN", "on")
+    knows_all = "  --disable-slash-commands\n  --exclude-dynamic-system-prompt-sections\n"
+    lean = launch.lean_flags("claude", os.environ, help_text=lambda b: knows_all)
+    assert lean == launch.LEAN_FLAGS
+    older = launch.lean_flags("claude", os.environ, help_text=lambda b: "  --disable-slash-commands\n")
+    assert older == ("--disable-slash-commands",)
+    assert launch.lean_flags("claude", os.environ, help_text=lambda b: "") == ()
+    argv = build_argv(spec(tmp_path), lean=lean)
+    assert argv[argv.index("--disallowedTools") + 1] == "Agent,Task"
+    assert "--disable-slash-commands" in argv and "--exclude-dynamic-system-prompt-sections" in argv
+    assert "--disallowedTools" not in build_argv(spec(tmp_path))
+    monkeypatch.setenv("CAUCE_LEAN", "off")
+    assert launch.lean_flags("claude", os.environ, help_text=lambda b: knows_all) == ()

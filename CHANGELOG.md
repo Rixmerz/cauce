@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-10-23
+
+### Changed
+
+- **A large build that outgrows its turns stops for a split instead of climbing.** A
+  task the plan sizes at 8 points or more, outside a workflow run and not sent `--whole`,
+  that runs out of turns stops as `split` with its work kept, instead of being given
+  200 turns on the same worker. Its ending offers `cauce split N`.
+- **The orchestration skill is short.** It keeps the core and a decision table for
+  every ending; the detail moved to `cauce guide <topic>` (`when`, `dispatch`,
+  `endings`, `orchestrator`, `workflows`, `notes`, `memory`, `relay`).
+- **Workers are lean.** No subagent tool (whose description lists every agent the
+  repository defines, read on every turn), no skill listing (a role's skills are
+  already in its brief), and per-machine prompt sections after the shared part for the
+  cache; only flags the installed CLI lists. The `lean` setting turns it off.
+
+### Added
+
+- **`cauce split`.** The pieces a request, or a task that stopped as `split`,
+  splits into: by its listed items with no model, else by Haiku, read strictly. `--queue`
+  starts them on what the task kept, moves what waited for it to the last piece, and
+  takes the task off the board.
+- **`cauce merge`.** Kept branches merged into the branch checked out, on the person's
+  word: the ones that touch no other first, the check after each; a conflict is aborted
+  and names the task that reconciles it.
+- **`cauce pr`.** Pushes a kept branch and opens a draft pull request with the verdict as
+  its description (needs `gh`; `--dry-run` prints it).
+- **A check that bypasses the repository's script is said.** `--verify 'ng test'` when
+  `npm test` runs `ng test --code-coverage …` warns that what the script adds is not
+  checked.
+- **Flaky tests.** A red check with three failing tests or fewer runs once more; tests
+  that pass then are flaky: the pass stands, the ending names them, and they are kept per
+  repository.
+- **The tests near the change.** A writing worker is told the command that runs only the
+  tests near its change (jest, vitest, pytest) to run as it goes.
+- **`cauce stats --expensive`.** The runs that cost the most for their kind, and why:
+  turns given more, models climbed, a race, the independent check, a slow check.
+- **Many endings at once in short.** Four or more endings tell each pass in one line.
+- **Files a request names hold it back.** A task with no surfaces waits when the files
+  its text names may touch what work ahead names or already changed.
+- **`cauce roles import`.** Claude Code agents as roles of yours: instructions kept,
+  model dropped, their tool list as tools taken away; used only where a team names them.
+
 ## [0.35.0] - 2026-10-22
 
 ### Fixed

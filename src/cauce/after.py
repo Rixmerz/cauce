@@ -132,7 +132,7 @@ def _work_dropped(store: Store, task: Mapping[str, Any]) -> bool:
     from cauce import stops  # stops reads holds: imported here, not at the top
 
     stop = stops.of(store, dict(task))
-    return stop is None or stop.cause != "turns"
+    return stop is None or stop.cause not in ("turns", "split")
 
 
 def _ended(store: Store, task: Mapping[str, Any]) -> str:
@@ -318,13 +318,19 @@ def hand_on(store: Store, task_id: int, to: Mapping[str, Any]) -> list[int]:
     """Work held behind a task superseded by `to`, a later one with the same text that
     passed: it waits on `to` instead, and the end of `to`'s run releases it onto what `to`
     kept (`workflows.advance`), as it releases what was queued after `to` itself. The ids moved."""
+    return reassign(store, task_id, int(to["id"]), f"#{task_id} was superseded by #{to['id']}, which passed the "
+                                                   "same work")
+
+
+def reassign(store: Store, task_id: int, to_id: int, why: str) -> list[int]:
+    """Work held behind task `task_id` waits on task `to_id` instead, with an `after_moved`
+    event that says why. The ids moved."""
     moved = []
     for t in behind(store, {"task": task_id}):
         options = json.loads(t.get("options") or "{}")
-        options[KEY] = {"task": int(to["id"])}
+        options[KEY] = {"task": int(to_id)}
         store.update_task(t["id"], options=json.dumps(options))
-        store.add_event(t["id"], "after_moved", was={"task": task_id}, now={"task": int(to["id"])},
-                        why=f"#{task_id} was superseded by #{to['id']}, which passed the same work")
+        store.add_event(t["id"], "after_moved", was={"task": task_id}, now={"task": int(to_id)}, why=why)
         moved.append(t["id"])
     return moved
 

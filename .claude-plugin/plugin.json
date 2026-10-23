@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.35.0",
+  "version": "0.36.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -85,6 +85,12 @@
       "type": "boolean",
       "title": "Choose the way for each request",
       "description": "Each request is read, with no model, for the way it is best done: by the session itself (small, reading, or about this conversation), by one worker that runs while the session goes on, or in parts side by side (large, or several areas). The session is told only when it is not itself, and decides. Off: the session chooses alone.",
+      "default": true
+    },
+    "lean": {
+      "type": "boolean",
+      "title": "Lean workers",
+      "description": "A worker gets no subagent tool (its description lists every agent the repository and you define, read on every turn), no skill listing (its role's skills are already in its brief), and its per-machine prompt sections after the part workers share, so the prompt cache serves more of it. Only flags your Claude Code supports are passed. Off: workers load what a session loads.",
       "default": true
     },
     "primer": {

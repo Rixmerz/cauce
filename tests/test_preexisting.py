@@ -461,3 +461,20 @@ def test_the_plan_warns_once_of_a_weak_check_and_reads_the_scripts_it_runs(git_r
 
 def test_the_check_card_without_a_base_failure_is_a_plain_pass():
     assert orchestrate._check_card("npm test", None) == {"command": "npm test", "passed": True}
+
+
+def test_a_few_tests_that_fail_once_and_pass_again_are_flaky_never_the_work_s(tmp_path, store):
+    from cauce import orchestrate
+
+    flip = "test -f once && echo '1 passed' || (touch once; echo 'FAIL src/a.test.ts'; exit 1)"
+    task = store.create_task("t", status="running", source="cauce")
+    baseline = orchestrate.Baseline(store=store, task_id=task["id"], repo_dir=tmp_path, base="abc", root=tmp_path)
+    code, out = orchestrate._steady_check(flip, tmp_path, baseline)
+    assert code == 0 and "failed on the first run and passed on the second: FAIL src/a.test.ts" in out
+    flaky = store.last_event(baseline.task_id, "check_flaky")["data"]
+    assert flaky["failures"] == ["FAIL src/a.test.ts"]
+    # one that keeps failing, or fails many tests, is the work's failure as it was
+    always = "echo 'FAIL src/b.test.ts'; exit 1"
+    assert orchestrate._steady_check(always, tmp_path, baseline)[0] == 1
+    many = "; ".join(f"echo 'FAIL src/{n}.test.ts'" for n in range(4)) + "; exit 1"
+    assert orchestrate._steady_check(many, tmp_path, None)[0] == 1

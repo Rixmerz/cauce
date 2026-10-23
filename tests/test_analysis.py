@@ -264,3 +264,32 @@ def test_a_dead_worker_noticed_days_later_is_lost_only_up_to_its_time_limit(stor
     # Three days passed before a sweep noticed it; the worker could not have run past its limit.
     assert run["lost_s"] == limit and run["unnoticed_s"] == 3 * 86400 - limit
     assert "unnoticed_s" in analysis.RUN_COLUMNS
+
+
+def test_the_runs_that_cost_most_for_their_kind_say_why(capsys):
+    def r(task, cost, **kw):
+        base = {"task": task, "title": f"t{task}", "kind": "implement", "cost_usd": cost, "moves": [], "cells": [],
+                "turns": 20, "verifier_cost_usd": 0.0, "check_s": None, "wall_s": None, "refused": 0, "stop": None,
+                "attempts": 1}
+        return {**base, **kw}
+
+    found = [r(n, 1.0) for n in range(1, 6)] + [
+        r(9, 30.0, moves=["more_turns", "next_model"], cells=["sonnet/high", "sonnet/high", "opus/high"], turns=320,
+          verifier_cost_usd=2.0, check_s=600.0, wall_s=1800.0, stop="turns", attempts=3)]
+    rows = analysis.expensive(found)
+    assert rows[0]["task"] == 9
+    why = rows[0]["why"]
+    assert "ran out of turns 1× and was given more (320 turns in all)" in why
+    assert "climbed models: sonnet → opus" in why and "stopped as turns" in why
+    assert any(w.startswith("its check took") for w in why)
+    assert analysis.expensive_text(rows).startswith("The runs that cost the most for their kind")
+    assert analysis.expensive_text([]).startswith("No run")
+
+
+def test_stats_expensive_prints_the_section(capsys):
+    from cauce import cli
+
+    assert cli.main(["stats", "--expensive"]) == 0
+    assert capsys.readouterr().out.startswith("No run cost more")
+    assert cli.main(["stats", "--expensive", "--json"]) == 0
+    assert capsys.readouterr().out.strip() == "[]"

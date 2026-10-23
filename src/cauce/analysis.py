@@ -427,6 +427,7 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "role_revisions": revisions.overview(store, repo),
         # Whether racing a first try paid, per repository and kind (`cauce.racing`): its own window.
         "races": racing.table(store, repo),
+        "expensive": expensive(found),
     }
     if keep_runs is None:
         report["runs"] = found
@@ -434,6 +435,64 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         report["slowest"] = sorted((r for r in found if r["wall_s"]), key=lambda r: -r["wall_s"])[:keep_runs]
         report["costliest"] = sorted(found, key=lambda r: -r["cost_usd"])[:keep_runs]
     return report
+
+
+#: A run costs much for its kind over this percentile of the kind's runs.
+EXPENSIVE_Q = 0.9
+#: Runs of a kind needed before its percentile says anything; below it, every run is weighed.
+EXPENSIVE_MIN = 5
+
+
+def expensive(found: Sequence[Mapping[str, Any]], *, top: int = 10) -> list[dict[str, Any]]:
+    """The runs that cost the most for their kind (over its `EXPENSIVE_Q` cost, or the costliest
+    when a kind has few runs), each with why, read from what it recorded: its turns and the
+    moves that raised them, the models it climbed, a race, the independent check, the check's
+    time, refusals. Money is measured, never a brake: this says where it went."""
+    by_kind: dict[str, list[float]] = defaultdict(list)
+    for r in found:
+        by_kind[r["kind"] or "?"].append(r["cost_usd"] or 0.0)
+    out = []
+    for r in found:
+        costs = by_kind[r["kind"] or "?"]
+        line = pct(costs, EXPENSIVE_Q) if len(costs) >= EXPENSIVE_MIN else None
+        if not r["cost_usd"] or (line is not None and r["cost_usd"] < line):
+            continue
+        why = []
+        moves = Counter(m for m in r["moves"] if m)
+        if moves.get("more_turns"):
+            why.append(f"ran out of turns {moves['more_turns']}× and was given more ({r['turns']} turns in all)")
+        elif r["turns"]:
+            why.append(f"{r['turns']} turns")
+        models = list(dict.fromkeys(str(c).split("/")[0] for c in r["cells"] if c))
+        if len(models) > 1:
+            why.append("climbed models: " + " → ".join(models))
+        if moves.get("more_effort"):
+            why.append(f"climbed effort {moves['more_effort']}×")
+        if moves.get("race"):
+            why.append("raced a second worker")
+        if r["verifier_cost_usd"]:
+            why.append(f"independent check {_usd(r['verifier_cost_usd'])}")
+        if r["check_s"] and r["wall_s"] and r["check_s"] >= 0.25 * r["wall_s"]:
+            why.append(f"its check took {_seconds(r['check_s'])} of {_seconds(r['wall_s'])}")
+        if r["refused"]:
+            why.append(f"{r['refused']} attempt(s) refused")
+        if r["stop"]:
+            why.append(f"stopped as {r['stop']}")
+        out.append({"task": r["task"], "title": r.get("title"), "kind": r["kind"], "cost_usd": r["cost_usd"],
+                    "kind_p90_usd": line, "attempts": r["attempts"], "why": why})
+    return sorted(out, key=lambda x: -x["cost_usd"])[:top]
+
+
+def expensive_text(rows: Sequence[Mapping[str, Any]]) -> str:
+    if not rows:
+        return "No run cost more than most of its kind in this period."
+    lines = ["The runs that cost the most for their kind, and why:"]
+    for r in rows:
+        bar = f" (p90 of {r['kind']}: {_usd(r['kind_p90_usd'])})" if r["kind_p90_usd"] is not None else ""
+        lines.append(f"#{r['task']} {_usd(r['cost_usd'])}{bar}, {r['attempts']} attempt(s)"
+                     + (f" — {r['title']}" if r.get("title") else ""))
+        lines += [f"  · {w}" for w in r["why"]] or ["  · nothing it recorded stands out"]
+    return "\n".join(lines)
 
 
 def runs_csv(found: Sequence[Mapping[str, Any]]) -> str:

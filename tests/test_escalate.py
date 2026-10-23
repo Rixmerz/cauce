@@ -331,3 +331,12 @@ def test_a_task_failure_on_work_that_stands_is_a_decision_not_a_replan():
     assert decide(ladder, [plain]).move is Move.REPLAN
     refused = Attempt(cell, 30, False, Failure.ARCHITECTURE_BUG, "x", denied=("Bash(npm test)",), stands=True)
     assert decide(ladder, [refused]).move is Move.REPLAN
+
+
+def test_several_pieces_that_outgrow_their_turns_are_split_not_given_more():
+    out = [fail("opus/high", Failure.TURNS_EXHAUSTED, turns=120)]
+    d = decide(IMPLEMENT, out, several="8 points: 3 criteria, reaches 27 symbols")
+    assert d.move is Move.REPLAN and d.split and "split what is left" in d.reason
+    assert "8 points" in " ".join(d.because)
+    # one piece outgrowing its turns is room: more turns, as before
+    assert decide(IMPLEMENT, out).move is Move.MORE_TURNS

@@ -219,3 +219,27 @@ def test_an_unreadable_workflow_is_skipped_and_said(project):
 def test_no_ci_says_nothing(git_repo, tmp_path):
     assert ci.jobs(git_repo) == ([], []) and ci.left_out(git_repo, "npm test") == (None, [])
     assert ci.jobs(tmp_path / "nowhere") == ([], [])
+
+
+def test_a_check_that_runs_a_tool_its_script_runs_with_more_is_said(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {
+        "test": "ng test --code-coverage --watch=false", "lint": "eslint src", "build": "ng build"}}))
+    said = ci.bypassed("npx ng test --watch=false", tmp_path)
+    assert said.startswith("this task's check `npx ng test --watch=false` runs `ng` itself, while `npm test` runs "
+                           "`ng test --code-coverage --watch=false`: what it adds (--code-coverage) is not checked")
+    assert "`--verify 'npm test'`" in said
+    # through the script, the same command, another tool, or no project: nothing to say
+    assert ci.bypassed("npm test", tmp_path) is None
+    assert ci.bypassed("ng test --code-coverage --watch=false", tmp_path) is None
+    assert ci.bypassed("pytest -q", tmp_path) is None
+    assert ci.bypassed("ng build", tmp_path) is None
+    assert ci.bypassed("npx ng test", None) is None
+    assert "`npm run lint`" in ci.bypassed("CI=1 npx eslint", tmp_path)
+
+
+def test_the_runner_a_check_uses_gives_the_command_for_the_tests_near_a_change(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": "jest --coverage", "e2e": "vitest"}}))
+    assert ci.related("npm test", tmp_path) == ("jest", "npx jest --findRelatedTests {files}")
+    assert ci.related("npm run e2e", tmp_path)[0] == "vitest"
+    assert ci.related("python3 -m pytest -q", None)[0] == "pytest"
+    assert ci.related("cargo test", None) is None

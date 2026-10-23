@@ -105,6 +105,20 @@ def declared_surfaces(task: Mapping[str, Any]) -> tuple[str, ...]:
         return ()
 
 
+def named_surfaces(task: Mapping[str, Any]) -> tuple[str, ...]:
+    """The files and folders a task's own text names, as surfaces (a folder as `folder/**`):
+    what it will likely change when it declared nothing. Only ever a reason to wait, never to
+    run beside other work, and never enforced on the worker."""
+    from cauce import points
+
+    found = []
+    for path in points.named(str(task.get("body") or task.get("title") or "")):
+        clean = path.strip("/")
+        if clean and "*" not in clean:
+            found.append(clean if "." in clean.rsplit("/", 1)[-1] else f"{clean}/**")
+    return tuple(dict.fromkeys(found))
+
+
 def _clip(line: str, at: int) -> str:
     """`line` in at most `FACT_CHARS`, keeping what sits at `at` and a little before it."""
     if len(line) <= FACT_CHARS:

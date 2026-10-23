@@ -1923,3 +1923,24 @@ def test_an_index_failure_is_said_in_one_plan_not_in_every_one(git_repo, store, 
     report = run("where is parse_amount", git_repo, store, Options(dry_run=True), registry={},
                  classifier=kind("explore"), adapters=[adapter])
     assert any("its last index here failed" in r for r in report.plan.reasons)
+
+
+def test_a_task_of_several_pieces_that_outgrows_its_turns_stops_for_a_split_with_its_work_kept(
+        git_repo, store, monkeypatch):
+    monkeypatch.setattr(orchestrate, "SPLIT_POINTS", 1)
+    out = WorkerResult(False, Failure.TURNS_EXHAUSTED, "ran out", changed_paths=("a.py",), cost_usd=0.1)
+    report = run("add the control, the PDF notes and the overlaps", git_repo, store, registry={},
+                 launcher=Script(out, write="a.py"), classifier=kind("implement"))
+    assert report.status == "replan" and report.stop.cause == "split" and report.branch
+    assert report.stop.who == "cauce" and "split what is left" in report.stop.reason
+    # --whole is the session's word that it is one piece: more turns, as before
+    again = run("add the control, the PDF notes and the overlaps", git_repo, store, Options(whole=True), registry={},
+                launcher=Script(out, ok()), classifier=kind("implement"))
+    assert again.status == "done"
+
+
+def test_a_writing_brief_names_the_tests_near_the_change_to_run_as_it_goes(tmp_path):
+    (tmp_path / "package.json").write_text('{"scripts": {"test": "jest --coverage"}}')
+    said = orchestrate.brief("add x", "implement", tmp_path, [], [], "npm test", True)
+    assert "run only the tests near your change (npx jest --findRelatedTests <the files you changed>)" in said
+    assert "findRelatedTests" not in orchestrate.brief("read x", "explore", tmp_path, [], [], "npm test", False)
