@@ -190,6 +190,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         carry=args.carry,
         add_dirs=tuple(str(Path(d).expanduser().resolve()) for d in args.add_dir or ()),
         services=tuple(args.service or ()),
+        whole=bool(getattr(args, "whole", False)),
     )
     if (args.after is not None or getattr(args, "detach", False)) and not args.dry_run:
         return _queue_after(args, options)
@@ -317,7 +318,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
             task = {**task, "status": was}
         # What stopped it: a dismissal keeps the cause it took off the board.
         cause = hidden or ((stop := stops.of(store, task)) and stop.cause)
-        outgrew = was == "replan" and cause == "turns"
+        # One split for its turns resumes as one that outgrew them: the session's word that it is one piece.
+        outgrew = was == "replan" and cause in ("turns", "split")
         if was not in RESUMABLE and not outgrew:
             print(f"task #{args.id} is {was}; only a task that stopped ({', '.join(RESUMABLE)}) resumes"
                   + ("; rewrite it as a new task" if was == "replan" else ""), file=sys.stderr)
@@ -553,6 +555,173 @@ def _dismiss_words(words: list[str]) -> tuple[list[int], str]:
             return ids, " ".join(words[i:]).strip()
         ids.append(int(number))
     return ids, ""
+
+
+def cmd_guide(args: argparse.Namespace) -> int:
+    """The orchestration skill's detail, a topic at a time: the skill itself stays short."""
+    folder = Path(__file__).parent / "guides"
+    topics = {p.stem: p for p in sorted(folder.glob("*.md"))}
+    if not args.topic:
+        for name, path in topics.items():
+            print(f"{name:<14} {path.read_text(encoding='utf-8').splitlines()[0].lstrip('# ')}")
+        return 0
+    if args.topic not in topics:
+        print(f"no guide {args.topic!r}; one of {', '.join(topics)}", file=sys.stderr)
+        return 2
+    print(topics[args.topic].read_text(encoding="utf-8").rstrip())
+    return 0
+
+
+def cmd_merge(args: argparse.Namespace) -> int:
+    """The branches tasks kept, merged into the branch checked out, on the person's word:
+    in an order that puts the ones that touch no other first, the check after each."""
+    from cauce import isolate, merging
+
+    ids = [int(str(n).lstrip("#")) for n in args.ids]
+    store = Store.open()
+    try:
+        tasks = {n: store.get_task(n) for n in ids}
+        missing = [f"#{n}" for n, t in tasks.items() if t is None]
+        if missing:
+            print(f"no task {', '.join(missing)}", file=sys.stderr)
+            return 1
+        where = Path(args.repo or tasks[ids[0]]["cwd"] or os.getcwd())
+        top = repo.toplevel(where) if where.is_dir() else None
+        if top is None:
+            print(f"{where} is no git checkout", file=sys.stderr)
+            return 1
+        finals = {n: ((store.final_event(n) or {}).get("data") or {}) for n in ids}
+        changed = {n: list(finals[n].get("changed") or []) for n in ids}
+        verify = args.verify or next((json.loads(tasks[n].get("options") or "{}").get("verify") for n in ids
+                                      if json.loads(tasks[n].get("options") or "{}").get("verify")), None)
+        branches = {n: isolate.branch_for(n) for n in ids}
+        if args.dry_run:
+            print("would merge, in this order: " + ", ".join(f"#{n} ({branches[n]})" for n in merging.order(changed))
+                  + (f"; `{verify}` after each" if verify else "; no check after each (pass --verify)"))
+            return 0
+        try:
+            done = merging.merge(top, branches, {n: tasks[n]["title"] for n in ids}, changed, verify=verify, say=print)
+        except merging.MergeError as exc:
+            print(f"cauce: nothing merged: {exc}", file=sys.stderr)
+            return 1
+        stops.landed(store, top)
+    finally:
+        store.close()
+    if done.conflict:
+        task_id, files = done.conflict
+        print(f"#{task_id} ({branches[task_id]}) conflicts with what is in {done.into} in {', '.join(files[:8])}: its "
+              "merge was aborted, nothing of it is in. Reconcile it by hand, or send it as a task:\n  "
+              + merging.resolve_task(done.into, branches[task_id], files, verify), file=sys.stderr)
+    if done.failed:
+        task_id, out = done.failed
+        print(f"`{verify}` fails after merging #{task_id}; the merge is in place (`git reset --merge ORIG_HEAD` "
+              f"undoes it):\n{out}", file=sys.stderr)
+    left = [f"#{n}" for n in done.order if n not in done.merged]
+    if left:
+        print("not merged: " + ", ".join(left))
+    return 0 if not (done.conflict or done.failed) else 1
+
+
+def cmd_pr(args: argparse.Namespace) -> int:
+    """A draft pull request for the branch a task kept, its verdict as the description; on
+    the person's word, since it pushes. `--dry-run` prints the description and pushes nothing."""
+    import shutil
+
+    from cauce import isolate, merging
+
+    task_id = int(str(args.id).lstrip("#"))
+    store = Store.open()
+    try:
+        task = store.get_task(task_id)
+        final = ((store.final_event(task_id) or {}).get("data") or {}) if task else {}
+    finally:
+        store.close()
+    if task is None:
+        print(f"no task #{task_id}", file=sys.stderr)
+        return 1
+    branch = isolate.branch_for(task_id)
+    where = Path(task["cwd"] or os.getcwd())
+    top = repo.toplevel(where) if where.is_dir() else None
+    if top is None or task_id not in isolate.kept_branches(top):
+        print(f"#{task_id} keeps no branch here: nothing to open a pull request for", file=sys.stderr)
+        return 1
+    title = (isolate.last_commit(top, branch) or f"x {task['title']}").split(" ", 1)[1][:72]
+    body = merging.pr_body(task, final)
+    if args.dry_run or shutil.which("gh") is None:
+        print(f"title: {title}\n\n{body}")
+        if not args.dry_run:
+            print(f"gh is not installed: push with `git push -u origin {branch}` and open the pull request with "
+                  "this title and description", file=sys.stderr)
+        return 0 if args.dry_run else 1
+    opened, said = merging.open_pr(top, branch, title, body, base=args.base)
+    print(said, file=sys.stdout if opened else sys.stderr)
+    return 0 if opened else 1
+
+
+#: What a piece keeps of the options of the task it splits: never its hold, start, turns or surfaces.
+_SPLIT_KEEPS = ("verify", "kind", "allow_tools", "add_dirs", "services", "livespec", "role", "carry")
+
+
+def cmd_split(args: argparse.Namespace) -> int:
+    """The pieces a request, or a task that stopped as several pieces, splits into
+    (`cauce.split`); `--queue` starts them on what the task kept."""
+    from cauce import split
+
+    target = args.target.lstrip("#")
+    store = Store.open()
+    try:
+        task = store.get_task(int(target)) if target.isdigit() else None
+        if target.isdigit() and task is None:
+            print(f"no task #{target}", file=sys.stderr)
+            return 1
+        if task is not None:
+            text, where = str(task["body"] or ""), Path(task["cwd"] or os.getcwd())
+            final = (store.final_event(task["id"]) or {}).get("data") or {}
+            done = list(final.get("changed") or [])
+            base = final.get("commit") or final.get("tip")
+            inherited = {k: v for k, v in json.loads(task.get("options") or "{}").items() if k in _SPLIT_KEEPS}
+        else:
+            text, where = _text(args.target), Path(args.repo or os.getcwd()).resolve()
+            done, base, inherited = [], None, {}
+        if args.verify:
+            inherited["verify"] = args.verify
+        proposal = split.by_items(text, done) if args.no_model else split.propose(text, where, done=done)
+        if args.json and not args.queue:
+            print(split.as_json(proposal))
+            return 0 if proposal.parts else 1
+        for line in split.lines(proposal):
+            print(line)
+        if not proposal.parts:
+            return 1
+        if not args.queue:
+            again = f"`cauce split {task['id']} --queue`" if task is not None else "the same command with `--queue`"
+            print(f"nothing queued: {again} starts them" + (" on what it kept" if base else ""))
+            return 0
+        ids: dict[str, int] = {}
+        for part in proposal.parts:
+            options = {**inherited, **({"surfaces": list(part["surfaces"])} if part.get("surfaces") else {}),
+                       **({"base": base} if base else {})}
+            if part.get("after"):
+                options[after.KEY] = {"task": ids[part["after"]]}
+            queued = store.enqueue(split.brief(part, proposal.contract), repo=repo.key(where), cwd=str(where),
+                                   options=options, session_id=os.environ.get("CAUCE_SESSION_ID"),
+                                   author="orchestrator" if os.environ.get("CAUCE_SESSION_ID") else "person")
+            ids[part["id"]] = queued["id"]
+            store.add_event(queued["id"], "split_from", task=task["id"] if task else None, part=part["id"])
+        numbers = ", ".join(f"#{n}" for n in ids.values())
+        print(f"queued {numbers}" + (f" on what #{task['id']} kept ({str(base)[:12]})" if task and base else ""))
+        if task is not None:
+            last = list(ids.values())[-1]
+            moved = after.reassign(store, task["id"], last, f"#{task['id']} was split into {numbers}")
+            if moved:
+                print(f"{', '.join(f'#{n}' for n in moved)} waited for #{task['id']}: now for #{last}, its last piece")
+            via = "session" if os.environ.get("CAUCE_SESSION_ID") else "cli"
+            if stops.dismiss(store, store.get_task(task["id"]), via=via, why=f"split into {numbers}") is not None:
+                print(f"#{task['id']} leaves the board: split into {numbers}")
+        print(dispatch.kick(where, repo.key(where), os.environ))
+    finally:
+        store.close()
+    return 0
 
 
 def cmd_dismiss(args: argparse.Namespace) -> int:
@@ -1153,7 +1322,8 @@ def cmd_queue(args: argparse.Namespace) -> int:
                                          "carry": args.carry or None,
                                          "add_dirs": [str(Path(d).expanduser().resolve()) for d in args.add_dir]
                                          if args.add_dir else None,
-                                         "services": args.service or None}.items() if v is not None}
+                                         "services": args.service or None,
+                                         "whole": True if args.whole else None}.items() if v is not None}
             if args.after is not None:
                 try:
                     options[after.KEY] = after.target_of(store, args.after)
@@ -1291,7 +1461,9 @@ def cmd_stats(args: argparse.Namespace) -> int:
         report = analysis.compute(store, days=args.days, repo=key, keep_runs=None if args.runs else 20)
     finally:
         store.close()
-    if args.runs:
+    if args.expensive:
+        print(analysis.as_json(report["expensive"]) if args.json else analysis.expensive_text(report["expensive"]))
+    elif args.runs:
         sys.stdout.write(analysis.runs_csv(report["runs"]) if args.csv else analysis.as_json(report["runs"]) + "\n")
     else:
         print(analysis.as_json(report) if args.json else analysis.text(report))
@@ -2181,6 +2353,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="everything, as JSON")
     p.add_argument("--runs", action="store_true", help="one record per run instead of the summary (JSON)")
     p.add_argument("--csv", action="store_true", help="with --runs: CSV, for a spreadsheet")
+    p.add_argument("--expensive", action="store_true", help="the runs that cost the most for their kind, and why")
     p.set_defaults(func=cmd_stats)
     p = sub.add_parser("doctor", help="states the store should never hold: work stuck now (broken) and what went "
                        "wrong over the last days (suspect); exits 1 when something is broken")
@@ -2473,6 +2646,36 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_endings)
 
+    p = sub.add_parser("guide", help="the orchestration skill's detail, a topic at a time (no topic: the list)")
+    p.add_argument("topic", nargs="?")
+    p.set_defaults(func=cmd_guide)
+
+    p = sub.add_parser("merge", help="merge the branches tasks kept into the branch checked out, on your word: "
+                       "the ones that touch no other first, the check after each; a conflict stops it")
+    p.add_argument("ids", nargs="+", help="the tasks whose branches to merge (N or #N)")
+    p.add_argument("--repo", help="the checkout (default: the first task's)")
+    p.add_argument("--verify", help="the check run after each merge (default: the tasks' own)")
+    p.add_argument("--dry-run", action="store_true", help="say the order, merge nothing")
+    p.set_defaults(func=cmd_merge)
+
+    p = sub.add_parser("pr", help="push the branch a task kept and open a draft pull request with its verdict, on "
+                       "your word (needs gh)")
+    p.add_argument("id", help="the task (N or #N)")
+    p.add_argument("--base", help="the branch to merge into (default: the repository's)")
+    p.add_argument("--dry-run", action="store_true", help="print the title and description, push nothing")
+    p.set_defaults(func=cmd_pr)
+
+    p = sub.add_parser("split", help="the pieces a request, or task N that stopped as several pieces, splits "
+                       "into; --queue starts them on what the task kept")
+    p.add_argument("target", help="a task number (N or #N), or the request's text ('-' reads stdin)")
+    p.add_argument("--queue", action="store_true", help="queue the pieces; task N leaves the board, and what "
+                   "waited for it waits for the last piece")
+    p.add_argument("--repo", help="where a request given as text runs (default: here)")
+    p.add_argument("--verify", help="the check every piece runs (default: the task's own)")
+    p.add_argument("--no-model", action="store_true", help="split only by the request's listed items")
+    p.add_argument("--json", action="store_true", help="the proposal as JSON")
+    p.set_defaults(func=cmd_split)
+
     p = sub.add_parser("board", help="needs-you, running and queued counts, for a status line")
     p.add_argument("--json", action="store_true", help="the counts as JSON")
     p.add_argument("--full", action="store_true", help="the whole board as JSON")
@@ -2514,6 +2717,8 @@ def build_parser() -> argparse.ArgumentParser:
 def _starts_work(args: argparse.Namespace) -> bool:
     """The commands that start cauce work: a worker runs none of them."""
     command = getattr(args, "command", None)
+    if (command == "split" and getattr(args, "queue", False)) or command == "merge":
+        return True
     return command in ("run", "resume", "work") or (command, getattr(args, f"{command}_command", None)) in {
         ("queue", "add"), ("workflow", "run"), ("workflow", "retry"), ("investigate", "start")}
 

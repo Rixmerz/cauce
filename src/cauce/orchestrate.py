@@ -182,6 +182,8 @@ class Options:
     #: request and the diff as the independent verifier would, so the verifier is not
     #: run twice on the same work (`workflows.reviewed_next`).
     reviewed_next: bool = False
+    #: The session's word that the task is one piece (`--whole`): out of turns, it gets more.
+    whole: bool = False
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -193,7 +195,7 @@ class Options:
                   "step_role": self.step_role, "surfaces": list(self.surfaces),
                   "ledger": self.ledger, "add_dirs": list(self.add_dirs), "services": list(self.services),
                   "run_verify": self.run_verify, "parts": self.parts, "integrate": self.integrate,
-                  "touches": list(self.touches), "reviewed_next": self.reviewed_next,
+                  "touches": list(self.touches), "reviewed_next": self.reviewed_next, "whole": self.whole,
                   # What `flow.queued_options` reads back: a resume stored without them lost them
                   # for every resume after it (a step's start cell, its turns, its base commit).
                   "start": self.start.label if self.start else None, "max_turns": self.max_turns,
@@ -543,6 +545,8 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
         neighbour_notes += _beside_ci(repo_dir, check, options.services)
     if check and (weak := ci.weak(check, repo_dir)):
         neighbour_notes.append(weak)
+    if check and (bypass := ci.bypassed(check, repo_dir)):
+        neighbour_notes.append(bypass)
     if spans := _spans(repo_dir, options.add_dirs):
         neighbour_notes.append(spans)
     for lag in models.lagging(store):
@@ -1374,7 +1378,8 @@ def run(
                 _remember(store, task, key, attempt, "failed", result, kind=the_plan.kind,
                           role=role_name)
             reading = not writes or (declared_read_only and not any(a.changed for a in attempts))
-            decision = decide(the_plan.ladder, attempts, allow_approval=options.allow_approval, reading=reading)
+            decision = decide(the_plan.ladder, attempts, allow_approval=options.allow_approval, reading=reading,
+                              several=_several(the_plan, options, task))
             resume, fresh = _continues(decision, session)
             store.set_move(task["id"], seq, decision.move.value, decision.reason)
             to = decision.cell.label if decision.cell and decision.continues else None
@@ -1440,7 +1445,7 @@ def run(
             # Work that outgrew its turns is kept too: the task was not wrong, only big. A
             # cancel stops the work, never throws it away: what it changed stays on its branch.
             # Nor does a resume that ends short drop what an earlier run of it kept.
-            outgrew = report.stop is not None and report.stop.cause == "turns"
+            outgrew = report.stop is not None and report.stop.cause in ("turns", "split")
             report.branch = isolate.finish(
                 workspace, keep=report.status in KEEPS_WORK or outgrew or report.status == "cancelled" or resumed,
                 message=isolate.message(task["id"], title=commit_title(task), subject=subject,
@@ -1656,7 +1661,7 @@ def _integrate(store: Store, task_id: int, workspace: isolate.Workspace | None, 
     if not options.verify:
         report.status, report.summary = "done", summary + "; no check was given: the review that follows reads it"
         return joined, False
-    code, full = _run_check(options.verify, workspace.path)
+    code, full = _steady_check(options.verify, workspace.path, baseline)
     output = full[-CHECK_OUTPUT_KEPT:]
     if code == 0:
         report.status, report.summary = "done", f"{summary}; `{options.verify}` passed on the joined work"
@@ -1892,6 +1897,21 @@ def _refused_here(store: Store, key: str | None, granted: Sequence[str], mode: s
     return sorted(shown.items(), key=lambda kv: (-kv[1], kv[0]))[:8]
 
 
+#: A task the plan sizes at this many points or more is several workers' work: out of turns,
+#: it is split (`cauce split`) instead of given more (`escalate.decide`'s `several`).
+SPLIT_POINTS = 8
+
+
+def _several(the_plan: Plan, options: Options, task: Mapping[str, Any]) -> str:
+    """Why the plan sized this task as several workers' work, or "": a build of
+    `SPLIT_POINTS` or more that the session did not send `--whole`, outside a workflow run
+    (a step's parts are its plan's) and never a reading kind."""
+    if (options.whole or task.get("workflow_run") or the_plan.kind in READ_ONLY_KINDS or options.parts
+            or options.integrate or options.ledger or the_plan.points.points < SPLIT_POINTS):
+        return ""
+    return f"{the_plan.points.points} points: " + ", ".join(the_plan.points.reasons[:3])
+
+
 def _cause(decision: Decision, attempt: Attempt) -> str:
     """What ended the run, from the move and the failure that led to it."""
     if decision.move is Move.BLOCKED:
@@ -1909,6 +1929,8 @@ def _cause(decision: Decision, attempt: Attempt) -> str:
     if decision.move is Move.REPLAN:
         if attempt.failure in (Failure.SPEC_BUG, Failure.ARCHITECTURE_BUG):
             return "spec"
+        if decision.split:
+            return "split"
         return "turns" if attempt.failure is Failure.TURNS_EXHAUSTED else "ladder"
     return "exhausted"
 
@@ -2278,6 +2300,11 @@ def brief(
                      "`spec_bug` when the task asks for a change, which you cannot make here.")
     if verify:
         parts.append(f"When you report a pass, it is checked by running: {verify}")
+        if writes and (near := ci.related(verify, workdir)):
+            files = "<the test files of what you changed>" if near[0] == "pytest" else "<the files you changed>"
+            parts.append(f"While you work, run only the tests near your change ({near[1].format(files=files)}): "
+                         f"the full `{verify}` is slow, and cauce runs it when you are done. Run it yourself once, "
+                         "at the end, before you report.")
     if dead_ends:
         lines = ["Fixes already tried against similar problems, here or in another repository. "
                  "Do not repeat one without saying why it would work this time:"]
@@ -2508,6 +2535,39 @@ def cannot_run(code: int | None, output: str) -> str | None:
     return None
 
 
+#: A red check with at most this many failing tests runs once more: one that passes then is flaky.
+FLAKY_MAX = 3
+#: Where a repository's flaky tests are remembered (`Store.meta`), each with how often it flaked.
+FLAKY_META = "flaky:"
+
+
+def _steady_check(command: str, workdir: Path, baseline: Baseline | None) -> tuple[int | None, str]:
+    """The check, run again once when it ran and failed on a few tests (`FLAKY_MAX`): a second
+    run that passes means those tests flake, which says nothing of the work. Its pass stands,
+    recorded as a `check_flaky` event with the tests and kept per repository; anything else is
+    the first run's failure, unchanged."""
+    code, full = _run_check(command, workdir)
+    if not _ran_and_failed(code, full):
+        return code, full
+    failing = launch.check_failures(full, roots=(workdir,))
+    if not failing or len(failing) > FLAKY_MAX:
+        return code, full
+    again, second = _run_check(command, workdir)
+    if again != 0:
+        return code, full
+    lines = sorted(clip(x, 200, one_line=True) for x in failing)
+    if baseline is not None:
+        with baseline._db() as db:
+            db.add_event(baseline.task_id, "check_flaky", command=command, failures=lines)
+            key = FLAKY_META + hashlib.sha256(str(baseline.repo_dir).encode()).hexdigest()[:24]
+            seen = json.loads(db.meta(key) or "{}")
+            for line in lines:
+                seen[line] = int(seen.get(line) or 0) + 1
+            db.set_meta(key, json.dumps(dict(sorted(seen.items(), key=lambda kv: -kv[1])[:50])))
+    return 0, second + "\n\n" + f"(cauce: {len(lines)} test(s) failed on the first run and passed on the second: " \
+        + "; ".join(lines) + ")"
+
+
 def _verified(result: launch.WorkerResult, command: str, workdir: Path,
               baseline: Baseline | None = None) -> launch.WorkerResult:
     """A claimed pass checked by the repository's own command. The worker does not
@@ -2518,7 +2578,7 @@ def _verified(result: launch.WorkerResult, command: str, workdir: Path,
     work: the pass stands, and that is recorded and said (`_against_base`)."""
     if baseline is not None:
         baseline.found = None
-    code, full = _run_check(command, workdir)
+    code, full = _steady_check(command, workdir, baseline)
     output = full[-CHECK_OUTPUT_KEPT:]
     if code is None:
         return dataclasses.replace(result, passed=False, failure=Failure.INCONCLUSIVE,
@@ -2584,7 +2644,7 @@ def _settled(result: launch.WorkerResult, command: str, workdir: Path,
              baseline: Baseline | None = None) -> launch.WorkerResult:
     if baseline is not None:
         baseline.found = None
-    code, full = _run_check(command, workdir)
+    code, full = _steady_check(command, workdir, baseline)
     output = full[-CHECK_OUTPUT_KEPT:]
     if result.failure is Failure.PERMISSION:
         cause = f"the worker was refused {', '.join(result.denied[:3])}"
@@ -2636,7 +2696,7 @@ def _stands(result: launch.WorkerResult, command: str | None, workdir: Path,
     if command:
         if baseline is not None:
             baseline.found = None
-        code, output = _run_check(command, workdir)
+        code, output = _steady_check(command, workdir, baseline)
         return "cauce" if code == 0 or (_ran_and_failed(code, output) and _against_base(
             baseline, command, output, workdir)[0]) else ""
     unmet = sum(1 for c in result.criteria if not c.get("met"))

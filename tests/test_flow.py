@@ -742,3 +742,19 @@ def test_a_task_whose_process_could_not_start_for_the_disk_goes_back_to_the_queu
 
     report = flow.work(store, start=start, pause=lambda: None, backoff=lambda s: None)
     assert tries == [task["id"], task["id"]] and [r.status for r in report.ran] == ["done"]
+
+
+def test_the_files_a_request_names_hold_it_back_never_start_it_beside(store: Store):
+    from cauce import flow
+
+    api = {"id": 1, "body": "add the service in src/app/curriculum-api.service.ts", "options": "{}"}
+    admin = {"id": 2, "body": "write the spec src/app/curriculum-api.service.ts for the admin", "options": "{}"}
+    forum = {"id": 3, "body": "add the forum in src/forum/", "options": "{}"}
+    held = flow.by_surfaces(admin, [api])
+    assert held is not None and not held.parallel and "#1" in held.reason
+    # names that cannot touch say nothing: the dispatcher's judgment decides, never a start
+    assert flow.by_surfaces(forum, [api]) is None
+    running = {"id": 4, "body": "refactor things", "options": "{}", "changed": ["src/forum/x.ts"]}
+    touched = flow.by_surfaces(forum, [running])
+    assert touched is not None and "already changed src/forum/x.ts" in touched.reason
+    assert flow.by_surfaces({"id": 5, "body": "tidy up", "options": "{}"}, [api]) is None

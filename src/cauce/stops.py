@@ -51,6 +51,8 @@ CAUSES = {
     "approval": ("needs_approval", "cauce"),
     "spec": ("replan", "worker"),
     "turns": ("replan", "cauce"),
+    # It outgrew its turns as several pieces: its work is kept, and `cauce split` starts the pieces on it.
+    "split": ("replan", "cauce"),
     "ladder": ("replan", "cauce"),
     "exhausted": ("failed", "cauce"),
     "attempts": ("failed", "cauce"),
@@ -178,11 +180,13 @@ def next_step(task_id: int, stop: Stop, *, resumable: bool = True) -> str | None
     if stop.cause == "superseded" and stop.extra.get("retry"):
         return None  # its step was queued again: the retry is the one that goes on
     if (stop.cause in ("dismissed", "superseded") and stop.extra.get("was") == "replan"
-            and stop.extra.get("had_cause") != "turns"):
+            and stop.extra.get("had_cause") not in ("turns", "split")):
         return None
     base = f"cauce resume {task_id}"
     if stop.cause == "turns":
         return f"{base} --max-turns {RESUME_TURNS}"
+    if stop.cause == "split":
+        return f"cauce split {task_id}"
     rules = stop.allow or allow.from_refusals(stop.denied)
     if stop.cause == "permission" and rules:
         return base + "".join(f" --allow {shlex.quote(rule)}" for rule in rules)
@@ -230,6 +234,9 @@ def what_to_do(stop: Stop) -> str:
         "spec": "the task as written cannot be done: rewrite or split it as a new task",
         "turns": "the work outgrew a worker's turns, not the task: resume it with more turns (what it did "
                  "stays), or split what is left into smaller tasks",
+        "split": "it is several pieces and outgrew one worker's turns; its work is kept on its branch. Read the "
+                 "pieces `cauce split` proposes, then start them on that work with `--queue` (what was queued "
+                 "after it waits for the last piece); a resume gives it more turns as one piece instead",
         "ladder": "no stronger model is left: rewrite the task, or read the attempts for what kept failing",
         "exhausted": "every cell failed: read the attempts, then resume or rewrite it",
         "attempts": "the attempt limit was reached: read the attempts, then resume",

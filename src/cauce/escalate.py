@@ -148,6 +148,8 @@ class Decision:
     wait_s: int = 0
     #: The same cell answers again in its own session: only the form of its answer failed.
     reshape: bool = False
+    #: It outgrew its turns as several pieces: split, not given more (`cauce split`).
+    split: bool = False
 
     @property
     def continues(self) -> bool:
@@ -272,9 +274,11 @@ def decide(
     *,
     allow_approval: bool = False,
     reading: bool = False,
+    several: str = "",
 ) -> Decision:
     """The move after the last attempt, with the evidence it rests on. `reading`
-    is a task that only finds out: its answer is what it is for."""
+    is a task that only finds out: its answer is what it is for. `several` says why the
+    plan sized it as several workers' work: out of turns, it is split, never given more."""
     if not attempts:
         raise ValueError("decide() needs at least one attempt")
     last = attempts[-1]
@@ -379,6 +383,16 @@ def decide(
         return Decision(Move.BLOCKED, reason="the environment failed twice; fix it, then resume",
                         because=(seen, f"it failed to run {retries} times: past the one retry, a person has to "
                                        "look at the environment"))
+
+    if failure is Failure.TURNS_EXHAUSTED and several:
+        # Room for one piece is turns; room for several is more workers. Its work is kept,
+        # and `cauce split` proposes the pieces and starts them on it.
+        return Decision(Move.REPLAN, reason=f"it outgrew {last.max_turns} turns as several pieces ({several}): "
+                                            "split what is left into tasks that each fit, on the work it kept",
+                        because=(seen, f"the plan sized it as several workers' work ({several})",
+                                 "more turns on one worker is the climb that costs the most: each turn re-reads "
+                                 "everything the work has read so far, so pieces cost less than one long attempt"),
+                        split=True)
 
     if failure is Failure.TURNS_EXHAUSTED:
         raised = sum(1 for a in attempts if a.failure is Failure.TURNS_EXHAUSTED)

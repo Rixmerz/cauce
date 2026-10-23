@@ -548,3 +548,18 @@ def test_a_session_hears_once_that_a_newer_cauce_is_installed(tmp_path):
     assert hooks._newer_plugin(tmp_path, "t", env) is not None  # each session hears it
     _plugin(config, "999.1.0")
     assert "999.1.0" in hooks._newer_plugin(tmp_path, "s", env)  # and each newer version
+
+
+def test_many_endings_at_once_tell_each_pass_in_one_line(store: Store):
+    verdict = {"check": {"command": "npm test"}, "criteria": [{"id": "S1", "met": True}, {"id": "S2", "met": False}],
+               "independent": {"ran": True, "passed": True}}
+    for n in range(4):
+        t = store.create_task(f"task {n}", status="done", source="cauce", session_id="s")
+        store.add_event(t["id"], "finished", status="done", final_cell="sonnet/high", branch=f"cauce/task-{t['id']}",
+                        verdict=verdict, changed=["a.py"])
+    notice, ids = hooks.endings(store, "s")
+    assert len(ids) == 4 and "4 ended: 4 passed, 0 stopped" in notice
+    assert notice.count("passed at sonnet/high, on branch cauce/task-") == 4
+    assert "`npm test` passed, 1/2 criteria met, independent check passed; changed 1 file(s)" in notice
+    assert "this verdict is cauce's own record" not in notice
+    assert hooks.verdict_summary(None) == "no verdict kept"

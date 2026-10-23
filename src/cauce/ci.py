@@ -494,3 +494,78 @@ def weak(command: str, where: Path | None = None) -> str | None:
         return (f"this task's check `{command}` exits as its last command (`{why}`) does{via}: a failure before "
                 "it never reaches cauce, so a green check proves nothing; add `set -o pipefail` or drop the pipe")
     return None
+
+
+#: What runs a tool from a project's dependencies, before the tool's own name.
+_LAUNCHERS = (("npm", "exec"), ("pnpm", "exec"), ("pnpm", "dlx"), ("yarn", "exec"), ("npx",), ("bunx",), ("yarn",),
+              ("pnpm",))
+#: The scripts a person most likely means by "the repository's check", first.
+_CHECK_SCRIPTS = ("test", "test:ci", "ci", "check", "verify", "lint", "build")
+_ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _tool(part: str) -> list[str]:
+    """One command's words from its tool on: environment assignments and a launcher left out."""
+    words = [w for w in part.split() if not _ENV_ASSIGN.match(w)]
+    for launcher in _LAUNCHERS:
+        if tuple(words[:len(launcher)]) == launcher and len(words) > len(launcher):
+            words = words[len(launcher):]
+            break
+    return [Path(words[0]).name, *words[1:]] if words else []
+
+
+def bypassed(command: str, where: Path | None) -> str | None:
+    """The plan's warning for a check that runs a tool itself while a script of the project
+    runs the same tool with more (`ng test` against `npm test`'s `ng test --code-coverage`):
+    what the script adds, a coverage threshold, a config, a project, is not checked. None
+    when the check goes through the project's scripts, or no script runs its tool with more.
+    A warning, never a refusal."""
+    if where is None or len(runs(command, where)) > 1:
+        return None
+    mine = [_tool(part) for part in _parts(_CONTINUED.sub(" ", command))]
+    npm, deno = _package_scripts(where), _deno_tasks(where)
+    named = [(name, body, "npm") for name, body in npm.items()] + [(name, body, "deno") for name, body in deno.items()]
+    order = {name: i for i, name in enumerate(_CHECK_SCRIPTS)}
+    named.sort(key=lambda found: (order.get(found[0], len(order)), found[0]))
+    for name, body, runner in named:
+        for theirs in (_tool(part) for part in _parts(_CONTINUED.sub(" ", body))):
+            for words in mine:
+                if not words or not theirs or words[0] != theirs[0] or (len(words) > 1 and len(theirs) > 1
+                                                                       and words[1] != theirs[1]):
+                    continue
+                extra = [w for w in theirs[1:] if w not in words[1:]]
+                if not extra:
+                    continue
+                call = ("npm test" if name == "test" else f"npm run {name}") if runner == "npm" else f"deno task {name}"
+                return (f"this task's check `{clip(command, 80, one_line=True)}` runs `{words[0]}` itself, while "
+                        f"`{call}` runs `{clip(' '.join(theirs), 100, one_line=True)}`: what it adds "
+                        f"({' '.join(extra[:4])}{' …' if len(extra) > 4 else ''}) is not checked here, a coverage "
+                        f"threshold or a config among them; `--verify '{call}'` checks what the repository checks")
+    return None
+
+
+#: How a runner the check uses runs only the tests near some files: `{files}` is where they go.
+_RELATED = (
+    ("vitest", "npx vitest related --run {files}"),
+    ("jest", "npx jest --findRelatedTests {files}"),
+    ("pytest", "python -m pytest -x {files}"),
+)
+
+
+def related(command: str, where: Path | None) -> tuple[str, str] | None:
+    """(runner, the command that runs only the tests near what changed) for the test runner
+    the check runs, directly or through the scripts it names; None when it runs none cauce
+    knows. A worker runs it as it goes; the check itself runs in full at the end."""
+    bodies = runs(command, where) if where is not None else [command]
+    for body in bodies:
+        for part in _parts(_CONTINUED.sub(" ", body)):
+            words = _tool(part)
+            if not words:
+                continue
+            tool = words[0]
+            if tool in ("python", "python3") and words[1:3] == ["-m", "pytest"]:
+                tool = "pytest"
+            for runner, line in _RELATED:
+                if tool == runner:
+                    return runner, line
+    return None

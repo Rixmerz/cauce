@@ -683,6 +683,12 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
              "and on their yes you run its line; any other you decide as its line says: resume it, rewrite it, "
              "or dismiss it with why (`cauce dismiss N --why '<why>'`). Nothing waits on the person unasked "
              "(never redo a worker's task by hand)."]
+    # Many endings at once: each pass in one line, so the notice costs the session little.
+    grouped = len(ended) >= ENDINGS_GROUPED
+    if grouped:
+        passed = sum(1 for t in ended if t["status"] == "done")
+        lines.append(f"{len(ended)} ended: {passed} passed, {len(ended) - passed} stopped; each pass in one line "
+                     "(`cauce show N` has its verdict in full).")
     for t in ended:
         data = t["finished_data"]
         changed = data.get("changed") or []
@@ -699,6 +705,12 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
         lines += _behind(store, t)
         lines += _found_before(store, t)
         lines += _overlaps(store, t)
+        if t["status"] == "done" and grouped:
+            branch = data.get("branch")
+            lines.append(f"  passed at {data.get('final_cell') or t['final_cell']}"
+                         + (f", on branch {branch}" if branch else "") + f"; {verdict_summary(data.get('verdict'))}"
+                         + (f"; changed {total} file(s)" if total else ""))
+            continue
         if t["status"] == "done":
             branch = data.get("branch")
             commit = f" (commit {str(data['commit'])[:12]})" if data.get("commit") else ""
@@ -714,6 +726,11 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
                 lines.append("  changed: " + ", ".join(changed[:8])
                              + (f" and {total - 8} more" if total > 8 else ""))
             lines += verdict_lines(data.get("verdict"))
+            if flaky := store.last_event(t["id"], "check_flaky"):
+                found = flaky["data"].get("failures") or []
+                lines.append(f"  flaky: `{flaky['data'].get('command')}` failed {len(found)} test(s) once, and they "
+                             "passed when it ran again: " + clip("; ".join(found), 300, one_line=True)
+                             + " (not this work's; kept per repository)")
             continue
         if decided:
             branch = data.get("branch")
@@ -747,6 +764,27 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
                          "opens the lane; when the queued work does not depend on it, tell the person and "
                          f"run `cauce lanes --unpause {t.get('repo')}` to let them start now")
     return "\n".join(lines), [t["id"] for t in ended]
+
+
+#: This many endings at once are told in short: each pass in one line.
+ENDINGS_GROUPED = 4
+
+
+def verdict_summary(verdict: Mapping | None) -> str:
+    """A verdict in a few words: the check, the criteria met, the independent check."""
+    if not isinstance(verdict, Mapping):
+        return "no verdict kept"
+    check = verdict.get("check")
+    said = [f"`{check['command']}` " + ("failing at base, unchanged" if check.get("state") else "passed")
+            if isinstance(check, Mapping) else "no check ran"]
+    found = list(verdict.get("criteria") or ())
+    if found:
+        said.append(f"{sum(1 for c in found if c.get('met'))}/{len(found)} criteria met")
+    ind = verdict.get("independent") or {}
+    if ind.get("ran"):
+        said.append("independent check "
+                    + ("passed" if ind.get("passed") else f"left {ind.get('blocking')} blocker(s)"))
+    return ", ".join(said)
 
 
 def verdict_lines(verdict: Mapping | None) -> list[str]:

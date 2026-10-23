@@ -381,3 +381,31 @@ def test_the_model_is_offered_only_the_team_s_kinds():
     assert "- docs:" in seen["prompt"] and "- ui:" not in seen["prompt"]
     by_model("x", kinds=("frontier",), runner=runner)
     assert '"ui"' in seen["schema"]
+
+
+def test_claude_code_agents_import_as_roles_of_the_person_s_and_change_no_team(tmp_path, capsys):
+    from cauce import cli
+
+    agents = tmp_path / "agents"
+    (agents / "quality").mkdir(parents=True)
+    (agents / "quality" / "code-reviewer.md").write_text(
+        "---\nname: code-reviewer\ndescription: Reviews code for bugs.\\n\\nExamples: <example>x</example>\n"
+        "tools: Read, Grep, Glob\nmodel: opus\ncolor: red\n---\nYou review changes carefully.\n")
+    (agents / "react-pro.md").write_text("---\nname: React Pro\ndescription: Builds React UI\n---\nBuild UI.\n")
+    (agents / "notes.md").write_text("just a readme, no frontmatter")
+    (agents / "empty.md").write_text("---\nname: empty\n---\n")
+    assert cli.main(["roles", "import", str(agents), "--dry-run"]) == 0
+    assert capsys.readouterr().out.startswith("would import 2 role(s)")
+    assert cli.main(["roles", "import", str(agents)]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("imported 2 role(s)") and "cauce team change" in out
+    catalog = roles.load()
+    reviewer = catalog.get("code-reviewer")
+    assert reviewer.kinds == ("review-routine", "review-critical") and reviewer.description == "Reviews code for bugs."
+    assert set(reviewer.disallowed_tools) == {"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch",
+                                              "WebSearch"}
+    assert reviewer.prompt == "You review changes carefully." and reviewer.derived_from == "agent:code-reviewer"
+    assert catalog.get("react-pro").kinds == ("ui", "feature") and not catalog.get("react-pro").disallowed_tools
+    # imported again: nothing replaced
+    assert cli.main(["roles", "import", str(agents)]) == 0
+    assert capsys.readouterr().out.startswith("imported 0 role(s)")

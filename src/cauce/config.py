@@ -51,6 +51,11 @@ DEFAULTS: dict[str, Any] = {
     # Each request is advised the way it is best done: by the session itself, one worker,
     # or in parts side by side (`cauce.route`); the session decides.
     "route": True,
+    # A one-shot worker gets no subagent tool (whose description lists every agent the
+    # repository and the person define), no skill listing (its role's skills are in its
+    # brief), and its per-machine prompt sections after the shared part, for the cache.
+    # Only the flags the installed CLI lists in its `--help` (`launch.lean_flags`).
+    "lean": True,
     "primer": True,
     # A role's lessons in each repository improve by measured trial: an editor (Haiku) proposes
     # them from what the role's workers met there, its tasks alternate with and without them,

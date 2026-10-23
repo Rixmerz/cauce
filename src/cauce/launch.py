@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import functools
 import json
 import os
 import re
@@ -396,8 +397,37 @@ class WorkerResult:
     fresh: str = ""
 
 
+#: Tools a one-shot worker never needs: the subagent tool's description lists every agent the
+#: repository and the person define, read on every turn (`lean` setting).
+LEAN_DENIED: tuple[str, ...] = ("Agent", "Task")
+#: CLI flags that keep a worker's context to what it needs: no skill listing (its role's skills
+#: are in its brief), and the per-machine sections after the part workers share, for the cache.
+LEAN_FLAGS: tuple[str, ...] = ("--disable-slash-commands", "--exclude-dynamic-system-prompt-sections")
+
+
+@functools.lru_cache(maxsize=8)
+def _cli_help(claude_bin: str) -> str:
+    try:
+        return subprocess.run([claude_bin, "--help"], capture_output=True, text=True, timeout=20,
+                              stdin=subprocess.DEVNULL, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def lean_flags(claude_bin: str, env: Mapping[str, str], *, help_text: Callable[[str], str] | None = None) -> tuple[
+        str, ...]:
+    """The lean flags the installed CLI lists in its `--help`, with the `lean` setting on; none
+    when it is off or the CLI cannot say. A flag an older CLI does not know is never passed."""
+    from cauce import config
+
+    if not config.enabled("lean", env):
+        return ()
+    said = (help_text or _cli_help)(claude_bin)
+    return tuple(flag for flag in LEAN_FLAGS if flag in said)
+
+
 def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path: Path | None = None,
-               prompt_path: Path | None = None) -> list[str]:
+               prompt_path: Path | None = None, lean: Sequence[str] = ()) -> list[str]:
     argv = [
         claude_bin, "-p",
         "--model", spec.model_id or spec.cell.model,
@@ -410,8 +440,10 @@ def build_argv(spec: LaunchSpec, *, claude_bin: str = "claude", mcp_config_path:
         argv += ["--effort", spec.cell.effort]
     if spec.tools is not None:
         argv += ["--tools", ",".join(spec.tools)]
-    if spec.disallowed_tools:
-        argv += ["--disallowedTools", ",".join(spec.disallowed_tools)]
+    denied = tuple(dict.fromkeys([*spec.disallowed_tools, *(LEAN_DENIED if lean else ())]))
+    if denied:
+        argv += ["--disallowedTools", ",".join(denied)]
+    argv += list(lean)
     if spec.allowed_tools:
         argv += ["--allowedTools", *spec.allowed_tools]
     if spec.workdir is not None and spec.workdir != spec.launch_dir:
@@ -486,7 +518,8 @@ def run(
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(spec.append_system_prompt)
         prompt_path = Path(name)
-    argv = build_argv(spec, claude_bin=claude_bin, mcp_config_path=mcp_path, prompt_path=prompt_path)
+    argv = build_argv(spec, claude_bin=claude_bin, mcp_config_path=mcp_path, prompt_path=prompt_path,
+                      lean=lean_flags(claude_bin, os.environ))
     before = tracked_state(spec.target_dir)
     started = time.monotonic()
     try:

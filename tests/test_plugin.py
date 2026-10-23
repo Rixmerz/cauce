@@ -60,5 +60,20 @@ def test_no_guidance_tells_a_session_to_pass_a_budget():
     repositories never hands a session a budget flag that no command takes."""
     root = Path(__file__).resolve().parent.parent
     texts = [*root.glob("commands/*.md"), *root.glob("skills/*/SKILL.md"), *root.glob("hooks/*.tsx"),
-             *root.glob("src/cauce/roles*/*.md")]
+             *root.glob("src/cauce/roles*/*.md"), *root.glob("src/cauce/guides/*.md")]
     assert texts and not [p.name for p in texts if "--budget" in p.read_text(encoding="utf-8")]
+
+
+def test_the_skill_is_short_and_every_guide_it_names_exists(capsys):
+    from cauce import cli
+
+    command = (ROOT / "commands" / "orchestration.md").read_text()
+    assert len(command.splitlines()) < 120
+    named = {"when", "dispatch", "endings", "orchestrator", "workflows", "notes", "memory", "relay"}
+    shipped = {p.stem for p in (ROOT / "src" / "cauce" / "guides").glob("*.md")}
+    assert named == shipped and all(f"`{n}`" in command for n in named)
+    assert cli.main(["guide"]) == 0
+    assert "endings" in capsys.readouterr().out
+    assert cli.main(["guide", "endings"]) == 0
+    assert "`replan` with `split`" in capsys.readouterr().out
+    assert cli.main(["guide", "nope"]) == 2
