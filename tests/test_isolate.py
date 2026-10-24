@@ -289,3 +289,19 @@ def test_dependencies_installed_for_another_lockfile_are_not_linked(git_repo, tm
 def test_a_base_that_cannot_be_read_is_refused_never_replaced_by_head(git_repo, tmp_path):
     with pytest.raises(isolate.IsolationError, match="is gone"):
         isolate.prepare(git_repo, 13, tmp_path / "home", base="0" * 40)
+
+
+def test_a_task_that_never_ran_sets_aside_a_branch_of_its_name_and_starts_on_its_base(git_repo, tmp_path):
+    head = git(git_repo, "rev-parse", "HEAD").strip()
+    git(git_repo, "checkout", "-q", "-b", "cauce/task-21")
+    old = _commit_in(git_repo, "foreign.py", "another store's work\n").strip()
+    git(git_repo, "checkout", "-q", "-")
+    ws = isolate.prepare(git_repo, 21, tmp_path / "home", fresh=True)
+    assert ws.set_aside == f"cauce/foreign/task-21-{old[:12]}"
+    assert ws.base == head and not (ws.path / "foreign.py").exists()
+    # nothing is lost, and the set-aside branch is no kept branch of any task
+    assert git(git_repo, "rev-parse", ws.set_aside).strip() == old
+    assert 21 in isolate.kept_branches(git_repo) and isolate.kept_branches(git_repo)[21] == head
+    assert len(isolate.kept_branches(git_repo)) == 1
+    # a fresh task with no such branch sets nothing aside
+    assert isolate.prepare(git_repo, 22, tmp_path / "home", fresh=True).set_aside is None

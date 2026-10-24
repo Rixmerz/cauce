@@ -978,8 +978,15 @@ def run(
     # their commit too, in a worktree its tools cannot write to.
     if options.isolate and (writes or options.base) and repo.toplevel(repo_dir) is not None:
         try:
-            resumed = isolate.kept(repo_dir, task["id"])
-            workspace = isolate.prepare(repo_dir, task["id"], home(), base=options.base)
+            # A task that never ran owns no branch yet: one of its name is another's.
+            never_ran = (len(store.events_of(task["id"], "planned")) <= 1 and not store.attempts(task["id"])
+                         and not store.events_of(task["id"], "finished"))
+            resumed = not never_ran and isolate.kept(repo_dir, task["id"])
+            workspace = isolate.prepare(repo_dir, task["id"], home(), base=options.base, fresh=never_ran)
+            if workspace.set_aside:
+                say(f"a branch {workspace.branch} was already in this checkout with none of this task's work "
+                    f"(another cauce store's): kept as {workspace.set_aside}, and this task starts on its base")
+                store.add_event(task["id"], "branch_set_aside", branch=workspace.branch, to=workspace.set_aside)
             if resumed:
                 context.append("This task was stopped before and is resumed: what its earlier attempts wrote is "
                                "already here. Check it, and finish it rather than starting over.")

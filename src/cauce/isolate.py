@@ -68,6 +68,9 @@ class Workspace:
     #: Dependency folders left out: the lockfile beside them here differs from the checkout's,
     #: so what is installed there is not what this commit needs.
     stale: tuple[str, ...] = ()
+    #: A branch of the task's name that held none of its work, renamed to this
+    #: before the task started (`prepare(fresh=True)`); None when there was none.
+    set_aside: str | None = None
 
 
 def _git(cwd: Path, *args: str, check: bool = True, strip: bool = True) -> str:
@@ -86,6 +89,21 @@ def last_commit(repo_dir: Path, branch: str) -> str | None:
     return _git(repo_dir, "log", "-1", "--format=%h %s", f"refs/heads/{branch}", "--", check=False) or None
 
 
+#: Where a branch named for a task that holds none of its work is moved (a store
+#: started over, another cauce home on the same checkout): kept, never deleted.
+FOREIGN = "cauce/foreign/task-{id}-{tip}"
+
+
+def _set_aside(top: Path, task_id: int) -> str:
+    """Rename the branch named for a task that never ran out of the task's way,
+    with its tip in the new name: nothing is lost, and the task starts on its base."""
+    branch = branch_for(task_id)
+    tip = _git(top, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False)[:12]
+    aside = FOREIGN.format(id=task_id, tip=tip)
+    _git(top, "branch", "-m", branch, aside)
+    return aside
+
+
 def kept(repo_dir: Path, task_id: int) -> bool:
     """Whether the task's branch exists: work it kept, verified or not."""
     return bool(_git(repo_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_for(task_id)}", check=False))
@@ -102,10 +120,14 @@ def _attached(top: Path, path: Path, branch: str) -> bool:
     return False
 
 
-def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None) -> Workspace:
+def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None,
+            fresh: bool = False) -> Workspace:
     """The task's worktree, on its own branch: from HEAD, or from `base` (a
     commit a workflow step builds on). A `base` that cannot be read is refused,
-    never replaced by HEAD: work built on the wrong commit looks like work."""
+    never replaced by HEAD: work built on the wrong commit looks like work. A
+    task that never ran before (`fresh`) owns no branch: one of its name already
+    here is another's (a store started over, another cauce home), set aside
+    (`FOREIGN`) and never built on."""
     top = Path(_git(repo_dir, "rev-parse", "--show-toplevel"))
     head = _git(top, "rev-parse", "HEAD")
     if base:
@@ -117,6 +139,9 @@ def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None
     path = root / "worktrees" / f"task-{task_id}"
     path.parent.mkdir(parents=True, exist_ok=True)
     _git(top, "worktree", "prune", check=False)  # a run that died left its entry behind
+    aside = None
+    if fresh and not _attached(top, path, branch) and kept(top, task_id):
+        aside = _set_aside(top, task_id)
     if _attached(top, path, branch):
         # A run whose process died left its worktree, uncommitted work and all:
         # the resume continues in it instead of failing to add it again.
@@ -131,7 +156,7 @@ def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None
         base = head
     shared = _shared(top, path)
     stale = tuple(rel for rel in shared if _stale(top, path, rel))
-    ws = Workspace(top, path, branch, base, tuple(rel for rel in shared if rel not in stale), stale)
+    ws = Workspace(top, path, branch, base, tuple(rel for rel in shared if rel not in stale), stale, aside)
     link(ws)
     return ws
 
