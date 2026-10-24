@@ -230,7 +230,9 @@ or the plugin setting) says what the mod does with a decision:
   cauce keeps itself) when it judges the conversation's detail is no longer
   needed, on that advice or on its own. The compaction runs when its turn
   ends, as with `auto`, with cauce's instructions and what it asked to keep
-  quoted apart as its own.
+  quoted apart as its own. With `then`, the session leaves itself what to go
+  on with: once the compaction finished, the mod submits it as the session's
+  next prompt, so a session with no work of its own running still goes on.
 - **suggest**: a toast shows the `/compact …` line to paste,
   once per decision. Nothing is sent to the model.
 - **auto**: between turns, never during one, the mod asks the engine to

@@ -12,8 +12,9 @@
 //   decides; it compacts with the `compact` tool, on that advice or on its own,
 //   and the engine compacts with cauce's instructions once its turn ends (in a
 //   headless session, where the engine has no such call, `/compact` runs with
-//   them). With `compact suggest` the line is shown to the person; with `auto`
-//   the engine compacts at cauce's moment. A toast says what ran.
+//   them). A `then` the session gave is submitted as its next prompt once the
+//   compaction finished. With `compact suggest` the line is shown to the person;
+//   with `auto` the engine compacts at cauce's moment. A toast says what ran.
 // - A status entry that counts what waits on the orchestrator, runs and is queued,
 //   and `/cauce`, which opens the web board: the one place to look and press
 //   (resume, allow, dismiss, unpause). A terminal copy of it was a poorer one.
@@ -170,6 +171,12 @@ async function compaction($: EngineInterface): Promise<void> {
     if (!busy) await $.prompt.submit({ text: step.advice })
     return
   }
+  if (step.action === 'continue' && step.text) {
+    // A compaction the session asked for finished, and it left itself what to go
+    // on with: with no work of its own running, no ending would start its turn.
+    if (!busy) await $.prompt.submit({ text: step.text })
+    return
+  }
   if (!step.line || step.decision === undefined || !step.action) return
   const decision = String(step.decision)
   const tell = (outcome: string[]) => cauce($, ['compaction', 'delivered', decision, '--session', session,
@@ -179,6 +186,8 @@ async function compaction($: EngineInterface): Promise<void> {
       // The call `/compact` makes, between turns: the engine refuses a `/` text a
       // mod submits, and this never reaches the model as a message.
       const result = await $.session.compact({ instructions: step.instructions ?? '' })
+      // Look again at once: a prompt the session left to follow its compaction is due now.
+      compactionDue = true
       if (result.skip === undefined) {
         $.ui.toast(compactedToast(step.decision))
         await tell(['--ran'])
@@ -194,6 +203,7 @@ async function compaction($: EngineInterface): Promise<void> {
       // the compaction carry its marker, as it does a submit nobody answered.
       try {
         await $.command.run({ command: 'compact', args: step.instructions ?? '' })
+        compactionDue = true
         $.ui.toast(commandToast(step.decision))
         return
       } catch (again) {
@@ -335,13 +345,20 @@ export const register: Register = (on, options) => {
       description: 'Compact this session, on your judgment: when the work at hand no longer needs this '
         + "conversation's detail (a break between tasks, a large context), not in the middle of work that still "
         + "needs it. It runs when this turn ends, told to keep the person's requests verbatim, the open cauce work "
-        + 'and the branches waiting to merge; cauce puts its digest of the session back after it. cauce also tells '
-        + 'you when it sees a good moment; the call is yours.',
+        + 'and the branches waiting to merge; cauce puts its digest of the session back after it. With nothing of '
+        + 'yours running, no ending starts your next turn: say in `then` what to go on with, and once the '
+        + 'compaction finished it reaches you as your own prompt. cauce also tells you when it sees a good moment; '
+        + 'the call is yours.',
       inputSchema: {
         type: 'object',
         properties: {
           why: { type: 'string', description: 'why now, in one line' },
           keep: { type: 'string', description: 'what the summary must also keep, beyond what cauce keeps itself' },
+          then: {
+            type: 'string',
+            description: 'your prompt to yourself once the compaction finished: what you go on with, as you would '
+              + 'ask it (left out, the session waits for the person or an ending)',
+          },
         },
         required: ['why'],
       },
@@ -474,13 +491,15 @@ export const register: Register = (on, options) => {
     const args = ['compaction', 'request', '--session', await $.session.id(), '--cwd', await $.session.cwd(),
       '--why', text(e.why), '--json']
     if (text(e.keep)) args.push('--keep', text(e.keep))
+    if (text(e.then)) args.push('--then', text(e.then))
     const ran = await cauce($, args)
     const asked = json<{ id?: number; error?: string }>(ran)
     if (!asked?.id) return { deny: asked?.error || ran.err || 'cauce could not take the compaction' }
     // Taken when the session is idle: the next look after this turn ends.
     compactionDue = true
     return { result: `compaction #${asked.id} is set: it runs when this turn ends. Finish the turn with what the `
-      + 'person needs to know now; after it, cauce puts its digest of the session back.' }
+      + 'person needs to know now; after it, cauce puts its digest of the session back'
+      + (text(e.then) ? ', and your `then` reaches you as your next prompt.' : '.') }
   }).catch(failed)
 
   on('tool.call', { tool: OVERVIEW }, async ($, call) => {

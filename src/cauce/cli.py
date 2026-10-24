@@ -2249,7 +2249,7 @@ def cmd_compaction(args: argparse.Namespace) -> int:
                                           skip=args.skipped)
         elif args.compaction_command == "request":
             answer = compaction.request(store, home(), session_id=args.session, cwd=args.cwd, why=args.why or "",
-                                        keep=args.keep or "")
+                                        keep=args.keep or "", then=args.then or "")
         elif args.compaction_command == "delivered":
             why = (f"the engine rejected it: {args.rejected}" if args.rejected is not None
                    else "a turn started before it could be submitted")
@@ -2261,7 +2261,7 @@ def cmd_compaction(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(answer, ensure_ascii=False))
     else:
-        for key in ("said", "line", "advice"):
+        for key in ("said", "line", "advice", "text"):
             if answer.get(key):
                 print(answer[key])
     return 0
@@ -2719,6 +2719,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cwd", help="where the session works (its open work and branches are read there)")
     p.add_argument("--why", help="why now, in a line")
     p.add_argument("--keep", help="what the summary must also keep, beyond what cauce keeps itself")
+    p.add_argument("--then", help="the session's prompt to itself once the compaction finished: what it goes on "
+                                  "with (the mod submits it)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_compaction)
     p = csub.add_parser("delivered", help="what became of a decision the mod was to submit; with none of the "

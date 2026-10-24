@@ -37,6 +37,13 @@ and `settle` decides from them a submit the mod never reported. The answer is
 kept per Claude Code version in the cauce home: a build found not to run one
 gets the line shown from then on.
 
+A compaction the session asked for may carry what it goes on with after it
+(`then`, the session's own prompt to itself): with nothing of its work running,
+no ending would ever start its next turn. Once the compaction finished (a hook
+saw one end after the decision was delivered, or the mod settled it), `next_step`
+hands that prompt to the mod once (`continuation`, a `compaction_continued`
+event), quoted and marked as the session's own words, and the mod submits it.
+
 Stdlib only, no model call: the Stop hook runs it.
 """
 from __future__ import annotations
@@ -91,12 +98,20 @@ MARKER_RE = re.compile(r"\[cauce-compaction #(\d+)\]")
 #: The most of what the orchestrating session asks the summary to keep, and of its reason.
 KEEP_CHARS = 500
 WHY_CHARS = 200
+#: The most of what the session asks to go on with after the compaction (`then`).
+THEN_CHARS = 2000
+#: How long after its delivery a compaction with a `then` is waited for, and after
+#: which it is no longer continued.
+THEN_WITHIN_S = 6 * 3600
 #: What each Claude Code version did with a `/compact` the mod submitted.
 BUILDS = "compaction-builds.json"
 RUNS, IGNORED = "runs", "ignored"
 #: The events this module writes.
 DECIDED, DELIVERED, SEEN, SETTLED = ("compaction_decided", "compaction_delivered", "compaction_seen",
                                      "compaction_settled")
+CONTINUED = "compaction_continued"
+#: The hooks that see a compaction once it is done (PreCompact sees it start).
+FINISHED_BY = ("PostCompact", "SessionStart")
 #: What the head of the instructions tells two readers: the summarizer, and a
 #: model that got the line as a message because the command did not run.
 HEAD = ("cauce asked for this compaction at a break between tasks. If this reached you as a chat message, the "
@@ -498,12 +513,13 @@ def consider(store: Store, root: Path, *, session_id: str, transcript: Path, cwd
 
 
 def request(store: Store, root: Path, *, session_id: str, cwd: str | None, why: str = "", keep: str = "",
-            transcript: Path | None = None, at: datetime | None = None) -> dict[str, Any]:
+            then: str = "", transcript: Path | None = None, at: datetime | None = None) -> dict[str, Any]:
     """The orchestrating session decided to compact (the mod's `compact` tool): a
     decision to compact now, on its word, with cauce's instructions and what it asks
     to keep quoted apart. It runs when the session's turn ends (`next_step`), with no
-    check of the cache, the size or the cooldown: the session judged it. Refused
-    without a turn to keep it on."""
+    check of the cache, the size or the cooldown: the session judged it. What it
+    asks to go on with after it (`then`) is kept on the decision, for
+    `continuation`. Refused without a turn to keep it on."""
     from cauce import scribe
 
     at = at or datetime.now(UTC)
@@ -521,8 +537,44 @@ def request(store: Store, root: Path, *, session_id: str, cwd: str | None, why: 
             "because": [f"the orchestrating session decided to compact: {reason}"], "tokens": context.tokens,
             "window": context.window, "mode": "orchestrator", "cwd": cwd,
             "instructions": " ".join(p for p in (text, keep_part) if p)}
+    if then.strip():
+        data["then"] = compact._clip(then.strip(), THEN_CHARS)
     data["id"] = store.add_event(turn["id"], DECIDED, **data)
     return data
+
+
+def continuation(store: Store, session_id: str, at: datetime) -> dict[str, Any] | None:
+    """The prompt a compaction the session asked for carries (`then`), once that
+    compaction finished: a hook saw a compaction end after the decision was
+    delivered, the engine answered the mod (a hook's veto too: the work still goes
+    on), or it was found never to run. A marker PreCompact saw is no end: the
+    compaction is still running then.
+    Claimed with a `compaction_continued` event, so it is handed over once; the
+    caller holds the write lock. `{"wait": True}` while one delivered within
+    `DETECT_S` has not finished yet; None when there is nothing to go on with."""
+    events = store.session_events(session_id, (DECIDED, DELIVERED, SEEN, SETTLED, CONTINUED),
+                                  since=_iso(at - timedelta(seconds=THEN_WITHIN_S)))
+    continued = {e["data"].get("decision") for e in events if e["kind"] == CONTINUED}
+    waiting = False
+    for decision in [e for e in events if e["kind"] == DECIDED and e["data"].get("then")]:
+        if decision["id"] in continued:
+            continue
+        sent = [e for e in events if e["kind"] == DELIVERED and e["data"].get("decision") == decision["id"]]
+        if not sent:
+            continue
+        done = any(e["kind"] == SETTLED and e["data"].get("decision") == decision["id"]
+                   and (e["data"].get("answered") or not e["data"].get("ran")) for e in events) or any(
+            e["kind"] == SEEN and e["id"] > sent[0]["id"] and e["data"].get("source") in FINISHED_BY
+            for e in events)
+        if not done:
+            stamp = _stamp(sent[0]["ts"])
+            waiting = waiting or (stamp is not None and (at - stamp).total_seconds() < DETECT_S)
+            continue
+        store.add_event(decision["task_id"], CONTINUED, decision=decision["id"])
+        return {"decision": decision["id"], "text": (
+            f"cauce [compaction #{decision['id']}]: this session compacted. Before it, the session left itself "
+            f"what to go on with, in its own words: \"{decision['data']['then']}\". Go on with it now.")}
+    return {"wait": True} if waiting else None
 
 
 def advice(found: Mapping[str, Any]) -> str:
@@ -652,7 +704,9 @@ def next_step(store: Store, root: Path, session_id: str, *, version: str, mode: 
     (with `auto`, or a decision the orchestrating session asked for, and only on a
     build not found to ignore it; with the `instructions` the engine compacts
     with), or `advise` (with `orchestrator`, cauce's own moment: the session is
-    told, and decides). A run of this session that took the
+    told, and decides), or `continue` (a compaction the session asked for
+    finished, and the prompt it left itself is due: `continuation`). A run of
+    this session that took the
     checkout since leaves the decision waiting, and says so (`wait`): the mod asks
     again while idle, and otherwise only after the next turn ends."""
     at = at or datetime.now(UTC)
@@ -663,8 +717,14 @@ def next_step(store: Store, root: Path, session_id: str, *, version: str, mode: 
     if mode == "off":
         return out
     with store.immediate():
+        follow = continuation(store, session_id, at)
+        if follow is not None and follow.get("text"):
+            out.update(action="continue", decision=follow["decision"], text=follow["text"])
+            return out
         found = pending(store, session_id, at)
         if found is None:
+            if follow is not None:
+                out["wait"] = True  # a compaction with a prompt to follow it is still running
             return out
         if holding(store, root, session_id, found["data"].get("cwd")):
             out["wait"] = True
@@ -708,7 +768,7 @@ def compacted(store: Store, root: Path, session_id: str, decision_id: int, *, ve
         return {"kept": False}
     evidence = "the engine compacted it" if skip is None else "a hook vetoed it: " + compact._clip(skip, 300)
     store.add_event(found[0]["task_id"], SETTLED, decision=decision_id, ran=skip is None, version=version,
-                    evidence=evidence)
+                    evidence=evidence, answered=True)
     if skip is None:
         _learn(root, version, RUNS, decision_id)
     return {"kept": True}
