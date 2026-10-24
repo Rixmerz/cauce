@@ -628,6 +628,31 @@ def test_a_resumed_task_continues_on_its_branch_with_its_history_in_the_brief(gi
     assert [a["seq"] for a in store.attempts(first.task_id)] == [1, 2]
 
 
+def test_a_new_task_never_builds_on_a_branch_of_its_number_another_store_left(git_repo, store):
+    task = store.create_task("create the routes", status="queued", source="cauce")
+    branch = f"cauce/task-{task['id']}"
+    git(git_repo, "checkout", "-q", "-b", branch)
+    (git_repo / "foreign.py").write_text("x\n")
+    git(git_repo, "add", "-A")
+    git(git_repo, "commit", "-q", "-m", "another store's task")
+    git(git_repo, "checkout", "-q", "-")
+    seen = []
+
+    def launcher(spec):
+        seen.append(((spec.target_dir / "foreign.py").exists(), spec.prompt))
+        (spec.target_dir / "routes.js").write_text("r\n")
+        return ok("wrote the routes")
+
+    report = run("create the routes", git_repo, store, Options(kind="implement"), registry={}, launcher=launcher,
+                 task_id=task["id"])
+    [(found, prompt)] = seen
+    assert not found and "is resumed" not in prompt
+    assert report.status == "done"
+    [aside] = store.events_of(task["id"], "branch_set_aside")
+    assert aside["data"]["to"].startswith(f"cauce/foreign/task-{task['id']}-")
+    assert git(git_repo, "log", "-1", "--format=%s", aside["data"]["to"]).strip() == "another store's task"
+
+
 def test_a_resumed_worker_that_finds_the_work_done_is_settled_by_the_check(git_repo, store):
     first = run("create the routes", git_repo, store, registry={}, launcher=Script(refused(), write="routes.js"),
                 classifier=kind("implement"))

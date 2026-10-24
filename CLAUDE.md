@@ -466,6 +466,10 @@ yields the default kind, not a guess.
   (`finished.tip`); a step whose run builds on a branch that is gone puts it
   back there (`branch_restored`), or stops the run with a `workflow_error`;
   a worktree never starts on HEAD in place of a base it cannot read.
+- A task that never ran owns no branch: a `cauce/task-N` already in the checkout when it
+  first starts (a store started over, another cauce home) is another's, renamed aside
+  (`isolate.FOREIGN`, its tip in the name, a `branch_set_aside` event) and never built on;
+  the task starts on its base and is no resume.
 - A kept branch is deleted only when nothing is lost (`isolate.prunable`):
   its commits are on another branch, HEAD holds every file it changed, it
   holds only artifacts, or another kept branch holds the same tree; never one

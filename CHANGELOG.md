@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.38.1] - 2026-10-24
+
+### Fixed
+
+- **A new task no longer builds on an old branch that has its number.** A checkout can
+  hold a `cauce/task-N` branch that is not the work of the task now numbered N: the
+  cauce home was started over, or another one used the same checkout. The new task used
+  to take that branch as its own kept work, start on top of it and be briefed as a
+  resume. Now a task that never ran renames such a branch to
+  `cauce/foreign/task-N-<tip>`, so nothing is lost and no list reads it as a kept branch.
+  It says so and starts on its base.
+
 ## [0.38.0] - 2026-10-24
 
 ### Added
