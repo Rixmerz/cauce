@@ -121,6 +121,7 @@ def test_tool_artifacts_are_no_work():
     assert isolate.is_artifact(".playwright-mcp/page-1.yml")
     assert isolate.is_artifact("web/.playwright-mcp/console.log")
     assert not isolate.is_artifact("src/playwright-mcp.ts")
+    assert isolate.is_artifact(".fresh-dev/dirty.json")  # a dev-server plugin's own state
     assert not isolate.is_artifact(".playwright-mcp")
 
 

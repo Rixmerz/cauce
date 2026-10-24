@@ -157,6 +157,27 @@ def queued_with_no_dispatcher(store: Store, *, now: datetime, **_) -> Iterable[F
                       task["id"], task["repo"])
 
 
+def wait_judged_on_gone(store: Store, *, now: datetime, **_) -> Iterable[Finding]:
+    """A queued task held back ("waits for #N") by a decision about work that is all gone,
+    while other work runs in its lane: the dispatcher judges it again as it walks the lane
+    (`flow._judged_against_gone`), so one that stays so is a dispatcher that does not."""
+    running = {t["repo"] for t in store.list_tasks(status=["running"], source=("cauce", "queue"), limit=500)}
+    for task in store.list_tasks(status=["queued"], limit=500):
+        if task.get("parallel") != 0 or after.held(task) or task["repo"] not in running:
+            continue
+        decided = store.last_event(task["id"], "dispatch_decided")
+        judged = [int(i) for i in ((decided or {}).get("data") or {}).get("ahead") or () if isinstance(i, int)]
+        at = _ts((decided or {}).get("ts"))
+        if not judged or at is None or now - at < QUEUED_STUCK:
+            continue
+        if all((store.get_task(i) or {}).get("status") not in ("running", "queued") for i in judged):
+            yield Finding("wait-judged-on-gone", BROKEN,
+                          f"#{task['id']} waits on a decision about {', '.join(f'#{i}' for i in judged)}, which "
+                          "all ended, while other work runs in its lane",
+                          f"cauce lanes --beside {task['id']} when it does not touch the work running",
+                          task["id"], task["repo"])
+
+
 def held_behind_gone(store: Store, **_) -> Iterable[Finding]:
     """Work queued after work that left the board without passing (dismissed, superseded,
     landed, or a run cancelled or gone): nothing will ever release it."""
@@ -467,7 +488,7 @@ def preexisting_that_was_not(store: Store, *, since: str | None, **_) -> Iterabl
 
 
 RULES: tuple[Callable[..., Iterable[Finding]], ...] = (
-    lanes_paused_on_ended, running_with_no_process, queued_with_no_dispatcher, held_behind_gone,
+    lanes_paused_on_ended, running_with_no_process, queued_with_no_dispatcher, held_behind_gone, wait_judged_on_gone,
     resumes_that_never_ran,
     parts_that_lost_their_mark, joins_short_of_their_parts, attempts_with_no_session, turns_under_the_kind,
     format_failures_that_climbed, fix_rounds_off_their_base, candidates_on_trial_at_once, revisions_judged_twice,

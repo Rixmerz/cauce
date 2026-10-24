@@ -467,3 +467,45 @@ def test_the_endings_command_resumes_a_mechanical_stop_before_it_could_wake(stor
     assert cli.main(["endings", "--session", "s", "--peek", "--json"]) == 0 and calls == [1]
     capsys.readouterr()
     assert stops.Stop("turns", "r").status == "replan"
+
+
+def test_a_usage_limit_is_resumed_after_its_reset_and_a_waiter_wakes_it_then(store: Store, tmp_path, monkeypatch):
+    import time as clock
+    from datetime import UTC, datetime, timedelta
+
+    from cauce import stops
+
+    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    resets = datetime.now(UTC) + timedelta(hours=2)
+    task = store.create_task("build the export", status="blocked", source="cauce", cwd=str(tmp_path), session_id="s")
+    stops.record(store, task["id"], stops.Stop("limit", "the account's usage limit stopped it",
+                                               extra={"resets_at": resets.isoformat(timespec="seconds")}))
+    started: list[list[str]] = []
+    # Before the reset: no resume, one waiter that sleeps until then, started once.
+    assert dispatch.recover(store, tmp_path, os.environ, popen=lambda argv, **kw: started.append(argv)) == []
+    assert dispatch.recover(store, tmp_path, os.environ, popen=lambda argv, **kw: started.append(argv)) == []
+    assert len(started) == 1 and started[0][3:5] == ["limit-wait", "--until"]
+    assert int(started[0][5]) == int(resets.timestamp()) + dispatch.LIMIT_GRACE_S
+    # After it, resumed; and a limit met again after its reset is another wait, up to LIMIT_RESUMES.
+    after = resets.timestamp() + dispatch.LIMIT_GRACE_S + 1
+    for _ in range(dispatch.LIMIT_RESUMES):
+        assert dispatch.recover(store, tmp_path, os.environ, popen=lambda argv, **kw: started.append(argv),
+                                now=after) == [task["id"]]
+    assert dispatch.recover(store, tmp_path, os.environ, popen=pytest.fail, now=after) == []
+    # One that named no reset is tried an hour after it stopped.
+    unknown = store.create_task("y", status="blocked", source="cauce", cwd=str(tmp_path))
+    stops.record(store, unknown["id"], stops.Stop("limit", "r"))
+    soon = clock.time() + 60
+    assert dispatch._due(stops.of(store, store.get_task(unknown["id"])), soon) == soon + dispatch.LIMIT_UNKNOWN_S
+
+
+def test_limit_wait_sleeps_until_the_reset_then_resumes_and_revives(monkeypatch, capsys):
+    import argparse
+    import time as clock
+
+    slept, calls = [], []
+    monkeypatch.setattr(dispatch, "recover", lambda *a, **kw: calls.append("recover") or [7])
+    monkeypatch.setattr(dispatch, "revive", lambda *a, **kw: calls.append("revive") or ["r"])
+    assert cli.cmd_limit_wait(argparse.Namespace(until=clock.time() + 100), sleep=slept.append) == 0
+    assert 90 < slept[0] <= 100 and calls == ["recover", "revive"]
+    assert "resumed #7; started 1 dispatcher(s)" in capsys.readouterr().out

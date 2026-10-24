@@ -37,7 +37,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
 | `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
-| `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets |
+| `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets, and the jobs a person quieted per repository |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
 | `src/cauce/habits.py` | mining sequences per repository (and the ones several repositories share), recipes for the brief, and approval-gated habit hooks |
@@ -169,7 +169,12 @@ yields the default kind, not a guess.
   `escalate.NETWORK_WAITS`, from the work it kept; such a try counts toward no
   attempt ceiling (nor `cli.UNATTENDED_ATTEMPTS`) and is no answer for a
   repeated pair; one that stays down stops the task as `network`, its work
-  kept.
+  kept. The account's own usage limit (`launch.USAGE_LIMIT`, read where a rate
+  limit is, its reset read by `launch.resets_in`) is neither: it stops the task
+  at once as `limit`, its work kept, the try no attempt (`stops.lost_tries`); no
+  queued work starts before the reset (`stops.LIMIT_META`, `flow.limited_until`),
+  and `dispatch.recover` resumes it after the reset, from a detached `cauce
+  limit-wait` when nobody's turn ends then, at most `dispatch.LIMIT_RESUMES`.
 - A build the plan sizes at `orchestrate.SPLIT_POINTS` or more, outside a workflow run and
   not sent `--whole`, that outgrows its turns is several pieces, not one that needs more
   room: it stops as `split` (`escalate.decide`'s `several`), its work kept, and the ending
@@ -224,7 +229,9 @@ yields the default kind, not a guess.
   and never a blocker: the plan reads each job of `.github/workflows/*.yml`
   (its `run:` commands, the services and the env the code reads) and names in
   one warning the jobs `--verify` leaves out, on the report too. A workflow
-  file the line reader cannot read is skipped and said once.
+  file the line reader cannot read is skipped and said once. A job the person
+  quieted for a repository (`cauce ci quiet`, kept in their cauce home) is named
+  no more there.
 - Work that stopped for a person (blocked, needs approval) is kept on its
   branch, unverified, and so is work that outgrew its turns (a `replan` for
   turns resumes with more); so is what a cancelled task changed (a cancel
@@ -292,7 +299,8 @@ yields the default kind, not a guess.
 - A red check with at most `orchestrate.FLAKY_MAX` failing tests runs once more
   (`_steady_check`); one that passes then is flaky: the pass stands, a `check_flaky`
   event names the tests, they are kept per repository in the store's meta, and the
-  ending says so. Anything else is the first run's failure, unchanged.
+  ending says so; every later writing brief there names them (`orchestrate.known_flaky`),
+  as data. Anything else is the first run's failure, unchanged.
 - A writing worker's brief names the command that runs only the tests near its change
   (`ci.related`: jest, vitest, pytest), to run as it goes; the full check runs at the end.
 - Reviewers never vote: their findings are added together, so one is enough
@@ -411,7 +419,10 @@ yields the default kind, not a guess.
 - Merging is the person's: `cauce merge` merges kept branches into the branch checked out
   only on their command, one merge commit each, aborts a conflict (never resolves it by
   guess) and stops where the check fails, the merge in place; `cauce pr` pushes and opens a
-  draft pull request only on their command. A worker runs neither.
+  draft pull request only on their command. `cauce merge --pr` merges onto a new branch,
+  leaves the one checked out as it was, and pushes and opens one draft only when every
+  branch merged clean and the check passed after each. A worker runs neither, and no one
+  merges a pull request but the person.
 - Where a task declared no surfaces, the files its text names (`dispatch.named_surfaces`)
   hold it back from work ahead that declares or names files they may touch, or already
   changed one; never a reason to start beside it, and never enforced on the worker.
@@ -422,6 +433,9 @@ yields the default kind, not a guess.
 - An ending of four or more at once tells each pass in one line (`hooks.verdict_summary`).
   `cauce stats --expensive` names the runs over their kind's p90 cost and why, from what
   they recorded.
+- Older cauce installs in Claude Code's plugin cache are named once per set at
+  SessionStart (`hooks._older_installs`), with the command that removes them; the person
+  removes them, cauce never deletes from Claude Code's folder.
 - A session keeps the plugin it loaded: a command it types runs the newest install
   (`link.forward_to`, which keeps the version it came from in `link.LOADED`) and says the
   session's skills and hooks are still that version's; the prompt hook says a newer install
@@ -483,7 +497,8 @@ yields the default kind, not a guess.
 - A kept commit's subject is the change's: the line the worker proposed
   (`commit`), else the task's title, never a task number; the task and an
   unverified state are trailers (`Cauce-Task`, `Cauce-Verified: no`).
-- Files a worker's tools write for themselves (`isolate.ARTIFACT_DIRS`) are
+- Files a worker's tools write for themselves (`isolate.ARTIFACT_DIRS`, a dev-server
+  plugin's `.fresh-dev/` among them) are
   never a changed file and never committed, and a branch holding only them is
   never a review.
 - A worker that stopped before its own check (refused, or out of turns) is
@@ -516,7 +531,11 @@ yields the default kind, not a guess.
 - Tests run with `CAUCE_LIVESPEC=off` and an empty `CLAUDE_CONFIG_DIR`; a
   test that wants livespec builds the fixture index in `tests/livespec_fixture.py`.
 - A dispatch decision fails closed: no answer from Haiku means the task
-  waits. It is made once and kept on the task with its reason. A task that will
+  waits. It is made once and kept on the task with its reason, until none of the
+  work it was judged against is ahead any more: then it is made again
+  (`flow._judged_against_gone`, the event's `again`). `cauce lanes --beside N` is
+  the session's word that a queued task starts beside the work ahead; it never
+  moves work held `--after`. A task that will
   not write (`matrix.READ_ONLY_KINDS`, or text `orchestrate.declares_read_only`
   reads as read-only; with no kind yet, the one `classify` gives it without the
   model, a build when no rule reads it) is never put to Haiku: it runs beside
@@ -776,7 +795,8 @@ yields the default kind, not a guess.
   not checked or not met.
 - An ending names the problems the work found that were already there, shown with
   proof (`hooks._found_before`), and the `bugfix` that would take one on `--after` the
-  work; nothing is started: the orchestrator decides.
+  work; nothing is started: the orchestrator decides. One its worker marks `fixed`, or in
+  a file the work changed, is counted and never offered: the work most likely fixed it.
 - A worker never inherits the host's session id (`CLAUDE_CODE_SESSION_ID`),
   and an attempt never keeps the host's session as its own.
 - Problems and fixes are kept with their cell (`cauce.cells`): the role the

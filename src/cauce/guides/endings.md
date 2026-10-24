@@ -61,3 +61,9 @@ When its ending says the lane is paused, deal with the stop first, then
 tell the person which queued tasks wait; when they do not depend on the
 stopped one, run `cauce lanes --unpause <repo>` so they start now, and say
 you did. Never leave queued work waiting for the person to press play.
+
+A queued task that "waits for #N" is the dispatcher's call that it may touch
+the work ahead. The call is made again once that work ends; when you know it
+is independent of what runs now (other files, another area), run
+`cauce lanes --beside N` and it starts beside it. A task held `--after` other
+work waits for it to pass: that is its order, and `--beside` leaves it.

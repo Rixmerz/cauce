@@ -166,14 +166,14 @@ def test_a_check_that_covers_less_than_ci_names_the_jobs_it_leaves_out(project, 
     # the suite runs, but not the build, not against the database, and the browser tests not at all; a
     # deploy is no check; DENO_VERSION is CI's own, no code reads it
     assert note == ("CI also runs: verify (`deno task build`); postgres (a postgres service, DATABASE_URL, "
-                    "APP_TRUNCATE); e2e (`deno task e2e`), which this check does not")
+                    "APP_TRUNCATE); e2e (`deno task e2e`), which this check does not" + ci.QUIET_HINT)
     covering = "DATABASE_URL=postgres://localhost/app APP_TRUNCATE=1 deno task check && deno task e2e"
     assert ci.left_out(project, covering) == (None, [])
     # an env the check runs with is set; a service the task starts is up
     monkeypatch.setenv("DATABASE_URL", "postgres://localhost/app")
     monkeypatch.setenv("APP_TRUNCATE", "1")
     assert ci.left_out(project, "deno task check && deno task e2e", services=("pg_ctl start@5432",))[0] == (
-        "CI also runs: postgres (a postgres service), which this check does not")
+        "CI also runs: postgres (a postgres service), which this check does not" + ci.QUIET_HINT)
     assert ci.left_out(project, "deno task check && deno task e2e", services=("postgres -D data@5432",)) == (None, [])
 
 
@@ -188,9 +188,9 @@ def test_a_job_is_covered_only_when_the_check_runs_every_command_it_checks_with(
     # one command of three is no cover, and the note names the ones left out; installs and the shell's
     # bookkeeping are no check, so a job that only readies itself is none either
     assert ci.left_out(git_repo, "npm run lint")[0] == (
-        "CI also runs: test (`npm test`, `npm run build`), which this check does not")
+        "CI also runs: test (`npm test`, `npm run build`), which this check does not" + ci.QUIET_HINT)
     assert ci.left_out(git_repo, "npm test")[0] == (
-        "CI also runs: test (`npm run lint`, `npm run build`), which this check does not")
+        "CI also runs: test (`npm run lint`, `npm run build`), which this check does not" + ci.QUIET_HINT)
     assert ci.left_out(git_repo, "npm run lint && npm test && npm run build") == (None, [])
     # a command continued on the next line is one command, and printing a tool's version checks nothing
     (git_repo / ".github" / "workflows" / "ci.yml").write_text(
@@ -198,13 +198,13 @@ def test_a_job_is_covered_only_when_the_check_runs_every_command_it_checks_with(
         "          node --version\n          npx tsc --noEmit\n")
     assert ci.left_out(git_repo, "python -m pytest -q && npx tsc --noEmit") == (None, [])
     assert ci.left_out(git_repo, "npx tsc --noEmit")[0] == (
-        "CI also runs: test (`python -m pytest -q`), which this check does not")
+        "CI also runs: test (`python -m pytest -q`), which this check does not" + ci.QUIET_HINT)
     # a check behind a `cd` or an `export` is still a check, and `-v` is verbose, not a version
     (git_repo / ".github" / "workflows" / "ci.yml").write_text(
         "jobs:\n  test:\n    steps:\n      - run: npm ci\n      - run: cd api && npm test\n"
         "      - run: pip install -e .\n      - run: pytest -v\n      - run: export CI=1 && ruff check .\n")
     assert ci.left_out(git_repo, "npm run lint")[0] == (
-        "CI also runs: test (`npm test`, `pytest -v`, `ruff check .`), which this check does not")
+        "CI also runs: test (`npm test`, `pytest -v`, `ruff check .`), which this check does not" + ci.QUIET_HINT)
     assert ci.left_out(git_repo, "cd api && npm test && pytest -v && ruff check .") == (None, [])
 
 
@@ -243,3 +243,25 @@ def test_the_runner_a_check_uses_gives_the_command_for_the_tests_near_a_change(t
     assert ci.related("npm run e2e", tmp_path)[0] == "vitest"
     assert ci.related("python3 -m pytest -q", None)[0] == "pytest"
     assert ci.related("cargo test", None) is None
+
+
+def test_a_job_quieted_here_is_named_in_no_plan(project, monkeypatch, capsys):
+    from cauce import cli, repo
+    from cauce.store import Store
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("APP_TRUNCATE", raising=False)
+    monkeypatch.chdir(project)
+    assert cli.main(["ci", "quiet", "e2e", "postgres"]) == 0
+    assert "quiet here: e2e, postgres" in capsys.readouterr().out
+    store = Store.open()
+    try:
+        quieted = ci.quiet(store, repo.key(project))
+    finally:
+        store.close()
+    note, _ = ci.left_out(project, "deno task check", quieted=quieted)
+    assert note == "CI also runs: verify (`deno task build`), which this check does not" + ci.QUIET_HINT
+    assert cli.main(["ci"]) == 0
+    listed = capsys.readouterr().out
+    assert "e2e  (quiet)" in listed and "verify\n" in listed + "\n"
+    assert cli.main(["ci", "speak", "postgres"]) == 0 and "quiet here: e2e" in capsys.readouterr().out

@@ -186,6 +186,40 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
 NEWER_SAID, NEWER_KEPT = "newer-plugin.json", 200
 
 
+#: Where the older installs SessionStart named are kept, so the same set is said once.
+OLDER_SAID = "older-installs.json"
+
+
+def _older_installs(root: Path, env: Mapping[str, str]) -> str | None:
+    """Older cauce installs left in Claude Code's plugin cache, named once per set: after a
+    compaction a hook may still run from one of them, an older version's code and text. The
+    person removes them; cauce never deletes from Claude Code's folder. Never costs the turn."""
+    try:
+        from cauce import __version__, link
+
+        mine = link.parse_version(__version__)
+        found = link.installed(env)
+        older = [(v, launcher.parents[1]) for v, launcher in found if mine and v < mine]
+        if not older or not mine or max(v for v, _ in found) > mine:
+            return None  # none, or this one is not the newest: the newer-plugin notice speaks
+        key = sorted(str(folder) for _, folder in older)
+        path = root / "work" / OLDER_SAID
+        try:
+            if json.loads(path.read_text()) == key:
+                return None
+        except (OSError, ValueError):
+            pass
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(key))
+    except Exception:  # the session starts either way
+        note_error(root, "older installs")
+        return None
+    names = ", ".join(".".join(map(str, v)) for v, _ in older)
+    return (f"cauce: older cauce installs remain in Claude Code's plugin cache ({names}), beside {__version__}; after "
+            "a compaction a hook can run from one of them, with that version's code and text. Tell the person once; "
+            "removing them is theirs: " + " ".join(f"rm -rf {shlex.quote(f)}" for f in key))
+
+
 def _newer_plugin(root: Path, session_id: str, env: Mapping[str, str]) -> str | None:
     """Once per session and installed version: a session keeps the plugin it loaded, so after
     an update the commands it types run the newest cauce (`link.forward_to`) while its skills,
@@ -556,6 +590,8 @@ def session_start(
     registry = _registry_notices(root)
     if registry:
         blocks.append(registry)
+    if older := _older_installs(root, os.environ):
+        blocks.append(older)
     if event.get("source") in ("resume", "compact"):
         # A turn or a subagent whose ending never arrived has nothing to resume: not unfinished work.
         unfinished = [t for t in store.list_tasks(session_id=session_id, status=("running", "interrupted"), limit=30)
@@ -841,12 +877,20 @@ def _found_before(store: Store, ended: Mapping) -> list[str]:
     decide; nothing is started."""
     tasks = store.run_tasks(int(ended["workflow_run"])) if ended.get("workflow_run") else [ended]
     found: dict[str, Mapping] = {}
+    # What the work changed, every step of a run: a problem in one of those files was most
+    # likely fixed by it (a test that caught a bug, then the fix), never work left to offer.
+    changed = {str(p).lower() for task in tasks
+               for p in (((store.final_event(task["id"]) or {}).get("data") or {}).get("changed") or ())}
+    fixed: set[str] = set()
     for task in tasks:
         final = store.final_event(task["id"]) if task.get("status") == "done" else None
         for f in ((final or {}).get("data") or {}).get("findings") or ():
             if isinstance(f, Mapping) and f.get("cause") == "pre-existing" and f.get("evidence_class") == \
                     "deterministic":
-                found.setdefault(findings_mod.key(f), f)
+                if f.get("fixed") or findings_mod.place(str(f.get("where") or "")) in changed:
+                    fixed.add(findings_mod.key(f))
+                else:
+                    found.setdefault(findings_mod.key(f), f)
         # A check that failed only as it does at the base: its failures are problems that were
         # already there too, shown by cauce's own run of the check on both commits.
         # Only when the passing attempt's own check was that one (its verdict says so): an earlier
@@ -857,8 +901,10 @@ def _found_before(store: Store, ended: Mapping) -> list[str]:
         if kept is not None and not int(kept["data"].get("added") or 0):
             found.setdefault(f"check:{kept['data'].get('command')}:{kept['data'].get('base')}",
                              _failing_at_base(kept["data"]))
+    fixed -= set(found)
     if not found:
-        return []
+        return [f"  it found {len(fixed)} problem(s) that were already there, each in a file this work changed or "
+                "marked fixed by it: nothing left to offer"] if fixed else []
     after_ref = f"run:{ended['workflow_run']}" if ended.get("workflow_run") else f"task:{ended['id']}"
     shown = list(found.values())[:FOUND_BEFORE_SHOWN]
     lines = [f"  it found {len(found)} problem(s) that were already there, not this change's (each shown with "
@@ -871,6 +917,8 @@ def _found_before(store: Store, ended: Mapping) -> list[str]:
                      f"--after {after_ref}`")
     if len(found) > len(shown):
         lines.append(f"    and {len(found) - len(shown)} more: `cauce show {ended['id']}`")
+    if fixed:
+        lines.append(f"    and {len(fixed)} more in files this work changed or marked fixed by it: not offered")
     return lines
 
 

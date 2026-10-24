@@ -123,6 +123,10 @@ class Attempt:
     network: str = ""
     #: The check's tests timed out on a loaded machine (see `WorkerResult.load`).
     load: str = ""
+    #: The API turned its session away (`usage`: the account's own limit), and the seconds
+    #: until it said to try again, or until that limit resets (see `WorkerResult.limited`).
+    limited: str = ""
+    retry_after_s: float | None = None
     #: The independent check's blockers, when they are all that failed it: the
     #: work passed its own check (or had none to run and its own check passed).
     blockers: tuple[dict[str, str], ...] = ()
@@ -356,6 +360,15 @@ def decide(
                                              f"{streak} tries; its work is kept: resume it when the machine is quieter",
                         because=(seen, f"they timed out {streak} times in a row, waited for each time",
                                  "the work stays on its branch"))
+
+    if failure is Failure.ENVIRONMENT and last.limited == "usage":
+        # The account's own limit: every cell meets it until it resets, so nothing is tried
+        # before then; the work, whatever it got to, waits on its branch for the reset.
+        return Decision(Move.BLOCKED, reason="the account's usage limit stopped it; its work is kept, and it resumes "
+                                             "once the limit resets",
+                        because=(seen, "the account's limit turns every session away until it resets: a retry, "
+                                       "more effort or another model meets the same limit",
+                                 "its work stays on its branch; the resume after the reset goes on from it"))
 
     if failure is Failure.ENVIRONMENT:
         retries = sum(1 for a in attempts if a.failure is Failure.ENVIRONMENT)

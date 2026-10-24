@@ -56,7 +56,9 @@ fastest way through a request, so give cauce work it can run side by side:
   first passes.
 - An ending that lists problems that were already there (not that
   change's) offers the bugfix for each: start the ones worth it with
-  `--after`, so they never block the work at hand.
+  `--after`, so they never block the work at hand. Ones in files the work
+  changed, or that its worker fixed, are left out: it most likely fixed
+  them. Several in one area are one bugfix, not one each.
 
 Work you queued, or ran in the background, reports back on its own: when
 it ends, a `cauce:` notice reaches you at the end of your turn or with the

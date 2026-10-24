@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-10-24
+
+### Changed
+
+- **Problems that were already there, but that the work fixed, are not offered as work.**
+  A worker that writes tests often finds old bugs and fixes them on the same branch. An
+  ending used to offer a bugfix for each one. Now it leaves out a finding the worker
+  marks `fixed` (a new field of the result contract), and one in a file the work changed.
+  It says how many it left out.
+- **A queued task's wait is judged again once the work it was judged against ends.**
+  Before, a "wait" decision was kept for good. A task held because it might touch one
+  task stayed behind an unrelated long build after that task merged. Now the dispatcher
+  makes the decision again against the work ahead at that moment.
+- **The account's usage limit is its own stop.** Messages such as "Session limit reached ∙
+  resets 5pm" are read with their reset time. The task stops as `limit` with its work
+  kept, the try counts as no attempt, and no queued work starts before the reset. A
+  detached `cauce limit-wait` resumes it after the reset with nobody typing, up to 3
+  times. Before, it stopped as "the environment stopped work" and waited for a person.
+- **`cauce pr` names the repository and the head in full** (`--repo owner/name --head
+  owner:branch`). Right after a push, `gh` used to say "No commits between".
+- **`.fresh-dev/` is a tool's own folder.** It is never a changed file and never
+  committed to a kept branch, and `cauce merge` does not count it as uncommitted
+  changes.
+- **Workers are told the repository's known flaky tests.** Every writing brief names
+  the tests cauce saw flake there, so each worker no longer rediscovers them.
+
+### Added
+
+- **`cauce merge N M … --pr`.** Merges the kept branches onto a new branch made from the
+  one checked out, which is left as it was. The check runs after each merge. When all
+  merge clean, it pushes the branch and opens one draft pull request with each task's
+  verdict. A conflict or a failing check stops it before any push.
+- **`cauce lanes --beside N`.** The session's word that a queued task is independent of
+  the work ahead: it starts beside that work.
+- **`cauce ci`, `cauce ci quiet <job>`, `cauce ci speak <job>`.** List the repository's CI
+  jobs as a plan reads them, and stop naming one that is known not to apply here. Kept
+  per repository in the person's cauce home.
+- **Clearer refusals.** A dismissal or a resume of a task that is running, queued,
+  cancelled or done says what that task takes instead.
+- **Older installs are named.** SessionStart names the older cauce installs left in
+  Claude Code's plugin cache once, with the command that removes them. After a
+  compaction, a hook can still run from one of them.
+
 ## [0.36.0] - 2026-10-23
 
 ### Changed

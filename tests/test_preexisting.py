@@ -478,3 +478,20 @@ def test_a_few_tests_that_fail_once_and_pass_again_are_flaky_never_the_work_s(tm
     assert orchestrate._steady_check(always, tmp_path, baseline)[0] == 1
     many = "; ".join(f"echo 'FAIL src/{n}.test.ts'" for n in range(4)) + "; exit 1"
     assert orchestrate._steady_check(many, tmp_path, None)[0] == 1
+
+
+def test_a_repository_s_known_flaky_tests_reach_every_writing_brief(git_repo, store):
+    from cauce import orchestrate
+
+    flip = "test -f once && echo '1 passed' || (touch once; echo 'FAIL src/ble.test.ts'; exit 1)"
+    task = store.create_task("t", status="running", source="cauce")
+    baseline = orchestrate.Baseline(store=store, task_id=task["id"], repo_dir=git_repo, base="abc", root=git_repo)
+    assert orchestrate._steady_check(flip, git_repo, baseline)[0] == 0
+    assert orchestrate.known_flaky(store, git_repo) == ["FAIL src/ble.test.ts"]
+    dry = run("add the export button", git_repo, store, Options(dry_run=True), registry={},
+              classifier=kind("implement"))
+    line = next(c for c in dry.plan.context if c.startswith("Tests known to flake in this repository"))
+    assert "FAIL src/ble.test.ts" in line and "run it again before changing code for it" in line
+    reading = run("explain the export", git_repo, store, Options(dry_run=True), registry={},
+                  classifier=kind("explore"))
+    assert not any(c.startswith("Tests known to flake") for c in reading.plan.context)

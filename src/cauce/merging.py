@@ -13,6 +13,7 @@ commit that is already there.
 """
 from __future__ import annotations
 
+import re
 import shlex
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
@@ -35,6 +36,8 @@ class Merged:
     """What a merge of several kept branches came to, in order."""
 
     into: str
+    #: The branch that was checked out, when the merges went onto a branch of their own (`onto`).
+    base: str = ""
     merged: list[int] = field(default_factory=list)
     #: The task whose branch conflicted, and the files.
     conflict: tuple[int, list[str]] | None = None
@@ -63,7 +66,9 @@ def ready(top: Path, branches: Mapping[int, str]) -> str:
     into = isolate.current_branch(top)
     if not into:
         raise MergeError("the checkout is on no branch (a detached HEAD): check out the branch to merge into")
-    dirty = _git(top, "status", "--porcelain", "--untracked-files=no").stdout.strip()
+    # What a tool writes for itself (`isolate.ARTIFACT_DIRS`) is never the person's change.
+    dirty = [line for line in _git(top, "status", "--porcelain", "--untracked-files=no").stdout.splitlines()
+             if line.strip() and not isolate.is_artifact(line[3:].strip().strip('"'))]
     if dirty:
         raise MergeError("the checkout has uncommitted changes to tracked files: commit or stash them first")
     kept = isolate.kept_branches(top)
@@ -74,11 +79,21 @@ def ready(top: Path, branches: Mapping[int, str]) -> str:
 
 
 def merge(top: Path, branches: Mapping[int, str], titles: Mapping[int, str], changed: Mapping[int, Sequence[str]],
-          *, verify: str | None = None, say: Callable[[str], Any] = lambda line: None) -> Merged:
+          *, verify: str | None = None, say: Callable[[str], Any] = lambda line: None,
+          onto: str | None = None) -> Merged:
     """Merge each branch into the one checked out, in `order`, a merge commit each; the
-    check after each when given. Stops at a conflict (aborted) or a failing check."""
+    check after each when given. Stops at a conflict (aborted) or a failing check. With
+    `onto`, the merges go on a new branch of that name made from the one checked out,
+    which is left as it was."""
     into = ready(top, branches)
-    result = Merged(into=into, order=order({t: changed.get(t, ()) for t in branches}))
+    base = ""
+    if onto:
+        made = _git(top, "checkout", "-q", "-b", onto)
+        if made.returncode != 0:
+            raise MergeError(f"could not make branch {onto}: {(made.stderr or made.stdout).strip()[:200]}")
+        base, into = into, onto
+        say(f"merging onto a new branch {onto}, made from {base}")
+    result = Merged(into=into, base=base, order=order({t: changed.get(t, ()) for t in branches}))
     for task_id in result.order:
         branch = branches[task_id]
         title = " ".join(str(titles.get(task_id) or "").split())[:72]
@@ -102,6 +117,33 @@ def merge(top: Path, branches: Mapping[int, str], titles: Mapping[int, str], cha
                 return result
             say(f"  `{verify}` passes after it")
     return result
+
+
+def back(top: Path, done: Merged) -> None:
+    """The branch that was checked out before the merges went onto their own, checked out again."""
+    if done.base:
+        _git(top, "checkout", "-q", done.base)
+
+
+def merged_body(tasks: Mapping[int, Mapping[str, Any]], finals: Mapping[int, Mapping[str, Any]],
+                done: Merged) -> str:
+    """A pull request's description for several kept branches merged together: each task's
+    title and its verdict in one line, in the order they went in."""
+    from cauce.hooks import verdict_summary
+
+    lines = [f"cauce merged {len(done.merged)} kept branch(es) onto `{done.into}`, in this order:", ""]
+    for n in done.merged:
+        title = " ".join(str(tasks[n].get("title") or "").split())
+        lines.append(f"- #{n} {title}: {verdict_summary(finals[n].get('verdict'))}")
+    return "\n".join(lines) + "\n"
+
+
+def github_repo(top: Path, remote: str = "origin") -> str | None:
+    """The `owner/name` a remote's URL names, whatever its form (`https://host/o/r.git`,
+    `git@host:o/r.git`, a proxy's `/git/o/r`); None when it names none."""
+    url = _git(top, "remote", "get-url", remote).stdout.strip()
+    found = re.search(r"[:/]([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", url)
+    return f"{found.group(1)}/{found.group(2)}" if url and found else None
 
 
 def resolve_task(into: str, branch: str, files: Sequence[str], verify: str | None) -> str:
@@ -137,7 +179,12 @@ def open_pr(top: Path, branch: str, title: str, body: str, *, base: str | None =
     pushed = run(["git", "push", "-u", "origin", branch], cwd=str(top), capture_output=True, text=True, check=False)
     if pushed.returncode != 0:
         return False, f"git push failed: {(pushed.stderr or pushed.stdout).strip()[-400:]}"
-    argv = ["gh", "pr", "create", "--draft", "--head", branch, "--title", title, "--body", body]
+    # Named in full: right after a push, `gh` reading the head from the checkout alone says
+    # there are no commits between it and the base.
+    named = github_repo(top)
+    owner = named.split("/")[0] if named else ""
+    argv = ["gh", "pr", "create", "--draft", "--head", f"{owner}:{branch}" if owner else branch,
+            "--title", title, "--body", body, *(["--repo", named] if named else [])]
     if base:
         argv += ["--base", base]
     try:

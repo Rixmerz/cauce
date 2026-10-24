@@ -563,3 +563,47 @@ def test_many_endings_at_once_tell_each_pass_in_one_line(store: Store):
     assert "`npm test` passed, 1/2 criteria met, independent check passed; changed 1 file(s)" in notice
     assert "this verdict is cauce's own record" not in notice
     assert hooks.verdict_summary(None) == "no verdict kept"
+
+
+def test_problems_already_there_that_the_work_fixed_are_not_offered(store: Store):
+    task = store.create_task("write tests for the radio drivers", status="done", source="cauce", session_id="s")
+    old = {"where": "src/radio/mac.ts:40", "what": "drops the last frame", "evidence_class": "deterministic",
+           "cause": "pre-existing", "proof": "deno test radio_test.ts"}
+    marked = {**old, "where": "src/radio/nrf24.ts:9", "what": "reads the wrong register", "fixed": True}
+    elsewhere = {**old, "where": "src/board/limits.ts:3", "what": "allows one board too many"}
+    store.add_event(task["id"], "finished", status="done", findings=[old, marked, elsewhere],
+                    changed=["src/radio/mac.ts", "tests/radio_test.ts"])
+    lines = hooks._found_before(store, store.get_task(task["id"]))
+    assert lines[0].startswith("  it found 1 problem(s)") and "src/board/limits.ts:3" in lines[1]
+    assert not any("mac.ts" in line or "nrf24" in line for line in lines[1:-1])
+    assert lines[-1] == "    and 2 more in files this work changed or marked fixed by it: not offered"
+    store.add_event(task["id"], "finished", status="done", findings=[old, marked], changed=["src/radio/mac.ts"])
+    assert hooks._found_before(store, store.get_task(task["id"])) == [
+        "  it found 2 problem(s) that were already there, each in a file this work changed or marked fixed by it: "
+        "nothing left to offer"]
+
+
+def test_a_finding_keeps_fixed_only_when_the_worker_says_true():
+    from cauce import findings
+
+    read = findings.read({"findings": [{"where": "a.py", "what": "x", "fixed": True},
+                                       {"where": "b.py", "what": "y", "fixed": "yes"}]})
+    assert read[0]["fixed"] is True and "fixed" not in read[1]
+
+
+def test_older_installs_left_in_the_cache_are_named_once_with_how_to_remove_them(tmp_path):
+    from cauce import __version__
+
+    from .test_link import _plugin
+
+    config = tmp_path / "config"
+    env = {"CLAUDE_CONFIG_DIR": str(config)}
+    _plugin(config, __version__)
+    assert hooks._older_installs(tmp_path, env) is None
+    _plugin(config, "0.1.0")
+    said = hooks._older_installs(tmp_path, env)
+    assert said.startswith("cauce: older cauce installs remain in Claude Code's plugin cache (0.1.0)")
+    assert "rm -rf " in said and "0.1.0" in said.split("rm -rf ")[1]
+    assert hooks._older_installs(tmp_path, env) is None  # once per set
+    _plugin(config, "999.0.0")
+    assert hooks._older_installs(tmp_path, env) is None  # a newer one: the newer-plugin notice speaks

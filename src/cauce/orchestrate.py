@@ -21,16 +21,17 @@ import os
 import re
 import shlex
 import socket
+import sqlite3
 import statistics
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor
 from concurrent.futures import wait as wait_for
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -539,10 +540,15 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     if learned:
         context.append("Steps that came before passing attempts on this kind of task here: "
                        + "; ".join(learned) + ". Use them unless the task says otherwise.")
+    if kind not in READ_ONLY_KINDS and (flaky := known_flaky(store, repo_dir)):
+        # Every worker met them on its own; what cauce saw is said once, to all of them.
+        context.append("Tests known to flake in this repository (cauce saw each fail and then pass when the "
+                       "same check ran again): " + "; ".join(flaky) + ". One of them failing alone says nothing "
+                       "about your change: run it again before changing code for it, and name it in `summary`.")
     check = options.verify or options.run_verify
     neighbour_notes += _unmet(text, registry, served=bool(options.services), verify=check, where=repo_dir)
     if check and kind not in READ_ONLY_KINDS:
-        neighbour_notes += _beside_ci(repo_dir, check, options.services)
+        neighbour_notes += _beside_ci(repo_dir, check, options.services, ci.quiet(store, repo.key(repo_dir)))
     if check and (weak := ci.weak(check, repo_dir)):
         neighbour_notes.append(weak)
     if check and (bypass := ci.bypassed(check, repo_dir)):
@@ -1343,7 +1349,8 @@ def run(
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
                               transient=result.transient, findings=result.findings, network=result.network,
-                              load=result.load, shape=result.shape,
+                              load=result.load, shape=result.shape, limited=result.limited,
+                              retry_after_s=result.retry_after_s,
                               blockers=open_blockers, stands=bool(stands) and result.failure in REPLAN)
             attempts.append(attempt)
             if raced is not None and not raced_first:
@@ -1407,7 +1414,8 @@ def run(
                     next_cell=decision.cell.label if decision.cell else None,
                     account=clip(findings_mod.text(attempt.blockers) if decision.move is Move.REVIEW
                                  else result.summary, 2000),
-                    extra={"checked": report.checked} if decision.move is Move.DECIDE else {})
+                    extra={"checked": report.checked} if decision.move is Move.DECIDE
+                    else _limit_extra(store, attempt) if _cause(decision, attempt) == "limit" else {})
                 break
             if decision.move is Move.NEXT_MODEL and workspace is not None:
                 # A new model starts from the base, not the bet that lost; what the
@@ -1786,11 +1794,11 @@ def _unmet(text: str, registry: Mapping[str, caps.Capability], *, served: bool =
     return notes
 
 
-def _beside_ci(repo_dir: Path, check: str, services: Sequence[str]) -> list[str]:
+def _beside_ci(repo_dir: Path, check: str, services: Sequence[str], quieted: Collection[str] = ()) -> list[str]:
     """The jobs of the repository's CI the task's check leaves out, in one note (a warning:
     a pass here is not CI's), and the workflow files that could not be read, said once.
-    Never a verdict and never a blocker."""
-    note, unreadable = ci.left_out(repo_dir, check, services)
+    Never a verdict and never a blocker; a job the person quieted here is not named."""
+    note, unreadable = ci.left_out(repo_dir, check, services, quieted)
     lines = [note] if note else []
     if unreadable:
         lines.append(f"CI: {', '.join(unreadable)} could not be read; it is left out of what this check is "
@@ -1912,11 +1920,25 @@ def _several(the_plan: Plan, options: Options, task: Mapping[str, Any]) -> str:
     return f"{the_plan.points.points} points: " + ", ".join(the_plan.points.reasons[:3])
 
 
+def _limit_extra(store: Store, attempt: Attempt) -> dict[str, Any]:
+    """A stop for the account's usage limit: when the limit resets, when the message named it,
+    kept on the stop for the resume after it and on the store's meta for the dispatcher."""
+    if attempt.retry_after_s is None:
+        return {}
+    at = (datetime.now(UTC) + timedelta(seconds=float(attempt.retry_after_s))).isoformat(timespec="seconds")
+    with contextlib.suppress(sqlite3.Error):
+        if (store.meta(stops.LIMIT_META) or "") < at:
+            store.set_meta(stops.LIMIT_META, at)
+    return {"resets_at": at}
+
+
 def _cause(decision: Decision, attempt: Attempt) -> str:
     """What ended the run, from the move and the failure that led to it."""
     if decision.move is Move.BLOCKED:
         if attempt.failure is Failure.PERMISSION or attempt.denied:
             return "permission"
+        if attempt.limited == "usage" and attempt.failure is Failure.ENVIRONMENT:
+            return "limit"
         return "network" if attempt.network else "load" if attempt.load else "environment"
     if decision.move is Move.NEEDS_APPROVAL:
         return "approval"
@@ -2541,6 +2563,25 @@ FLAKY_MAX = 3
 FLAKY_META = "flaky:"
 
 
+#: The most of a repository's known flaky tests a brief names.
+FLAKY_BRIEFED = 5
+
+
+def flaky_key(repo_dir: Path) -> str:
+    """Where a repository's flaky tests are kept: by its key, so every worktree and session
+    of it reads the same ones."""
+    return FLAKY_META + hashlib.sha256(str(repo.key(repo_dir) or repo_dir).encode()).hexdigest()[:24]
+
+
+def known_flaky(store: Store, repo_dir: Path) -> list[str]:
+    """The tests cauce saw flake here (failed, then passed on the rerun), most often first."""
+    try:
+        seen = json.loads(store.meta(flaky_key(repo_dir)) or "{}")
+    except (ValueError, sqlite3.Error):
+        return []
+    return [line for line, _ in sorted(seen.items(), key=lambda kv: -int(kv[1] or 0))][:FLAKY_BRIEFED]
+
+
 def _steady_check(command: str, workdir: Path, baseline: Baseline | None) -> tuple[int | None, str]:
     """The check, run again once when it ran and failed on a few tests (`FLAKY_MAX`): a second
     run that passes means those tests flake, which says nothing of the work. Its pass stands,
@@ -2559,7 +2600,7 @@ def _steady_check(command: str, workdir: Path, baseline: Baseline | None) -> tup
     if baseline is not None:
         with baseline._db() as db:
             db.add_event(baseline.task_id, "check_flaky", command=command, failures=lines)
-            key = FLAKY_META + hashlib.sha256(str(baseline.repo_dir).encode()).hexdigest()[:24]
+            key = flaky_key(baseline.repo_dir)
             seen = json.loads(db.meta(key) or "{}")
             for line in lines:
                 seen[line] = int(seen.get(line) or 0) + 1

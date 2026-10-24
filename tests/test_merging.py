@@ -87,3 +87,47 @@ def test_a_pull_request_carries_the_verdict_and_opens_only_through_gh(git_repo, 
     refused = merging.open_pr(git_repo, "x", "t", "b", run=lambda argv, **kw: sp.CompletedProcess(argv, 1, "", "no"))
     assert refused == (False, "git push failed: no")
     assert cli.main(["pr", "999"]) == 1
+
+
+def test_merge_with_pr_goes_onto_its_own_branch_and_opens_one_draft(git_repo, capsys, monkeypatch):
+    import subprocess as sp
+
+    store = Store.open()
+    try:
+        one = _kept(store, git_repo, "add the forum", {"forum.ts": "forum\n"})
+        two = _kept(store, git_repo, "add the admin", {"admin.ts": "a\n"})
+    finally:
+        store.close()
+    opened = []
+
+    def fake(top, branch, title, body, *, base=None):
+        opened.append((branch, title, body, base))
+        return True, "https://example.test/pr/2"
+
+    monkeypatch.setattr(merging, "open_pr", fake)
+    assert cli.main(["merge", str(one["id"]), str(two["id"]), "--pr", "--verify", "true"]) == 0
+    branch, title, body, base = opened[0]
+    assert branch == f"cauce/merge-{one['id']}-{two['id']}" and base == "main"
+    assert title == "Merge 2 cauce branches" and f"- #{one['id']} add the forum" in body
+    assert "https://example.test/pr/2" in capsys.readouterr().out
+    # The person's branch is as it was, and the merges are on the new one.
+    assert git(git_repo, "rev-parse", "--abbrev-ref", "HEAD").strip() == "main"
+    assert not (git_repo / "forum.ts").exists()
+    assert "forum.ts" in git(git_repo, "ls-tree", "-r", "--name-only", branch)
+    # A failing check stops before any push, on the new branch.
+    store = Store.open()
+    try:
+        three = _kept(store, git_repo, "add the shop", {"shop.ts": "s\n"})
+    finally:
+        store.close()
+    assert cli.main(["merge", str(three["id"]), "--pr", "--verify", "false"]) == 1
+    assert "stays checked out" in capsys.readouterr().err and len(opened) == 1
+    git(git_repo, "checkout", "-q", "main")
+    # The pull request names the repository and the head in full.
+    git(git_repo, "remote", "add", "origin", "http://proxy@127.0.0.1:9/git/Owner/project")
+    assert merging.github_repo(git_repo) == "Owner/project"
+    calls = []
+    monkeypatch.undo()
+    merging.open_pr(git_repo, "b", "t", "x", run=lambda argv, **kw: calls.append(argv) or sp.CompletedProcess(
+        argv, 0, "ok", ""))
+    assert calls[1][calls[1].index("--head") + 1] == "Owner:b" and calls[1][-2:] == ["--repo", "Owner/project"]

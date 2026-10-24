@@ -176,3 +176,15 @@ def test_a_note_made_current_as_proven_with_too_few_briefs_that_carried_it_is_su
     person = store.add_note("r", "code", "u", "Invoices are numbered per tenant", author="person", filed_by="person")
     store.update_note(person, state="current", state_reason=None)
     assert "note-proven-unbriefed" not in rules(store, now=LATER, alive=lambda pid: True)
+
+
+def test_a_wait_on_a_decision_about_work_that_all_ended_is_broken(store: Store):
+    gone = store.create_task("rewrite the importer", status="done", source="queue", repo="r")
+    long = store.create_task("build the long feature", status="running", source="queue", repo="r", pid=1)
+    held = store.create_task("add a flag", status="queued", source="queue", repo="r")
+    store.set_parallel(held["id"], False, "it changes the importer")
+    store.add_event(held["id"], "dispatch_decided", parallel=False, reason="x", ahead=[gone["id"]])
+    found = rules(store, now=LATER, alive=lambda pid: True)["wait-judged-on-gone"]
+    assert [f.task_id for f in found] == [held["id"]] and found[0].fix.startswith(f"cauce lanes --beside {held['id']}")
+    store.add_event(held["id"], "dispatch_decided", parallel=False, reason="x", ahead=[long["id"]])
+    assert "wait-judged-on-gone" not in rules(store, now=LATER, alive=lambda pid: True)

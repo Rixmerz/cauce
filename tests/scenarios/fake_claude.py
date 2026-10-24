@@ -14,6 +14,8 @@ worker was given. An action:
 - `{"turns": true, "write": {...}}`: writes, then ends out of turns.
 - `{"die": true}`: kills the process that started it (cauce's `run-queued`) and itself, as a
   machine that ran out of memory would.
+- `{"limit": "text"}`: writes, then ends as the CLI does when the account's usage limit turns
+  the session away (`is_error`, subtype `success`, the text as its result).
 
 Every answer carries a session id: the one `--resume` names, else the host's when it
 inherited one (the real CLI does so), else a new one.
@@ -74,6 +76,10 @@ def main() -> int:
         os.kill(os.getppid(), signal.SIGKILL)
         os.kill(os.getpid(), signal.SIGKILL)
     usage = {"input_tokens": 100, "cache_read_input_tokens": 0, "output_tokens": 10}
+    if action.get("limit"):
+        print(json.dumps({"is_error": True, "subtype": "success", "result": action["limit"], "session_id": session,
+                          "num_turns": 1, "total_cost_usd": 0.0, "usage": usage}))
+        return 0
     if action.get("turns"):
         print(json.dumps({"is_error": True, "subtype": "error_max_turns", "session_id": session,
                           "num_turns": 5, "total_cost_usd": 0.01, "usage": usage}))

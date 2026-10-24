@@ -313,7 +313,8 @@ def settle(store: Store, root: Path, *, machine: Machine, ceiling: int | None, w
     recovered = level.dropped_from is not None and _recovered(level, machine, now)
     if limited is not None:
         kind = limited["data"]["limited"]
-        reason = "halved, the API answered 429" if kind == "rate_limit" else "halved, the API was overloaded"
+        reason = {"rate_limit": "halved, the API answered 429",
+                  "usage": "halved, the account's usage limit was reached"}.get(kind, "halved, the API was overloaded")
         at = _when(limited["ts"]) or now
         wait = limited["data"].get("retry_after_s")
         wait = float(wait) if isinstance(wait, int | float) and not isinstance(wait, bool) else RETRY_AFTER_S
