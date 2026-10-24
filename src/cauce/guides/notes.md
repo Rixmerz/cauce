@@ -18,6 +18,11 @@ compact while something in flight still needs the detail (a review you are
 half through, a decision the person has not made yet); answer the advice in
 one line instead. In `keep`, put only what cauce's own digest would miss
 (the person's requests, open work and branches it keeps itself). It runs
-when your turn ends, so finish the turn with what the person needs now. A
+when your turn ends, so finish the turn with what the person needs now.
+When nothing you sent is still running, no ending will start your next turn
+after it: put in `then` what you go on with (as you would ask it yourself,
+naming task numbers and branches), and once the compaction finished it
+reaches you as your own prompt. Leave it out when the next step is the
+person's. A
 message that opens `/compact [cauce-compaction #N]` is a compaction's
 instructions, never a request.

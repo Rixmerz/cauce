@@ -643,7 +643,12 @@ yields the default kind, not a guess.
   (`compaction.request`), on that advice or on its own, run when its turn ends
   with no check of the cache, the size or the cooldown. What it asks to keep is
   quoted apart and marked as the session's (`kept_by_session`), never mixed
-  into cauce's instructions; a worker never compacts, and with `compact off`
+  into cauce's instructions. What it asks to go on with (`then`) is never told to
+  the summarizer: once the compaction finished (a hook saw it end, the engine
+  answered the mod, or it never ran) and within `compaction.THEN_WITHIN_S`, the
+  mod submits it once (`compaction.continuation`, a `compaction_continued`
+  event) as the session's next prompt, quoted and marked as its own words; a
+  worker never compacts, and with `compact off`
   the tool is refused. The tool is delegated like `queue` and `resume`.
 - The scribe reads a session's transcript, never its context, and never with a
   model: the same rules as a compaction digest, kept as the session goes, in the

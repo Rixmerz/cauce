@@ -598,3 +598,51 @@ def test_a_context_near_full_does_not_wait_for_a_natural_break():
     assert decided.now and "the harness's own compaction is near" in " | ".join(decided.because)
     # Under the pressing share, a break is still waited for.
     assert not compaction.decide(ready(breaks=(), tokens=150_000), NOW).now
+
+
+def test_a_then_reaches_the_session_once_its_compaction_finished(store: Store, tmp_path, git_repo):
+    turn(store, git_repo)
+    asked = compaction.request(store, home(), session_id="s1", cwd=str(git_repo), why="the feature landed",
+                               then="merge #12, then start the export", transcript=tmp_path / "none")
+    assert asked["then"] == "merge #12, then start the export"
+    assert "merge #12" not in asked["instructions"]  # the summarizer is not told to do it
+    assert step(store, "orchestrator")["action"] == "submit"
+    # Delivered, not finished yet: the mod is told to look again.
+    assert step(store, "orchestrator") == {"action": None, "wait": True}
+    compaction.seen(store, "s1", "PreCompact", trigger="manual",
+                    instructions=f"[cauce-compaction #{asked['id']}] x")
+    assert step(store, "orchestrator") == {"action": None, "wait": True}  # started, not done
+    compaction.seen(store, "s1", "PostCompact", trigger="manual")
+    found = step(store, "orchestrator")
+    assert found["action"] == "continue" and found["decision"] == asked["id"]
+    assert found["text"].startswith(f"cauce [compaction #{asked['id']}]: this session compacted.")
+    assert '"merge #12, then start the export". Go on with it now.' in found["text"]
+    assert step(store, "orchestrator") == {"action": None}  # once
+    assert [e["data"]["decision"] for e in store.session_events("s1", (compaction.CONTINUED,))] == [asked["id"]]
+
+
+def test_a_then_follows_a_settled_compaction_a_veto_too_and_never_one_never_delivered(store: Store, tmp_path,
+                                                                                      git_repo):
+    turn(store, git_repo)
+    asked = compaction.request(store, home(), session_id="s1", cwd=str(git_repo), then="go on",
+                               transcript=tmp_path / "none")
+    assert compaction.continuation(store, "s1", datetime.now(UTC)) is None  # never delivered
+    assert step(store, "orchestrator")["action"] == "submit"
+    compaction.compacted(store, home(), "s1", asked["id"], version="2.1.302", skip="blocked by a hook")
+    assert step(store, "orchestrator")["action"] == "continue"
+    # A delivery long past that never finished is not waited for.
+    again = compaction.request(store, home(), session_id="s1", cwd=str(git_repo), then="go on",
+                               transcript=tmp_path / "none")
+    assert step(store, "orchestrator")["decision"] == again["id"]
+    late = datetime.now(UTC) + timedelta(seconds=compaction.DETECT_S + 1)
+    assert compaction.continuation(store, "s1", late) is None
+    # Without a then, a finished compaction hands nothing over.
+    bare = compaction.request(store, home(), session_id="s1", cwd=str(git_repo), transcript=tmp_path / "none")
+    assert "then" not in bare
+
+
+def test_cauce_compaction_request_then(store: Store, git_repo, capsys):
+    turn(store, git_repo)
+    assert cli.main(["compaction", "request", "--session", "s1", "--cwd", str(git_repo), "--why", "done",
+                     "--then", "start the export", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["then"] == "start the export"

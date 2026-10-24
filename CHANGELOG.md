@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-10-24
+
+### Added
+
+- **A session that compacts can leave itself its next prompt.** The `compact` tool takes
+  `then`: what the session goes on with once the compaction finished. Before, a session
+  that compacted with nothing of its own running stopped there, since no ending would
+  start its next turn. Now the mod submits `then` as the session's next prompt, once,
+  quoted and marked as its own words, as soon as the compaction ends (a hook saw it end,
+  the engine answered, or it never ran; a hook's veto too). It is never told to the
+  summarizer. `cauce compaction request --then` is the same from the command line, and
+  `cauce stats` shows which compactions carried one and were continued.
+
 ## [0.37.0] - 2026-10-24
 
 ### Changed

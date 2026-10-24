@@ -453,6 +453,28 @@ test('compact: the session decides; cauce takes it, and it runs at the next idle
   expect((await call($, 'compact', { why: 'x' })).deny).toBe('off')
 })
 
+test('compact with then: once the compaction stood, the prompt the session left itself is its next turn',
+  async ($, on) => {
+    const asked = compacts(on, () => ({ messages: [{ role: 'user', text: 'the summary', toolUses: [] }] }))
+    const follow = 'cauce [compaction #7]: this session compacted. … "merge #12, then start the export". Go on with it now.'
+    const steps = [SUBMIT, JSON.stringify({ action: 'continue', decision: 7, text: follow }), JSON.stringify({ action: null })]
+    const { seen, clock } = await started($, on, {
+      'compaction request': { exitCode: 0, stdout: JSON.stringify({ id: 7 }) },
+      'compaction next': () => ({ exitCode: 0, stdout: steps.shift() ?? JSON.stringify({ action: null }) }),
+      'compaction delivered': { exitCode: 0, stdout: JSON.stringify({ kept: true }) },
+    })
+    const answer = await call($, 'compact', { why: 'the feature landed', then: 'merge #12, then start the export' })
+    expect(answer.result).toEndWith('your `then` reaches you as your next prompt.')
+    expect(compactionCalls(seen)[0]).toEqual(['compaction', 'request', '--session', 'sess-1', '--cwd', '/work/shop',
+      '--why', 'the feature landed', '--json', '--then', 'merge #12, then start the export'])
+    await clock.advance(15_000)
+    expect(asked).toEqual([INSTRUCTIONS])
+    expect(seen.prompts).toEqual([])
+    // The mod looks again after the compaction, with no turn ended in between.
+    await clock.advance(15_000)
+    expect(seen.prompts).toEqual([follow])
+  })
+
 const INSTRUCTIONS = LINE.slice('/compact '.length)
 const SUBMIT = JSON.stringify({ action: 'submit', decision: 7, line: LINE, instructions: INSTRUCTIONS })
 const DELIVERED = ['compaction', 'delivered', '7', '--session', 'sess-1', '--version', '2.1.302']

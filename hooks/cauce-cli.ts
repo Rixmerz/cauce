@@ -60,9 +60,10 @@ export function endedToast(ids: number[], statuses?: Record<string, string | nul
 
 /** What `cauce compaction next` answers: what the mod does now that the session
  * is idle, once per decision, and what cauce found out about this build. `wait`:
- * a decision is held (a run of this session holds the checkout), so ask again. */
+ * a decision is held (a run of this session holds the checkout), or a compaction
+ * with a prompt to follow it has not finished yet, so ask again. */
 export type CompactionStep = {
-  action: 'suggest' | 'submit' | 'advise' | null
+  action: 'suggest' | 'submit' | 'advise' | 'continue' | null
   decision?: number
   line?: string
   instructions?: string
@@ -70,6 +71,8 @@ export type CompactionStep = {
   wait?: boolean
   /** With `advise`: what the orchestrating session is told; it decides. */
   advice?: string
+  /** With `continue`: the prompt the session left itself to go on with once its compaction finished. */
+  text?: string
 }
 
 /** The toast that hands the person the `/compact` line to paste. */

@@ -38,7 +38,8 @@ PHASES = ("advance_s", "pickup_s", "spawn_s", "queued_s", "plan_s", "setup_s", "
 #: The phases before a run's own start: never part of its wall time, so never taken from "other".
 BEFORE_RUN = frozenset({"advance_s", "pickup_s", "spawn_s", "queued_s"})
 #: The events a compaction decision leaves (`cauce.compaction`).
-COMPACTION_EVENTS = ("compaction_decided", "compaction_delivered", "compaction_settled", "compaction_seen")
+COMPACTION_EVENTS = ("compaction_decided", "compaction_delivered", "compaction_settled", "compaction_seen",
+                     "compaction_continued")
 #: How many compaction decisions the text lists, newest last.
 COMPACTIONS_SHOWN = 10
 #: The columns of a run, as `cauce stats --runs` writes them.
@@ -388,7 +389,8 @@ def compactions(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
                 "tokens": tokens, "share": round(tokens / window, 2) if window else None,
                 "because": data.get("because") or [], "warm_usd": warm, "cold_usd": cold,
                 "warm_share": round(warm / cold, 2) if warm is not None and cold else None,
-                "delivered": None, "ran": None, "evidence": None}
+                "delivered": None, "ran": None, "evidence": None,
+                "then": bool(data.get("then")), "continued": False}
             continue
         row = rows.get(int(data.get("decision") or data.get("marker") or 0))
         if row is None:
@@ -397,6 +399,8 @@ def compactions(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
             row["delivered"] = data.get("how")
         elif event["kind"] == compaction.SETTLED:
             row["ran"], row["evidence"] = bool(data.get("ran")), data.get("evidence")
+        elif event["kind"] == compaction.CONTINUED:
+            row["continued"] = True
         elif event["kind"] == compaction.SEEN and row["ran"] is None:
             row["ran"], row["evidence"] = True, f"{data.get('source')} carried its marker"
     return list(rows.values())
