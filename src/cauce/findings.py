@@ -47,6 +47,8 @@ def read(block: Mapping[str, Any]) -> tuple[dict[str, str], ...]:
             "evidence_class": evidence if evidence in EVIDENCE else "inferential",
             "cause": cause if cause in CAUSES else "unknown",
             "proof": proof,
+            # The worker found it and fixed it in this change: reported, never offered as work left.
+            **({"fixed": True} if f.get("fixed") is True else {}),
         })
     return tuple(out)
 
@@ -57,23 +59,23 @@ def blocking(found: Iterable[Mapping[str, str]]) -> list[Mapping[str, str]]:
             and f["evidence_class"] != "insufficient"]
 
 
-def _place(where: str) -> str:
+def place(where: str) -> str:
     """A finding's file, without its line: a fix moves lines."""
     return re.sub(r"[:#]L?\d+(?:[-:]\d+)*$", "", where.strip().lower())
 
 
 def key(f: Mapping[str, str]) -> str:
     words = " ".join(sorted(set(re.findall(r"[a-z0-9_]{4,}", f["what"].lower())))[:12])
-    return hashlib.sha256(f"{_place(f['where'])}|{words}".encode()).hexdigest()[:12]
+    return hashlib.sha256(f"{place(f['where'])}|{words}".encode()).hexdigest()[:12]
 
 
 def same(a: Mapping[str, str], b: Mapping[str, str]) -> bool:
     """The same finding: the same identity, or the same place named (a fix moves lines and rewords)."""
-    return key(a) == key(b) or (bool(a["where"]) and _place(a["where"]) == _place(b["where"]))
+    return key(a) == key(b) or (bool(a["where"]) and place(a["where"]) == place(b["where"]))
 
 
 def places(found: Iterable[Mapping[str, str]]) -> frozenset[str]:
-    return frozenset(_place(f["where"]) for f in found if f["where"])
+    return frozenset(place(f["where"]) for f in found if f["where"])
 
 
 def text(found: Iterable[Mapping[str, str]]) -> str:

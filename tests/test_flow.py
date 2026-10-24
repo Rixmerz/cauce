@@ -758,3 +758,51 @@ def test_the_files_a_request_names_hold_it_back_never_start_it_beside(store: Sto
     touched = flow.by_surfaces(forum, [running])
     assert touched is not None and "already changed src/forum/x.ts" in touched.reason
     assert flow.by_surfaces({"id": 5, "body": "tidy up", "options": "{}"}, [api]) is None
+
+
+def test_a_wait_judged_against_work_that_ended_is_judged_again(store: Store):
+    first = store.enqueue("rewrite the importer", repo="r", cwd="/x")
+    store.claim(first["id"])
+    held = store.enqueue("add a flag to the importer", repo="r", cwd="/x")
+    asked = []
+
+    def decide(task, ahead):
+        asked.append([t["id"] for t in ahead])
+        if any(t["id"] == first["id"] for t in ahead):
+            return dispatch.Decision(False, f"it changes the importer #{first['id']} rewrites")
+        return dispatch.Decision(True, "the long build ahead touches other files")
+
+    assert flow.runnable(store, "r", parallel=True, decide=decide) == []
+    # The work it was judged against ended, and other work runs now: the old "wait" says
+    # nothing of it, so it is judged again, against what is ahead now.
+    store.update_task(first["id"], status="done")
+    long = store.enqueue("build the long feature", repo="r", cwd="/x")
+    store.update_task(long["id"], parallel=1)
+    store.claim(long["id"])
+    assert [t["id"] for t in flow.runnable(store, "r", parallel=True, decide=decide)] == [held["id"]]
+    assert asked == [[first["id"]], [long["id"]]]
+    again = store.last_event(held["id"], "dispatch_decided")["data"]
+    assert again["again"] == [first["id"]] and again["ahead"] == [long["id"]]
+    # A wait judged against work still ahead stands, and asks nothing.
+    store.claim(held["id"])
+    other = store.enqueue("rename the importer's flag", repo="r", cwd="/x")
+    store.set_parallel(other["id"], False, "it changes the importer")
+    store.add_event(other["id"], "dispatch_decided", parallel=False, reason="x", ahead=[long["id"]])
+    assert flow.runnable(store, "r", parallel=True, decide=_never) == []
+
+
+def test_the_session_lets_a_queued_task_start_beside_the_work_ahead(capsys, store: Store, monkeypatch):
+    from cauce import cli
+
+    monkeypatch.setenv("CAUCE_AUTOWORK", "off")
+    first = store.enqueue("build the long feature", repo="r", cwd="/x")
+    store.claim(first["id"])
+    held = store.enqueue("fix the BLE test", repo="r", cwd="/x")
+    store.set_parallel(held["id"], False, "it may touch the feature")
+    assert cli.main(["lanes", "--beside", str(held["id"])]) == 0
+    assert f"task #{held['id']} starts beside the work ahead" in capsys.readouterr().out
+    assert [t["id"] for t in flow.runnable(store, "r", parallel=True, decide=_never)] == [held["id"]]
+    assert store.last_event(held["id"], "dispatch_decided")["data"]["by"] == "session"
+    store.claim(held["id"])
+    assert cli.main(["lanes", "--beside", str(held["id"])]) == 1
+    assert "only a queued task" in capsys.readouterr().err

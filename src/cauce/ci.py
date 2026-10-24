@@ -14,7 +14,7 @@ import json
 import os
 import re
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -393,7 +393,30 @@ def _read_by_code(top: Path, keys: set[str]) -> set[str]:
     return set(proc.stdout.split()) & set(names)
 
 
-def left_out(where: Path, verify: str, services: Sequence[str] = ()) -> tuple[str | None, list[str]]:
+#: The CI jobs a person said are known not to apply to a repository's checks (`cauce ci quiet`),
+#: kept per repository key in the store's meta (the person's cauce home, never a repository).
+QUIET_META = "ci_quiet:"
+QUIET_HINT = " (`cauce ci quiet <job>` stops naming one known not to apply here)"
+
+
+def quiet(store: Any, key: str | None) -> set[str]:
+    """The jobs `left_out` names no more for this repository."""
+    try:
+        return set(json.loads(store.meta(QUIET_META + str(key)) or "[]"))
+    except ValueError:
+        return set()
+
+
+def set_quiet(store: Any, key: str | None, names: Sequence[str], *, on: bool = True) -> set[str]:
+    """Quiet (or speak again of) these jobs for this repository; the jobs quiet after it."""
+    now = quiet(store, key)
+    now = now | set(names) if on else now - set(names)
+    store.set_meta(QUIET_META + str(key), json.dumps(sorted(now)))
+    return now
+
+
+def left_out(where: Path, verify: str, services: Sequence[str] = (),
+             quieted: Collection[str] = ()) -> tuple[str | None, list[str]]:
     """The CI jobs `verify` does not cover, as one note, and the workflow files that could
     not be read. A job is covered when the check runs every command of it that checks the
     work (each one a line chains with `&&`, `||` or `;`, `_SETUP` ones aside), through the
@@ -403,7 +426,8 @@ def left_out(where: Path, verify: str, services: Sequence[str] = ()) -> tuple[st
     delivers (deploy, release) is no check, and nor is one that only readies itself."""
     found, unreadable = jobs(where)
     checks = {id(j): [c for line in j.commands for c in _parts(line) if not _SETUP.match(c)] for j in found}
-    found = [j for j in found if checks[id(j)] and not _DELIVERY.search(j.name)]
+    found = [j for j in found if checks[id(j)] and not _DELIVERY.search(j.name)
+             and j.name not in quieted and f"{j.file}/{j.name}" not in quieted]
     if not found:
         return None, unreadable
     ran = " \n".join(runs(verify, where))
@@ -426,7 +450,7 @@ def left_out(where: Path, verify: str, services: Sequence[str] = ()) -> tuple[st
         return None, unreadable
     more = len(missing) - JOBS_NAMED
     named = "; ".join(missing[:JOBS_NAMED]) + (f"; and {more} more" if more > 0 else "")
-    return f"CI also runs: {named}, which this check does not", unreadable
+    return f"CI also runs: {named}, which this check does not{QUIET_HINT}", unreadable
 
 
 # --- a check whose exit says nothing ---------------------------------------------------

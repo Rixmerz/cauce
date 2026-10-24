@@ -36,8 +36,10 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from cauce import allow, grants, models, surfaces
 from cauce import criteria as criteria_mod
@@ -82,6 +84,51 @@ RATE_LIMITED = re.compile(r"\b(?:429|rate[_ ]limit(?:ed|_error)?|too many reques
 OVERLOADED = re.compile(r"\b(?:529|overloaded(?:_error)?)\b", re.IGNORECASE)
 _RETRY_AFTER = re.compile(r"retry[-_ ]after\W{0,3}(\d{1,6})", re.IGNORECASE)
 _RESETS_AT = re.compile(r"usage limit reached\|(\d{10})", re.IGNORECASE)
+#: The account's own limit (a session's, the week's, a model's), as the CLI says it: no retry
+#: in seconds passes it, only its reset. Read only where `RATE_LIMITED` is.
+USAGE_LIMIT = re.compile(
+    r"usage limit reached|\b(?:session|weekly|daily|5-hour|opus|sonnet|fable)(?: usage)? limit(?: reached| hit)?\b|"
+    r"hit your (?:\w+ )?limit|limit will reset|you(?:'ve| have) reached your (?:\w+ )?(?:usage )?limit|"
+    r"out of (?:extra )?usage", re.IGNORECASE)
+#: The reset a limit message names: `resets 5pm`, `resets at 3:30am (America/Santiago)`,
+#: `resets Oct 27, 9am`.
+_RESETS = re.compile(
+    r"\breset(?:s| at| will be at)?\s+(?:at\s+)?(?:(?P<mon>[A-Z][a-z]{2})[a-z]*\.?\s+(?P<day>\d{1,2}),?\s+(?:at\s+)?)?"
+    r"(?P<h>\d{1,2})(?::(?P<m>\d{2}))?\s*(?P<ap>[ap]\.?m\.?)?(?:\s*\((?P<tz>[A-Za-z_]+(?:/[A-Za-z_+-]+)+|UTC)\))?",
+    re.IGNORECASE)
+_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+
+
+def resets_in(text: str, *, now: datetime | None = None) -> float | None:
+    """Seconds until the reset a limit message names, read in its time zone (the machine's
+    when it names none), the next such moment after `now`; None when it names none."""
+    if found := _RESETS_AT.search(text or ""):
+        at = float(found.group(1))
+        return max(at - (now.timestamp() if now else time.time()), 0.0)
+    found = _RESETS.search(text or "")
+    if found is None:
+        return None
+    hour, minute, ap = int(found["h"]), int(found["m"] or 0), (found["ap"] or "").lower().replace(".", "")
+    if (ap and not 1 <= hour <= 12) or hour > 23 or minute > 59:
+        return None
+    hour = hour % 12 + (12 if ap == "pm" else 0) if ap else hour
+    try:
+        zone = ZoneInfo(found["tz"]) if found["tz"] else None
+    except (ZoneInfoNotFoundError, ValueError):
+        zone = None
+    here = (now or datetime.now(UTC)).astimezone(zone)
+    at = here.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if found["mon"] and found["mon"].lower()[:3] in _MONTHS:
+        month = _MONTHS.index(found["mon"].lower()[:3]) + 1
+        try:
+            at = at.replace(month=month, day=int(found["day"]))
+        except ValueError:
+            return None
+        if at <= here:
+            at = at.replace(year=at.year + 1)
+    elif at <= here:
+        at += timedelta(days=1)
+    return (at - here).total_seconds()
 #: A disk with no room left, as the CLI or the OS says it.
 NO_SPACE = re.compile(r"\bENOSPC\b|no space left on device", re.IGNORECASE)
 #: The exit of a CLI the kernel killed (SIGKILL), as its out-of-memory killer does.
@@ -120,7 +167,7 @@ When you are done, end your reply with exactly one fenced block:
   "findings": [{{"where": "path:line", "what": "the problem",
                 "evidence_class": "deterministic" | "inferential" | "insufficient",
                 "cause": "introduced" | "worsened" | "pre-existing" | "unknown",
-                "proof": "the command or hunk that shows it"}}],
+                "proof": "the command or hunk that shows it", "fixed": false}}],
   "verdicts": [{{"id": "F1", "verdict": "one of the words the task gives", "proof": "what shows it"}}]
 }}
 ```
@@ -183,8 +230,10 @@ When you are done, end your reply with exactly one fenced block:
   diff shows it, `inferential` when you read it from the code, `insufficient`
   when you only suspect it. `cause` is `introduced` or `worsened` when the
   change being checked is to blame, `pre-existing` when it was there before
-  (check the base commit), `unknown` when you cannot tell. `[]` when there is
-  none, or when you were not asked to find problems.
+  (check the base commit), `unknown` when you cannot tell. `fixed` is true for
+  a problem you found and fixed in this change (a bug your new test caught and
+  you then fixed): it is reported, never offered as work left. `[]` when there
+  is none, or when you were not asked to find problems.
 - `verdicts`: when the task gives you ledger rows `F1..Fn` to decide, one entry
   for each, with one of the words it names. A pass that leaves one out is not a
   pass. `[]` otherwise.
@@ -830,8 +879,12 @@ def preexisting(work: frozenset[str], base: frozenset[str] | None, *, must_fix: 
 
 
 def api_limit(text: str) -> tuple[str, float | None]:
-    """What a session's own failed call says of the API turning it away: (`rate_limit` or
-    `overloaded`, the seconds it said to wait), or ("", None)."""
+    """What a session's own failed call says of the API turning it away: (`usage` for the
+    account's own limit, `rate_limit` or `overloaded`, the seconds it said to wait, or until
+    the limit resets), or ("", None)."""
+    if USAGE_LIMIT.search(text or ""):
+        # The account's limit: nothing passes it before its reset, which the message names.
+        return "usage", resets_in(text)
     if OVERLOADED.search(text or ""):
         kind = "overloaded"
     elif RATE_LIMITED.search(text or ""):

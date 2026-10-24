@@ -319,7 +319,8 @@ def _judged(store: Store, task: dict, ahead: list[dict], decide: Decide,
         if not task["parallel"]:
             store.set_parallel(task["id"], True, NOTHING_WRITES_AHEAD)
         return {**task, "parallel": 1}
-    if task["parallel"] is not None:
+    stale = _judged_against_gone(store, task, writing)
+    if task["parallel"] is not None and not stale:
         return task
     read_changes()
     writing = [t for t in ahead if not reads_only(t)]
@@ -328,10 +329,23 @@ def _judged(store: Store, task: dict, ahead: list[dict], decide: Decide,
     store.set_parallel(task["id"], decision.parallel, decision.reason)
     store.add_event(task["id"], "dispatch_decided", parallel=decision.parallel,
                     reason=decision.reason, behind=_behind(decision, writing),
-                    ahead=[t["id"] for t in writing], by="surfaces" if settled else "haiku")
+                    ahead=[t["id"] for t in writing], by="surfaces" if settled else "haiku",
+                    **({"again": stale} if stale else {}))
     if decision.cost_usd:
         store.update_task(task["id"], cost_usd=(task["cost_usd"] or 0) + decision.cost_usd)
     return {**task, "parallel": int(decision.parallel)}
+
+
+def _judged_against_gone(store: Store, task: dict, writing: list[dict]) -> list[int]:
+    """The work a "wait" was judged against, when none of it is ahead any more: it ended, so
+    the decision says nothing of the work ahead now and is made again. A wait kept before
+    the decision named its work ahead stands. [] when it is not stale."""
+    if task["parallel"] != 0:
+        return []
+    decided = (store.last_event(task["id"], "dispatch_decided") or {}).get("data") or {}
+    judged = [int(i) for i in decided.get("ahead") or () if isinstance(i, int)]
+    now = {int(t["id"]) for t in writing}
+    return judged if judged and not now.intersection(judged) else []
 
 
 def _walk(store: Store, repo: str | None, *, parallel: bool, decide: Decide) -> Iterator[dict]:
@@ -397,6 +411,16 @@ def shares(store: Store, level: int) -> dict[str | None, capacity.Share]:
     return capacity.allot(level, _lanes(store)[0], lambda key: False)
 
 
+def limited_until(store: Store, *, now: datetime | None = None) -> str | None:
+    """When the account's usage limit resets, while it has not (`stops.LIMIT_META`, kept by the
+    run it stopped); None once it has, or when no limit was met."""
+    at = store.meta(stops.LIMIT_META)
+    try:
+        return at if at and datetime.fromisoformat(at) > (now or datetime.now(UTC)) else None
+    except ValueError:
+        return None
+
+
 def pick(store: Store, repo: str | None, *, parallel: bool, decide: Decide,
          level: int | None = None) -> tuple[list[dict], dict[str | None, capacity.Share]]:
     """What may start now within the machine's level, and each lane's share of it
@@ -404,6 +428,10 @@ def pick(store: Store, repo: str | None, *, parallel: bool, decide: Decide,
     then what is lent. The lanes of `repo` (every lane, with None) are walked and judged
     (`_walk`); another dispatcher's are read as they stand, never judged here."""
     level = level if level is not None else capacity.current(home()).value
+    if limited_until(store):
+        # The account's usage limit turns every session away until it resets: nothing starts,
+        # and `cauce limit-wait` starts the dispatchers again after it.
+        return [], capacity.allot(level, _lanes(store)[0], lambda key: False)
     lanes, queued = _lanes(store)
     walks: dict[str | None, Iterator[dict]] = {}
     demand: dict[str | None, int] = {}

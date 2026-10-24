@@ -35,7 +35,7 @@ def world(tmp_path: Path, git_repo: Path, _isolated_home: Path):
     (bin_dir / "claude").write_text(f"#!/bin/sh\nexec {sys.executable} {FAKE} \"$@\"\n")
     (bin_dir / "claude").chmod(0o755)
     env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "PYTHONPATH": str(SRC),
-           "CAUCE_AUTOWORK": "on", "CLAUDE_CODE_SESSION_ID": "host-session",
+           "CAUCE_AUTOWORK": "on", "CAUCE_LIMIT_GRACE_S": "1", "CLAUDE_CODE_SESSION_ID": "host-session",
            "CLAUDE_CODE_REMOTE_SESSION_ID": "host-session",
            "FAKE_CLAUDE_SCRIPT": str(tmp_path / "script.json"), "FAKE_CLAUDE_LOG": str(tmp_path / "calls.jsonl")}
     env.pop("CAUCE_SESSION_ID", None)
@@ -239,4 +239,19 @@ def test_work_queued_after_a_task_that_is_dismissed_leaves_the_queue_with_it(wor
         assert held["status"] == "cancelled" and json.loads(held["options"]).get("after") is None
     finally:
         store.close()
+    world.healthy()
+
+
+def test_a_task_the_usage_limit_stopped_resumes_on_its_own_after_the_reset(world):
+    resets = int(time.time()) + 3
+    world.script([{"match": "make the greeting", "do": [
+        {"limit": f"Claude AI usage limit reached|{resets}", "write": {"hi.txt": "h\n"}},
+        {"pass": True, "write": {"hi.txt": "hi\n"}}]}])
+    world.cauce("queue", "add", "--kind", "implement", "make the greeting file for the app")
+    stopped = world.wait(_task(("blocked", "done", "failed")), "the limit to stop it")
+    assert stopped["status"] == "blocked"
+    # A turn's end (here, the endings command) sees the limit has not reset: a waiter resumes it then.
+    world.cauce("endings", "--session", "nobody")
+    ended = world.wait(_task(("done",)), "the resume after the reset")
+    assert ended["id"] == stopped["id"] and [c["action"].get("limit") is None for c in world.calls()] == [False, True]
     world.healthy()

@@ -46,6 +46,8 @@ CAUSES = {
     "network": ("blocked", "network"),
     # The check's tests kept timing out on a loaded machine, through cauce's waits.
     "load": ("blocked", "environment"),
+    # The account's usage limit turned its session away: it resumes once the limit resets.
+    "limit": ("blocked", "environment"),
     "budget": ("blocked", "budget"),
     "missing_dir": ("blocked", "environment"),
     "approval": ("needs_approval", "cauce"),
@@ -83,6 +85,10 @@ DISMISSABLE = ("failed", "blocked", "replan", "needs_approval", "interrupted")
 #: approval, a directory that is gone their hands. Every other stop is the
 #: orchestrator's to decide (`cauce.orchestrator`): resume it, rewrite it, or
 #: dismiss it with why.
+#: Where the account's usage limit is kept until it resets (`Store.meta`, an ISO time): no
+#: queued work starts before then (`flow.pick`), since every session meets it.
+LIMIT_META = "usage_limit_until"
+
 PERSON_ONLY = ("permission", "approval", "missing_dir")
 
 #: The attempts after which a resume nobody approved is refused: two runs' worth
@@ -207,11 +213,18 @@ def for_person(stop: Stop | None, *, tried: int = 0, limit: int | None = None) -
 def waits_on(store: Any, task: dict[str, Any]) -> str:
     """"person" or "orchestrator": who a task that stopped waits on."""
     attempts = store.attempts(task["id"])
-    # A try the network or the machine's load cost is no attempt at the work, as `cli` counts it.
-    dropped = sum(1 for e in store.events_of(task["id"], "moved")
-                  if (e["data"] or {}).get("network") or (e["data"] or {}).get("load"))
-    return "person" if for_person(of(store, task), tried=len(attempts) - dropped,
+    return "person" if for_person(of(store, task), tried=len(attempts) - lost_tries(store, task["id"]),
                                   limit=UNATTENDED_ATTEMPTS) else "orchestrator"
+
+
+def lost_tries(store: Any, task_id: int) -> int:
+    """The tries that said nothing about the work, and count toward no attempt ceiling: the
+    network dropped under them, the machine's load timed their check out, or the account's
+    usage limit turned their session away."""
+    dropped = sum(1 for e in store.events_of(task_id, "moved")
+                  if (e["data"] or {}).get("network") or (e["data"] or {}).get("load"))
+    return dropped + sum(1 for e in store.events_of(task_id, "attempt_finished")
+                         if (e["data"] or {}).get("limited") == "usage")
 
 
 def what_to_do(stop: Stop) -> str:
@@ -226,6 +239,8 @@ def what_to_do(stop: Stop) -> str:
         "environment": "fix what failed to run, then resume",
         "network": "the network dropped and stayed down through cauce's waits; its work is kept: resume it once "
                    "the network is back",
+        "limit": "the account's usage limit stopped it; its work is kept: cauce resumes it once the limit "
+                 "resets" + (f" ({stop.extra['resets_at']})" if stop.extra.get("resets_at") else ""),
         "load": "its check's tests kept timing out while the machine was loaded, after the worker's own run "
                 "passed; its work is kept: resume it when the machine is quieter",
         "budget": "an older cauce stopped it on a dollar budget, which no longer exists: resume it",

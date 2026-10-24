@@ -552,3 +552,20 @@ def test_a_lean_worker_gets_no_subagent_tool_nor_skill_listing_and_only_flags_it
     assert "--disallowedTools" not in build_argv(spec(tmp_path))
     monkeypatch.setenv("CAUCE_LEAN", "off")
     assert launch.lean_flags("claude", os.environ, help_text=lambda b: knows_all) == ()
+
+
+def test_the_account_s_usage_limit_is_read_with_when_it_resets():
+    from datetime import UTC, datetime
+
+    now = datetime(2026, 10, 23, 15, 0, tzinfo=UTC)  # 12:00 in Santiago
+    kind, wait = launch.api_limit("Claude AI usage limit reached|1792771200")
+    assert kind == "usage" and wait is not None
+    assert launch.api_limit("Session limit reached ∙ resets 5pm")[0] == "usage"
+    assert launch.api_limit("You've hit your limit · resets 3am (America/Santiago)")[0] == "usage"
+    assert launch.resets_in("5-hour limit reached ∙ resets 5pm (America/Santiago)", now=now) == 5 * 3600
+    assert launch.resets_in("resets at 11:30am (UTC)", now=now) == 20.5 * 3600  # tomorrow's
+    assert launch.resets_in("Weekly limit reached ∙ resets Oct 27, 9am (UTC)", now=now) == (3 * 24 + 18) * 3600
+    assert launch.resets_in("resets 25pm", now=now) is None and launch.resets_in("no reset named") is None
+    assert launch.resets_in("resets 9am (Mars/Olympus)", now=now) is not None  # an unknown zone: the machine's
+    # A rate limit is no usage limit, and keeps its retry-after.
+    assert launch.api_limit("API Error: 429 rate_limit_error retry-after: 30") == ("rate_limit", 30.0)

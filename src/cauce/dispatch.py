@@ -206,6 +206,17 @@ def decide(task: dict, ahead: Sequence[dict], **haiku_kwargs) -> Decision:
     return Decision(out["parallel"], reason or ("independent" if out["parallel"] else "may conflict"), cost)
 
 
+def _limit_holds(store: Store) -> str | None:
+    """When the account's usage limit resets, while it holds the queue (`flow.limited_until`)."""
+    from cauce.stops import LIMIT_META
+
+    at = store.meta(LIMIT_META)
+    try:
+        return at if at and datetime.fromisoformat(at).timestamp() > time.time() else None
+    except ValueError:
+        return None
+
+
 def waiting(store: Store, task: Mapping) -> str | None:
     """What a queued task the dispatcher held back waits for now, in one line
     ("waits for #46: <reason>"); None for one it has not held back, or with
@@ -215,6 +226,8 @@ def waiting(store: Store, task: Mapping) -> str | None:
     Work queued after other work says that first ("waits for #17 to pass", `after`)."""
     if (held := after.waiting(store, task)) is not None:
         return held
+    if task.get("status") == "queued" and (until := _limit_holds(store)):
+        return f"waits for the account's usage limit to reset ({until})"
     if task.get("status") != "queued" or task.get("parallel") != 0:
         return None
     ahead = [t["id"] for t in store.dispatched_running(task.get("repo"))]
@@ -373,9 +386,43 @@ AUTO_RESUMES = 1
 #: them: a worker that died, work that outgrew its turns (resumed with more), a network that
 #: stayed down through cauce's waits, a machine under load through its waits. Each is cauce's
 #: own account (`stops`), never a judgment about the work.
-MECHANICAL = ("died", "turns", "network", "load")
+MECHANICAL = ("died", "turns", "network", "load", "limit")
 #: Only deaths this recent are resumed on their own: an upgrade never wakes old ones.
 AUTO_RESUME_WITHIN_S = 6 * 3600
+#: A usage limit's resume waits this long past the reset its message named (a minute's word),
+#: or `LIMIT_UNKNOWN_S` past the stop when it named none. A limit met again after its reset is
+#: another wait, up to `LIMIT_RESUMES` of them, counted apart from the other causes' resume.
+LIMIT_GRACE_S = 120
+LIMIT_UNKNOWN_S = 3600
+LIMIT_RESUMES = 3
+
+
+def _due(stop: Any, ended_at: float) -> float:
+    """When a stop may be resumed on its own: at once, or for a usage limit after its reset."""
+    if stop.cause != "limit":
+        return ended_at
+    grace = float(os.environ.get("CAUCE_LIMIT_GRACE_S") or LIMIT_GRACE_S)  # a scenario's clock is seconds
+    try:
+        return datetime.fromisoformat(str(stop.extra["resets_at"])).timestamp() + grace
+    except (KeyError, ValueError, TypeError):
+        return ended_at + LIMIT_UNKNOWN_S
+
+
+def _wake_at(store: Store, task_id: int, due: float, root: Path, env: Mapping[str, str],
+             start: Callable[..., object]) -> None:
+    """A detached `cauce limit-wait` that sleeps until `due` and then resumes what the limit
+    stopped, so nobody has to type after the reset; one per task and reset."""
+    if any(abs(float((e["data"] or {}).get("until") or 0) - due) < 1
+           for e in store.events_of(task_id, "limit_waiting")):
+        return
+    try:
+        (root / "work").mkdir(parents=True, exist_ok=True)
+        with open(root / "work" / "auto-resume.log", "a") as out:
+            start([sys.executable, "-m", "cauce", "limit-wait", "--until", str(int(due))], env=child_env(env),
+                  stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+    except OSError:
+        return
+    store.add_event(task_id, "limit_waiting", until=int(due))
 
 
 def _alive(pid: int | None) -> bool:
@@ -419,12 +466,20 @@ def recover(store: Store, root: Path, env: Mapping[str, str], *, popen: Callable
         ended = store.final_event(task["id"])
         if stop is None or stop.cause not in MECHANICAL or not task.get("cwd") or not Path(task["cwd"]).is_dir():
             continue
-        if len(store.events_of(task["id"], "auto_resumed")) >= AUTO_RESUMES:
+        limit = stop.cause == "limit"
+        done = [e for e in store.events_of(task["id"], "auto_resumed")
+                if ((e["data"] or {}).get("cause") == "limit") == limit]
+        if len(done) >= (LIMIT_RESUMES if limit else AUTO_RESUMES):
             continue
         try:
-            if now - datetime.fromisoformat(str((ended or {}).get("ts"))).timestamp() > AUTO_RESUME_WITHIN_S:
-                continue
+            due = _due(stop, datetime.fromisoformat(str((ended or {}).get("ts"))).timestamp())
         except ValueError:
+            continue
+        if now < due:
+            # The limit has not reset: a waiter resumes it then, nobody has to type.
+            _wake_at(store, int(task["id"]), due, root, env, start)
+            continue
+        if now - due > AUTO_RESUME_WITHIN_S:
             continue
         try:
             (root / "work").mkdir(parents=True, exist_ok=True)

@@ -1470,3 +1470,15 @@ def test_run_and_queue_add_ask_a_build_of_many_items_split_and_start_nothing(git
         store.close()
     # --whole is the session's word that it is one task
     assert cli.main(["queue", "add", big, "--repo", str(git_repo), "--whole"]) == 0
+
+
+def test_a_dismissal_or_a_resume_of_a_task_in_another_state_says_what_it_takes(store, capsys, tmp_path):
+    running = store.create_task("build it", status="running", source="cauce", cwd=str(tmp_path), pid=os.getpid())
+    done = store.create_task("built", status="done", source="cauce", cwd=str(tmp_path))
+    assert cli.main(["dismiss", str(running["id"])]) == 1
+    err = capsys.readouterr().err
+    assert "It is running: its ending reaches you when it ends" in err and f"cauce cancel {running['id']}" in err
+    assert cli.main(["resume", str(running["id"])]) == 1
+    assert "It is running" in capsys.readouterr().err
+    assert cli.main(["resume", str(done["id"])]) == 1
+    assert "It passed: nothing to take off the board or to resume" in capsys.readouterr().err

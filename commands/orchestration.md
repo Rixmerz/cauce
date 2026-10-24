@@ -72,15 +72,18 @@ compacting), `memory`, `relay`.
    | `blocked`, `decision` (exit 4) | the work is done and kept; tell the person the point, then act on it |
    | `blocked`, `review` | read the blockers (`cauce show N`); resume `--unattended`, or dismiss with why |
    | `blocked`, environment or network | fix or wait, then `cauce resume N --unattended` |
+   | `blocked`, `limit` | nothing: cauce resumes it after the account's limit resets |
    | `needs_approval` | ask; `--allow-approval` only on a yes |
    | `failed` | report what each attempt found (`cauce show N`); never redo it by hand |
-   | other work changes the same files | merge one first, then the other |
+   | other work changes the same files | merge one first, then the other; `cauce merge N M --pr` does both as one draft |
    | problems that were already there | start the bugfix it offers `--after`, if worth it |
-   | flaky tests | nothing to do; it is said and kept per repository |
+   | flaky tests | nothing to do; it is said, kept per repository and named in later briefs |
+   | a CI job known not to apply | `cauce ci quiet <job>`, once, on the person's word |
 
    A resume you start on your own carries `--unattended`. A task that stops
    pauses its lane: deal with it, and `cauce lanes --unpause <repo>` when the
-   queued work does not depend on it. What waits `--after` a task you dismiss
+   queued work does not depend on it; a queued task that waits for work it
+   does not touch starts with `cauce lanes --beside N`. What waits `--after` a task you dismiss
    leaves the queue with it and comes back to you. `cauce stats --expensive`
    says which runs cost the most and why. Every status in `cauce guide endings`.
 

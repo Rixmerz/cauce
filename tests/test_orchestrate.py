@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from cauce import __version__, launch, orchestrate, roles
+from cauce import __version__, ci, launch, orchestrate, roles
 from cauce import capabilities as caps
 from cauce.classify import Classification
 from cauce.escalate import MAX_TURNS_CEILING, Failure
@@ -896,7 +896,7 @@ def test_a_check_that_covers_less_than_ci_is_said_in_the_plan_and_on_the_report(
     lines = []
     report = run("fix the total", git_repo, store, Options(verify="true"), registry={}, launcher=Script(ok()),
                  classifier=kind("implement"), progress=lines.append)
-    note = "CI also runs: db (`npm test`, a postgres service, DATABASE_URL), which this check does not"
+    note = "CI also runs: db (`npm test`, a postgres service, DATABASE_URL), which this check does not" + ci.QUIET_HINT
     assert note in report.plan.reasons and note in report.text()
     assert f"cauce: #{report.task_id} warning: {note}" in lines
     assert store.last_event(report.task_id, "planned")["data"]["warnings"] == [note]
@@ -1944,3 +1944,30 @@ def test_a_writing_brief_names_the_tests_near_the_change_to_run_as_it_goes(tmp_p
     said = orchestrate.brief("add x", "implement", tmp_path, [], [], "npm test", True)
     assert "run only the tests near your change (npx jest --findRelatedTests <the files you changed>)" in said
     assert "findRelatedTests" not in orchestrate.brief("read x", "explore", tmp_path, [], [], "npm test", False)
+
+
+def test_the_account_s_usage_limit_stops_the_task_until_it_resets_with_the_work_kept(git_repo, store):
+    from cauce import flow, stops
+
+    limited = WorkerResult(False, Failure.ENVIRONMENT, "the session errored: Session limit reached ∙ resets 5pm",
+                           transient=True, limited="usage", retry_after_s=3600.0, cost_usd=0.1)
+    script = Script(limited, write="app.py")
+    report = run("fix the cart total", git_repo, store, Options(max_attempts=4), registry={}, launcher=script,
+                 classifier=kind("implement"))
+    # One try: every cell meets the same limit until it resets.
+    assert len(script.specs) == 1 and report.status == "blocked" and report.branch
+    assert report.stop.cause == "limit" and report.stop.extra["resets_at"]
+    assert "cauce resumes it once the limit resets" in stops.what_to_do(report.stop)
+    assert stops.lost_tries(store, report.task_id) == 1
+    # Nothing queued starts before the reset: every session would meet it.
+    queued = store.enqueue("rename a flag", repo=None, cwd=str(git_repo))
+    assert flow.limited_until(store) == report.stop.extra["resets_at"]
+    assert flow.runnable(store, None, parallel=True, decide=lambda t, a: None) == []
+    from cauce import dispatch
+
+    assert dispatch.waiting(store, store.get_task(queued["id"])).startswith(
+        "waits for the account's usage limit to reset")
+    from datetime import datetime, timedelta
+
+    later = datetime.fromisoformat(report.stop.extra["resets_at"]) + timedelta(minutes=1)
+    assert flow.limited_until(store, now=later) is None

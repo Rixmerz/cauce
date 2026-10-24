@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from cauce import (
@@ -322,7 +323,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         outgrew = was == "replan" and cause in ("turns", "split")
         if was not in RESUMABLE and not outgrew:
             print(f"task #{args.id} is {was}; only a task that stopped ({', '.join(RESUMABLE)}) resumes"
-                  + ("; rewrite it as a new task" if was == "replan" else ""), file=sys.stderr)
+                  + ("; rewrite it as a new task" if was == "replan" else _instead(args.id, was)), file=sys.stderr)
             return 1
         if args.keep:
             # Kept for every task in this repository, so the next one is not
@@ -444,9 +445,7 @@ def _needs_a_person(store: Store, task: dict, args: argparse.Namespace) -> str |
     attempts = store.attempts(task["id"])
     # A try the network dropped under, or the load timed out, is no attempt at the work
     # (its `moved` event says so).
-    dropped = sum(1 for e in store.events_of(task["id"], "moved")
-                  if (e["data"] or {}).get("network") or (e["data"] or {}).get("load"))
-    tried = len(attempts) - dropped
+    tried = len(attempts) - stops.lost_tries(store, task["id"])
     if tried >= UNATTENDED_ATTEMPTS:
         # No dollar cap stops work any more: a model resuming a task that keeps
         # failing is stopped by the attempts it already had.
@@ -597,16 +596,31 @@ def cmd_merge(args: argparse.Namespace) -> int:
         branches = {n: isolate.branch_for(n) for n in ids}
         if args.dry_run:
             print("would merge, in this order: " + ", ".join(f"#{n} ({branches[n]})" for n in merging.order(changed))
-                  + (f"; `{verify}` after each" if verify else "; no check after each (pass --verify)"))
+                  + (f"; `{verify}` after each" if verify else "; no check after each (pass --verify)")
+                  + ("; onto a new branch, pushed as one draft pull request" if args.pr else ""))
             return 0
+        onto = ("cauce/merge-" + "-".join(str(n) for n in ids))[:80] if args.pr else None
         try:
-            done = merging.merge(top, branches, {n: tasks[n]["title"] for n in ids}, changed, verify=verify, say=print)
+            done = merging.merge(top, branches, {n: tasks[n]["title"] for n in ids}, changed, verify=verify,
+                                 say=print, onto=onto)
         except merging.MergeError as exc:
             print(f"cauce: nothing merged: {exc}", file=sys.stderr)
             return 1
-        stops.landed(store, top)
+        if not onto:
+            stops.landed(store, top)
     finally:
         store.close()
+    if onto and not (done.conflict or done.failed):
+        # Every branch went in and the check passes after each: pushed and offered as one draft.
+        merging.back(top, done)
+        opened, said = merging.open_pr(top, onto, f"Merge {len(done.merged)} cauce branches"[:72],
+                                       merging.merged_body(tasks, finals, done), base=done.base)
+        print(said if opened else f"cauce: merged onto {onto}, but the pull request did not open: {said}",
+              file=sys.stdout if opened else sys.stderr)
+        return 0 if opened else 1
+    if onto:
+        print(f"the merges stopped on {onto}, which stays checked out; `git checkout {done.base}` goes back",
+              file=sys.stderr)
     if done.conflict:
         task_id, files = done.conflict
         print(f"#{task_id} ({branches[task_id]}) conflicts with what is in {done.into} in {', '.join(files[:8])}: its "
@@ -620,6 +634,33 @@ def cmd_merge(args: argparse.Namespace) -> int:
     if left:
         print("not merged: " + ", ".join(left))
     return 0 if not (done.conflict or done.failed) else 1
+
+
+def cmd_ci(args: argparse.Namespace) -> int:
+    """The repository's CI jobs as a plan reads them, and the ones quieted here: a job known not
+    to apply to its checks (one that needs a license the fork lacks) is named in no plan."""
+    from cauce import ci
+
+    where = Path(args.repo or os.getcwd()).resolve()
+    key = repo.key(where)
+    store = Store.open()
+    try:
+        if args.ci_command in ("quiet", "speak"):
+            now = ci.set_quiet(store, key, args.jobs, on=args.ci_command == "quiet")
+            print(f"quiet here: {', '.join(sorted(now)) or 'none'}")
+            return 0
+        quieted = ci.quiet(store, key)
+    finally:
+        store.close()
+    found, unreadable = ci.jobs(where)
+    for job in found:
+        print(f"{job.file}/{job.name}" + ("  (quiet)" if job.name in quieted or f"{job.file}/{job.name}" in quieted
+                                           else ""))
+    for name in unreadable:
+        print(f"{name}: could not be read")
+    if not found and not unreadable:
+        print("no CI jobs found in .github/workflows")
+    return 0
 
 
 def cmd_pr(args: argparse.Namespace) -> int:
@@ -724,6 +765,19 @@ def cmd_split(args: argparse.Namespace) -> int:
     return 0
 
 
+def _instead(task_id: int, status: str) -> str:
+    """What a task in this state takes instead of a dismissal or a resume, as the refusal ends."""
+    return {
+        "running": f". It is running: its ending reaches you when it ends; `cauce cancel {task_id}` stops it now, its "
+                   "work kept",
+        "queued": f". It waits in the queue: `cauce cancel {task_id}` takes it off, `cauce lanes --beside "
+                  f"{task_id}` starts it beside the work ahead",
+        "cancelled": f". It was cancelled: nothing waits on it; `cauce resume {task_id}` starts it again",
+        "done": ". It passed: nothing to take off the board or to resume",
+        "dismissed": f". It is off the board already; `cauce resume {task_id}` brings it back",
+    }.get(status, "")
+
+
 def cmd_dismiss(args: argparse.Namespace) -> int:
     """A task that waits on a person, taken off the board on their word; typed in a
     session (its Bash), it is the orchestrating session's call and says so."""
@@ -743,8 +797,8 @@ def cmd_dismiss(args: argparse.Namespace) -> int:
             waited = dispatch.waiting(store, task) if after.held(task) else None
             if (stop := stops.dismiss(store, task, via=via, why=why)) is None:
                 print(f"task #{task_id} is {task['status']}; only a task that waits "
-                      f"({', '.join(stops.DISMISSABLE)}) or on other work (`--after`) is dismissed",
-                      file=sys.stderr)
+                      f"({', '.join(stops.DISMISSABLE)}) or on other work (`--after`) is dismissed"
+                      + _instead(task_id, task["status"]), file=sys.stderr)
                 return 1
             print(f"took task #{task_id} off the queue (it {waited})" if waited
                   else f"dismissed task #{task_id}; `cauce resume {task_id}` brings it back")
@@ -1361,6 +1415,22 @@ def cmd_queue(args: argparse.Namespace) -> int:
 def cmd_lanes(args: argparse.Namespace) -> int:
     store = Store.open()
     try:
+        if args.beside is not None:
+            task = store.get_task(args.beside)
+            if task is None or task["status"] != "queued":
+                print(f"task #{args.beside} is {task['status'] if task else 'not there'}; only a queued task is let "
+                      "start beside the work ahead", file=sys.stderr)
+                return 1
+            if after.held(task):
+                print(f"task #{args.beside} {dispatch.waiting(store, task)}: `--after` is its order, not the "
+                      f"dispatcher's call; `cauce dismiss {args.beside}` takes it off the queue", file=sys.stderr)
+                return 1
+            reason = "the session's word: it does not touch the work ahead"
+            store.set_parallel(task["id"], True, reason)
+            store.add_event(task["id"], "dispatch_decided", parallel=True, reason=reason, ahead=[], by="session")
+            print(f"task #{task['id']} starts beside the work ahead"
+                  + (", its dispatcher started" if _go_on(store, task.get("repo")) else ""))
+            return 0
         if args.unpause is not None:
             key = repo.key(Path(args.unpause).resolve()) if Path(args.unpause).is_dir() else args.unpause
             store.unpause_lane(key)
@@ -2132,6 +2202,28 @@ def cmd_endings(args: argparse.Namespace) -> int:
     return 0
 
 
+#: The longest a `limit-wait` sleeps: a week's limit resets within it.
+LIMIT_WAIT_MAX_S = 8 * 24 * 3600
+
+
+def cmd_limit_wait(args: argparse.Namespace, *, sleep: Callable[[float], None] = time.sleep) -> int:
+    """Sleep until the account's usage limit resets, then resume what it stopped and start
+    the dispatchers whose queue it held (`dispatch.recover`, `dispatch.revive`): started
+    detached by `recover`, so the work goes on after the reset with nobody typing."""
+    wait = min(max(float(args.until) - time.time(), 0.0), LIMIT_WAIT_MAX_S)
+    if wait:
+        sleep(wait)
+    store = Store.open()
+    try:
+        resumed = dispatch.recover(store, home(), os.environ)
+        revived = dispatch.revive(store, home(), os.environ)
+    finally:
+        store.close()
+    print(f"cauce limit-wait: resumed {', '.join(f'#{n}' for n in resumed) or 'nothing'}; started "
+          f"{len(revived)} dispatcher(s)")
+    return 0
+
+
 def cmd_compaction(args: argparse.Namespace) -> int:
     """The mod's side of `cauce.compaction`: what to do now that the session is
     idle (`next`), or what became of a decision it was to submit (`delivered`)."""
@@ -2321,6 +2413,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("lanes", help="one serial lane per repository; a failed task pauses it")
     p.add_argument("--unpause", metavar="REPO", help="a repository path or key")
+    p.add_argument("--beside", metavar="N", type=int,
+                   help="let queued task N start beside the work ahead: the session's word that it is independent")
     p.set_defaults(func=cmd_lanes)
 
     p = sub.add_parser("work", help="run queued tasks in workers, lane by lane")
@@ -2639,6 +2733,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_compaction)
 
+    p = sub.add_parser("limit-wait", help=argparse.SUPPRESS)
+    p.add_argument("--until", type=float, required=True, help="the epoch second the limit's resume is due")
+    p.set_defaults(func=cmd_limit_wait)
+
     p = sub.add_parser("endings", help="what ended since a session last heard; delivered once, --peek to look")
     p.add_argument("--session", required=True)
     p.add_argument("--peek", action="store_true", help="read it without marking it delivered")
@@ -2656,7 +2754,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", help="the checkout (default: the first task's)")
     p.add_argument("--verify", help="the check run after each merge (default: the tasks' own)")
     p.add_argument("--dry-run", action="store_true", help="say the order, merge nothing")
+    p.add_argument("--pr", action="store_true",
+                   help="merge onto a new branch made from the one checked out, which stays as it is, then push it "
+                        "and open one draft pull request (needs gh); a conflict or a failing check stops before")
     p.set_defaults(func=cmd_merge)
+
+    p = sub.add_parser("ci", help="the repository's CI jobs as a plan reads them; quiet one known not to apply here")
+    p.add_argument("--repo", help="the checkout (default: here)")
+    ci_sub = p.add_subparsers(dest="ci_command")
+    for name, what in (("quiet", "name these jobs in no plan here"), ("speak", "name these jobs again")):
+        q = ci_sub.add_parser(name, help=what)
+        q.add_argument("jobs", nargs="+", help="a job's name, or file/name")
+    p.set_defaults(func=cmd_ci)
 
     p = sub.add_parser("pr", help="push the branch a task kept and open a draft pull request with its verdict, on "
                        "your word (needs gh)")
@@ -2719,7 +2828,8 @@ def _starts_work(args: argparse.Namespace) -> bool:
     command = getattr(args, "command", None)
     if (command == "split" and getattr(args, "queue", False)) or command == "merge":
         return True
-    return command in ("run", "resume", "work") or (command, getattr(args, f"{command}_command", None)) in {
+    return command in ("run", "resume", "work", "limit-wait") or (
+        command, getattr(args, f"{command}_command", None)) in {
         ("queue", "add"), ("workflow", "run"), ("workflow", "retry"), ("investigate", "start")}
 
 

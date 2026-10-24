@@ -101,3 +101,25 @@ def test_a_check_that_failed_only_as_at_the_base_reads_back_in_the_ending(git_re
         {"check": check}))
     offered = hooks._found_before(store, store.get_task(report.task_id))
     assert kept["failures"][0] in offered[1] and f"base {kept['base'][:12]}" in offered[1]
+
+
+def test_the_reset_a_limit_stop_keeps_is_the_one_its_resume_waits_for(git_repo, store):
+    """`orchestrate` keeps the usage limit's reset on the stop (`resets_at`); `dispatch.recover`
+    waits for it from that field alone, and `flow.pick` from the store's meta."""
+    from datetime import datetime
+
+    from cauce import dispatch, stops
+    from cauce.escalate import Failure
+    from cauce.launch import WorkerResult
+    from cauce.orchestrate import run
+
+    from .test_orchestrate import Script, kind
+
+    limited = WorkerResult(False, Failure.ENVIRONMENT, "the session errored: You've hit your limit · resets 5pm",
+                           transient=True, limited="usage", retry_after_s=600.0)
+    report = run("fix the total", git_repo, store, Options(), registry={}, launcher=Script(limited),
+                 classifier=kind("implement"))
+    stop = stops.of(store, store.get_task(report.task_id))
+    resets = datetime.fromisoformat(stop.extra["resets_at"]).timestamp()
+    assert dispatch._due(stop, 0.0) == resets + dispatch.LIMIT_GRACE_S
+    assert flow.limited_until(store) == stop.extra["resets_at"]
