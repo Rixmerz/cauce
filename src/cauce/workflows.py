@@ -1317,6 +1317,40 @@ def _findings_of(store: Store, task: Mapping[str, Any] | None) -> list[dict]:
     return out
 
 
+def reviewer_yield(store: Store, repo: str | None = None, *, limit: int = 200) -> list[dict[str, Any]]:
+    """What each blind review of a ledger with two reviews or more added, over the last
+    `limit` runs (one repository's, or every one): the rows it put on the ledger, the ones no
+    other review saw, and of those the ones the refuter or a proof kept. A review whose rows
+    another always saw too costs its run and adds nothing: `cauce stats` says so, it changes no
+    definition. Read only."""
+    out: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for run in store.list_runs(repos=None if repo is None else {repo}, limit=limit):
+        defn = _definition(run)
+        latest = _latest(store, run["id"])
+        by_id = {s["id"]: s for s in defn["steps"]}
+        for step in defn["steps"]:
+            decided = _decided(store, latest.get(step["id"])) if step.get("ledger") == "refute" else {}
+            if not decided:
+                continue
+            sources = [sid for sid in _before(defn, step["id"]) if not by_id[sid].get("ledger")
+                       and by_id[sid].get("kind") in READ_ONLY_KINDS and latest.get(sid)]
+            if len(sources) < 2:
+                continue
+            rows = ledger.collect([(sid, _findings_of(store, latest[sid])) for sid in sources])
+            kept = set(decided.get("confirmed") or ())
+            for sid in sources:
+                key = (defn["name"], sid, str(latest[sid].get("final_cell") or "?"))
+                row = out.setdefault(key, {"workflow": key[0], "step": sid, "cell": key[2], "runs": 0, "rows": 0,
+                                           "alone": 0, "alone_kept": 0})
+                mine = [r for r in rows if sid in r["seen_by"]]
+                alone = [r for r in mine if r["seen_by"] == [sid]]
+                row["runs"] += 1
+                row["rows"] += len(mine)
+                row["alone"] += len(alone)
+                row["alone_kept"] += sum(1 for r in alone if r["id"] in kept)
+    return sorted(out.values(), key=lambda r: (r["workflow"], r["step"], r["cell"]))
+
+
 def _decided(store: Store, task: Mapping[str, Any] | None) -> dict:
     finished = store.final_event(task["id"]) if task and task.get("status") == "done" else None
     return dict((finished or {}).get("data", {}).get("ledger") or {})

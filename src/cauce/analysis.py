@@ -26,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cauce import cells as cells_mod
-from cauce import launch, racing, revisions, trunks, usage
+from cauce import launch, racing, revisions, trunks, usage, workflows
 from cauce.store import Store
 
 #: The phases of a run, in the order they happen. The first four come before its own wall
@@ -459,6 +459,8 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "role_revisions": revisions.overview(store, repo),
         # Whether racing a first try paid, per repository and kind (`cauce.racing`): its own window.
         "races": racing.table(store, repo),
+        # What each blind review of a two-review ledger added that no other saw (`workflows.reviewer_yield`).
+        "reviewers": workflows.reviewer_yield(store, repo),
         "expensive": expensive(found),
     }
     if keep_runs is None:
@@ -629,6 +631,14 @@ def text(report: Mapping[str, Any]) -> str:
                 lines.append(f"  {_name(row['repo']):<16} {row['kind']:<12} races {row['races']:>3}  rung won "
                              f"{row['rung_wins']:>3}  start won {row['start_wins']:>3}  both failed "
                              f"{row['neither']:>3}  {'racing' if row['pays'] else 'not racing'}: {row['why']}")
+        if report.get("reviewers"):
+            lines += ["", "blind reviews beside another (rows each put on the ledger, rows no other saw, and of those "
+                      "the ones kept):"]
+            for row in report["reviewers"]:
+                lines.append(f"  {row['workflow']:<14} {row['step']:<12} {row['cell']:<12} runs {row['runs']:>3}  rows "
+                             f"{row['rows']:>4}  alone {row['alone']:>3}  kept {row['alone_kept']:>3}"
+                             + ("  added nothing the others missed" if row["runs"] >= 3 and not row["alone_kept"]
+                                else ""))
         if report["stops"]:
             lines += ["", "stopped by: " + ", ".join(f"{k} {v}" for k, v in report["stops"].items())]
     t = report["turns"]["turns"]

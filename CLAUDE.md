@@ -54,6 +54,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/racing.py` | whether racing a first try paid, per repository and kind: each race read from its attempts (rung, start, neither), the rung's wins and the time to pass against climbs, the judgement `race_cell` and `cauce stats` read; no model |
 | `src/cauce/cells.py` | where a lesson belongs: the area a path or a change is in, the role that met it, or everyone (`scope`); the text a failure is kept and matched by (a workflow step's goal, never its template); the cell's primer (how its workers got oriented) and its trial; no model |
 | `src/cauce/doctor.py` | `cauce doctor`: states the store should never hold, each a bug that shipped turned into a query (broken: stuck now; suspect: over the last days); read only, no model; SessionStart names what is broken |
+| `bench/review/` | the review benchmark: real review chains (one review, two blind ones, two with different purposes, a classifier before a quality check) on a change with planted bugs, matched by `analyze.py`; what it measured is in its README |
 | `bench/memory/` | the memory benchmark: real workers on a small pricing engine, judged by hidden tests, cold against briefed with a teacher's memory; what it measured is in its README (real money: run on purpose) |
 | `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away; constraints, the rules a change must meet, briefed apart as requirements |
 | `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
@@ -333,6 +334,9 @@ yields the default kind, not a guess.
   `ledger.BRIEF_CHARS` (shown and agreed ones first, `ledger.fit`), a fix's rows that
   did not fit wait for its next round and a refute's go to the person, each said by
   count. `panel` is this chain after four blind reviews, one lens each.
+  What each blind review beside another added (rows no other saw, and of those the ones
+  kept) is measured from the runs (`workflows.reviewer_yield`, `cauce stats`), never a reason
+  the engine changes a definition.
 - A risk tier is only raised, never lowered; a change that cannot be read is
   high. Its reasons are true: a word is read in its sense ("checkout" in git's,
   `payment` as one name among others is no money until the change touches that

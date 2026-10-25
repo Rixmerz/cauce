@@ -1598,3 +1598,27 @@ def test_a_goal_that_is_several_features_is_told_before_it_runs():
     assert said and "lists 7 items" in said and "--after run:<N>" in said
     assert workflows.many_features("Build the orders view:\n- it lists orders\n- it pages by 50") is None
     assert workflows.many_features("- a\n- b\n- c\n- d\n- e\n- f\n- g") is None  # many items, small: no advice
+
+
+def test_what_each_blind_review_added_beside_the_other_is_measured(git_repo, store: Store, kicks):
+    shown = {"where": "app.py:3", "what": "the total skips the last line", "evidence_class": "deterministic",
+             "cause": "introduced", "proof": "python3 -c 'print(total([1, 2]))' prints 1"}
+    read = {"where": "app.py:9", "what": "a negative quantity is accepted", "evidence_class": "inferential",
+            "cause": "introduced"}
+    results = [WorkerResult(True, None, "two problems", "read it", findings=(shown, read)),
+               WorkerResult(True, None, "one problem", "read it", findings=(shown,)),
+               WorkerResult(True, None, "decided", "showed it",
+                            verdicts=({"id": "F2", "verdict": "confirmed", "proof": "total([-1]) is -1"},)),
+               ok("fixed both"),
+               WorkerResult(True, None, "checked", "both fixed",
+                            verdicts=({"id": "F1", "verdict": "fixed", "proof": "p"},
+                                      {"id": "F2", "verdict": "fixed", "proof": "p"}))]
+    seen: list[dict] = []
+    workflows.start(store, "dual-review", git_repo, {"target": "the branch"})
+    flow.work(store, runner=_runner(results, seen))
+    rows = {r["step"]: r for r in workflows.reviewer_yield(store)}
+    assert {k: (r["runs"], r["rows"], r["alone"], r["alone_kept"]) for k, r in rows.items()} == {
+        "review-a": (1, 2, 1, 1), "review-b": (1, 1, 0, 0)}
+    from cauce import analysis
+    said = analysis.text(analysis.compute(store, days=0))
+    assert "blind reviews beside another" in said and "review-b" in said

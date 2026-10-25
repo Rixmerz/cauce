@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-10-25
+
+### Fixed
+
+- **Work queued while the last dispatcher was leaving no longer waits for the next hook.** A
+  step queued by a run that had just ended kicked its lane while that lane's dispatcher, which
+  had read the queue before the step was there, still held its lock. The kick was dropped, and
+  in one recorded run a review step waited 30 minutes on an idle machine. A start now leaves
+  word before it asks whether a dispatcher runs. A dispatcher that read its queue before that
+  word starts a fresh one once it releases its lock.
+  `cauce doctor` names a pickup that waited with nothing running in its lane
+  (`pickup-nobody-saw`).
+
+### Added
+
+- **`cauce stats` says what each blind review added beside another**: for each workflow step
+  that reviewed beside another, its cell, the rows it put on the ledger, the rows no other
+  review saw, and how many of those the refuter or a proof kept. It changes no definition.
+- **`bench/review`: two blind reviewers with one purpose against a classifier before a quality
+  check.** These are real review chains on a change with 14 planted bugs in 1,221 diff lines.
+  Every arm caught 40 to 41 of 42. In all six two-review chains, the second (sonnet) reviewer
+  found no bug the opus one missed, for about 60% more cost than one review. The classifier and
+  quality-check funnel cost about as much as a blind review and was the slowest arm, so it was
+  not built.
+
+
 ## [0.44.0] - 2026-10-25
 
 ### Added
