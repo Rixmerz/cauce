@@ -26,7 +26,7 @@ import harness  # noqa: E402
 
 from cauce.orchestrate import verifier_brief  # noqa: E402
 
-CHECK = ".venv/bin/python -m pytest -q -p no:cacheprovider"
+CHECK = [".venv/bin/python", "-m", "pytest", "-q", "-p", "no:cacheprovider"]
 
 
 def worktree(commit: str) -> Path:
@@ -38,7 +38,7 @@ def worktree(commit: str) -> Path:
 
 def check(where: Path) -> dict:
     began = time.monotonic()
-    done = subprocess.run(CHECK, shell=True, cwd=where, capture_output=True, text=True, timeout=1800)
+    done = subprocess.run(CHECK, cwd=where, capture_output=True, text=True, timeout=1800)
     return {"code": done.returncode, "wall_s": round(time.monotonic() - began, 1),
             "tail": done.stdout.strip().splitlines()[-1:]}
 
