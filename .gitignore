@@ -14,3 +14,4 @@ dist/
 # Laid by Claude Code when it loads the mod from this folder
 .claude-plugin/types/
 node_modules/
+bench/memory/results-*.jsonl

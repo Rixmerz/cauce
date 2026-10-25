@@ -1,0 +1,3 @@
+{"ana": {"id": "c-17", "staff": false, "loyalty": {"tier": "GOLD", "since": "2021-03-01"}},
+ "ben": {"id": "c-18", "staff": true, "loyalty": {"tier": "SILVER", "since": "2023-11-12"}},
+ "cy": {"id": "c-19", "staff": false, "loyalty": null}}

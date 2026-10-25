@@ -54,7 +54,8 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/racing.py` | whether racing a first try paid, per repository and kind: each race read from its attempts (rung, start, neither), the rung's wins and the time to pass against climbs, the judgement `race_cell` and `cauce stats` read; no model |
 | `src/cauce/cells.py` | where a lesson belongs: the area a path or a change is in, the role that met it, or everyone (`scope`); the text a failure is kept and matched by (a workflow step's goal, never its template); the cell's primer (how its workers got oriented) and its trial; no model |
 | `src/cauce/doctor.py` | `cauce doctor`: states the store should never hold, each a bug that shipped turned into a query (broken: stuck now; suspect: over the last days); read only, no model; SessionStart names what is broken |
-| `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away |
+| `bench/memory/` | the memory benchmark: real workers on a small pricing engine, judged by hidden tests, cold against briefed with a teacher's memory; what it measured is in its README (real money: run on purpose) |
+| `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away; constraints, the rules a change must meet, briefed apart as requirements |
 | `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
 | `src/cauce/grants.py` | what workers may do: the permission mode per model (auto; Haiku bypasses) and the rules a person keeps per repository with `cauce allow` |
 | `src/cauce/runtime.py` | the Node a project declares (`.nvmrc`, `.node-version`, `engines.node`), or its installed dependencies need when it declares none, found among nvm's and put first on a worker's PATH |
@@ -898,6 +899,21 @@ yields the default kind, not a guess.
   Haiku's from a conversation are current as written. Haiku files under topics that
   exist and never invents a link; without Haiku a fact is kept by its words.
   A fact that looks like a secret is never kept.
+- A constraint (`notes.CONSTRAINT`) is a note of its own kind: a rule a change must meet (a
+  policy, a limit a check enforces), briefed apart from the notes and as a requirement
+  (`notes.constraint_lines`), every live one of the project that fits in
+  `notes.CONSTRAINT_CHARS` and the rest by count, to every worker and to the independent
+  verifier, where breaking one is a finding. Framing is measured, not taste: a cheap model
+  ignored a policy briefed as a note and met it briefed as a constraint (`bench/memory`). It
+  bounds what the work must be, never what a worker may run or change. It comes from a
+  person (`cauce note … --constraint`, current as written) or from a passing worker's
+  `constraints`, kept only when a check of that task (cauce's own, or the verifier's) failed
+  before the pass, else filed as a fact; a worker's starts as a candidate and is weighed as
+  any note. It has no anchor: a change to the code it was learned on does not send it to review.
+- A note whose anchors were all written at commits outside the history a task starts from
+  (its base, else HEAD: a worker's note about its own change, filed while its branch waits
+  to be merged) is marked so in that task's brief (`notes.unmerged`), never dropped: what it
+  says of the code may not be there yet.
 - A note's anchor is reviewed only against this checkout's history: a change
   on a branch not merged yet is not a change. Filing notes never fails a run,
   and a GET in the UI never reviews them. Tests run with `CAUCE_NOTES=off`; a

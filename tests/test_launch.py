@@ -569,3 +569,14 @@ def test_the_account_s_usage_limit_is_read_with_when_it_resets():
     assert launch.resets_in("resets 9am (Mars/Olympus)", now=now) is not None  # an unknown zone: the machine's
     # A rate limit is no usage limit, and keeps its retry-after.
     assert launch.api_limit("API Error: 429 rate_limit_error retry-after: 30") == ("rate_limit", 30.0)
+
+
+def test_the_rules_a_failing_check_taught_are_read_from_the_block(tmp_path):
+    rule = "Gift card lines are never discounted (CI: POL-7)"
+    rules = [rule, "", 4, rule]
+    out = parse(proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed", constraints=rules))),
+                spec(tmp_path))
+    assert out.constraints == ("Gift card lines are never discounted (CI: POL-7)",)
+    assert parse(proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed"))), spec(tmp_path)).constraints \
+        == ()
+    assert '"constraints"' in launch.RESULT_INSTRUCTIONS

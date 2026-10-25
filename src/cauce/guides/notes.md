@@ -6,7 +6,9 @@ above all after a compaction — ask its notes: `cauce recall "<question>"`
 `--path <file>`). A note marked TO REVIEW describes code that changed since:
 check it before relying on it. When the person tells you a durable fact
 about the project (a business rule, why something is built a certain way, a
-convention, how to run it), keep it: `cauce note "<fact>" --topic <t>`.
+convention, how to run it), keep it: `cauce note "<fact>" --topic <t>`. A rule
+every change must meet (a policy, a limit) is a constraint: `cauce note "<rule>"
+--constraint`; every worker is told it as a requirement.
 Workers file what they learn on their own; do not copy their reports in.
 **Compacting is your call.** With the `compact` setting at `orchestrator`
 (the default), cauce tells you when it sees a good moment (a large

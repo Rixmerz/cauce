@@ -1744,7 +1744,8 @@ def _print_notes(found: list[dict], as_json: bool) -> None:
     if not found:
         print("no notes match")
     for n in found:
-        state = "" if n["state"] == "current" else f" [{n['state']}]"
+        state = ("" if n["state"] == "current" else f" [{n['state']}]") + (
+            " [constraint]" if n.get("kind") == notes.CONSTRAINT else "")
         why = f"  ({n['why']})" if n.get("why") else ""
         print(f"#{n['id']} [{n['topic']}]{state} {n['title']}{why}")
         if not n["text"].startswith(n["title"].rstrip("…")):
@@ -1777,7 +1778,8 @@ def cmd_note(args: argparse.Namespace) -> int:
                                      author="session" if os.environ.get("CAUCE_SESSION_ID") else "person",
                                      filed_by="person" if args.topic else "rule",
                                      source="cauce note", session_id=os.environ.get("CAUCE_SESSION_ID"),
-                                     links=links, paths=args.anchor or [], repo_dir=where)
+                                     links=links, paths=args.anchor or [], repo_dir=where,
+                                     kind=notes.CONSTRAINT if args.constraint else None)
         except ValueError as exc:
             print(f"cauce: {exc}", file=sys.stderr)
             return 2
@@ -1788,7 +1790,8 @@ def cmd_note(args: argparse.Namespace) -> int:
         print(json.dumps({"id": note_id, "new": new, "topic": note["topic"], "title": note["title"]},
                          ensure_ascii=False))
     else:
-        print(f"{'kept' if new else 'already known as'} #{note_id} [{note['topic']}] {note['title']}")
+        print(f"{'kept' if new else 'already known as'} #{note_id} [{note['topic']}] {note['title']}"
+              + (" as a constraint: every worker here is told its change must meet it" if args.constraint else ""))
     return 0
 
 
@@ -1905,7 +1908,8 @@ def cmd_notes(args: argparse.Namespace) -> int:
                 notes.review(store, key, where)
                 in_topics = [notes.resolve_topic(store, key, t) for t in args.topic] if args.topic else None
                 states = ["review"] if args.review else (notes.STATES if args.all_states else notes.LIVE)
-                rows = store.notes(key, topics=in_topics, states=states, limit=args.limit)
+                rows = store.notes(key, topics=in_topics, states=states, limit=args.limit,
+                                   kind=notes.CONSTRAINT if args.constraints else None)
                 _print_notes(notes.expand(store, [r["id"] for r in rows]), args.json)
             elif command == "show":
                 found = notes.expand(store, [args.id])
@@ -2622,6 +2626,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="a file the fact is about, relative to the checkout's top (repeatable)")
     p.add_argument("--link", action="append", metavar="ID[:KIND]",
                    help="a note it relates to: depends_on (default), explains, replaces, contradicts, example_of")
+    p.add_argument("--constraint", action="store_true",
+                   help="a rule every change here must meet (a policy, a limit): each worker's brief says it as one")
     p.add_argument("--repo")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_note)
@@ -2655,11 +2661,12 @@ def build_parser() -> argparse.ArgumentParser:
     notes_p = sub.add_parser("notes", help="this project's notes: list, show, ok, drop, move, link, topics")
     notes_p.add_argument("--repo")
     notes_p.set_defaults(func=cmd_notes, notes_command=None, topic=None, review=False, all_states=False,
-                         limit=100, json=False)
+                         limit=100, json=False, constraints=False)
     nsub = notes_p.add_subparsers(dest="notes_command")
     p = nsub.add_parser("list", help="notes, latest first")
     p.add_argument("--topic", action="append")
     p.add_argument("--review", action="store_true", help="only notes whose code changed since they were written")
+    p.add_argument("--constraints", action="store_true", help="only the rules every change here must meet")
     p.add_argument("--all-states", action="store_true")
     p.add_argument("--limit", type=int, default=100)
     p.add_argument("--json", action="store_true")

@@ -243,6 +243,10 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         # The worker's Claude Code session, kept in its worktree: more turns continue it.
         "session_id": "TEXT",
     },
+    "notes": {
+        # `constraint`: a rule a change must meet, briefed as one (`notes.CONSTRAINT`). NULL: a fact.
+        "kind": "TEXT",
+    },
     "problems": {
         "first_seen": "TEXT",
         "last_seen": "TEXT",
@@ -1756,13 +1760,13 @@ class Store:
 
     def add_note(self, project: str, topic: str, title: str, text: str, *, author: str, filed_by: str,
                  source: str = "", task_id: int | None = None, session_id: str | None = None,
-                 proposed_topic: str | None = None, state: str = "current") -> int:
+                 proposed_topic: str | None = None, state: str = "current", kind: str | None = None) -> int:
         stamp = now()
         cur = self._conn.execute(
             "INSERT INTO notes (project, topic, title, text, author, filed_by, source, task_id, session_id, "
-            "proposed_topic, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "proposed_topic, state, kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (project, topic, title, text, author, filed_by, source, task_id, session_id, proposed_topic, state,
-             stamp, stamp))
+             kind, stamp, stamp))
         note_id = int(cur.lastrowid)
         self._index("note", note_id, project, f"{title}\n{text}")
         return note_id
@@ -1785,9 +1789,14 @@ class Store:
         return note
 
     def notes(self, project: str, *, topics: Iterable[str] | None = None, states: Iterable[str] | None = None,
-              ids: Iterable[int] | None = None, limit: int = 200) -> list[dict]:
-        """A project's notes, latest first."""
+              ids: Iterable[int] | None = None, limit: int = 200, kind: str | None = None) -> list[dict]:
+        """A project's notes, latest first; with `kind`, only that kind (`fact` is a note of none)."""
         where, params = ["project = ?"], [project]
+        if kind == "fact":
+            where.append("kind IS NULL")
+        elif kind is not None:
+            where.append("kind = ?")
+            params.append(kind)
         for column, values in (("topic", topics), ("state", states), ("id", ids)):
             if values is not None:
                 values = list(values)
