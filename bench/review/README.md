@@ -9,6 +9,7 @@ so no worker reading the disk finds them).
 ```bash
 python bench/review/harness.py run <plain|volume> single,dual,split,funnel 3 4
 python bench/review/analyze.py bench/review/results-volume.jsonl --rows
+python bench/review/recheck.py run both,recheck,merged 3 3 && python bench/review/recheck.py report
 ```
 
 The arms are each a chain cauce runs or could run:
@@ -69,6 +70,28 @@ because its two stages cannot overlap.
    next takes 1 to 3 seconds. The exception was a review step that waited 30 minutes with the
    machine idle: it had been queued while the lane's last dispatcher was leaving.
 
+## After the fix: two readers of one diff, or one
+
+`recheck.py` checks a fix of the nine `plain` rows. The fix gets seven of them right, and slips
+in three ways:
+- **U**: it "fixes" the tier case by lowercasing the test data, not the code.
+- **N**: it "fixes" the CSV only with a line in the docs.
+- **R**: adding `bulk` to `rules.cfg`, it drops `staff`, and changes an existing test's expected
+  total so the suite still passes.
+
+| Arm | U | N | R | Cost | Path |
+|---|---|---|---|---|---|
+| the fix's verifier, then the re-check (cauce 0.44) | 3/3 | 3/3 | 3/3 | $0.34 | 94 s |
+| the re-check alone | 3/3 | 3/3 | 3/3 | $0.25 | 49 s |
+| one reader asked for both | 3/3 | 3/3 | 3/3 | $0.25 | 51 s |
+
+Every arm also called the `bulk` row a regression (it caused the `staff` slip), and no arm called
+a row open that was fixed. The verifier alone (sonnet/high, 40 to 48 s) caught all three slips
+too, with no false row. Over this repository's own runs, the fix's verifier and the re-check
+after it averaged 2.6 and 3.9 minutes per fix round. The verifier caught four fixes with
+blockers out of 17, two of them regressions next to the rows, so it is the one that stays: it
+corrects the fix in its own task.
+
 ## What cauce did with it (0.45.0)
 
 - **A start is never lost while the last dispatcher leaves.** A start leaves word before it asks
@@ -78,6 +101,9 @@ because its two stages cannot overlap.
 - **`cauce stats` says what each blind review added beside another**: the rows it put on the
   ledger, the rows no other review saw, and how many of those were kept. So whether a template's
   second reviewer pays is read from a person's own runs, not from this benchmark.
+- **A fix's verifier answers its rows, and a re-check it already answered runs no worker.** A row
+  the verifier calls open is a correction of the fix. When every row is fixed, the re-check is
+  decided from the verifier's answers.
 - **Not built:** the funnel and the split reviewers. The data does not support either.
 
 The caveat: one family of small changes, three runs per arm. The bugs were findable by one strong

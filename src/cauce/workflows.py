@@ -1216,7 +1216,8 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         # A run queued after other work: its steps wait for that work to pass, as it does; a
         # part that builds on another part waits for that one.
         after.KEY: (part or {}).get("hold") or options.get(after.KEY)}.items() if v is not None}
-    empty = (held is not None and not held["ids"]) or (joining is not None and not joins)
+    empty = (held is not None and (not held["ids"] or bool(held.get("answered")))) or \
+        (joining is not None and not joins)
     task = store.create_task(body, status="done" if empty else "queued", source="queue", author="workflow",
                              repo=run["repo"], cwd=run["cwd"], session_id=run["session_id"],
                              options=json.dumps(opts),
@@ -1229,8 +1230,14 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         if held is not None:
             nothing = {"refute": "no finding needed a refuter", "fix": "no confirmed finding to fix",
                        "recheck": "no fix to check"}[held["role"]]
-            decided = {"ledger": ledger.Outcome(held["role"], held["round"], confirmed=list(held.get("agreed") or ()),
-                                                held=list(held.get("held") or ())).data()}
+            outcome = ledger.Outcome(held["role"], held["round"], confirmed=list(held.get("agreed") or ()),
+                                     held=list(held.get("held") or ()))
+            if held.get("answered"):
+                nothing = (f"the fix's independent check showed {', '.join(held['ids'])} fixed in the same diff: "
+                           "no second reading")
+                outcome = ledger.outcome(held, held["answered"])
+                store.add_event(task["id"], "ledger_decided", seq=0, by="verifier", **outcome.data())
+            decided = {"ledger": outcome.data()}
         else:
             assert joining is not None
             nothing = ("one part kept a branch: nothing to join, and what follows starts from it"
@@ -1417,6 +1424,13 @@ def _ledger(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step:
         spec["base"] = _base(store, run, defn, step["id"], latest) or options.get("origin")
     if noted_only:
         spec["noted_only"] = noted_only
+    if role == "recheck" and mine and not noted_only and fix and fix["status"] == "done":
+        # The fix's own independent check read the same diff and answered every row fixed: the
+        # re-check would read it again, so it is decided with no worker (`orchestrate.verifier_brief`).
+        checked = (store.last_event(fix["id"], "verified") or {}).get("data") or {}
+        said = {v.get("id"): v.get("verdict") for v in checked.get("verdicts") or ()}
+        if checked.get("passed") and all(said.get(r["id"]) == "fixed" for r in mine):
+            spec["answered"] = [v for v in checked["verdicts"] if v.get("id") in spec["ids"]]
     spec["brief"] = ledger.brief(role, mine, round_=round_, sha=sha, diff=diff,
                                  reviewers=max(1, len(reviewers)),
                                  waiting=len(deferred) if role != "recheck" else 0) if mine else \

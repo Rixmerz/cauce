@@ -15,6 +15,17 @@
   `cauce doctor` names a pickup that waited with nothing running in its lane
   (`pickup-nobody-saw`).
 
+### Changed
+
+- **A fix whose own check showed every row fixed is not re-checked by a second worker.** The
+  fix's independent verifier now answers each ledger row it fixes (`fixed`, `not_fixed`,
+  `regression`). A row it calls open is a blocker, and the fix gets a correction round in its
+  own task instead of a stop later. When its passing check called every row fixed, the
+  re-check after it is decided from those answers with no worker. The two had read the same
+  diff one after the other: in this repository's runs they took 2.6 and 3.9 minutes per fix
+  round. On `bench/review`'s fix with planted slips, each caught all three slips alone. The
+  pair took 94 s against 49 s for one reader.
+
 ### Added
 
 - **`cauce stats` says what each blind review added beside another**: for each workflow step

@@ -1424,7 +1424,9 @@ def run(
                         base=base_commit, changed=so_far, risk=the_plan.risk, ledger=ledger,
                         corrections=corrections, launcher=launcher, store=store, task_id=task["id"], nth=nth,
                         say=say, outgrew=outgrew, registry=registry,
-                        rules=[n for n in the_plan.notes if n.get("kind") == notes.CONSTRAINT])
+                        rules=[n for n in the_plan.notes if n.get("kind") == notes.CONSTRAINT],
+                        rows=list((options.ledger or {}).get("ids") or ())
+                        if (options.ledger or {}).get("role") == "fix" else ())
             verifier_s = time.monotonic() - mark
             timing["worker_s"] += worker_s
             timing["check_s"] += check_s
@@ -2379,7 +2381,7 @@ def kept_evidence(text: str, room: int = 4000) -> str:
 
 def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, changed: Sequence[str],
                    known: Sequence[Mapping[str, str]] = (), why: Sequence[str] = (),
-                   rules: Sequence[Mapping[str, Any]] = ()) -> str:
+                   rules: Sequence[Mapping[str, Any]] = (), rows: Sequence[str] = ()) -> str:
     """What the verifier is given: the request in its words, the change, why it is checked
     (the risk's reasons, in the router's words) and the constraints the project keeps —
     never the worker's account."""
@@ -2402,6 +2404,14 @@ def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, change
     if lines := notes.constraint_lines(rules):
         parts.append("\n".join(lines) + "\nA change that breaks one that applies to it is a finding, shown with "
                      "the case that breaks it.")
+    if rows:
+        # A fix of ledger rows: its answers per row decide the re-check after it (`workflows._ledger`).
+        parts.append(f"The request is a fix of the ledger rows {', '.join(rows)}. Answer every one in `verdicts`, "
+                     f"one entry per id, with `verdict` one of {', '.join(ledger_mod.WORDS['recheck'])} and the "
+                     "`proof` that shows it: `fixed` only when you can show it in the change, in the code the row "
+                     "is about; a row only written down (a note, a doc, an instruction file) or answered by "
+                     "changing a test or its data is `not_fixed`; `regression` when the fix broke something at "
+                     "or around it. Report anything else the change broke in `findings`.")
     parts.append("This check is read-only: change no file of the project.")
     return "\n\n".join(parts)
 
@@ -2411,7 +2421,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
                        ledger: dict[str, Mapping[str, str]], corrections: int, launcher: Launcher, store: Store,
                        task_id: int, nth: int, say: Callable[[str], None], outgrew: bool = False,
                        registry: Mapping[str, caps.Capability] | None = None,
-                       rules: Sequence[Mapping[str, Any]] = ()
+                       rules: Sequence[Mapping[str, Any]] = (), rows: Sequence[str] = ()
                        ) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int,
                                   tuple[dict[str, str], ...]]:
     """A pass checked again by a worker that verifies the request, not the work.
@@ -2437,9 +2447,11 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
                           paths=changed, reading=True)
     measuring.update(touched.servers)
     hints = {name: hints[name] for name in measuring}
+    fixing = tuple(rows)
     check = dataclasses.replace(
         spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values()), risk.reasons,
-                                    rules=rules),
+                                    rules=rules, rows=fixing),
+        verdicts=fixing, verdict_words=ledger_mod.WORDS["recheck"] if fixing else (),
         cell=vcell, max_turns=min(spec.max_turns, VERIFIER_TURNS),
         # Its own session, never the worker's: it reads the request and the diff, not the work's account.
         resume_session="", fork_session=False, resume_note="", persist_session=False,
@@ -2459,6 +2471,13 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     cost = result.cost_usd + verdict.cost_usd
     shown = findings_mod.read({"findings": list(verdict.findings)})
     blockers = findings_mod.blocking(shown)
+    # A row of the fix it says is still open is a problem of this change, as a finding is.
+    answered = {v["id"]: v for v in verdict.verdicts if v["id"] in rows}
+    blockers += [{"where": v["id"], "what": f"{v['id']} is {v['verdict'].replace('_', ' ')}: {v['proof']}",
+                  "evidence_class": "deterministic" if v["proof"] else "inferential", "cause": "introduced",
+                  "proof": v["proof"]}
+                 for v in answered.values() if v["verdict"] != "fixed"
+                 and not any(findings_mod.same({"where": v["id"], "what": v["proof"]}, b) for b in blockers)]
     if not verdict.passed and not blockers and verdict.verdict == "fail":
         blockers = [{"where": "", "what": verdict.summary or "the check failed without a finding",
                      "evidence_class": "inferential", "cause": "unknown", "proof": ""}]
@@ -2474,7 +2493,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
                     blockers=list(blockers)[:20],
                     carried=len(carried), cost_usd=verdict.cost_usd, summary=verdict.summary[:500],
                     round=corrections, wall_s=round(wall_s, 2), duration_s=round(verdict.duration_s, 2),
-                    turns=verdict.turns)
+                    turns=verdict.turns, **({"verdicts": list(answered.values())} if rows else {}))
     if not decided:
         say(f"cauce: #{task_id} the independent check could not decide; the pass stands")
         return dataclasses.replace(result, cost_usd=cost, evidence=result.evidence + "\n\n[independent check "

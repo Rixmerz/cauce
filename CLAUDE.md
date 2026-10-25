@@ -337,6 +337,12 @@ yields the default kind, not a guess.
   What each blind review beside another added (rows no other saw, and of those the ones
   kept) is measured from the runs (`workflows.reviewer_yield`, `cauce stats`), never a reason
   the engine changes a definition.
+  A fix's independent verifier answers its rows in the re-check's words (`verifier_brief`'s
+  `rows`): a row it calls open is a blocker of the fix, a correction like any, and when its
+  passing check called every row `fixed` (and the fix wrote none only down) the re-check after
+  it is decided from those answers with no worker (`workflows._ledger`'s `answered`, a
+  `ledger_decided` event `by: verifier`): one reader of one diff, not two in a row. A fix that
+  ran no verifier, or whose check left a row unanswered, is re-checked by a worker as before.
 - A risk tier is only raised, never lowered; a change that cannot be read is
   high. Its reasons are true: a word is read in its sense ("checkout" in git's,
   `payment` as one name among others is no money until the change touches that
