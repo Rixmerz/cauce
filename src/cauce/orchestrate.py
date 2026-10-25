@@ -187,6 +187,9 @@ class Options:
     whole: bool = False
     #: A resume's account of where it starts and why (`cli.resume_line`), said in its plan.
     resume_why: str = ""
+    #: The loop this task is a round's step of (`cauce.loops`): its tools that act are
+    #: held by the loop's mode and rules in `cauce.mcp_guard`.
+    loop: str | None = None
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -202,7 +205,7 @@ class Options:
                   # What `flow.queued_options` reads back: a resume stored without them lost them
                   # for every resume after it (a step's start cell, its turns, its base commit).
                   "start": self.start.label if self.start else None, "max_turns": self.max_turns,
-                  "base": self.base, "carry": self.carry,
+                  "base": self.base, "carry": self.carry, "loop": self.loop,
                   "max_attempts": self.max_attempts if self.max_attempts != Options.max_attempts else None}
         kept = {k: v for k, v in values.items() if v not in (None, [], False)}
         if not self.keep_learned:
@@ -1210,6 +1213,8 @@ def run(
                 paths=touched_paths(text, options, [*changed, *(isolate.changed(workspace) if workspace else ())]),
                 reading=not writes or declared_read_only), the_plan.role, registry, workdir), the_plan, repo_dir,
                 workdir)
+            # A tool that acts answers to the loop the task is a round of, or to none.
+            selection = caps.for_loop(selection, options.loop, home())
             # Numbered as the store numbers it: a resumed task's attempts go on from its last.
             nth = len(store.attempts(task["id"])) + 1
             fork = bool(resume) and decision is not None and decision.move is Move.MORE_EFFORT

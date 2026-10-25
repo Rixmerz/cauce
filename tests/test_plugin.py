@@ -69,7 +69,8 @@ def test_the_skill_is_short_and_every_guide_it_names_exists(capsys):
 
     command = (ROOT / "commands" / "orchestration.md").read_text()
     assert len(command.splitlines()) < 120
-    named = {"when", "dispatch", "endings", "orchestrator", "workflows", "panels", "notes", "memory", "relay"}
+    named = {"when", "dispatch", "endings", "orchestrator", "workflows", "panels", "loops", "notes", "memory",
+             "relay"}
     shipped = {p.stem for p in (ROOT / "src" / "cauce" / "guides").glob("*.md")}
     assert named == shipped and all(f"`{n}`" in command for n in named)
     assert cli.main(["guide"]) == 0

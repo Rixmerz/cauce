@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-10-25
+
+### Added
+
+- **Loops: goals that run in rounds (`cauce loop`).** For work with no end of its own
+  (find and follow up leads through the night, keep CI green, work a backlog). A loop has
+  a goal, a workflow each round runs, a metric, a window and the person's rules, all kept
+  in their cauce home. A detached runner (`cauce loop start`) starts each round as an
+  ordinary workflow run, on what the round before kept when it passed, and tells every step
+  the goal, the mode, the rules and the diary of the last rounds, quoted as data. The metric
+  is the last number the person's command prints, run by cauce before the first round and
+  after each. A loop stops on evidence only: its target, its window (`--until 07:00`),
+  `--stale` rounds that did not improve on the best before them, or a round that waits on
+  what only the person clears; never on money, and each round's cost is kept. Given
+  `--variant`s, rounds alternate until each has `--trial` measured rounds, and the one that
+  moved the metric most is adopted. The session that made the loop hears of its stop once,
+  with its summary (`cauce loop show`): rounds, metric, cost, the strategy adopted and what
+  waits on the person.
+- **Tools that act on the world answer to a loop.** A capability names its sending tools
+  (`"outbound": {"acts": [...]}` in `capabilities.json`) and runs behind a new `outbound`
+  guard: those calls are refused outside a loop and while the loop is a draft (every loop
+  starts as one, and its workers write what they would send); after the person's `cauce
+  loop act`, a call is still refused outside the loop's `--hours`, past its `--per-hour`
+  (counted across its workers in a log that keeps no argument) or when it names an
+  `--exclude`. What the rules do not allow is listed under `Needs the person:` and shown
+  when the loop stops.
+- **`/cauce:loop`**: a session proposes a loop with the person (whether it is one, its
+  metric, what a round does, the rules in their words, what may act and what waits, the
+  window, strategies to compare, the tools the registry lacks), builds it with cauce's own
+  commands only on their yes, and starts it as a draft. `cauce guide loops` is the detail.
+
 ## [0.41.0] - 2026-10-25
 
 ### Fixed

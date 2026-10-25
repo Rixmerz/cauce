@@ -751,6 +751,34 @@ A note is read only from the project the run is in. A run whose memory cannot
 be read there (a note of another project, a dropped note, an empty topic, a
 missing problem) does not start.
 
+### Loops: goals that run in rounds
+
+Some goals have no end of their own: find and follow up leads through the night,
+keep CI green, work a backlog. `/cauce:loop` has the session propose one with
+you (its goal, metric, rules, what may act and what waits for you) and build it
+only on your yes:
+
+```bash
+cauce loop add leads --goal "find clients for the audit service" --workflow leads-round \
+  --dir ~/leads --every 30m --until 07:00 --metric "python count_replies.py" \
+  --policy "offer only the audit, USD 900, no discounts" --hours 8-21 --per-hour 20 \
+  --variant "short first message" --variant "first message with a case study"
+cauce loop start leads    # a detached runner; it starts as a draft
+cauce loop show leads     # rounds, the metric, the cost, what waits on you
+cauce loop act leads      # your word that it may act, within its rules
+```
+
+Each round is a workflow run, its workers fresh, checked and costed; between
+rounds the loop keeps a diary in your cauce home that the next round reads as
+data. The metric is a command cauce runs, never a worker's word. A loop stops
+on evidence (its target, its window, rounds that stopped improving, or something
+only you clear), never for money. Given strategies, rounds alternate until each
+has its measured rounds, and the one that moved the metric most is adopted. A
+loop starts as a draft: a capability's sending tools (listed under `outbound`
+in `capabilities.json`) run behind cauce's guard, which refuses them in a draft
+and, once you say `act`, outside the loop's hours, past its hourly cap or when
+they name someone it excludes. What its rules do not allow is listed for you.
+
 ### Watching several sessions
 
 One session per project, and one more that watches them all: run
@@ -921,6 +949,13 @@ profile (your logins), no saved routine (`--routines=off` too), writes and
 uploads only to the app on this machine (localhost), and every call in a
 session of its own. A `capabilities.json` entry of the same name wins over an
 installed plugin.
+
+A server whose tools act on the world (send mail, post, reply) names them, and
+runs behind the same guard: refused outside a loop you set to act (below).
+
+```json
+{"mail": {"server": {"command": "mail-mcp"}, "outbound": {"acts": ["send_message", "reply"]}}}
+```
 
 ### Roles and teams
 

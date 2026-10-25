@@ -259,6 +259,7 @@ def queued_options(task: dict, defaults: Options) -> Options:
         touches=tuple(raw.get("touches") or defaults.touches),
         reviewed_next=bool(raw.get("reviewed_next")) or defaults.reviewed_next,
         whole=bool(raw.get("whole")) or defaults.whole,
+        loop=raw.get("loop") or defaults.loop,
     )
 
 

@@ -701,7 +701,7 @@ def test_a_flag_a_command_does_not_take_says_what_was_meant(capsys):
     assert "--allw: did you mean --allow?" in said and "--input name=value" in said
     with pytest.raises(SystemExit):
         cli.main(["run", "fix it", "--input", "goal=x"])
-    assert "--input is taken by cauce workflow run, not by `cauce run`" in capsys.readouterr().err
+    assert "--input is taken by cauce workflow run, cauce loop add, not by `cauce run`" in capsys.readouterr().err
 
 
 def test_the_status_says_how_far_each_run_got_in_a_line(git_repo, store: Store, kicks, capsys, monkeypatch):
