@@ -26,6 +26,15 @@
   round. On `bench/review`'s fix with planted slips, each caught all three slips alone. The
   pair took 94 s against 49 s for one reader.
 
+- **The independent check runs beside cauce's own check, not after it** (the `overlap` setting).
+  When a writing attempt in a worktree passes and its change needs the verifier, the verifier
+  starts at once. It reads the same diff, and it is told the check is running and not to run it
+  itself. A check that fails stops it: its verdict is dropped and its cost kept
+  (`verifier_dropped`). It never overlaps for a task that starts services. In
+  `bench/speed/overlap.py` (a cauce worktree, its full suite as the check, a real verifier, 3 reps),
+  check plus verifier went from a median of 822 s to 478 s. The check was not slowed (260 to 263 s),
+  and the verifier passed with the same findings in every run.
+
 ### Added
 
 - **`cauce stats` says what each blind review added beside another**: for each workflow step
