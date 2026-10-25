@@ -70,6 +70,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/analysis.py` | where cauce's time and money go (`cauce stats`, the UI's Analysis): runs from `planned` to `finished`, their timed phases (and the gaps before them: advance, pickup, spawn), attempts by cell, the session's thread in briefs, a session's own turns; read only, no model |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
 | `src/cauce/loops.py` | goals that run in rounds (`cauce loop`): a definition, a diary and a state per loop in the person's cauce home, each round a workflow run, the metric measured by cauce, stops on evidence, strategies tried in arms; `loop_cli.py` is `cauce loop …` and the detached `loop-runner` |
+| `src/cauce/trunks.py` | a workflow step whose first try forks the session of a reading step before it (`trunk`): what it forks, the note that marks the role it takes from there, and the trial (`fork` against `fresh`) that keeps forking only where it paid; no model |
 | `src/cauce/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; a step that fans out over a plan's parts, one that joins their branches, a large change's review by area; `workflow_cli.py` is `cauce workflow …` |
 | `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
 | `src/cauce/services.py` | the servers a task needs up (`--service 'cmd@port'`): started in the task's directory, waited for, stopped with their process group when the run ends |
@@ -977,6 +978,22 @@ yields the default kind, not a guess.
   before said reaches a step quoted, as context, never as its criteria.
 - A fix's later round starts from the tip the round before it kept, so the
   run's last branch holds every round (`doctor`: `fix-round-off-base`).
+- A step may start as a fork of a reading step's session (`trunk`: an `explore` or `plan`
+  step before it that it waits on), and only its first try: what follows goes on from its own
+  attempts. A trunk reads and decides nothing for its forks; a review forks only an
+  `explore`, a refute, recheck or integrate step forks none, and the independent verifier
+  never runs in a fork. Claude Code records a session's system prompt on its first request
+  and every resume and fork sends that record (`--system-prompt-snapshot`), so a trunk runs
+  with its role and capability hints in its brief, never in its system prompt, and a fork is
+  given its role, its hints, where its directory is and that it is a new worker as its first
+  message (`trunks.note`), its brief after it. A trunk is queued with a worktree, where its
+  session is kept; one with no session, one that did not pass, or one whose context is over
+  `trunks.MAX_TOKENS` is not forked, and the step says why. Whether forking pays is
+  measured, never assumed: a repository's steps alternate forked and fresh first tries until
+  each arm has `trunks.TRIAL`, then forking stays only where its first tries passed no worse
+  than `MARGIN` below and reached their first change in fewer calls or finished sooner
+  (`trunks.arm`, the `briefed` event's `trunk_arm`, `cauce stats`); the `trunk` setting
+  turns it off, and tests run with `CAUCE_TRUNK=off`.
 - A worker's answer is refused for its form only by what its result contract
   told it (`launch.RESULT_INSTRUCTIONS`, `PARTS_INSTRUCTIONS`): a check the
   worker was never told of is a lost attempt, never a shape. Length is no form:

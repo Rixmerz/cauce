@@ -21,6 +21,15 @@ You hear of the run once, when it ends or when a step waits on the person.
 continued with `cauce resume <task> --unattended` or `cauce workflow retry <run> <step>`,
 and the run goes on from there.
 
+**A step can start where a reading step left off.** A step given a `trunk`
+(an `explore` or `plan` step before it) starts as a fork of that step's
+session: what it read is already in its context, and its own role is its
+first message after the fork, since the fork keeps the trunk's system prompt.
+Use it where a reading step and the work after it share what must be read
+(a plan and the parts it splits; an exploration and the steps that act on
+it), never to hand a review an opinion: a review forks only an exploration.
+cauce measures it in arms per repository and keeps it where it pays.
+
 When no saved workflow fits and the same shape will come back, make one
 instead of chaining by hand: `cauce workflow new <name> --from <closest>`,
 then `cauce workflow step add|set|rm`. Tell the person what you saved, and

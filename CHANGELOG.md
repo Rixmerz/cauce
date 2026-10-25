@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-10-25
+
+### Added
+
+- **A workflow step can start where a reading step left off (`trunk`).** A step that names
+  an `explore` or `plan` step before it as its `trunk` starts its first try as a fork of that
+  step's session (`claude -p --resume <trunk> --fork-session`), so what the trunk read is
+  already in its context instead of being read again, from another worktree. Claude Code
+  records a session's system prompt on its first request and every resume and fork sends that
+  record, so a new role given as a system prompt never reaches a fork: a trunk now runs with
+  its role in its brief, and a fork is given its role, its capability hints, its directory and
+  that it is a new worker (what was read is evidence, never a decision made for it) as its first
+  message, its brief after it. A review forks only an exploration, which decided nothing;
+  refute, recheck and integrate steps fork none. A trunk with no session, one that did not pass
+  or one whose context is over 120,000 tokens is not forked, and the step says why.
+  `feature-parallel`'s parts now fork its plan; `cauce workflow step add|set --trunk` gives
+  any step one.
+- **Forking is a trial, not a belief.** Each repository's steps alternate forked and fresh
+  first tries until each side has 10, then keep forking only where its first tries passed no
+  worse and reached their first change in fewer calls or finished sooner; it ends early where
+  forked first tries pass much worse. `cauce stats` shows both arms and where the trial stands;
+  the `trunk` setting turns it off.
 ## [0.42.0] - 2026-10-25
 
 ### Added

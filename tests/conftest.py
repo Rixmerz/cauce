@@ -32,6 +32,7 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("CAUCE_RACE", "off")
     monkeypatch.setenv("CAUCE_ROUTE", "off")
     monkeypatch.setenv("CAUCE_PRIMER", "off")
+    monkeypatch.setenv("CAUCE_TRUNK", "off")
     # Lean workers read the CLI's `--help`: a test that wants them passes a fake one.
     monkeypatch.setenv("CAUCE_LEAN", "off")
     # A role's revision is a Haiku call and a trial: a test that wants them turns them on with a fake `ask`.

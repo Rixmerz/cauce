@@ -36,7 +36,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from cauce import after, dispatch, isolate, ledger, project, repo, surfaces
+from cauce import after, dispatch, isolate, ledger, project, repo, surfaces, trunks
 from cauce import findings as findings_mod
 from cauce.escalate import MAX_TURNS_CEILING
 from cauce.matrix import KINDS, READ_ONLY_KINDS, Cell
@@ -55,7 +55,7 @@ TOP_KEYS = frozenset({"name", "description", "inputs", "steps", "version"})
 #: What a step may say. Nothing here widens what a worker may do: rules,
 #: approvals and capabilities are the person's flags on `run`, never a file's.
 STEP_KEYS = frozenset({"id", "title", "prompt", "kind", "needs", "verify", "start", "max_turns",
-                       "memory", "role", "surfaces", "ledger", "fanout", "integrate"})
+                       "memory", "role", "surfaces", "ledger", "fanout", "integrate", "trunk"})
 #: Keys an older cauce took in a step and nothing reads any more: a definition or
 #: a run's frozen copy that still holds one loads, and the key is dropped. A step
 #: has no dollar limit: its room is its turns.
@@ -339,6 +339,7 @@ def normalize(defn: Mapping[str, Any], name: str | None = None) -> dict[str, Any
         step["title"] = str(step.get("title") or sid)
         ids.append(sid)
     errors += _parts_problems([s for s in steps if isinstance(s, dict)], ids)
+    errors += trunks.problems([s for s in steps if isinstance(s, dict)], ids)
     if errors:
         raise WorkflowError("; ".join(errors))
     data["steps"] = steps
@@ -1179,6 +1180,12 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
                  f"`git diff {options['origin'][:12]}` shows it.")
     touches = _touches(run, options, base, area) if (str(step.get("kind") or "").startswith("review")
                                                      or step.get("ledger")) else None
+    trunk_for = trunks.is_trunk(defn, step["id"]) and trunks.enabled()
+    if trunk_for and not base:
+        # A trunk runs in a worktree at the run's commit: only there is its session kept to fork.
+        base = options.get("origin")
+    forks = trunks.source(store, (_tasks_of(latest.get(step["trunk"])) or [None])[-1], step["trunk"]) \
+        if step.get("trunk") else None
     opts = {k: v for k, v in {
         "kind": step.get("kind"), "verify": step_check(step, options, inputs), "start": step.get("start"),
         # The files the change it reads touches: capabilities about them join it.
@@ -1203,6 +1210,9 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         "integrate": {k: joining[k] for k in ("branches", "contract")} if joins and joining else None,
         # A round of a loop: the guard reads its mode and rules by this name.
         "loop": (options.get("loop") or {}).get("name") or None,
+        # A step its later steps fork (its role goes in its brief), and the trunk this one forks.
+        "trunk_for": True if trunk_for else None,
+        "trunk": forks,
         # A run queued after other work: its steps wait for that work to pass, as it does; a
         # part that builds on another part waits for that one.
         after.KEY: (part or {}).get("hold") or options.get(after.KEY)}.items() if v is not None}

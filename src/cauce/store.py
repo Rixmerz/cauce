@@ -1040,22 +1040,30 @@ class Store:
         """The tasks of a repository (None: of every one) whose brief was put in a primer arm: the arm, whether
         the first try passed, its input tokens, and how many tool calls it made before
         its first change (None when it made none)."""
+        return self.arm_trial(repo, "primer_arm")
+
+    def arm_trial(self, repo: str | None, key: str) -> list[dict]:
+        """The tasks of a repository (None: of every one) whose first `briefed` event put them in an arm
+        under `key` (`primer_arm`, `trunk_arm`): the arm, whether the first try passed, its input
+        tokens, its duration, and how many tool calls it made before its first change (None when
+        it made none)."""
         rows = self._conn.execute(
             "SELECT e.task_id, e.data FROM events e JOIN tasks t ON t.id = e.task_id "
             "WHERE e.kind = 'briefed' AND (? IS NULL OR t.repo = ?) ORDER BY e.id", (repo, repo)).fetchall()
         out: dict[int, dict] = {}
         for task_id, raw in rows:
-            arm = json.loads(raw).get("primer_arm")
+            arm = json.loads(raw).get(key)
             if arm and task_id not in out:
                 out[task_id] = {"task_id": task_id, "arm": arm}
         for task_id, row in out.items():
             first = self._conn.execute(
-                "SELECT passed, input_tokens FROM attempts WHERE task_id = ? AND seq = 1", (task_id,)).fetchone()
+                "SELECT passed, input_tokens, duration_s FROM attempts WHERE task_id = ? AND seq = 1",
+                (task_id,)).fetchone()
             tools = [r[0] for r in self._conn.execute(
                 "SELECT tool FROM tool_events WHERE task_id = ? AND attempt = 1 ORDER BY id", (task_id,))]
             edit = next((i for i, tool in enumerate(tools) if tool in EDIT_TOOLS), None)
             row.update(passed_first=bool(first and first[0]), input_tokens=int(first[1]) if first else 0,
-                       calls_before_edit=edit)
+                       duration_s=float(first[2] or 0) if first else 0.0, calls_before_edit=edit)
         return [r for r in out.values() if r["input_tokens"] or r["passed_first"]]
 
     def briefs(self, repo: str) -> list[dict]:

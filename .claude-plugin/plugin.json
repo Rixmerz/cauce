@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.42.0",
+  "version": "0.43.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -97,6 +97,12 @@
       "type": "boolean",
       "title": "Brief each worker with how its cell got oriented",
       "description": "A passing worker says what it had to find before its first change; the next worker of its role or area starts from those lines. Each repository alternates tasks with and without them until each side has 12, then keeps the primer only where it won (fewer calls before the first change, first tries no worse). Off: no primer.",
+      "default": true
+    },
+    "trunk": {
+      "type": "boolean",
+      "title": "Workflow steps fork the step that read for them",
+      "description": "A workflow step that names a reading step before it as its trunk (a plan, an exploration) starts as a fork of that step's session instead of reading the code again: its role reaches it as its first message after the fork, and the trunk's part is served by the prompt cache to every step that forks it. Each repository alternates forked and fresh first tries until each side has 10, then keeps forking only where it won (first tries no worse, fewer calls before the first change or less time). Off: every step starts fresh.",
       "default": true
     },
     "role_trials": {

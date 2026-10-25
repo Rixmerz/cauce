@@ -23,7 +23,7 @@ from cauce.text import clip
 NOW_HELP = ("write the change at once even while runs use the workflow (they go on with the copy they started "
             "with); without it the change waits for them")
 STEP_FLAGS = (("title", str), ("prompt", str), ("kind", str), ("role", str), ("verify", str), ("start", str),
-              ("max_turns", int), ("ledger", str), ("fanout", str))
+              ("max_turns", int), ("ledger", str), ("fanout", str), ("trunk", str))
 
 
 def _cwd(args: argparse.Namespace) -> Path:
@@ -68,7 +68,7 @@ def _print_definition(defn: dict[str, Any]) -> None:
     print(f"  inputs: {workflows.describe_inputs(defn)}")
     for step in defn["steps"]:
         after = f" after {', '.join(step['needs'])}" if step["needs"] else " (first)"
-        extra = ", ".join(f"{k} {step[k]}" for k in ("kind", "start", "verify", "max_turns", "fanout")
+        extra = ", ".join(f"{k} {step[k]}" for k in ("kind", "start", "verify", "max_turns", "fanout", "trunk")
                           if step.get(k) is not None) + (", integrate" if step.get("integrate") else "")
         print(f"\n  {step['id']} — {step['title']}{after}" + (f" [{extra}]" if extra else ""))
         for line in step["prompt"].splitlines():
@@ -590,7 +590,8 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         for flag, kind in STEP_FLAGS:
             p.add_argument(f"--{flag.replace('_', '-')}", dest=flag, type=kind,
                            help="the task text; {input} names are replaced at run time; - reads stdin"
-                           if flag == "prompt" else None)
+                           if flag == "prompt" else "a reading step before it (explore or plan) whose session its "
+                           "first try forks, its role given there" if flag == "trunk" else None)
         p.add_argument("--needs", help="comma-separated step ids it waits on ('' for none)")
         p.add_argument("--memory", help="memory its brief carries, comma-separated: note:<id> (or <id>), "
                        "topic:<name>, problem:<id>")
