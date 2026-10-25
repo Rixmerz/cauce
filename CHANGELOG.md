@@ -35,6 +35,17 @@
   check plus verifier went from a median of 822 s to 478 s. The check was not slowed (260 to 263 s),
   and the verifier passed with the same findings in every run.
 
+- **A feature starts at sonnet/high, a rung below where it started.** The feature ladder now
+  runs sonnet/high, sonnet/xhigh, opus/high, opus/xhigh. A feature classified as high complexity
+  starts a rung up, at sonnet/xhigh as before, and a repository's history and its calibrated
+  standard still raise the start where its features needed more. `bench/speed/build.py` ran two
+  builds, three runs per cell:
+  - **Medium build** (three rules, a receipt and a CSV export): every cell passed all seven hidden
+    tests. sonnet/high took 57 s, opus/high 118 s, sonnet/xhigh 170 s and opus/xhigh 192 s.
+  - **Harder build** (the same, plus moving 24 rules and renaming their methods everywhere):
+    sonnet/high passed all ten hidden tests 3 times in 3, in 84 s; sonnet/xhigh did too, in 276 s.
+    opus/high (189 s) and opus/xhigh (382 s) missed one test once each.
+
 ### Added
 
 - **`cauce stats` says what each blind review added beside another**: for each workflow step

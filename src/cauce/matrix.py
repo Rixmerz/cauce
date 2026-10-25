@@ -129,7 +129,10 @@ LADDERS: dict[str, tuple[Cell, ...]] = {
     "refactor": ladder("sonnet/medium", "sonnet/high", "opus/high"),
     "implement": ladder("sonnet/medium", "sonnet/high", "sonnet/xhigh", "opus/high"),
     "ui": ladder("sonnet/high", "sonnet/xhigh", "opus/high"),
-    "feature": ladder("sonnet/xhigh", "opus/high", "opus/xhigh"),
+    # A feature starts at sonnet/high: on bench/speed's builds (a medium one and one with a 24-rule
+    # refactor), it passed every hidden test 6 times in 6, 3 to 4 times sooner than sonnet/xhigh,
+    # which passed them no better. High complexity starts a rung up, and history raises the start.
+    "feature": ladder("sonnet/high", "sonnet/xhigh", "opus/high", "opus/xhigh"),
     "debug-repro": ladder("sonnet/high", "sonnet/xhigh", "opus/high", "opus/xhigh"),
     "debug-unclear": ladder("opus/high", "opus/xhigh", "opus/max"),
     "review-routine": ladder("sonnet/medium", "sonnet/high", "opus/high"),

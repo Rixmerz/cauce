@@ -71,14 +71,14 @@ MECHA = "github.com/o/mecha"
 
 
 def _calibrated(store: Store) -> dict:
-    """The example: 2 of 8 passed first at sonnet/xhigh and 4 of 5 at opus/high."""
+    """The example: 2 of 8 passed first at sonnet/high and 4 of 5 at sonnet/xhigh."""
     before = local(15, 12)
-    many(store, 2, ("sonnet/xhigh", 1), repo=MECHA, kind="feature", points=5, at=before)
-    many(store, 4, ("sonnet/xhigh", 0, "approach", "next_model"), ("opus/high", 1), repo=MECHA, kind="feature",
+    many(store, 2, ("sonnet/high", 1), repo=MECHA, kind="feature", points=5, at=before)
+    many(store, 4, ("sonnet/high", 0, "approach", "next_model"), ("sonnet/xhigh", 1), repo=MECHA, kind="feature",
          points=5, at=before)
-    finished(store, ("sonnet/xhigh", 0, "approach", "next_model"), ("opus/high", 0), repo=MECHA, kind="feature",
+    finished(store, ("sonnet/high", 0, "approach", "next_model"), ("sonnet/xhigh", 0), repo=MECHA, kind="feature",
              points=5, at=before)
-    finished(store, ("sonnet/xhigh", 0, "code_bug", "more_effort"), ("opus/xhigh", 1), repo=MECHA, kind="feature",
+    finished(store, ("sonnet/high", 0, "code_bug", "more_effort"), ("opus/high", 1), repo=MECHA, kind="feature",
              points=5, at=before)
     change, = standards.calibrate(store, MECHA, now=local(20, 12))
     return change
@@ -86,18 +86,18 @@ def _calibrated(store: Store) -> dict:
 
 def test_a_change_reads_as_a_sentence_with_its_verdict(store: Store):
     change = _calibrated(store)
-    assert (change["old_value"], change["new_value"]) == (None, "opus/high")
+    assert (change["old_value"], change["new_value"]) == (None, "sonnet/xhigh")
     report = evolution.report(store, days=30, now=local(21, 12), tz=HERE)
     line, = [c["line"] for c in report["changes"]]
-    assert line == ("feature in mecha, 5 points: starts at opus/high since Oct 20 because 2 of 8 passed first at "
-                    "sonnet/xhigh and 4 of 5 at opus/high; no task has run under it yet")
+    assert line == ("feature in mecha, 5 points: starts at sonnet/xhigh since Oct 20 because 2 of 8 passed first at "
+                    "sonnet/high and 4 of 5 at sonnet/xhigh; no task has run under it yet")
     for n in range(2):
-        finished(store, ("opus/high", int(n == 0)), repo=MECHA, kind="feature", points=5, used=[change["id"]],
+        finished(store, ("sonnet/xhigh", int(n == 0)), repo=MECHA, kind="feature", points=5, used=[change["id"]],
                  at=local(22, 12))
     line = evolution.report(store, now=local(22, 13), tz=HERE)["changes"][0]["line"]
     assert line.endswith(f"; pass-first since then 50 % over 2 tasks, judged after {standards.JUDGE_AFTER}")
     for _ in range(3):
-        finished(store, ("opus/high", 1), repo=MECHA, kind="feature", points=5, used=[change["id"]],
+        finished(store, ("sonnet/xhigh", 1), repo=MECHA, kind="feature", points=5, used=[change["id"]],
                  at=local(23, 12))
     standards.judge(store, MECHA, now=local(24, 12))
     found = evolution.report(store, now=local(25, 12), tz=HERE)["changes"][0]
@@ -107,7 +107,7 @@ def test_a_change_reads_as_a_sentence_with_its_verdict(store: Store):
 
 def test_a_revert_reads_as_one(store: Store):
     change = _calibrated(store)
-    many(store, standards.JUDGE_AFTER, ("opus/high", 0, "code_bug", "more_effort"), ("opus/xhigh", 0),
+    many(store, standards.JUDGE_AFTER, ("sonnet/xhigh", 0, "code_bug", "more_effort"), ("opus/high", 0),
          repo=MECHA, kind="feature", points=5, used=[change["id"]], at=local(22, 12))
     standards.judge(store, MECHA, now=local(23, 12))
     reverted, back = evolution.report(store, now=local(24, 12), tz=HERE)["changes"]
@@ -150,11 +150,11 @@ def test_the_command_prints_the_report_and_its_data(store: Store, capsys, monkey
     monkeypatch.setattr(evolution, "_now", lambda: local(21, 12))
     assert cli.main(["evolution"]) == 0
     out = capsys.readouterr().out
-    assert "feature in mecha, 5 points: starts at opus/high since Oct 20" in out
+    assert "feature in mecha, 5 points: starts at sonnet/xhigh since Oct 20" in out
     assert "No snapshot in the last 30 days yet" in out
     assert cli.main(["evolution", "--json", "--days", "7"]) == 0
     data = json.loads(capsys.readouterr().out)
-    assert data["days"] == 7 and data["changes"][0]["new_value"] == "opus/high" and data["standards"]
+    assert data["days"] == 7 and data["changes"][0]["new_value"] == "sonnet/xhigh" and data["standards"]
     assert cli.main(["evolution", "--snapshot"]) == 0
     assert "snapshot: 1 row" in capsys.readouterr().out
     assert len(store.snapshots()) == 1
