@@ -67,7 +67,7 @@ compacting), `memory`, `relay`.
    | `done`, on a branch | report the verdict; merge only on their word (`cauce merge N …`, or `cauce pr N`) |
    | `replan`, `split` | it is several pieces and kept its work: `cauce split N`, then `--queue` |
    | `replan`, turns | outgrew its turns as one piece: cauce resumed it once; again, split what is left |
-   | `replan`, wrong task | rewrite or split it from the reason; never rerun it as is |
+   | `replan`, wrong task | rewrite or split it from the reason; never rerun it as is (its surfaces kept it from the cause: run the `cauce resume N --surface …` its ending gives) |
    | `blocked`, permission | ask for the rule; on yes, the line it gives (`--keep` for every task here) |
    | `blocked`, `decision` (exit 4) | the work is done and kept; tell the person the point, then act on it |
    | `blocked`, `review` | read the blockers (`cauce show N`); resume `--unattended`, or dismiss with why |

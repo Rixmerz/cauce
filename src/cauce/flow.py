@@ -37,11 +37,11 @@ import sqlite3
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from cauce import after, capacity, classify, config, dispatch, isolate, launch, stops, surfaces
 from cauce.matrix import READ_ONLY_KINDS, Cell
@@ -77,6 +77,45 @@ def disk_full(exc: BaseException) -> bool:
         said = str(exc).lower()
         return "disk is full" in said or "disk i/o error" in said
     return False
+
+
+#: A running task is slow once it has run longer than this and than 9 in 10 of the passes of
+#: its kind in its repository, over at least `SLOW_SAMPLES` of them.
+SLOW_MIN_S = 20 * 60
+SLOW_SAMPLES = 5
+
+
+def slow(store: Store, task: Mapping[str, Any], now: float | None = None,
+         seen: dict[tuple[str, str], list[float]] | None = None) -> str | None:
+    """Why a running task is slow, or None: it has run longer than `SLOW_MIN_S` and than the
+    90th percentile of the wall time its kind's passes took here (`finished` events' `wall_s`).
+    Said, never acted on: nothing is stopped. `seen` keeps each repository and kind's times
+    for a caller that asks of several tasks."""
+    if task.get("status") != "running" or not task.get("kind"):
+        return None
+    planned = store.last_event(int(task["id"]), "planned")
+    try:
+        began = datetime.fromisoformat(str(planned["ts"])).timestamp() if planned else None
+    except ValueError:
+        began = None
+    if began is None or (elapsed := (time.time() if now is None else now) - began) < SLOW_MIN_S:
+        return None
+    key = (str(task.get("repo") or ""), str(task["kind"]))
+    walls = (seen or {}).get(key)
+    if walls is None:
+        walls = sorted(float(w) for t in store.list_tasks(repo=task.get("repo"), status=["done"], limit=200,
+                                                           source=("cauce", "queue"))
+                       if t["kind"] == task["kind"] and t["id"] != task["id"]
+                       and (w := (((store.final_event(t["id"]) or {}).get("data")) or {}).get("wall_s")))
+        if seen is not None:
+            seen[key] = walls
+    if len(walls) < SLOW_SAMPLES:
+        return None
+    p90 = walls[min(len(walls) - 1, int(0.9 * len(walls)))]
+    if elapsed <= p90:
+        return None
+    return (f"running {round(elapsed / 60)}m: longer than 9 in 10 of the {len(walls)} {task['kind']} tasks that "
+            f"passed here (p90 {round(p90 / 60)}m); `cauce show {task['id']}` says what it is doing")
 
 
 def alive(pid: int | None) -> bool:

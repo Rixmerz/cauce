@@ -184,6 +184,23 @@ def transcript_cost(path: Path, *, since: str | None = None) -> float:
     return round(sum(seen.values()), 4)
 
 
+def transcript_turns(path: Path, *, since: str | None = None) -> int:
+    """How many model calls one transcript holds (each assistant message once, by its id); with
+    `since`, only the ones written from then on. 0 when it cannot be read."""
+    seen: set[str] = set()
+    try:
+        for _, entry in _records(path, 0):
+            if not entry or entry.get("type") != "assistant":
+                continue
+            if since and str(entry.get("timestamp") or "")[:19] < since[:19]:
+                continue
+            if mid := (entry.get("message") or {}).get("id"):
+                seen.add(str(mid))
+    except OSError:
+        return 0
+    return len(seen)
+
+
 def running_cost(task_id: int, attempt: int | None, *, since: str | None = None,
                  env: Mapping[str, str] | None = None) -> float | None:
     """What a running attempt cost so far, read from its worker's live transcript: its session

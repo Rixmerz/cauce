@@ -101,6 +101,7 @@ def board(store: Store, repos: set[str] | None = None, session: str | None = Non
     project's board holds every session's, and a status line counts the one it is in."""
     tasks = store.list_tasks(limit=500, source=TASK_SOURCES)
     needs, running, done = [], [], []
+    slow_seen: dict[tuple[str, str], list[float]] = {}
     for t in tasks:
         if repos is not None and t["repo"] not in repos:
             continue
@@ -118,6 +119,7 @@ def board(store: Store, repos: set[str] | None = None, session: str | None = Non
             item["phase"] = phase.of(t["id"], item["attempt"])
             steps = len((item.get("flow") or {}).get("steps", []))
             item["worker"] = worker_of(store, t, steps) if item.get("flow") else None
+            item["slow"] = flow.slow(store, t, seen=slow_seen)
             running.append(item)
         elif t["status"] == "done":
             finished = store.final_event(t["id"])

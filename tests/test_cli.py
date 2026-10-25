@@ -539,6 +539,8 @@ def test_resume_continues_a_stopped_task_with_what_it_was_refused_granted(capsys
     assert options.kind == "implement" and options.start.label == "sonnet/medium"
     assert kw["task_id"] == t["id"] and kw["history"][0].failure.value == "permission"
     assert kw["history"][0].denied == ("Bash(node app.js)",)  # the resumed brief still says what was refused
+    assert options.resume_why == ("resumed after it blocked (1 attempt(s) before): it starts at sonnet/medium, the "
+                                  "cell its last attempt ran")
     assert options.isolate is True
     store = Store.open()
     row = store.get_task(t["id"])
@@ -1482,3 +1484,45 @@ def test_a_dismissal_or_a_resume_of_a_task_in_another_state_says_what_it_takes(s
     assert "It is running" in capsys.readouterr().err
     assert cli.main(["resume", str(done["id"])]) == 1
     assert "It passed: nothing to take off the board or to resume" in capsys.readouterr().err
+
+
+def test_a_resume_says_where_it_starts_and_when_that_is_below_what_it_ran():
+    cells = ["sonnet/xhigh", "opus/high", "opus/xhigh"]
+    assert cli.resume_line("failed", cells, "opus/xhigh", "last") == (
+        "resumed after it failed (3 attempt(s) before): it starts at opus/xhigh, the cell its last attempt ran")
+    lower = cli.resume_line("failed", cells, "opus/high", "asked")
+    assert lower.endswith("it starts at opus/high, as `--start` asked; that is below opus/xhigh, the highest cell "
+                          "it ran")
+    assert cli.resume_line("cancelled", [], None, "last").startswith("resumed after it cancelled, with no attempt")
+
+
+def test_show_tells_each_run_of_a_task_that_failed_and_was_resumed(capsys):
+    store = Store.open()
+    t = store.create_task("fix the radio", status="done", source="cauce", repo="r", kind="debug-repro")
+    store.add_event(t["id"], "planned", start="sonnet/xhigh", reasons=[])
+    store.add_event(t["id"], "finished", status="failed", attempts=3)
+    store.add_event(t["id"], "planned", start="opus/high", reasons=[
+        "resumed after it failed (3 attempt(s) before): it starts at opus/high, as `--start` asked"])
+    store.add_event(t["id"], "finished", status="done", attempts=1)
+    store.close()
+    assert cli.main(["show", str(t["id"])]) == 0
+    out = capsys.readouterr().out
+    assert "runs:\n  1. failed after 3 attempt(s), started at sonnet/xhigh\n  2. done after 1 attempt(s), started " \
+           "at opus/high (resumed after it failed" in out
+
+
+def test_tasks_workers_lists_only_work_a_worker_ran_by_project(capsys):
+    store = Store.open()
+    ran = store.create_task("fix the radio", status="done", source="cauce", repo="/w/hertzbench", kind="bugfix",
+                            cost_usd=3.2)
+    store.add_attempt(ran["id"], cell="sonnet/high", max_turns=30, passed=1)
+    other = store.create_task("add the button", status="done", source="cauce", repo="/w/site", kind="ui")
+    store.add_attempt(other["id"], cell="sonnet/high", max_turns=30, passed=1)
+    store.create_task("never ran", status="cancelled", source="queue", repo="/w/site", kind="ui")
+    store.create_task("a prompt", status="done", source="hook", repo="/w/site")
+    store.close()
+    assert cli.main(["tasks", "--all", "--workers", "--turns"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "hertzbench (/w/hertzbench)" and out[2] == "site (/w/site)"
+    assert out[1].startswith(f"#{ran['id']}") and out[1].endswith("fix the radio  (1 attempt(s), $3.20)")
+    assert len(out) == 4 and not any("never ran" in x or "(turn)" in x for x in out)

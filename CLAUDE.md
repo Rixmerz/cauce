@@ -301,6 +301,12 @@ yields the default kind, not a guess.
   event names the tests, they are kept per repository in the store's meta, and the
   ending says so; every later writing brief there names them (`orchestrate.known_flaky`),
   as data. Anything else is the first run's failure, unchanged.
+- Work that fixes a flake (writing work whose request names a flaky, intermittent or
+  "1 of N" failure, `orchestrate.flake_fix_runs`) runs its check `FLAKE_FIX_RUNS` times
+  (`_repeated_check`, a `check_repeated` event) and passes only when every run does; runs
+  that disagree are the flake still there, never the one-rerun pass and never excused by the
+  base; every run failing the same tests is one steady failure, compared with the base as any
+  is. The plan says so and the verdict card keeps the runs.
 - A writing worker's brief names the command that runs only the tests near its change
   (`ci.related`: jest, vitest, pytest), to run as it goes; the full check runs at the end.
 - Reviewers never vote: their findings are added together, so one is enough
@@ -338,6 +344,11 @@ yields the default kind, not a guess.
   dismissed one too) gives its first check the blockers the `verified` event
   kept.
   Tests run with `CAUCE_VERIFIER=off`.
+- A task that stops on a point (`spec`, `decision`) because its surfaces kept it from the
+  cause (it changed a path outside them, or its worker says so and names one,
+  `orchestrate._widen`) keeps those paths on its stop (`widen`), and its next step is
+  `cauce resume N --surface …` with them: the resume adds them and its brief keeps the
+  diagnosis. Nothing widens a task's surfaces but that resume.
 - Surfaces narrow and grant nothing: a change outside them fails the attempt
   and is undone in its worktree, never in a person's checkout. Two tasks whose
   surfaces are provably disjoint run side by side without Haiku; a task whose
@@ -432,7 +443,25 @@ yields the default kind, not a guess.
   name is never replaced, and an imported role reaches no worker until a team names it.
 - An ending of four or more at once tells each pass in one line (`hooks.verdict_summary`).
   `cauce stats --expensive` names the runs over their kind's p90 cost and why, from what
-  they recorded.
+  they recorded. A running task past `flow.SLOW_MIN_S` and its kind's p90 wall time in its
+  repository (`flow.slow`, over `SLOW_SAMPLES` passes) is said slow on the board, in `cauce
+  tasks` and in the mod's `tasks` tool; said, never stopped.
+- A resume's plan says what it resumes after, the cell it starts at and why, and when that
+  is below the highest cell the task ran (`cli.resume_line`); `cauce show` lists every run of
+  a task that ran more than once, so a fail resumed to a pass reads as both.
+- A plan line a repository hears the same on every task (`orchestrate.repeats`: a
+  neighbour's state, the CI jobs a check leaves out, a capability not in the registry) is
+  shown once a day there (`said_today`, the store's meta); the `planned` event keeps every
+  line and names the ones left out (`quiet`), and the ending leaves them out too.
+- An attempt's turns are the larger of the CLI's `num_turns` and its worker transcript's
+  model calls since it began (`launch.counted_turns`): a worker that compacted restarts the
+  CLI's count.
+- A pass whose worker never ran its own check (out of turns, refused) and that cauce's
+  check settled says so on its verdict card (`unchecked`), and the ending then allows the
+  diff to be opened.
+- A plan the request asks to be written to a file ("write it in docs/PLAN.md") is
+  classified `implement`, never a read-only plan (`classify.asks_for_change`); a `#plan`
+  tag keeps it a plan.
 - Older cauce installs in Claude Code's plugin cache are named once per set at
   SessionStart (`hooks._older_installs`), with the command that removes them; the person
   removes them, cauce never deletes from Claude Code's folder.
@@ -806,6 +835,9 @@ yields the default kind, not a guess.
   proof (`hooks._found_before`), and the `bugfix` that would take one on `--after` the
   work; nothing is started: the orchestrator decides. One its worker marks `fixed`, or in
   a file the work changed, is counted and never offered: the work most likely fixed it.
+  So is one in a file changed since the work started (`hooks._moved_since`: the checkout's
+  branch since the base its `finished` event keeps, or other work here that passed after it
+  started): it may be fixed already.
 - A worker never inherits the host's session id (`CLAUDE_CODE_SESSION_ID`),
   and an attempt never keeps the host's session as its own.
 - Problems and fixes are kept with their cell (`cauce.cells`): the role the

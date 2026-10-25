@@ -492,7 +492,9 @@ cauce run "the login redirect drops the query string" --verify "pytest -q tests/
 cauce run "build the training module" --verify "npm run build" --allow "Bash(npm run build)"
 cauce resume 12 --allow "Bash(node:*)"                         # a task that stopped, from its kept work
 cauce resume 12 --allow "Bash(node:*)" --keep                  # …and every task here gets the rule from now on
-cauce show 12                                                  # attempts, moves and messages
+cauce resume 12 --surface src/sync/clock.ts                    # …one its surfaces kept from the cause, with more
+cauce show 12                                                  # attempts, moves, each run and messages
+cauce tasks --all --workers                                    # only work a worker ran, by project
 cauce memory search "redirect query string"                    # dead ends, every repo
 cauce memory record --problem "redirect drops query" --fix "use url_for(_external)" --outcome failed --why "..."
 ```

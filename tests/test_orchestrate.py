@@ -1996,3 +1996,71 @@ def test_the_account_s_usage_limit_stops_the_task_until_it_resets_with_the_work_
 
     later = datetime.fromisoformat(report.stop.extra["resets_at"]) + timedelta(minutes=1)
     assert flow.limited_until(store, now=later) is None
+
+
+def test_a_pass_whose_worker_never_ran_its_own_check_says_so_on_its_verdict(git_repo, store):
+    from cauce import hooks
+
+    out_of_turns = WorkerResult(False, Failure.TURNS_EXHAUSTED, "used all 120 turns without a verdict")
+    report = run("remove the old module", git_repo, store, Options(verify="test -f gone.txt"), registry={},
+                 launcher=Script(out_of_turns, write="gone.txt"), classifier=kind("refactor"))
+    assert report.status == "done" and report.unchecked == "it ran out of turns"
+    verdict = store.final_event(report.task_id)["data"]["verdict"]
+    assert verdict["unchecked"].startswith("the worker never ran its own check (it ran out of turns)")
+    lines = hooks.verdict_lines(verdict)
+    assert any(line.startswith("  not self-checked: the worker never ran") for line in lines)
+    assert any("open the diff only where it says something was not checked" in line for line in lines)
+    plain = run("add gone.txt", git_repo, store, Options(verify="test -f gone.txt"), registry={},
+                launcher=Script(ok(), write="gone.txt"), classifier=kind("implement"))
+    assert "unchecked" not in store.final_event(plain.task_id)["data"]["verdict"]
+
+
+def test_a_task_its_surfaces_kept_from_the_cause_offers_a_resume_with_them_widened(git_repo, store, monkeypatch,
+                                                                                    capsys):
+    from cauce import cli, stops
+
+    wrong = WorkerResult(False, Failure.SPEC_BUG, "the root cause is in src/sync/clock.ts, outside my surfaces "
+                         "(src/radio/**): I may not change it", verdict="fail",
+                         evidence="src/radio/mac.ts:40 reads clock.now() from src/sync/clock.ts")
+    report = run("fix the dropped frames in src/radio", git_repo, store, Options(surfaces=("src/radio/**",)),
+                 registry={}, launcher=Script(wrong), classifier=kind("bugfix"))
+    assert report.status == "replan" and report.stop.cause == "spec"
+    assert report.stop.extra["widen"] == ["src/sync/clock.ts"]
+    line = stops.next_step(report.task_id, report.stop)
+    assert line == f"cauce resume {report.task_id} --surface src/sync/clock.ts"
+    # without a word about its surfaces, a path the account names is no reason to widen them
+    plain = WorkerResult(False, Failure.SPEC_BUG, "the request contradicts src/sync/clock.ts", verdict="fail")
+    other = run("fix the frames", git_repo, store, Options(surfaces=("src/radio/**",)), registry={},
+                launcher=Script(plain), classifier=kind("bugfix"))
+    assert "widen" not in other.stop.extra and stops.next_step(other.task_id, other.stop) is None
+
+    calls = []
+    monkeypatch.setattr(orchestrate, "run", lambda text, repo_dir, st, options, **kw: calls.append((options, kw))
+                        or orchestrate.Report(kw.get("task_id"), "done", None))
+    monkeypatch.setattr(orchestrate.Report, "text", lambda self: "ok")
+    monkeypatch.setattr(cli, "Store", type("S", (), {"open": staticmethod(lambda: store)}))
+    monkeypatch.setattr(store, "close", lambda: None)
+    assert cli.main(["resume", str(report.task_id), "--no-model"]) == 1  # a replan without more surfaces
+    assert cli.main(["resume", str(report.task_id), "--surface", "src/sync/clock.ts", "--no-model"]) == 0
+    options, kw = calls[-1]
+    assert options.surfaces == ("src/radio/**", "src/sync/clock.ts")
+    assert "its surfaces now take src/sync/clock.ts too" in options.resume_why
+    assert kw["history"][0].summary.startswith("the root cause is in src/sync/clock.ts")
+
+
+def test_lines_a_repository_hears_on_every_task_are_said_once_a_day(git_repo, store):
+    lines = ["engram: absent", "CI also runs: e2e (playwright)", "risk medium: payments"]
+    assert orchestrate.said_today(store, "r", lines, today="2026-10-24") == frozenset()
+    assert orchestrate.said_today(store, "r", lines, today="2026-10-24") == {"engram: absent",
+                                                                             "CI also runs: e2e (playwright)"}
+    assert orchestrate.said_today(store, "other", lines, today="2026-10-24") == frozenset()
+    assert orchestrate.said_today(store, "r", lines, today="2026-10-25") == frozenset()
+    assert orchestrate.repeats("role ui: capability browser is not in your registry or an adopted neighbour here")
+
+    from cauce.classify import Classification
+
+    plan = orchestrate.Plan("implement", Classification("implement"), (), orchestrate.Cell.parse("sonnet/medium"),
+                            ["CI also runs: e2e", "first change"], (), quiet=frozenset({"CI also runs: e2e"}))
+    text = orchestrate.Report(7, "done", plan).text()
+    assert "CI also runs" not in text and "first change" in text
+    assert "(1 note(s) this repository already heard today left out: `cauce show 7` keeps them)" in text

@@ -185,6 +185,8 @@ class Options:
     reviewed_next: bool = False
     #: The session's word that the task is one piece (`--whole`): out of turns, it gets more.
     whole: bool = False
+    #: A resume's account of where it starts and why (`cli.resume_line`), said in its plan.
+    resume_why: str = ""
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -239,6 +241,8 @@ class Plan:
     standard: dict | None = None
     #: The rung its first try races beside the start (`race_cell`): None when it does not.
     race: Cell | None = None
+    #: Lines of the plan this repository already heard today (`said_today`): kept, not shown again.
+    quiet: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -295,6 +299,8 @@ class Report:
     alerts: list[str] = field(default_factory=list)
     #: cauce's check failed only as it does at the base (`Baseline.found`): what it found, else None.
     preexisting: dict[str, Any] | None = None
+    #: Why the passing worker never ran its own check (out of turns, refused), when cauce's passed in its place.
+    unchecked: str = ""
 
     def checked_text(self) -> str:
         """What checked the work, said as it is: "unverified" only when no check cauce ran passed."""
@@ -309,7 +315,8 @@ class Report:
             f"task #{self.task_id}: {self.status}" if self.task_id else f"plan: {self.status}",
             f"kind {self.plan.kind} ({self.plan.classification.source}: {self.plan.classification.reason})",
             f"ladder {' → '.join(c.label for c in self.plan.ladder)}",
-            f"start {self.plan.start.label}" + "".join(f"\n  · {r}" for r in self.plan.reasons),
+            f"start {self.plan.start.label}" + "".join(f"\n  · {r}" for r in self.plan.reasons
+                                                       if r not in self.plan.quiet),
         ]
         if self.plan.role is not None:
             lines.append(f"role {self.plan.role.name} ({self.plan.role.scope}) of the {self.plan.team} team: "
@@ -317,7 +324,10 @@ class Report:
         lines.append(f"risk {self.plan.risk.tier}" + (f": {'; '.join(self.plan.risk.reasons)}"
                                                       if self.plan.risk.reasons else ""))
         lines.append(f"points {self.plan.points.line()}")
-        lines += [status.line() for status in self.plan.neighbours]
+        lines += [line for status in self.plan.neighbours if (line := status.line()) not in self.plan.quiet]
+        if self.plan.quiet:
+            lines.append(f"({len(self.plan.quiet)} note(s) this repository already heard today left out: "
+                         f"`cauce show {self.task_id}` keeps them)")
         if self.task_id is None:
             # A dry run shows what the first worker would be handed.
             lines += self.plan.context
@@ -549,6 +559,9 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     neighbour_notes += _unmet(text, registry, served=bool(options.services), verify=check, where=repo_dir)
     if check and kind not in READ_ONLY_KINDS:
         neighbour_notes += _beside_ci(repo_dir, check, options.services, ci.quiet(store, repo.key(repo_dir)))
+    if check and flake_fix_runs(kind, text) > 1:
+        reasons.append(f"this work fixes a flaky test: `{check}` runs {FLAKE_FIX_RUNS} times and must pass "
+                       "every time, since one pass says nothing of a flake")
     if check and (weak := ci.weak(check, repo_dir)):
         neighbour_notes.append(weak)
     if check and (bypass := ci.bypassed(check, repo_dir)):
@@ -813,6 +826,34 @@ def warnings(reasons: Sequence[str]) -> list[str]:
     return [r for r in reasons if r.startswith(WARNINGS)]
 
 
+#: Plan lines that read the same task after task in a repository: said once a day there.
+_REPEATED = ("CI also runs", "CI: ", "engram: ", "livespec: ")
+SAID_META = "said:"
+
+
+def repeats(line: str) -> bool:
+    """Whether a plan line is one a repository hears the same on every task: a neighbour's
+    state, the CI jobs a check leaves out, a role's capability that is not there."""
+    return line.startswith(_REPEATED) or " is not in your registry " in line
+
+
+def said_today(store: Store, key: str | None, lines: Sequence[str], *, today: str | None = None) -> frozenset[str]:
+    """The lines (`repeats`) this repository already heard today, and the rest marked as heard:
+    each is said on the day's first task there and kept on every `planned` event."""
+    day = today or datetime.now().astimezone().date().isoformat()
+    heard = set()
+    for line in dict.fromkeys(x for x in lines if repeats(x)):
+        meta = SAID_META + hashlib.sha256(f"{key}\0{line}".encode()).hexdigest()[:32]
+        try:
+            if store.meta(meta) == day:
+                heard.add(line)
+            else:
+                store.set_meta(meta, day)
+        except sqlite3.Error:
+            continue
+    return frozenset(heard)
+
+
 def foresee(text: str, repo_dir: Path, store: Store, options: Options) -> list[str]:
     """What a task's plan will warn of when it starts, said before it does: a dry
     plan, classified by rules alone and with no neighbour asked, since a neighbour's
@@ -940,6 +981,8 @@ def run(
             released := after.released_line(store, task["id"])):
         # Queued after other work that passed: where it starts, said once, as it starts.
         the_plan.reasons.append(released)
+    if options.resume_why:
+        the_plan.reasons.append(options.resume_why)
     if task_id is None:
         for twin in _twins(store, task, repo_dir):
             the_plan.reasons.append(f"task #{twin} asked the same and keeps its work on {isolate.branch_for(twin)}: "
@@ -950,15 +993,19 @@ def run(
     if not options.max_turns and the_plan.turns is None and turns_for(the_plan.kind) != DEFAULT_TURNS:
         the_plan.reasons.append(f"{the_plan.kind} work starts with {turns_for(the_plan.kind)} turns: "
                                 f"at {DEFAULT_TURNS} its attempts ran out")
+    the_plan.quiet = said_today(store, repo.key(repo_dir), [*the_plan.reasons,
+                                                           *(st.line() for st in the_plan.neighbours)])
     warned = warnings(the_plan.reasons)
     for reason in warned:
-        say(f"cauce: #{task['id']} warning: {reason}")
+        if reason not in the_plan.quiet:
+            say(f"cauce: #{task['id']} warning: {reason}")
     store.add_event(task["id"], "planned", kind=the_plan.kind, start=the_plan.start.label, warnings=warned,
                     role=the_plan.role.name if the_plan.role else None, team=the_plan.team,
                     risk=the_plan.risk.data(), points=the_plan.points.points,
                     points_why=list(the_plan.points.reasons), standard=the_plan.standard,
                     ladder=[x.label for x in the_plan.ladder], reasons=the_plan.reasons,
                     neighbours=[st.line() for st in the_plan.neighbours], plan_s=round(plan_s, 2),
+                    quiet=sorted(the_plan.quiet),
                     queued_s=queued_s)
 
     workspace = None
@@ -1076,7 +1123,9 @@ def run(
     # A red check is compared with the same check at the commit the work started from:
     # what failed there too was not this work's doing (`_against_base`).
     baseline = Baseline(store, task["id"], workspace.repo_dir if workspace else repo_dir, base_commit, home(),
-                        must_fix=the_plan.kind in _REPRODUCES) if base_commit and options.verify else None
+                        must_fix=the_plan.kind in _REPRODUCES,
+                        runs=flake_fix_runs(the_plan.kind, task.get("body") or task.get("title") or "")) \
+        if base_commit and options.verify else None
     # Turns are the one room dial, and they have one ceiling: a number asked for from
     # outside (a resume, a model's tool call) never raises it.
     cell, turns = the_plan.start, min(options.max_turns or the_plan.turns or turns_for(the_plan.kind),
@@ -1259,7 +1308,10 @@ def run(
                 result = _verified(result, options.verify, workdir, baseline)
             elif _settles(result, options.verify) and (
                     isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
+                unchecked = "it was refused a command" if result.failure is Failure.PERMISSION else \
+                    "it ran out of turns"
                 result = _settled(result, options.verify, workdir, baseline)
+                report.unchecked = unchecked if result.passed else ""
             stands = ""
             if result.failure in REPLAN and not result.denied and (
                     isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
@@ -1421,8 +1473,10 @@ def run(
                     next_cell=decision.cell.label if decision.cell else None,
                     account=clip(findings_mod.text(attempt.blockers) if decision.move is Move.REVIEW
                                  else result.summary, 2000),
-                    extra={"checked": report.checked} if decision.move is Move.DECIDE
-                    else _limit_extra(store, attempt) if _cause(decision, attempt) == "limit" else {})
+                    extra=({"checked": report.checked} if decision.move is Move.DECIDE
+                           else _limit_extra(store, attempt) if _cause(decision, attempt) == "limit" else {})
+                    | ({"widen": widen} if _cause(decision, attempt) in ("spec", "decision")
+                       and (widen := _widen(store, task["id"], options.surfaces, result)) else {}))
                 break
             if decision.move is Move.NEXT_MODEL and workspace is not None:
                 # A new model starts from the base, not the bet that lost; what the
@@ -1515,7 +1569,7 @@ def run(
         size = _realized(store, task["id"], report, workspace, time.monotonic() - clock)
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
-                        tip=_tip(workspace, report.branch),
+                        tip=_tip(workspace, report.branch), base=workspace.base if workspace else None,
                         commit=report.commit, checked=report.checked, isolated=report.isolated,
                         alerts=report.alerts,
                         changed=report.changed[:CHANGED_KEPT], changed_n=len(report.changed),
@@ -1566,9 +1620,12 @@ def verdict_card(store: Store, task_id: int, report: Report, options: Options, v
         "criteria": [{"id": str(c.get("id")), "met": bool(c.get("met")),
                       "evidence": " ".join(str(c.get("evidence") or "").split())[:CRITERION_EVIDENCE]}
                      for c in report.criteria if isinstance(c, Mapping)],
-        "check": _check_card(options.verify, report.preexisting) if options.verify else None,
+        "check": _check_card(options.verify, report.preexisting,
+                             store.last_event(task_id, "check_repeated")) if options.verify else None,
         "independent": independent,
         "attempts": len(report.cells),
+        **({"unchecked": f"the worker never ran its own check ({report.unchecked}); cauce's check passed in its "
+                         "place, so its criteria are its word alone"} if report.unchecked else {}),
     }
 
 
@@ -1576,12 +1633,15 @@ def verdict_card(store: Store, task_id: int, report: Report, options: Options, v
 FAILING_AT_BASE = "failing at base, unchanged"
 
 
-def _check_card(command: str, found: Mapping[str, Any] | None) -> dict[str, Any]:
+def _check_card(command: str, found: Mapping[str, Any] | None,
+                repeated: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """The verdict card's check: passed, or failing at the base too with the same failures
-    (`Baseline.found`): it stood as a pass, and the card says which it was."""
+    (`Baseline.found`): it stood as a pass, and the card says which it was. Work that fixes
+    a flake says how many runs it passed (`runs`); any other check ran once."""
+    runs = {"runs": int((repeated.get("data") or {}).get("runs") or 1)} if repeated else {}
     if not found:
-        return {"command": command, "passed": True}
-    return {"command": command, "passed": True, "state": FAILING_AT_BASE, "base": str(found.get("base") or ""),
+        return {"command": command, "passed": True, **runs}
+    return {"command": command, "passed": True, **runs, "state": FAILING_AT_BASE, "base": str(found.get("base") or ""),
             "failures": int(found.get("n") or 0), "fixed": int(found.get("fixed") or 0)}
 
 
@@ -1937,6 +1997,27 @@ def _limit_extra(store: Store, attempt: Attempt) -> dict[str, Any]:
         if (store.meta(stops.LIMIT_META) or "") < at:
             store.set_meta(stops.LIMIT_META, at)
     return {"resets_at": at}
+
+
+#: The most paths outside its surfaces a stop offers to widen them by.
+WIDEN_MAX = 5
+_SURFACE_WORDS = re.compile(r"\b(surfaces?|superficies?|outside (my|the|its) (scope|allowed)|not allowed to "
+                            r"(change|touch|edit)|may not (change|touch|edit))\b", re.IGNORECASE)
+
+
+def _widen(store: Store, task_id: int, surfaces: Sequence[str], result: launch.WorkerResult) -> list[str]:
+    """The paths a task that stopped on a point would need beyond its surfaces: the ones its
+    attempts changed outside them (undone), and the ones its worker names when it says its
+    surfaces kept it from them. Offered as a resume with them added (`stops.next_step`), so
+    the diagnosis is not lost to a new task; never applied on its own."""
+    if not surfaces:
+        return []
+    strayed = [str(p) for e in store.events_of(task_id, "outside_surfaces") for p in e["data"].get("paths") or ()]
+    said = f"{result.summary}\n{result.evidence}"
+    named = points_mod.named(said) if _SURFACE_WORDS.search(said) else []
+    found = (p.strip("/") for p in [*strayed, *named])
+    return list(dict.fromkeys(p for p in found if p and "*" not in p and not surfaces_mod.allows(surfaces, p)))[
+        :WIDEN_MAX]
 
 
 def _cause(decision: Decision, attempt: Attempt) -> str:
@@ -2426,6 +2507,10 @@ class Baseline:
     base: str
     root: Path
     must_fix: bool = False
+    #: How many times the check runs (`flake_fix_runs`): more than one for work that fixes a flake.
+    runs: int = 1
+    #: Whether the last check's runs disagreed: work that fixes a flake then fails, never excused by the base.
+    flaked: bool = False
     #: The last check's account when its failures were all there at the base, else None.
     found: dict[str, Any] | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -2489,6 +2574,9 @@ def _against_base(baseline: Baseline | None, command: str, output: str, workdir:
     if baseline is None:
         return False, ""
     baseline.found = None
+    if baseline.flaked:
+        return False, (f"this work fixes a flaky test, and its check gave different results over {baseline.runs} "
+                       "runs: the flake is still there, whatever the base does")
     work = launch.check_failures(output, roots=(workdir, baseline.repo_dir))
     if not work:
         return False, ("cauce could not read which tests or files failed from its output, so it cannot tell "
@@ -2572,6 +2660,21 @@ FLAKY_META = "flaky:"
 
 #: The most of a repository's known flaky tests a brief names.
 FLAKY_BRIEFED = 5
+#: How many times the check of work that fixes a flaky test runs: a flake that is fixed holds on each.
+FLAKE_FIX_RUNS = 3
+_FLAKE_FIX = re.compile(
+    r"\b(flak(y|e|es|iness)|intermittent\w*|intermitente\w*|sporadic\w*|espor[aá]dic\w*|a veces falla\w*"
+    r"|sometimes fails|fails sometimes|(fail\w*|falla\w*|pass\w*|pasa\w*) \d+ (of|de|out of) \d+"
+    r"|\d+ (of|de|out of) \d+ (runs?|times|veces|corridas))\b", re.IGNORECASE)
+
+
+def flake_fix_runs(kind: str, text: str) -> int:
+    """How many times a task's check runs: `FLAKE_FIX_RUNS` for writing work whose request is
+    about a flaky or intermittent failure, since one run that passes proves nothing of a flake;
+    once otherwise."""
+    if kind in READ_ONLY_KINDS or not _FLAKE_FIX.search(text or ""):
+        return 1
+    return FLAKE_FIX_RUNS
 
 
 def flaky_key(repo_dir: Path) -> str:
@@ -2593,8 +2696,13 @@ def _steady_check(command: str, workdir: Path, baseline: Baseline | None) -> tup
     """The check, run again once when it ran and failed on a few tests (`FLAKY_MAX`): a second
     run that passes means those tests flake, which says nothing of the work. Its pass stands,
     recorded as a `check_flaky` event with the tests and kept per repository; anything else is
-    the first run's failure, unchanged."""
+    the first run's failure, unchanged. Work that fixes a flake (`Baseline.runs`) gets its runs
+    instead (`_repeated_check`)."""
+    if baseline is not None:
+        baseline.flaked = False
     code, full = _run_check(command, workdir)
+    if baseline is not None and baseline.runs > 1 and (code == 0 or _ran_and_failed(code, full)):
+        return _repeated_check(command, workdir, baseline, code, full)
     if not _ran_and_failed(code, full):
         return code, full
     failing = launch.check_failures(full, roots=(workdir,))
@@ -2614,6 +2722,33 @@ def _steady_check(command: str, workdir: Path, baseline: Baseline | None) -> tup
             db.set_meta(key, json.dumps(dict(sorted(seen.items(), key=lambda kv: -kv[1])[:50])))
     return 0, second + "\n\n" + f"(cauce: {len(lines)} test(s) failed on the first run and passed on the second: " \
         + "; ".join(lines) + ")"
+
+
+def _repeated_check(command: str, workdir: Path, baseline: Baseline, code: int | None,
+                    full: str) -> tuple[int | None, str]:
+    """The check of work that fixes a flake, run `baseline.runs` times (the first given): it
+    passes only when every run does. Every run failing the same tests is one steady failure,
+    compared with the base as any is; runs that disagree are the flake still there
+    (`Baseline.flaked`), never excused by the base. Kept as a `check_repeated` event."""
+    results = [(code, full)]
+    while len(results) < baseline.runs and results[-1][0] is not None:
+        results.append(_run_check(command, workdir))
+    failed = [(c, out) for c, out in results if c != 0]
+    shapes = {frozenset(launch.check_failures(out, roots=(workdir,))) for _, out in failed}
+    steady = not failed or (len(failed) == len(results) and len(shapes) == 1)
+    n, passed = len(results), len(results) - len(failed)
+    with baseline._db() as db:
+        db.add_event(baseline.task_id, "check_repeated", command=command, runs=n, passed=passed, steady=steady)
+    if not failed:
+        return 0, results[-1][1] + f"\n\n(cauce: this work fixes a flaky test: `{command}` ran {n} times and " \
+            "passed every time)"
+    first = failed[0]
+    if steady:
+        return first
+    baseline.flaked = True
+    return (first[0] if first[0] is not None else 1), first[1] + (
+        f"\n\n(cauce: this work fixes a flaky test, so `{command}` ran {n} times: it passed {passed} of {n}. A "
+        "flake that is fixed passes every run; this output is the first run that failed)")
 
 
 def _verified(result: launch.WorkerResult, command: str, workdir: Path,

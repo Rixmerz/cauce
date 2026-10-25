@@ -464,7 +464,10 @@ export const register: Register = (on, options) => {
         lines.push(`  ${card.asks}`)
       }
     }
-    for (const card of found.running) lines.push(`running: #${card.id} ${card.title}${card.current_cell ? ` (${card.current_cell})` : ''}`)
+    for (const card of found.running) {
+      lines.push(`running: #${card.id} ${card.title}${card.current_cell ? ` (${card.current_cell})` : ''}`)
+      if (card.slow) lines.push(`  slow: ${card.slow}`)
+    }
     for (const lane of found.queued) {
       for (const card of lane.tasks) lines.push(`queued: #${card.id} ${card.title}${lane.paused ? ` (lane paused: ${lane.reason ?? ''})` : ''}`)
     }

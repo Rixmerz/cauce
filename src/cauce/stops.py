@@ -181,6 +181,9 @@ def next_step(task_id: int, stop: Stop, *, resumable: bool = True) -> str | None
     """The command that continues the task, or None when none would: a task the
     worker found wrong is rewritten, and one that never ran cannot resume. A
     dismissed task resumes as what it was, so one that was replanned does not."""
+    if resumable and (widen := stop.extra.get("widen")) and stop.cause in ("spec", "decision"):
+        # Its point was its surfaces: the resume adds the paths it needs and keeps its diagnosis.
+        return f"cauce resume {task_id}" + "".join(f" --surface {shlex.quote(str(p))}" for p in widen)
     if not resumable or stop.cause in ("spec", "ladder", "missing_dir", "converged", "decision", "landed"):
         return None
     if stop.cause == "superseded" and stop.extra.get("retry"):

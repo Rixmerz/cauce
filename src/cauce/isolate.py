@@ -690,6 +690,15 @@ def current_branch(repo_dir: Path) -> str | None:
     return _git(repo_dir, "symbolic-ref", "--quiet", "--short", "HEAD", check=False) or None
 
 
+def moved_since(repo_dir: Path, base: str) -> set[str] | None:
+    """The files the checkout's branch changed since `base` (a task's base commit), as HEAD
+    has them now: work that landed after the task started. None when git cannot say."""
+    if not base or not _git(repo_dir, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}", check=False):
+        return None
+    out = _git(repo_dir, "diff", "--name-only", base, "HEAD", "--", check=False)
+    return set(out.splitlines())
+
+
 def behind(repo_dir: Path, tip: str, base: str) -> dict[str, Any] | None:
     """How far `tip` is behind the branch `base` as it is now: the commits `base` gained
     since they parted, and the files both changed since. Read only: nothing is merged or
