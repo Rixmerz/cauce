@@ -705,7 +705,7 @@ def _kick(cwd: str, key: str | None) -> bool:
     """Start the repository's dispatcher unless one runs. A workflow run is the
     person asking for its work, so this does not wait for the `autowork` setting."""
     root = home()
-    return dispatch.held(root, key or "*") or dispatch.start(Path(cwd), root, key or "*")
+    return dispatch.start(Path(cwd), root, key or "*") or dispatch.held(root, key or "*")
 
 
 def example(defn: Mapping[str, Any]) -> str:

@@ -32,6 +32,8 @@ BROKEN, SUSPECT, FIXED = "broken", "suspect", "fixed"
 WINDOW_DAYS = 2
 #: Queued work no dispatcher took for this long, with nothing running in its lane, is stuck.
 QUEUED_STUCK = timedelta(minutes=30)
+#: A pickup is seconds when nothing runs in the lane: one this long there was work no dispatcher saw.
+PICKUP_UNSEEN = timedelta(minutes=5)
 #: An automatic resume that started no attempt after this long was refused or died.
 RESUME_SILENT = timedelta(minutes=10)
 #: A running task whose process is gone and that said nothing for this long.
@@ -56,6 +58,7 @@ FIXED_IN = {
     "problem-open-after-pass": "0.40.0",
     "flake-fix-checked-once": "0.40.0",
     "turns-under-the-wall": "0.40.0",
+    "pickup-nobody-saw": "0.45.0",
 }
 #: An attempt that ran this long per turn it counted kept a count the CLI restarted.
 WALL_PER_TURN_S = 300
@@ -570,13 +573,57 @@ def turns_under_the_wall(store: Store, *, since: str | None, **_) -> Iterable[Fi
         yield _history("turns-under-the-wall", before, None)
 
 
+def pickups_nobody_saw(store: Store, *, since: str | None, **_) -> Iterable[Finding]:
+    """Work that waited `PICKUP_UNSEEN` or more to be picked up while nothing ran in its lane and
+    no dispatch decision or usage limit held it: no worker was busy, so the wait was no worker's.
+    It was queued while the lane's last dispatcher was leaving, and the kick that found that one's
+    lock held was lost (`dispatch.wake`)."""
+    events = store.events_of_kinds(["attempt_started", "attempt_finished", "finished"], since=since)
+    began: dict[tuple[int, object], datetime] = {}
+    busy: list[tuple[int, datetime, datetime]] = []  # (task, from, to) of every attempt that ran
+    for event in events:
+        at, key = _ts(event["ts"]), (event["task_id"], event["data"].get("seq"))
+        if at is None:
+            continue
+        if event["kind"] == "attempt_started":
+            began[key] = at
+        elif event["kind"] == "attempt_finished" and key in began:
+            busy.append((event["task_id"], began.pop(key), at))
+    busy += [(task_id, start, datetime.max.replace(tzinfo=UTC)) for (task_id, _), start in began.items()]
+    before: list[int] = []
+    for event in events:
+        data, task = event["data"], None
+        waited = data.get("pickup_s") if event["kind"] == "finished" else None
+        if not isinstance(waited, int | float) or isinstance(waited, bool):
+            continue
+        held = sum(float(data.get(k) or 0) for k in ("pickup_conflict_s", "pickup_limit_s"))
+        task = store.get_task(event["task_id"])
+        dispatched = _ts((store.last_event(event["task_id"], "dispatched") or {}).get("ts"))
+        if task is None or dispatched is None or waited - held < PICKUP_UNSEEN.total_seconds():
+            continue
+        start = dispatched - timedelta(seconds=float(waited))
+        repo = task["repo"]
+        if any(other != task["id"] and a < dispatched and b > start
+               and (store.get_task(other) or {}).get("repo") == repo for other, a, b in busy):
+            continue
+        if _fixed("pickup-nobody-saw", data.get("version")):
+            before.append(task["id"])
+            continue
+        yield Finding("pickup-nobody-saw", SUSPECT,
+                      f"#{task['id']} waited {int(waited // 60)} min to be picked up while nothing ran in its lane",
+                      "a dispatcher left as it was queued; `cauce doctor` names it again if it recurs", task["id"],
+                      repo)
+    if before:
+        yield _history("pickup-nobody-saw", before, None)
+
+
 RULES: tuple[Callable[..., Iterable[Finding]], ...] = (
     lanes_paused_on_ended, running_with_no_process, queued_with_no_dispatcher, held_behind_gone, wait_judged_on_gone,
     resumes_that_never_ran,
     parts_that_lost_their_mark, joins_short_of_their_parts, attempts_with_no_session, turns_under_the_kind,
     format_failures_that_climbed, fix_rounds_off_their_base, candidates_on_trial_at_once, revisions_judged_twice,
     trials_never_sampled, notes_proven_unbriefed, preexisting_that_was_not, problems_open_after_pass,
-    flake_fixes_checked_once, turns_under_the_wall,
+    flake_fixes_checked_once, turns_under_the_wall, pickups_nobody_saw,
 )
 
 

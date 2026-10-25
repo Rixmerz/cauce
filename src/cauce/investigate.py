@@ -134,7 +134,7 @@ def _kick(cwd: str, key: str | None) -> bool:
     """Start the lane's dispatcher: an investigation is the person asking for its work,
     so it does not wait for the `autowork` setting."""
     root = home()
-    return dispatch.held(root, key or "*") or dispatch.start(Path(cwd), root, key or "*")
+    return dispatch.start(Path(cwd), root, key or "*") or dispatch.held(root, key or "*")
 
 
 def plan(store: Store | None, *, repos: Iterable[str] = (), exclude: Iterable[str] = (),

@@ -1524,7 +1524,10 @@ def cmd_work(args: argparse.Namespace) -> int:
                                defaults=orchestrate.Options(use_model_classifier=not args.no_model))
         finally:
             store.close()
-    if report.at_limit and getattr(args, "detached", False):
+    # Work queued while this one was leaving found its lock held and was left to it (`dispatch.wake`):
+    # it read its queue before that work was there, so a fresh dispatcher takes it now, not the next hook.
+    unseen = dispatch.woken(home(), key or "*", report.looked_at)
+    if unseen or (report.at_limit and getattr(args, "detached", False)):
         # The bound is per process: a detached dispatcher that reached it with work
         # still queued starts a fresh one after its lock is released, since nothing
         # else would (a step's parts all queue at once, and the step waits for them).
@@ -1536,7 +1539,8 @@ def cmd_work(args: argparse.Namespace) -> int:
         finally:
             store.close()
         if handed:
-            report.stopped_because += "; a fresh dispatcher takes the rest"
+            report.stopped_because += ("; a fresh dispatcher takes what was queued as this one left" if unseen
+                                       and not report.at_limit else "; a fresh dispatcher takes the rest")
     print(report.text())
     return 0 if all(r.status == "done" for r in report.ran) else 1
 

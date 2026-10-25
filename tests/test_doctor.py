@@ -225,3 +225,27 @@ def test_a_long_attempt_that_kept_few_turns_is_suspect(store: Store):
     found = rules(store, now=LATER, alive=lambda pid: True)["turns-under-the-wall"]
     assert [(f.severity, f.what) for f in found] == [(doctor.SUSPECT, f"#{task['id']} attempt 1 ran 48m and kept 2 "
                                                                       "turn(s)")]
+
+
+def test_work_picked_up_late_while_its_lane_was_idle_is_suspect(store: Store):
+    def at(event_id: int, minutes: float) -> None:
+        store._conn.execute("UPDATE events SET ts = ? WHERE id = ?",
+                            ((datetime.now(UTC) - timedelta(minutes=minutes)).isoformat(timespec="seconds"),
+                             event_id))
+
+    def waited(repo: str, version: str = "0.45.0", **pickup) -> dict:
+        task = store.create_task("review it", status="done", source="cauce", repo=repo)
+        at(store.add_event(task["id"], "dispatched", at=0), 0)
+        store.add_event(task["id"], "finished", status="done", version=version, pickup_s=20 * 60, **pickup)
+        return task
+
+    lost = waited("r")
+    held = waited("q", pickup_conflict_s=19 * 60)  # a dispatch decision held it: the wait was its
+    busy = waited("b")
+    other = store.create_task("build", status="done", source="cauce", repo="b")
+    at(store.add_event(other["id"], "attempt_started", seq=1), 25)
+    at(store.add_event(other["id"], "attempt_finished", seq=1), 5)  # a worker ran in its lane meanwhile
+    old = waited("r", version="0.44.0")
+    found = rules(store, now=LATER, alive=lambda pid: True)["pickup-nobody-saw"]
+    assert [(f.severity, f.task_id) for f in found] == [(doctor.SUSPECT, lost["id"]), (doctor.FIXED, old["id"])]
+    assert "waited 20 min" in found[0].what and held["id"] != busy["id"]

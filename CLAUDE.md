@@ -729,7 +729,11 @@ yields the default kind, not a guess.
 - A dispatcher never dies on a full disk (`flow.disk_full`): it waits and
   tries again with its lock and work kept. The hooks (SessionStart, Stop)
   start a dispatcher for a lane with startable queued work and none holding
-  its lock (`dispatch.revive`, autowork on), never a GET.
+  its lock (`dispatch.revive`, autowork on), never a GET. A start leaves word
+  before it asks whether a dispatcher runs (`dispatch.wake`), and a dispatcher
+  that read its queue before that word was left starts a fresh one once its lock
+  is let go (`cli.cmd_work`, `WorkReport.looked_at`): work queued while the last
+  one was leaving never waits for the next hook (`doctor`: `pickup-nobody-saw`).
 - A project names one orchestrator (`cauce.orchestrator`), in its `.cauce/`,
   never in a repository's files: the first session that sends work, one that
   claims it, a relay from it, the next session that starts where it ended, or
