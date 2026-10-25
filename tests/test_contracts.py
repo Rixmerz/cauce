@@ -20,7 +20,8 @@ def test_every_option_a_resume_stores_reads_back_the_same():
                    ledger={"role": "fix", "round": 1, "ids": ["F1"]}, keep_learned=False, carry=True,
                    add_dirs=("/other",), services=("serve@8000",), run_verify="make test", parts=True,
                    integrate={"branches": [{"part": "api", "task": 2, "branch": "b"}], "contract": "c"},
-                   touches=("ui",), reviewed_next=True, loop="leads")
+                   touches=("ui",), reviewed_next=True, loop="leads", trunk_for=True,
+                   trunk={"step": "plan", "task": 4, "session": "s", "model": "m", "cell": "opus/xhigh", "base": "b"})
     back = flow.queued_options({"options": json.dumps(full.stored())}, Options())
     lost = [f.name for f in dataclasses.fields(Options)
             if f.name != "use_model_classifier" and getattr(back, f.name) != getattr(full, f.name)

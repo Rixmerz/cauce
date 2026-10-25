@@ -26,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cauce import cells as cells_mod
-from cauce import launch, racing, revisions, usage
+from cauce import launch, racing, revisions, trunks, usage
 from cauce.store import Store
 
 #: The phases of a run, in the order they happen. The first four come before its own wall
@@ -453,6 +453,9 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "primer": cells_mod.trial(store, repo),
         # Where it stands now: the verdict a brief would get in this repository (none across all).
         "primer_now": cells_mod.primer_arm(store, repo, 0)[1] if repo else None,
+        # Workflow steps that fork the reading step before them, against fresh ones (`cauce.trunks`).
+        "trunk": trunks.trial(store, repo),
+        "trunk_now": trunks.arm(store, repo, 0)[1] if repo else None,
         "role_revisions": revisions.overview(store, repo),
         # Whether racing a first try paid, per repository and kind (`cauce.racing`): its own window.
         "races": racing.table(store, repo),
@@ -605,6 +608,18 @@ def text(report: Mapping[str, Any]) -> str:
                              f"  input p50 {row['input_tokens_p50'] or '—'}")
             if report.get("primer_now"):
                 lines.append(f"  now: {report['primer_now']}")
+        trunk = report.get("trunk") or {}
+        if any(row["tasks"] for row in trunk.values()):
+            lines += ["", "workflow steps that fork the step that read for them (the trunk's trial; first tries):"]
+            for arm, row in trunk.items():
+                rate = row["passed_first"] / row["tasks"] if row["tasks"] else None
+                calls = row["calls_before_edit_p50"]
+                took = row["duration_p50_s"]
+                lines.append(f"  {arm:<11} tasks {row['tasks']:>4}  first {_rate(rate):>4}  calls before the first "
+                             f"change p50 {calls if calls is not None else '—'}  input p50 "
+                             f"{row['input_tokens_p50'] or '—'}  time p50 {f'{took}s' if took is not None else '—'}")
+            if report.get("trunk_now"):
+                lines.append(f"  now: {report['trunk_now']}")
         if report.get("role_revisions"):
             lines += ["", "the roles' lessons here (a revision on trial, its arms' first tries, and its history):"]
             lines += ["  " + line for line in revisions.text(report["role_revisions"], lessons=False)]

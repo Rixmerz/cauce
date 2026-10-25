@@ -57,6 +57,7 @@ from cauce import (
     standards,
     stops,
     teams,
+    trunks,
     workflows,
 )
 from cauce import allow as allow_rules
@@ -190,6 +191,12 @@ class Options:
     #: The loop this task is a round's step of (`cauce.loops`): its tools that act are
     #: held by the loop's mode and rules in `cauce.mcp_guard`.
     loop: str | None = None
+    #: A workflow step a later step forks (`cauce.trunks`): its role goes in its brief, never
+    #: in its system prompt, which every fork of it would keep.
+    trunk_for: bool = False
+    #: The trunk this step's first attempt forks (`trunks.source`: its task, step and session),
+    #: or why there is none (`missing`).
+    trunk: dict | None = None
 
     def stored(self) -> dict:
         """What a resumed run is started with again, as the task's `options`. A run
@@ -206,6 +213,7 @@ class Options:
                   # for every resume after it (a step's start cell, its turns, its base commit).
                   "start": self.start.label if self.start else None, "max_turns": self.max_turns,
                   "base": self.base, "carry": self.carry, "loop": self.loop,
+                  "trunk_for": self.trunk_for, "trunk": self.trunk,
                   "max_attempts": self.max_attempts if self.max_attempts != Options.max_attempts else None}
         kept = {k: v for k, v in values.items() if v not in (None, [], False)}
         if not self.keep_learned:
@@ -1107,8 +1115,31 @@ def run(
             worn.update(given)
             if lessons:
                 context.append(lessons)
+    # A workflow step whose first try forks the session of the reading step it names
+    # (`cauce.trunks`): forked or fresh by the trunk's trial, kept either way so the arms
+    # can be compared; one with nothing to fork says why and is in no arm.
+    forking: dict[str, Any] | None = None
+    trunked: dict[str, Any] = {}
+    if options.trunk and trunks.enabled() and not store.attempts(task["id"]) and not resumed:
+        trunk = options.trunk
+        why = trunk.get("missing") or ("" if workspace is not None else
+                                       "it runs in no worktree of its own, where a session is kept")
+        held_tokens = trunks.context_tokens(trunk["session"]) if not why else None
+        if held_tokens is not None and held_tokens > trunks.MAX_TOKENS:
+            why = f"its trunk's context held {held_tokens} tokens, over {trunks.MAX_TOKENS}: little room left"
+        if why:
+            trunked = {"trunk_why": f"starts fresh, not as a fork of step {trunk.get('step')!r}: {why}"}
+        else:
+            arm, arm_why = trunks.arm(store, key, task["id"])
+            trunked = {trunks.KEY: arm, "trunk_why": arm_why, "trunk_task": trunk.get("task"),
+                       **({"trunk_tokens": held_tokens} if held_tokens is not None else {})}
+            if arm == "fork":
+                forking = dict(trunk)
+        say(f"cauce: #{task['id']} " + (f"forks step {trunk.get('step')!r}'s session (#{trunk.get('task')}) "
+                                         f"on its first try: {trunked['trunk_why']}" if forking is not None
+                                         else trunked["trunk_why"]))
     store.add_event(task["id"], "briefed", session=got, dead_ends=len(dead), areas=list(reach),
-                    context_chars=sum(len(line) for line in context), **primed, **worn,
+                    context_chars=sum(len(line) for line in context), **primed, **worn, **trunked,
                     **({notes.BRIEFED: [int(n["id"]) for n in the_plan.notes]} if the_plan.notes else {}))
     # The runtime the project declares goes first on the worker's PATH, and on its
     # check's: a worker given the wrong Node hunts for another and is refused each one.
@@ -1158,7 +1189,8 @@ def run(
     timing = {"hold_s": 0.0, "services_s": 0.0, "worker_s": 0.0, "check_s": 0.0, "verifier_s": 0.0, "wait_s": 0.0}
     # Its first try races the next rung (`race_cell`): only a fresh run in its own worktree
     # that brought nothing in from the person's checkout, which the race's lane would lack.
-    racing = the_plan.race is not None and workspace is not None and not history and not filled and not resumed
+    racing = the_plan.race is not None and workspace is not None and not history and not filled and not resumed \
+        and forking is None
     try:
         mark = time.monotonic()
         if in_place:
@@ -1218,11 +1250,21 @@ def run(
             # Numbered as the store numbers it: a resumed task's attempts go on from its last.
             nth = len(store.attempts(task["id"])) + 1
             fork = bool(resume) and decision is not None and decision.move is Move.MORE_EFFORT
+            prompt = brief(text, the_plan.kind, workdir, [*history, *attempts], dead, options.verify,
+                           writes and not declared_read_only, [*context, *aside], options.surfaces)
+            role_text = briefing.system_prompt if briefing else ""
+            hints = selection.system_prompt()
+            if options.trunk_for and (role_text or hints):
+                # Later steps fork this session, and a fork keeps the system prompt its first
+                # request recorded: its role and hints go in its brief, so a fork reads one role.
+                prompt = "\n\n".join(p for p in (role_text and "Your role for this step:\n" + role_text, hints,
+                                                  prompt) if p)
+            # Only the first try forks the trunk; a later one goes on from its own attempts.
+            branch = forking if forking is not None and not attempts else None
             spec = launch.LaunchSpec(
                 model_id=models.pinned(cell.model),
                 permission_mode=grants.mode_for(cell.model),
-                prompt=brief(text, the_plan.kind, workdir, [*history, *attempts], dead, options.verify,
-                             writes and not declared_read_only, [*context, *aside], options.surfaces),
+                prompt=prompt,
                 cell=cell,
                 launch_dir=launch_dir,
                 workdir=workdir if workdir != launch_dir else None,
@@ -1242,8 +1284,7 @@ def run(
                                     if (workspace.repo_dir / rel).is_dir()) if workspace else ()),
                             *(Path(d).expanduser().resolve() for d in options.add_dirs)),
                 mcp_servers=selection.servers,
-                append_system_prompt="\n\n".join(p for p in (briefing.system_prompt if briefing else "",
-                                                               selection.system_prompt()) if p),
+                append_system_prompt="" if options.trunk_for else "\n\n".join(p for p in (role_text, hints) if p),
                 env={**run_env, "CAUCE_WORKER_TASK": str(task["id"]), "CAUCE_WORKER_ATTEMPT": str(nth)},
                 criteria=criteria_mod.ids(text),
                 judging=not writes or declared_read_only or deciding is not None,
@@ -1253,11 +1294,15 @@ def run(
                 # Kept only in a worktree, where its directory is the task's: a session in the
                 # person's checkout would be one of theirs.
                 persist_session=workspace is not None,
-                resume_session=resume,
-                fork_session=fork,
-                resume_prompt=(launch.DEEPER_PROMPT if fork else launch.RESHAPE_PROMPT
+                resume_session=branch["session"] if branch else resume,
+                fork_session=bool(branch) or fork,
+                # A fork of the trunk is told it is a new worker, and its role: its system prompt is
+                # the trunk's record. Its brief follows.
+                resume_prompt=(trunks.note(branch, role=role_text, capabilities=hints, workdir=workdir,
+                                           base=workspace.base if workspace else None) if branch
+                               else launch.DEEPER_PROMPT if fork else launch.RESHAPE_PROMPT
                                if decision is not None and decision.reshape else launch.CONTINUE_PROMPT),
-                resume_note=continuation_note([*history, *attempts][-1]) if resume else "",
+                resume_note=prompt if branch else continuation_note([*history, *attempts][-1]) if resume else "",
             )
             store.update_task(task["id"], current_cell=cell.label)
             say(f"cauce: #{task['id']} attempt {nth} at {cell.label}")
@@ -1268,7 +1313,9 @@ def run(
                             since_start_s=round(time.monotonic() - clock, 2), brief_chars=len(spec.prompt),
                             **({"role": the_plan.role.name, "team": the_plan.team,
                                 "skills": list(briefing.skills)} if briefing else {}),
-                            **({"resumed": resume} if resume else {}), **({"fresh": fresh} if fresh else {}))
+                            **({"resumed": resume} if resume else {}), **({"fresh": fresh} if fresh else {}),
+                            **({"forked_trunk": {k: branch.get(k) for k in ("task", "step", "session")}}
+                               if branch else {}))
             if resume:
                 say(f"cauce: #{task['id']} attempt {nth} continues attempt {nth - 1}'s session ({resume})"
                     + (f" at {cell.label}" if fork else ""))

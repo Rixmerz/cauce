@@ -78,6 +78,14 @@ How to write the steps:
   worker only for a conflict or a check that fails on the joined work. A
   review of a large change that touches several areas runs once per area, into
   one ledger.
+- **Trunk:** `--trunk <reading step>` starts a step's first try as a fork of
+  that step's session (an `explore` or a `plan` step before it that it waits
+  on): it starts with what that step read instead of reading it again, and its
+  role reaches it as its first message after the fork. A review forks only an
+  `explore` step, which decided nothing; refute, recheck and integrate steps
+  fork none. Each repository tries forked and fresh first tries against each
+  other and keeps forking where it won (`cauce stats`). `feature-parallel`'s
+  parts fork its plan.
 - **Review ledger:** after review steps, `--ledger refute` decides the
   findings only one review saw, `--ledger fix` fixes only the confirmed ones,
   and `--ledger recheck` checks each one. Reviews never vote. A row still open

@@ -43,6 +43,9 @@ def world(tmp_path: Path, git_repo: Path, _isolated_home: Path):
     class World:
         repo, home, log = git_repo, _isolated_home, tmp_path / "calls.jsonl"
 
+        def setenv(self, name: str, value: str) -> None:
+            env[name] = value
+
         def script(self, rules: list[dict]) -> None:
             Path(env["FAKE_CLAUDE_SCRIPT"]).write_text(json.dumps(rules))
 
@@ -131,7 +134,7 @@ def test_a_workflow_part_that_died_is_resumed_and_the_join_holds_every_part(worl
              {"id": "web", "prompt": "PART-WEB: write web.txt", "surfaces": ["web.txt"]}]
     world.script([
         # The plan's first answer cannot run in parts: the same cell is asked again, no climb.
-        {"match": "Plan, without changing any file", "do": [
+        {"match": "Plan, without changing any file|Your last answer to this task could not be read", "do": [
             {"pass": True, "block": {"parts": [{"id": "api"}], "contract": "c"}},
             {"pass": True, "block": {"parts": parts, "contract": "api.txt and web.txt each say their name"}}]},
         {"match": "PART-API", "do": [{"pass": True, "write": {"api.txt": "api\n"}}]},
@@ -167,7 +170,7 @@ def test_a_part_that_builds_on_another_starts_from_its_work_after_it_passes(worl
     parts = [{"id": "api", "prompt": "PART-API: write api.txt", "surfaces": ["api.txt"]},
              {"id": "web", "prompt": "PART-WEB: write web.txt from api.txt", "surfaces": ["web.txt"], "after": "api"}]
     world.script([
-        {"match": "Plan, without changing any file", "do": [
+        {"match": "Plan, without changing any file|Your last answer to this task could not be read", "do": [
             {"pass": True, "block": {"parts": parts, "contract": "web.txt repeats api.txt"}}]},
         {"match": "PART-API", "do": [{"pass": True, "write": {"api.txt": "api\n"}}]},
         {"match": "PART-WEB", "do": [{"pass": True, "write": {"web.txt": "web on api\n"}}]},
@@ -289,6 +292,40 @@ def test_a_loop_runs_rounds_by_itself_until_its_metric_stops_moving(world, tmp_p
     assert len(briefs) == 3
     shown = world.cauce("loop", "show", "leads")
     assert "metric: 0.0 → 3.0" in shown and "rounds: 3 (3 ended)" in shown
+    world.healthy()
+
+
+def test_a_step_forks_the_session_of_the_step_that_read_for_it(world, tmp_path):
+    """A step whose `trunk` is the exploration before it starts as a fork of that session, from
+    its own worktree, told it is a new worker; its brief follows, so its own rule answers."""
+    (tmp_path / "scout.json").write_text(json.dumps({"name": "scout", "inputs": ["goal"], "steps": [
+        {"id": "look", "prompt": "LOOK-STEP: read the code for {goal}, changing nothing", "kind": "explore"},
+        {"id": "make", "prompt": "MAKE-STEP: build {goal}", "kind": "implement", "trunk": "look",
+         "needs": ["look"]}]}))
+    world.cauce("workflow", "save", str(tmp_path / "scout.json"), "--scope", "user")
+    world.setenv("CAUCE_TRUNK", "on")
+    world.script([
+        {"match": "(?s)everything above is the session of the workflow step 'look'.*MAKE-STEP",
+         "do": [{"pass": True, "write": {"greeting.txt": "hi\n"}}]},
+        {"match": "LOOK-STEP", "do": [{"pass": True}]}])
+    world.cauce("workflow", "run", "scout", "the greeting")
+    def run_ended(store):
+        return next((r for r in store.list_runs(limit=5) if r["status"] not in ("running", "active")), None)
+
+    ended = world.wait(run_ended, "the run to end")
+    assert ended["status"] == "done", ended
+    look, make = world.calls()
+    assert look["rule"] == 1 and "--resume" not in look["argv"]
+    store = Store(world.home / "cauce.db")
+    try:
+        tasks = {t["workflow_step"]: t for t in store.run_tasks(ended["id"])}
+        kept = store.attempt(tasks["look"]["id"], 1)["session_id"]
+        briefed = store.events_of(tasks["make"]["id"], "briefed")[0]["data"]
+    finally:
+        store.close()
+    assert kept and make["rule"] == 0
+    assert make["argv"][make["argv"].index("--resume") + 1] == kept and "--fork-session" in make["argv"]
+    assert make["cwd"] != look["cwd"] and briefed["trunk_arm"] == "fork"
     world.healthy()
 
 

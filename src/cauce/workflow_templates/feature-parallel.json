@@ -1,6 +1,6 @@
 {
   "name": "feature-parallel",
-  "description": "For a feature that touches several areas: a plan splits it into parts, each with surfaces no other part touches and a contract they all keep; the parts are built side by side, joined into one branch, and the joined change goes through the review chain of `feature`. A plan of one part is today's `feature`",
+  "description": "For a feature that touches several areas: a plan splits it into parts, each with surfaces no other part touches and a contract they all keep; the parts are built side by side, each starting as a fork of the plan's session, joined into one branch, and the joined change goes through the review chain of `feature`. A plan of one part is today's `feature`",
   "inputs": [
     "goal"
   ],
@@ -16,6 +16,7 @@
       "title": "Build each part, with its tests",
       "kind": "feature",
       "fanout": "plan",
+      "trunk": "plan",
       "needs": [
         "plan"
       ],

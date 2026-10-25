@@ -57,6 +57,10 @@ DEFAULTS: dict[str, Any] = {
     # Only the flags the installed CLI lists in its `--help` (`launch.lean_flags`).
     "lean": True,
     "primer": True,
+    # A workflow step that names a reading step before it as its `trunk` starts as a fork of
+    # that step's session, its role given as its first message there (`cauce.trunks`); each
+    # repository alternates forked and fresh first tries and keeps forking where it won.
+    "trunk": True,
     # A role's lessons in each repository improve by measured trial: an editor (Haiku) proposes
     # them from what the role's workers met there, its tasks alternate with and without them,
     # and they are kept only where they won (`cauce.revisions`). Off: the role's own text alone.

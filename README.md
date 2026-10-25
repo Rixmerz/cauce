@@ -704,8 +704,8 @@ Definitions are JSON files:
 - `bundled`: the templates `feature` (build with its tests → blind review →
   refute → fix → recheck), `feature-parallel` (for a feature that touches
   several areas: a plan splits it into parts with surfaces of their own and a
-  contract they keep → the parts built side by side → joined → the same review
-  chain; one part is `feature`), `bugfix` (reproduce and fix in one worker,
+  contract they keep → the parts built side by side, each a fork of the plan's
+  session → joined → the same review chain; one part is `feature`), `bugfix` (reproduce and fix in one worker,
   then the same review chain), `review-fix`, `dual-review` and `panel` (four
   blind reviews, each through its own lens: correctness, security,
   performance, tests; then the same refute → fix → recheck). The ledger steps
@@ -714,7 +714,7 @@ Definitions are JSON files:
 
 A definition holds steps (`id`, `prompt` with `{input}` names, `needs`,
 `kind`, `verify`, `start`, `max_turns`, `memory`, `surfaces`, `ledger`,
-`fanout`, `integrate`) and never a permission rule,
+`fanout`, `integrate`, `trunk`) and never a permission rule,
 an approval, a capability or a dollar limit. Rules, approvals and a run-wide
 check (`--verify`, for every step that writes and names none) are the person's
 flags on `run`. A step's `memory` topic with no note yet is said, never a
