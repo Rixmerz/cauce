@@ -34,12 +34,21 @@ ASK = ("Add pricing rules: loyalty members get their tier's discount on the orde
        "total, and a CSV export of an order for finance, `tally.export.rows(cart, customer) -> list[str]`, a "
        "header row, one row per line (item, qty, unit price, line total) and a total row.\n\nAdd tests for it, "
        "and run the suite before you stop.")
+HARD = (" Also reorganize the rules: move every rule module into `src/tally/rules/line/` or "
+        "`src/tally/rules/order/` by its stage, and rename the rule methods everywhere, `apply_line` to `on_line` "
+        "and `apply_order` to `on_order`, so every rule, the checkout and the tests use the new names and every "
+        "rule still prices as it did.")
 MAX_TURNS = 120
 
 
-def repository() -> Path:
+def repository(variant: str = "plain") -> Path:
     where = Path(tempfile.mkdtemp(prefix="tally-build-")) / "repo"
     shutil.copytree(BASE, where)
+    if variant == "hard":
+        sys.path.insert(0, str(HERE.parent / "review"))
+        import volume
+
+        volume.base(where)
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=where, check=True)
     subprocess.run(["git", "add", "-A"], cwd=where, check=True)
     subprocess.run(["git", "-c", "user.email=b@b", "-c", "user.name=b", "commit", "-qm", "init"], cwd=where,
@@ -47,9 +56,10 @@ def repository() -> Path:
     return where
 
 
-def hidden(where: Path) -> int:
+def hidden(where: Path, variant: str = "plain") -> int:
     with tempfile.TemporaryDirectory() as tmp:
-        subprocess.run(["tar", "xzf", str(HERE / "hidden.tgz"), "-C", tmp], check=True)
+        packed = HERE / ("hidden-hard.tgz" if variant == "hard" else "hidden.tgz")
+        subprocess.run(["tar", "xzf", str(packed), "-C", tmp], check=True)
         done = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "ci/hbuild.py"],
                               cwd=tmp, capture_output=True, text=True, timeout=300,
                               env={"PYTHONPATH": f"{where / 'src'}:{Path(tmp) / 'ci'}", "PATH": "/usr/bin:/bin"})
@@ -57,10 +67,11 @@ def hidden(where: Path) -> int:
     return int(found.group(1)) if found else 0
 
 
-def one(cell: str) -> dict:
+def one(cell: str, variant: str = "plain") -> dict:
     model, effort = cell.split("/")
-    where = repository()
-    spec = launch.LaunchSpec(prompt=ASK, cell=Cell(model, effort), launch_dir=where, max_turns=MAX_TURNS,
+    where = repository(variant)
+    ask = ASK.replace("\n\nAdd tests", HARD + "\n\nAdd tests") if variant == "hard" else ASK
+    spec = launch.LaunchSpec(prompt=ask, cell=Cell(model, effort), launch_dir=where, max_turns=MAX_TURNS,
                              timeout_s=launch.timeout_for(MAX_TURNS), permission_mode=grants.mode_for(model),
                              allowed_tools=("Bash(make:*)", "Bash(python3:*)", "Bash(git:*)"))
     began = time.monotonic()
@@ -72,22 +83,27 @@ def one(cell: str) -> dict:
     wall = time.monotonic() - began
     visible = subprocess.run(["make", "test"], cwd=where, capture_output=True, text=True, timeout=300).returncode == 0
     row = {"cell": cell, "wall_s": round(wall, 1), "turns": r.turns, "cost": round(r.cost_usd, 4),
-           "claimed": r.passed, "visible": visible, "hidden": hidden(where), "of": 7,
+           "claimed": r.passed, "visible": visible, "hidden": hidden(where, variant),
+           "of": 10 if variant == "hard" else 7,
+           "variant": variant,
            "s_per_turn": round(wall / r.turns, 1) if r.turns else None}
     shutil.rmtree(where.parent, ignore_errors=True)
     return row
 
 
 def main(argv: list[str]) -> None:
-    out = HERE / "results-build.jsonl"
+    variant = "hard" if "--hard" in argv else "plain"
+    argv = [a for a in argv if a != "--hard"]
+    out = HERE / ("results-build-hard.jsonl" if variant == "hard" else "results-build.jsonl")
     if argv[0] == "report":
         rows = [json.loads(x) for x in out.read_text().splitlines() if x.strip() and "error" not in x]
-        print(f"{'cell':<14}{'n':>3}{'all 7':>7}{'hidden':>8}{'wall p50':>10}{'turns':>7}{'s/turn':>8}{'$ p50':>7}"
+        print(f"{'cell':<14}{'n':>3}{'all':>7}{'hidden':>8}{'wall p50':>10}{'turns':>7}{'s/turn':>8}{'$ p50':>7}"
               f"{'wall per right build':>22}")
         for cell in sorted({r["cell"] for r in rows}):
             rs = [r for r in rows if r["cell"] == cell]
-            right = sum(r["hidden"] == r["of"] for r in rs)
-            print(f"{cell:<14}{len(rs):>3}{right:>4}/{len(rs):<2}{sum(r['hidden'] for r in rs):>5}/{7 * len(rs):<3}"
+            right = sum(r["hidden"] == r["of"] for r in rs)  # a build is right only when every hidden test passes
+            tests = f"{sum(r['hidden'] for r in rs)}/{sum(r['of'] for r in rs)}"
+            print(f"{cell:<14}{len(rs):>3}{right:>4}/{len(rs):<2}{tests:>8}"
                   f"{median(r['wall_s'] for r in rs):>10.0f}{median(r['turns'] for r in rs):>7}"
                   f"{median(r['s_per_turn'] for r in rs):>8.1f}{median(r['cost'] for r in rs):>7.2f}"
                   f"{(sum(r['wall_s'] for r in rs) / right if right else float('inf')):>22.0f}")
@@ -96,7 +112,7 @@ def main(argv: list[str]) -> None:
     jobs = [c for _ in range(reps) for c in cells]
 
     def run(cell: str) -> None:
-        row = one(cell)
+        row = one(cell, variant)
         with out.open("a") as fh:
             fh.write(json.dumps(row) + "\n")
         print(json.dumps(row), flush=True)
