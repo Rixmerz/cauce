@@ -706,7 +706,9 @@ Definitions are JSON files:
   several areas: a plan splits it into parts with surfaces of their own and a
   contract they keep → the parts built side by side → joined → the same review
   chain; one part is `feature`), `bugfix` (reproduce and fix in one worker,
-  then the same review chain), `review-fix` and `dual-review`. The ledger steps
+  then the same review chain), `review-fix`, `dual-review` and `panel` (four
+  blind reviews, each through its own lens: correctness, security,
+  performance, tests; then the same refute → fix → recheck). The ledger steps
   are skipped when the review found nothing, so a clean change costs two
   workers, and a join that merges cleanly costs none.
 
@@ -1076,7 +1078,10 @@ See [`src/cauce/skills/README.md`](src/cauce/skills/README.md) and
   to a refuter, which confirms or refutes it with its own proof; what it cannot
   decide comes to you. The fix gets only the confirmed rows (`F1..Fn`, frozen
   with a digest), the re-check answers for each row against the fix's diff, and
-  a row still open gets one more round, then comes to you.
+  a row still open gets one more round, then comes to you. `panel` is the same
+  chain after four blind reviews that each ask a different question. The ledger
+  keeps every row: a brief carries what fits, and a fix's rows that did not fit
+  wait for the next round, said by count.
 
 These ideas are adapted from
 [gentle-shell](https://github.com/Gentleman-Programming/gentle-shell) (MIT).

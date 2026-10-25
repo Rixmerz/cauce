@@ -22,7 +22,6 @@ from typing import Any
 
 EVIDENCE = ("deterministic", "inferential", "insufficient")
 CAUSES = ("introduced", "worsened", "pre-existing", "unknown")
-MAX_FINDINGS = 30
 
 
 def read(block: Mapping[str, Any]) -> tuple[dict[str, str], ...]:
@@ -31,7 +30,7 @@ def read(block: Mapping[str, Any]) -> tuple[dict[str, str], ...]:
     if not isinstance(raw, list):
         return ()
     out = []
-    for f in raw[:MAX_FINDINGS]:
+    for f in raw:
         if not isinstance(f, dict) or not str(f.get("what") or "").strip():
             continue
         evidence = str(f.get("evidence_class") or "").lower()

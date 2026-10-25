@@ -634,6 +634,22 @@ def test_the_dual_review_starts_two_blind_reviews_on_different_models(git_repo, 
     assert all("What the steps before it found" not in t["body"] for t in first)
 
 
+def test_the_panel_starts_four_blind_reviews_each_with_its_own_lens(git_repo, store, monkeypatch):
+    from cauce import ledger, workflows
+
+    monkeypatch.setattr(workflows, "_kick", lambda cwd, key: None)
+    defn = workflows.load("panel", git_repo, "bundled")
+    lenses = ["correctness", "security", "performance", "tests"]
+    assert next(s for s in defn["steps"] if s["id"] == "refute")["needs"] == lenses
+    started = workflows.start(store, "panel", git_repo, {"target": "the cart module"})
+    first = [store.get_task(i) for i in started["queued"]]
+    assert [t["workflow_step"] for t in first] == lenses
+    assert all(lens in t["body"].split("yours is", 1)[1][:20] and "What the steps before it found" not in t["body"]
+               for lens, t in zip(lenses, first, strict=True))
+    assert "4 reviewers, each through its own lens, worked apart" in ledger.brief(
+        "refute", [], round_=1, sha="abc", reviewers=4)
+
+
 # --- what a running attempt is doing, and the change it kept -----------------------------
 
 
@@ -824,6 +840,50 @@ def test_the_dual_review_fixes_only_what_is_confirmed_and_rechecks_each_row(git_
     assert decided["confirmed"] == ["F1", "F2"] and decided["refuted"] == ["F3"]
     # the session hears of the run once, at its end
     assert [t["workflow_step"] for t in store.unreported("s1")] == ["recheck"]
+
+
+def test_the_ledger_keeps_every_row_and_a_brief_carries_what_fits():
+    from cauce import ledger
+
+    assert len(criteria.items("\n".join(f"- item {n}" for n in range(25)))) == 25
+
+    many = _found(*((f"m{n}.py:1", f"problem {n}", "inferential", "introduced") for n in range(45)))
+    rows = ledger.collect([("review-a", many), ("review-b", _found(("m3.py:1", "problem 3", "deterministic",
+                                                                     "introduced")))])
+    assert len(rows) == 45 and rows[-1]["id"] == "F45"
+    # shown and agreed rows go first; one row always goes
+    one = len(ledger.rows_text([rows[3]])) + 1
+    given, waiting = ledger.fit(rows, limit=one)
+    assert [r["id"] for r in given] == ["F4"] and len(waiting) == 44
+    assert [r["id"] for r in ledger.fit(rows, limit=1)[0]] == ["F4"]
+    assert ledger.fit(rows)[1] == []
+    text = ledger.brief("fix", given, round_=1, sha="abc", waiting=44)
+    assert "44 more row(s)" in text and "the next fix round takes them" in text
+    # a refute's rows that did not fit go to the person; a fix's wait for the next round
+    refute = ledger.outcome({"role": "refute", "ids": ["F1"], "deferred": ["F2"]}, [{"id": "F1", "verdict": "refuted"}])
+    assert refute.held == ["F2"] and "did not fit in the refuter's brief" in refute.stop
+    later = ledger.outcome({"role": "recheck", "round": 1, "ids": ["F1"], "deferred": ["F2", "F3"]},
+                           [{"id": "F1", "verdict": "fixed"}])
+    assert later.survivors == ["F2", "F3"] and not later.stop
+    last = ledger.outcome({"role": "recheck", "round": 2, "ids": ["F2"], "deferred": ["F3"]},
+                          [{"id": "F2", "verdict": "fixed"}])
+    assert last.survivors == ["F3"] and "F3 still open after 2 fix rounds" in last.stop
+    assert len(ledger.read({"verdicts": [{"id": f"F{n}", "verdict": "fixed"} for n in range(1, 100)]})) == 99
+
+
+def test_a_fix_s_rows_that_did_not_fit_go_to_the_next_round(git_repo, store, monkeypatch):
+    from cauce import ledger
+
+    shown = ("cart.py:10", "total ignores the discount", "deterministic", "introduced")
+    monkeypatch.setattr(ledger, "BRIEF_CHARS", 1)
+    results = [_reviewed("a", shown, ("tax.py:5", "tax on the gross", "deterministic", "worsened")),
+               _reviewed("b"), ok("fixed the total"), _decides("one", F1="fixed"), ok("fixed the tax"),
+               _decides("two", F2="fixed")]
+    _, seen, steps = _ledger_run(git_repo, store, results, monkeypatch)
+    fix1, fix2 = seen[2]["prompt"], seen[4]["prompt"]
+    assert "- F1 " in fix1 and "- F2 " not in fix1 and "1 more row(s)" in fix1
+    assert "- F2 " in fix2 and "round 2 of 2" in fix2
+    assert steps["recheck"]["status"] == "done"
 
 
 def test_what_the_refuter_cannot_decide_goes_to_the_person(git_repo, store, monkeypatch):

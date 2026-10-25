@@ -15,6 +15,10 @@ digest a brief carries. A fix is given only the rows it may fix and adds none;
 a re-check answers only for those rows, against the fix's own diff. A row the
 fix left open earns one more round, up to `ROUNDS`; after that, and for every
 row the refuter could not decide, the run stops for the person as `review`.
+
+The ledger keeps every row; what is bounded is one brief. A role is given the rows
+that fit in `BRIEF_CHARS` (shown and agreed rows first); a fix's rows that did not
+fit wait for the next round, and a refute's go to the person, each said by count.
 """
 from __future__ import annotations
 
@@ -31,7 +35,8 @@ ROLES = ("refute", "fix", "recheck")
 ROUNDS = 2
 #: The answers each deciding role gives per row.
 WORDS = {"refute": ("confirmed", "refuted", "unsure"), "recheck": ("fixed", "not_fixed", "regression")}
-MAX_ROWS = 30
+#: The rows' text one role's brief carries; the rest wait, said, never dropped.
+BRIEF_CHARS = 40_000
 
 
 def _same(a: Mapping[str, str], b: Mapping[str, str]) -> bool:
@@ -50,8 +55,6 @@ def collect(sources: Sequence[tuple[str, Iterable[Mapping[str, str]]]]) -> list[
         for f in findings_mod.blocking(found):
             same = next((r for r in rows if _same(r, f)), None)
             if same is None:
-                if len(rows) >= MAX_ROWS:
-                    continue
                 same = {k: f.get(k, "") for k in ("where", "what", "evidence_class", "cause", "proof")}
                 same["seen_by"] = []
                 rows.append(same)
@@ -67,6 +70,24 @@ def disputed(row: Mapping[str, Any]) -> bool:
     return row["evidence_class"] != "deterministic" and len(row["seen_by"]) < 2
 
 
+def fit(rows: Sequence[Mapping[str, Any]], limit: int | None = None) -> tuple[list, list[str]]:
+    """The rows one brief carries and the ids that wait: shown rows first, then the ones
+    two reviewers agree on, each in ledger order, while their text fits in `limit`.
+    One row always goes, so a ledger always moves."""
+    limit = BRIEF_CHARS if limit is None else limit
+    order = sorted(rows, key=lambda r: (r["evidence_class"] != "deterministic", len(r["seen_by"]) < 2))
+    given: list = []
+    size = 0
+    for r in order:
+        n = len(rows_text([r])) + 1
+        if given and size + n > limit:
+            continue
+        given.append(r)
+        size += n
+    kept = {r["id"] for r in given}
+    return [r for r in rows if r["id"] in kept], [r["id"] for r in rows if r["id"] not in kept]
+
+
 def digest(rows: Sequence[Mapping[str, Any]]) -> str:
     canonical = json.dumps([{k: r[k] for k in sorted(r)} for r in rows], sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(canonical.encode()).hexdigest()
@@ -80,7 +101,8 @@ def rows_text(rows: Sequence[Mapping[str, Any]]) -> str:
 
 def _refute(reviewers: int) -> str:
     """The refuter's ask, true to how the rows came: from one review or from two."""
-    who = ("Two reviewers worked apart; each row below was found by only one of them and was read from the code, "
+    many = "Two reviewers" if reviewers == 2 else f"{reviewers} reviewers, each through its own lens,"
+    who = (f"{many} worked apart; each row below was found by only one of them and was read from the code, "
            "not shown." if reviewers > 1 else "A review read each row below from the code; nothing showed it.")
     return (f"You are the refuter. {who} Decide each row yourself, read-only, with your own proof: `confirmed` "
             "(you can show the problem, and, when a change is under review, that it caused or worsened it), "
@@ -117,9 +139,12 @@ def about_notes(row_where: str) -> bool:
 
 
 def brief(role: str, rows: Sequence[Mapping[str, Any]], *, round_: int, sha: str, diff: str = "",
-          reviewers: int = 2) -> str:
+          reviewers: int = 2, waiting: int = 0) -> str:
     ask = _refute(reviewers) if role == "refute" else _ASK[role]
     lines = [f"Ledger ({role}, round {round_} of {ROUNDS}), frozen; sha256 {sha}:", rows_text(rows), "", ask]
+    if waiting:
+        lines.append(f"{waiting} more row(s) of this ledger did not fit in this brief and are not yours this "
+                     "round" + ("; the next fix round takes them." if role == "fix" else "; a person decides them."))
     if diff:
         lines.append(f"The fix is `{diff}`.")
     if role in WORDS:
@@ -134,7 +159,7 @@ def read(block: Mapping[str, Any]) -> tuple[dict[str, str], ...]:
     if not isinstance(raw, list):
         return ()
     out = []
-    for v in raw[:MAX_ROWS * 2]:
+    for v in raw:
         if isinstance(v, dict) and isinstance(v.get("id"), str) and isinstance(v.get("verdict"), str):
             out.append({"id": v["id"].strip().upper(), "verdict": v["verdict"].strip().lower(),
                         "proof": str(v.get("proof") or "")[:500]})
@@ -175,14 +200,20 @@ def outcome(spec: Mapping[str, Any], verdicts: Sequence[Mapping[str, str]]) -> O
         out.confirmed = [*spec.get("agreed", ()), *(i for i in ids if said.get(i) == "confirmed")]
         out.refuted = [i for i in ids if said.get(i) == "refuted"]
         out.held = [i for i in ids if said.get(i) not in ("confirmed", "refuted")]
+        waited = list(spec.get("deferred") or ())
         if out.held and not out.confirmed:
             out.stop = f"the refuter could not decide {', '.join(out.held)}: read them and fix or dismiss"
+        out.held += waited
+        if waited and not out.confirmed and not out.stop:
+            out.stop = f"{len(waited)} row(s) did not fit in the refuter's brief: read them and fix or dismiss"
         return out
     out.held = held
     # A fix whose diff only wrote things down fixed no row but the ones about those files,
     # whatever the re-check says: a confirmed row ends fixed in code, refuted, or with the person.
     noted = set(spec.get("noted_only") or ())
     out.survivors = [i for i in ids if said.get(i) != "fixed" or i in noted]
+    # The fix's rows that did not fit in its brief wait for the next round, as rows it left open do.
+    out.survivors += [i for i in spec.get("deferred") or () if i not in out.survivors]
     if out.survivors and round_ >= ROUNDS:
         out.stop = f"{', '.join(out.survivors)} still open after {ROUNDS} fix rounds"
     elif not out.survivors and held:

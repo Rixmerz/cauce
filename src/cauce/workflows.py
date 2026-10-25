@@ -1349,8 +1349,16 @@ def _ledger(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step:
                         # The fix only wrote things down: no row but one about those files is fixed by it.
                         noted_only = [r["id"] for r in mine
                                       if not ledger.about_notes(str(r.get("where") or ""))]
+    deferred: list[str] = []
+    if role == "recheck":
+        deferred = list(spec.get("deferred") or ()) if fix else []
+    elif mine:
+        mine, deferred = ledger.fit(mine)
     sha = ledger.digest(mine)
-    spec = {"role": role, "round": round_, "ids": [r["id"] for r in mine], "digest": sha, "held": held}
+    spec = {"role": role, "round": round_, "ids": [r["id"] for r in mine], "digest": sha, "held": held,
+            "rows": len(rows)}
+    if deferred:
+        spec["deferred"] = deferred
     if role == "refute":
         spec["agreed"] = agreed
     if role == "fix":
@@ -1358,7 +1366,8 @@ def _ledger(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step:
     if noted_only:
         spec["noted_only"] = noted_only
     spec["brief"] = ledger.brief(role, mine, round_=round_, sha=sha, diff=diff,
-                                 reviewers=max(1, len(reviewers))) if mine else \
+                                 reviewers=max(1, len(reviewers)),
+                                 waiting=len(deferred) if role != "recheck" else 0) if mine else \
         f"Ledger ({role}): nothing to do."
     return spec
 
