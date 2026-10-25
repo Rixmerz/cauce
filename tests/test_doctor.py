@@ -188,3 +188,40 @@ def test_a_wait_on_a_decision_about_work_that_all_ended_is_broken(store: Store):
     assert [f.task_id for f in found] == [held["id"]] and found[0].fix.startswith(f"cauce lanes --beside {held['id']}")
     store.add_event(held["id"], "dispatch_decided", parallel=False, reason="x", ahead=[long["id"]])
     assert "wait-judged-on-gone" not in rules(store, now=LATER, alive=lambda pid: True)
+
+
+def test_a_problem_left_open_after_its_task_passed_is_suspect(store: Store):
+    task = store.create_task("fix the ble race", status="done", source="cauce", repo="r")
+    problem = store.open_problem("fix the ble race", repo="r")
+    store.add_fix(problem, "sonnet/high: retried", "failed", repo="r", task_id=task["id"])
+    store.add_event(task["id"], "finished", status="done", version="0.40.0")
+    old = store.create_task("fix the scanner", status="done", source="cauce", repo="r")
+    other = store.open_problem("fix the scanner", repo="r")
+    store.add_fix(other, "x", "failed", repo="r", task_id=old["id"])
+    store.add_event(old["id"], "finished", status="done", version="0.39.0")
+    found = rules(store, now=LATER, alive=lambda pid: True)["problem-open-after-pass"]
+    assert [(f.severity, f.task_id) for f in found] == [(doctor.SUSPECT, task["id"]), (doctor.FIXED, old["id"])]
+    store.add_fix(problem, "opus/high: serialized it", "worked", repo="r", task_id=task["id"])
+    assert [f.severity for f in rules(store, now=LATER, alive=lambda pid: True)["problem-open-after-pass"]] == [
+        doctor.FIXED]
+
+
+def test_a_flake_fix_that_passed_on_one_run_is_suspect(store: Store):
+    task = store.create_task("fix the flaky esp-now test", status="done", source="cauce", repo="r", kind="bugfix")
+    store.add_event(task["id"], "finished", status="done", version="0.40.0",
+                    verdict={"check": {"command": "deno task test", "passed": True}})
+    held = store.create_task("fix the flaky ble test", status="done", source="cauce", repo="r", kind="bugfix")
+    store.add_event(held["id"], "finished", status="done", version="0.40.0",
+                    verdict={"check": {"command": "deno task test", "passed": True, "runs": 3}})
+    found = rules(store, now=LATER, alive=lambda pid: True)["flake-fix-checked-once"]
+    assert [(f.severity, f.task_id) for f in found] == [(doctor.SUSPECT, task["id"])]
+
+
+def test_a_long_attempt_that_kept_few_turns_is_suspect(store: Store):
+    task = store.create_task("ui", status="done", source="cauce", repo="r")
+    store.add_event(task["id"], "attempt_finished", seq=1, wall_s=48 * 60, turns=2, version="0.40.0")
+    store.add_event(task["id"], "attempt_finished", seq=2, wall_s=48 * 60, turns=40, version="0.40.0")
+    store.add_event(task["id"], "attempt_finished", seq=3, wall_s=5 * 60, turns=1, version="0.40.0")
+    found = rules(store, now=LATER, alive=lambda pid: True)["turns-under-the-wall"]
+    assert [(f.severity, f.what) for f in found] == [(doctor.SUSPECT, f"#{task['id']} attempt 1 ran 48m and kept 2 "
+                                                                      "turn(s)")]

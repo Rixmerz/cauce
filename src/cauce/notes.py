@@ -589,6 +589,10 @@ def index_text(store: Store, project: str, *, latest: int = 6) -> str | None:
     recent = store.notes(project, states=LIVE, limit=latest)
     if recent:
         lines.append("Latest: " + "; ".join(f"#{n['id']} [{n['topic']}] {n['title']}" for n in recent))
+    if waiting := sum(by.get("review", 0) for by in counts.values()):
+        lines.append(f"{waiting} note(s) wait for review: their files changed since they were written "
+                     "(`cauce notes list --review`). Check one against the code before relying on it, then keep it "
+                     "(`cauce notes ok N`) or drop it (`cauce notes drop N`).")
     return "\n".join(lines)
 
 
@@ -613,8 +617,9 @@ EXTRACT_PROMPT = (
     "stated, decisions and why they were made, what was tried and dropped, conventions, how to run, build, test "
     "or deploy it, how a part of the code works. Never keep: the task's progress or plans, guesses, things later "
     "contradicted, anything about the agent itself, secrets, credentials, tokens or personal data. At most eight "
-    "facts, often none. Each fact is one or two self-contained sentences, and it and its title are written in the "
-    "language the person writes in: Spanish when they write Spanish, never translated. For each give topic (one "
+    "facts, often none. Each fact is one or two self-contained sentences, and it and its title are written in "
+    "English, whatever language the conversation is in, so a project's notes read the same to every worker; a "
+    "domain word, a name or a quote of the person stays exactly as they wrote it. For each give topic (one "
     "of the listed), title (three to eight words), duplicate_of (the id of an existing note that already says "
     "it, else null), links to existing notes (depends_on, explains, replaces, contradicts, example_of), paths "
     "(only files the conversation itself names as what the fact is about; usually none) and new_topic (a short "

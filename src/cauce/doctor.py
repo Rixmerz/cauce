@@ -53,7 +53,14 @@ FIXED_IN = {
     "trial-never-sampled": "0.32.0",
     "note-proven-unbriefed": "0.32.0",
     "preexisting-that-was-not": "0.34.0",
+    "problem-open-after-pass": "0.40.0",
+    "flake-fix-checked-once": "0.40.0",
+    "turns-under-the-wall": "0.40.0",
 }
+#: An attempt that ran this long per turn it counted kept a count the CLI restarted.
+WALL_PER_TURN_S = 300
+#: Attempts shorter than this are never read for it: a long check after few turns is honest.
+WALL_LONG_S = 20 * 60
 #: A candidate revision this old whose trial briefed no task, while its role's tasks here were briefed.
 TRIAL_UNSAMPLED = timedelta(days=3)
 #: Statuses a task leaves the board with: nothing it paused waits on it any more.
@@ -487,12 +494,89 @@ def preexisting_that_was_not(store: Store, *, since: str | None, **_) -> Iterabl
         yield _history("preexisting-that-was-not", before, None)
 
 
+def problems_open_after_pass(store: Store, **_) -> Iterable[Finding]:
+    """A problem still open whose own failures came from a task that has since passed: the
+    pass should have solved it (`orchestrate._remember`), and the memory keeps showing it to
+    workers as a dead end with no fix."""
+    before: list[int] = []
+    for problem in store.recent_problems(limit=200):
+        if problem["state"] == "solved":
+            continue
+        tasks = {f["task_id"] for f in problem["fixes"] if f["outcome"] == "failed" and f["task_id"]}
+        worked_after = {f["task_id"] for f in problem["fixes"] if f["outcome"] == "worked"}
+        for task_id in sorted(tasks - worked_after):
+            task = store.get_task(int(task_id))
+            if task is None or task["status"] != "done":
+                continue
+            ended = store.final_event(int(task_id))
+            if ended is None or ended["ts"] < max(f["created_at"] for f in problem["fixes"]):
+                continue
+            if _fixed("problem-open-after-pass", _version_of(store, int(task_id))):
+                before.append(int(task_id))
+                continue
+            yield Finding("problem-open-after-pass", SUSPECT,
+                          f"problem #{problem['id']} ({problem['title'][:60]}) is still {problem['state']} though "
+                          f"#{task_id}, whose attempts opened it, passed",
+                          f"`cauce memory record --problem {json.dumps(problem['title'])} --fix … --outcome worked`",
+                          int(task_id), problem["repo"])
+            break
+    if before:
+        yield _history("problem-open-after-pass", before, None)
+
+
+def flake_fixes_checked_once(store: Store, *, since: str | None, **_) -> Iterable[Finding]:
+    """Work that fixes a flaky test, passed with a check, whose check ran once: one green run
+    says nothing of a flake (`orchestrate.flake_fix_runs`)."""
+    from cauce.orchestrate import flake_fix_runs
+
+    before: list[int] = []
+    for event in store.events_of_kinds(["finished"], since=since):
+        data = event["data"]
+        task = store.get_task(event["task_id"])
+        check = (data.get("verdict") or {}).get("check") if data.get("status") == "done" else None
+        if task is None or not isinstance(check, Mapping) or int(check.get("runs") or 1) > 1 or \
+                flake_fix_runs(str(task.get("kind") or ""), str(task.get("body") or task.get("title") or "")) <= 1:
+            continue
+        if _fixed("flake-fix-checked-once", data.get("version")):
+            before.append(task["id"])
+            continue
+        yield Finding("flake-fix-checked-once", SUSPECT,
+                      f"#{task['id']} fixes a flaky test and passed on one run of `{check.get('command')}`",
+                      f"run its check several times on its branch before merging it (`cauce show {task['id']}`)",
+                      task["id"], task["repo"])
+    if before:
+        yield _history("flake-fix-checked-once", before, None)
+
+
+def turns_under_the_wall(store: Store, *, since: str | None, **_) -> Iterable[Finding]:
+    """Long attempts that kept far fewer turns than their time allows: the CLI's count was
+    restarted (a session that compacted) and the transcript was not read
+    (`launch.counted_turns`)."""
+    before: list[int] = []
+    for event in store.events_of_kinds(["attempt_finished"], since=since):
+        data = event["data"]
+        wall, turns = float(data.get("wall_s") or 0), int(data.get("turns") or 0)
+        if wall < WALL_LONG_S or turns * WALL_PER_TURN_S >= wall:
+            continue
+        if _fixed("turns-under-the-wall", data.get("version")):
+            before.append(event["task_id"])
+            continue
+        task = store.get_task(event["task_id"])
+        yield Finding("turns-under-the-wall", SUSPECT,
+                      f"#{event['task_id']} attempt {data.get('seq')} ran {round(wall / 60)}m and kept {turns} turn(s)",
+                      "its worker transcript holds the real count: `cauce show` reads the attempt",
+                      event["task_id"], task["repo"] if task else None)
+    if before:
+        yield _history("turns-under-the-wall", before, None)
+
+
 RULES: tuple[Callable[..., Iterable[Finding]], ...] = (
     lanes_paused_on_ended, running_with_no_process, queued_with_no_dispatcher, held_behind_gone, wait_judged_on_gone,
     resumes_that_never_ran,
     parts_that_lost_their_mark, joins_short_of_their_parts, attempts_with_no_session, turns_under_the_kind,
     format_failures_that_climbed, fix_rounds_off_their_base, candidates_on_trial_at_once, revisions_judged_twice,
-    trials_never_sampled, notes_proven_unbriefed, preexisting_that_was_not,
+    trials_never_sampled, notes_proven_unbriefed, preexisting_that_was_not, problems_open_after_pass,
+    flake_fixes_checked_once, turns_under_the_wall,
 )
 
 

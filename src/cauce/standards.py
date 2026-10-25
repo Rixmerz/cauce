@@ -61,6 +61,10 @@ NO_VERDICT = frozenset({"environment", "permission"})
 #: The moves after which an attempt goes on with the same cell's try: room, or a launch that broke.
 GOES_ON = frozenset({"retry", "more_turns"})
 FIELDS = ("start_cell", "start_turns")
+#: The band of a kind at every size: its start cell is measured over all of the kind's tasks
+#: here, for the sizes whose own band has too few to tell (`for_plan`). Its turns never move:
+#: what a task needs in turns depends on its size.
+ANY_SIZE = 0
 #: The last ending a settle read, and each repository's endings since its last calibration.
 SEEN_KEY = "standards:seen"
 #: Set once every task that ended before it had points was sized and every repository with
@@ -201,6 +205,20 @@ def metrics(tasks: Sequence[Ended]) -> dict[str, Any]:
     }
 
 
+def size_ratio(store: Store, repo: str | None, kind: str) -> tuple[float | None, int]:
+    """How much bigger than estimated the kind's recent tasks here turned out: the median of
+    realized over estimated points over the last `WINDOW` that had both, and how many."""
+    if not repo:
+        return None, 0
+    ratios = sorted([t.realized / t.band for t in ended(store, repo=repo)
+                     if t.kind == kind and t.band and t.realized][-WINDOW:])
+    if not ratios:
+        return None, 0
+    mid = len(ratios) // 2
+    median = ratios[mid] if len(ratios) % 2 else (ratios[mid - 1] + ratios[mid]) / 2
+    return round(median, 2), len(ratios)
+
+
 def _position(rungs: Sequence[Cell], cell: Cell | None) -> int:
     if cell is None:
         return 0
@@ -274,6 +292,13 @@ def calibrate(store: Store, repo: str, *, now: datetime | None = None) -> list[d
     for task in ended(store, repo=repo):
         if task.band and task.kind:
             bands[(task.kind, task.band)].append(task)
+    # The sizes whose own band has too few tasks to tell, two or more of them, together: where
+    # the kind starts at any size here (`ANY_SIZE`). A band with enough speaks for itself.
+    for kind in sorted({k for k, _ in bands}):
+        sparse = [b for k, b in bands if k == kind and len(bands[(k, b)][-WINDOW:]) < MIN_SAMPLES]
+        if len(sparse) >= 2:
+            bands[(kind, ANY_SIZE)] = sorted((t for b in sparse for t in bands[(kind, b)]),
+                                             key=lambda t: t.ended_at)
     waiting = {(c["kind"], c["band"]) for c in _open(store, repo)}
     changes = []
     for (kind, band), tasks in sorted(bands.items()):
@@ -292,6 +317,8 @@ def calibrate(store: Store, repo: str, *, now: datetime | None = None) -> list[d
                                    old_value=row.get("start_cell"), new_value=moved.label, rule=rule,
                                    evidence={**evidence, "tasks": len(window)}))
             store.set_standard(repo, kind, band, start_cell=moved.label)
+            continue
+        if band == ANY_SIZE:
             continue
         needed = [n for n in (turns_needed(t.attempts) for t in window if t.passed) if n]
         current = row.get("start_turns")
@@ -354,7 +381,8 @@ def judge(store: Store, repo: str, *, now: datetime | None = None) -> list[dict[
     tasks = [t for t in ended(store, repo=repo) if t.band]
     out = []
     for change in pending:
-        band = [t for t in tasks if t.kind == change["kind"] and t.band == change["band"]]
+        # A change of the kind at any size is judged by the kind's tasks of every size.
+        band = [t for t in tasks if t.kind == change["kind"] and change["band"] in (t.band, ANY_SIZE)]
         # A change carried from a repository that joined a workspace is judged by the tasks
         # that used it under either id.
         ids = {change["id"], json.loads(change.get("evidence") or "{}").get("carried_from")}
@@ -437,6 +465,8 @@ def day(at: str, tz: tzinfo | None = None) -> str:
 
 
 def size(band: int) -> str:
+    if band == ANY_SIZE:
+        return "any size"
     return f"{band} point" if band == 1 else f"{band} points"
 
 
@@ -477,6 +507,13 @@ def for_plan(store: Store, repo: str, kind: str, band: int, *, pinned: bool, exp
     latest = {c["field"]: c for c in store.calibrations(repo=repo) if c["kind"] == kind and c["band"] == band}
     name = f"{kind} at {size(band)} here"
     reasons, changes = [], []
+    if not row.get("start_cell") and not pinned and band != ANY_SIZE and (
+            pooled := store.standard(repo, kind, ANY_SIZE) or {}).get("start_cell"):
+        # Its own size has too few tasks to tell: where the kind's tasks of every size here start.
+        row = {**row, "start_cell": pooled["start_cell"]}
+        latest = {**latest, **{c["field"]: c for c in store.calibrations(repo=repo)
+                               if c["kind"] == kind and c["band"] == ANY_SIZE and c["field"] == "start_cell"}}
+        name = f"{kind} here (every size: {size(band)} has too few tasks)"
     cell = _cell(row.get("start_cell"))
     if cell is not None and (cell not in ladder_for(kind) or cell.needs_approval):
         reasons.append(f"the standard for {name} says {cell.label}, which the {kind} ladder no longer holds: "

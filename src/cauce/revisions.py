@@ -49,6 +49,9 @@ ROLE_MARGIN = 0.1
 #: be than its trial's current arm before it is reverted.
 REVERT_AFTER = 10
 REVERT_MARGIN = 0.2
+#: A candidate whose trial has not filled its arms in this long is dropped for too few tasks here:
+#: a role that rarely works in a repository never holds a trial open for good.
+TRIAL_DAYS = 14
 #: Dead ends and verifier blockers a role's workers met here since its last revision before the editor
 #: is asked for one: fewer is anecdote.
 MIN_EVIDENCE = 3
@@ -278,7 +281,18 @@ def judge(store: Store, repo: str, role: str, *, now: datetime | None = None) ->
     candidate = found["candidate"]
     if candidate is not None:
         measured = arms(store, repo, candidate["id"])
-        if min(m["tasks"] for m in measured.values()) >= ROLE_TRIAL:
+        opened = datetime.fromisoformat(str(candidate["at"]))
+        if min(m["tasks"] for m in measured.values()) < ROLE_TRIAL and \
+                (now or datetime.now(UTC)) - opened.astimezone(UTC) >= timedelta(days=TRIAL_DAYS):
+            n = {arm: m["tasks"] for arm, m in measured.items()}
+            out.append(_record(store, at=_stamp(now), repo=repo, role=role, record="dropped",
+                               revision=candidate["id"], hash=candidate["hash"],
+                               role_version=candidate["role_version"], lessons=candidate["lessons"],
+                               evidence=measured,
+                               reason=f"too few tasks here to judge it: in {TRIAL_DAYS} days its arms reached "
+                                      f"{n.get('candidate', 0)} and {n.get('current', 0)} first tries of the "
+                                      f"{ROLE_TRIAL} each it needs"))
+        elif min(m["tasks"] for m in measured.values()) >= ROLE_TRIAL:
             said, reason = verdict(measured["candidate"], measured["current"])
             out.append(_record(store, at=_stamp(now), repo=repo, role=role, record=said, revision=candidate["id"],
                                hash=candidate["hash"], role_version=candidate["role_version"],

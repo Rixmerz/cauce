@@ -82,6 +82,23 @@ def _words(found: Sequence[str]) -> str:
     return found[0] if len(found) == 1 else f"{', '.join(found[:-1])} and {found[-1]}"
 
 
+#: How much bigger than their estimate a kind's tasks must have turned out here, at the median over at
+#: least `UNDER_SAMPLES` of them, before its next estimate is raised one step of the scale.
+UNDER_RATIO, UNDER_SAMPLES = 1.5, 5
+
+
+def corrected(score: Score, kind: str, ratio: float | None, samples: int) -> Score:
+    """An estimate raised one step of the scale when the kind's tasks here turned out
+    `UNDER_RATIO` or more times their estimate (realized over estimated, at the median of
+    `samples`). Only raised, one step, and said; never lowered, since a size too small is
+    the one that splits too late."""
+    if ratio is None or samples < UNDER_SAMPLES or ratio < UNDER_RATIO or score.points >= SCALE[-1]:
+        return score
+    up = SCALE[SCALE.index(score.points) + 1]
+    return Score(up, (*score.reasons, f"{kind} tasks here turned out {ratio:.1f}× their estimate "
+                                      f"(median of {samples}): one step up"))
+
+
 def estimate(*, criteria: int, kind: str, tier: str, areas: Sequence[tuple[str, str]], named: int,
              reached: int | None, chars: int) -> Score:
     """A task's size before the work, from the plan's signals. `reached` is None when no

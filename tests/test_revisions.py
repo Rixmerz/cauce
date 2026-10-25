@@ -140,7 +140,8 @@ def test_the_current_lessons_proposed_again_are_no_candidate(store: Store):
 
 
 def _candidate(store: Store, lessons=LESSONS) -> dict:
-    return {**{"id": store.add_role_revision(at="2026-10-01T00:00:00+00:00", repo="r", role="implementer",
+    opened = (datetime.now(UTC) - timedelta(days=1)).isoformat(timespec="seconds")
+    return {**{"id": store.add_role_revision(at=opened, repo="r", role="implementer",
                                             record="proposed", hash=revisions.lessons_hash(lessons),
                                             lessons=lessons, version="0.32.0")}}
 
@@ -381,3 +382,13 @@ def test_a_run_s_brief_records_the_role_s_version_and_follows_the_trial_s_arm(gi
     off = run("add the d", git_repo, store, registry={}, launcher=Script(ok(), write="d.py"),
               classifier=kind("implement"))
     assert "revision_arm" not in store.last_event(off.task_id, "briefed")["data"]
+
+
+def test_a_trial_that_cannot_fill_its_arms_in_its_days_is_dropped_for_too_few_tasks(store: Store):
+    cand = _candidate(store)["id"]
+    _arm(store, cand, "candidate", passed=1, n=1)
+    assert revisions.judge(store, "r", "implementer") == []
+    later = datetime.now(UTC) + timedelta(days=revisions.TRIAL_DAYS)
+    [found] = revisions.judge(store, "r", "implementer", now=later)
+    assert found["record"] == "dropped" and found["reason"].startswith("too few tasks here to judge it: in 14 days")
+    assert revisions.state(store, "r", "implementer")["candidate"] is None

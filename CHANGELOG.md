@@ -2,6 +2,55 @@
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-10-25
+
+### Fixed
+
+- **The memory of problems follows the work.** A task that failed and then passed on a
+  resume that started fresh, or a later task that finished what an earlier one diagnosed,
+  left its problem "open", and workers kept seeing it as a dead end. A pass now solves the
+  problem its task's attempts opened, in any run, and the open problems of its repository
+  its text matches strictly. Work that fails on a problem solved under another title marks
+  it recurring and disproves its fix.
+- **Two long requests are two problems.** A long request's title is clipped in its middle,
+  and problems were told apart by that title alone, so different requests shared one.
+  The 30-task scenario found it.
+
+### Changed
+
+- **Sizes with too few tasks learn from the kind.** Where several sizes of a kind each hold
+  too few tasks to calibrate, they are measured together. A size with no start of its own
+  starts where the kind's first tries pass, and the plan says so. Where sonnet/high passed
+  1 in 6, ui and debug work now moves its start up.
+- **An estimate is raised where the kind turns out bigger.** When a kind's tasks here turned
+  out 1.5 times their estimate or more (the median of 5 or more), the next estimate goes one
+  step up the scale, and says why.
+- **A role's trial ends.** A candidate that has not filled its arms in 14 days is dropped,
+  with the counts it reached.
+- **The primer's trial is balanced and can end early.** Its arms fill by count, not by the
+  task number's parity. A primer whose first tries pass more than 20 points worse over 6
+  tasks each loses at once. `cauce stats` for a repository says where it stands.
+- **Notes filed from a conversation are in English.** The person's domain words and quotes
+  stay as they wrote them.
+
+### Added
+
+- **Why the pickup waited.** `cauce stats` splits the wait for a worker into:
+  - work ahead it was judged to wait for;
+  - the usage limit;
+  - your ceiling of workers, a choice;
+  - the machine's level.
+- **`cauce doctor` reads the memory and the checks.** It reports:
+  - a problem still open after its task passed;
+  - a flake fix that passed on one run;
+  - a long attempt that kept few turns.
+- **A README among several is named.** A request about a README in a repository holding
+  more than one is warned that the one at the top is the one its host shows.
+- **The notes' index names what waits for review**, and how to keep or drop each note.
+- **Compaction advice the session chose not to take** is counted apart in `cauce stats`.
+- **A scenario of 30 tasks in one repository** checks that reports stay short, lines heard
+  once a day are not said again, and every problem a failure opened is solved by its pass.
+
 ## [0.39.0] - 2026-10-25
 
 ### Changed

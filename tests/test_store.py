@@ -228,3 +228,13 @@ def test_a_lane_paused_by_the_dispatcher_is_released_by_its_task(store):
     assert store.release_lane("r", 24)
     store.pause_lane("r", "task #24 ended blocked: a refused command")
     assert store.release_lane("r", 24)
+
+
+def test_two_requests_whose_clipped_titles_match_are_two_problems(store):
+    title = "fix the radio dri… that drops the last frame of a burst"
+    one = store.open_problem(title, repo="r", symptom="fix the radio driver 1 that drops the last frame of a burst")
+    two = store.open_problem(title, repo="r", symptom="fix the radio driver 3 that drops the last frame of a burst")
+    assert one != two
+    assert store.open_problem(title, repo="r", symptom="fix the radio driver 1 that drops the last frame of a burst") \
+        == one
+    assert store.open_problem(title, repo="r") == two  # no text to tell them apart: the latest

@@ -181,6 +181,9 @@ PRIMER_TRIAL = 12
 #: The primer stays only when its first tries pass no worse than this below the control's,
 #: and its workers reach their first change in fewer calls.
 PRIMER_MARGIN = 0.1
+#: A trial ends early when, over this many first tries each, the primed ones pass worse by more than
+#: this: a primer that costs that much is not kept waiting for the full trial.
+PRIMER_EARLY, PRIMER_EARLY_MARGIN = 6, 0.2
 #: The arms a task's brief is in (`briefed` event's `primer_arm`).
 ARMS = ("primer", "control")
 
@@ -246,10 +249,17 @@ def primer_arm(store: Store, repo: str | None, task_id: int) -> tuple[str, str]:
         return "primer", "no repository to run a trial in"
     found = trial(store, repo)
     p, c = found["primer"], found["control"]
-    if min(p["tasks"], c["tasks"]) < PRIMER_TRIAL:
-        arm = ARMS[task_id % 2]
+    early = min(p["tasks"], c["tasks"]) >= PRIMER_EARLY and \
+        p["passed_first"] / p["tasks"] < c["passed_first"] / c["tasks"] - PRIMER_EARLY_MARGIN
+    if min(p["tasks"], c["tasks"]) < PRIMER_TRIAL and not early:
+        # The arm with fewer tasks, so both fill at the same pace; a tie by the task's parity.
+        arm = ARMS[task_id % 2] if p["tasks"] == c["tasks"] else "primer" if p["tasks"] < c["tasks"] else "control"
         return arm, f"the primer's trial here ({p['tasks']} primed, {c['tasks']} without, {PRIMER_TRIAL} each)"
     rate_p, rate_c = p["passed_first"] / p["tasks"], c["passed_first"] / c["tasks"]
+    if early:
+        return "control", (f"the primer lost its trial here early: primed first tries passed {rate_p:.0%}, "
+                           f"without {rate_c:.0%}, worse by more than {PRIMER_EARLY_MARGIN:.0%} over "
+                           f"{PRIMER_EARLY} or more each")
     faster = (p["calls_before_edit_p50"] is not None and c["calls_before_edit_p50"] is not None
               and p["calls_before_edit_p50"] < c["calls_before_edit_p50"])
     said = (f"primed first tries passed {rate_p:.0%}, without {rate_c:.0%}; calls before the first change p50 "

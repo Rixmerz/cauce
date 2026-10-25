@@ -235,3 +235,18 @@ def test_a_run_leaves_its_orientation_and_the_next_run_s_brief_follows_its_arm(g
     off = Script(ok(), write="other.py")
     done = run("add the other", git_repo, store, registry={}, launcher=off, classifier=kind("implement"))
     assert "primer_arm" not in store.last_event(done.task_id, "briefed")["data"]
+
+
+def test_the_primer_s_arms_fill_evenly_and_a_primer_far_worse_loses_early(store: Store):
+    for _ in range(3):
+        _trial_task(store, "primer", passed=True, calls=8)
+    assert cells.primer_arm(store, "r", 7)[0] == "control" and cells.primer_arm(store, "r", 8)[0] == "control"
+    for _ in range(cells.PRIMER_EARLY):
+        _trial_task(store, "primer", passed=False, calls=8, repo="early")
+        _trial_task(store, "control", passed=True, calls=8, repo="early")
+    arm, why = cells.primer_arm(store, "early", 8)
+    assert arm == "control" and why.startswith("the primer lost its trial here early")
+    for _ in range(cells.PRIMER_EARLY):
+        _trial_task(store, "primer", passed=True, calls=8, repo="close")
+        _trial_task(store, "control", passed=True, calls=8, repo="close")
+    assert "trial here (" in cells.primer_arm(store, "close", 8)[1]  # no gap: the full trial runs

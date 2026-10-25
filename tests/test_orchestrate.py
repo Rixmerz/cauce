@@ -2064,3 +2064,56 @@ def test_lines_a_repository_hears_on_every_task_are_said_once_a_day(git_repo, st
     text = orchestrate.Report(7, "done", plan).text()
     assert "CI also runs" not in text and "first change" in text
     assert "(1 note(s) this repository already heard today left out: `cauce show 7` keeps them)" in text
+
+
+def test_a_problem_its_task_left_open_is_solved_when_a_resume_passes_its_first_attempt(git_repo, store):
+    first = run("fix the ble race in the scanner", git_repo, store, Options(max_attempts=1), registry={},
+                launcher=Script(bad(Failure.CODE_BUG, "the race is in the scanner callback")),
+                classifier=kind("bugfix"))
+    [problem] = store.recent_problems(limit=5)
+    assert problem["state"] == "open"
+    again = run("fix the ble race in the scanner", git_repo, store, Options(kind="bugfix"), registry={},
+                launcher=Script(ok("serialized the callback"), write="scan.py"), task_id=first.task_id)
+    assert again.status == "done"
+    assert store.problem(problem["id"])["state"] == "solved"
+
+
+def test_a_later_task_whose_text_matched_an_open_problem_solves_it(git_repo, store):
+    key = __import__("cauce.repo", fromlist=["key"]).key(git_repo)
+    problem = store.open_problem("esp-now frames dropped on the macos bridge", repo=key,
+                                 symptom="esp-now frames dropped on the macos bridge under load")
+    store.add_fix(problem, "sonnet/high: retried the send", "failed", repo=key, why="code_bug", task_id=999)
+    report = run("fix the esp-now frames dropped on the macos bridge", git_repo, store, Options(kind="bugfix"),
+                 registry={}, launcher=Script(ok("acked every frame"), write="bridge.py"))
+    assert report.status == "done"
+    found = store.problem(problem)
+    assert found["state"] == "solved" and found["fixes"][-1]["task_id"] == report.task_id
+    # a different subject is never closed by it
+    other = store.open_problem("landing page claims no binaries", repo=key)
+    store.add_fix(other, "x", "failed", repo=key, task_id=998)
+    run("fix the esp-now bridge retries", git_repo, store, Options(kind="bugfix"), registry={},
+        launcher=Script(ok(), write="b2.py"))
+    assert store.problem(other)["state"] == "open"
+
+
+def test_work_failing_on_a_solved_problem_under_another_title_marks_it_recurring(store):
+    problem = store.open_problem("esp-now flaky test on macos", repo="r", symptom="esp-now flaky test on macos")
+    store.add_fix(problem, "awaited the ack", "worked", repo="r", task_id=1)
+    assert store.regressed("the esp-now flaky test on macos fails again on CI", repo="r", task_id=2) == [problem]
+    found = store.problem(problem)
+    assert found["state"] == "recurring" and found["fixes"][0]["invalidated_on"]
+    assert "task #2 met it again" in found["fixes"][0]["why"]
+    assert store.regressed("the esp-now flaky test on macos", repo="other", task_id=3) == []
+
+
+def test_a_task_about_a_readme_in_a_repository_with_several_is_warned(git_repo, store):
+    (git_repo / "README.md").write_text("# upstream\n")
+    (git_repo / "bench").mkdir()
+    (git_repo / "bench" / "README.md").write_text("# the fork\n")
+    dry = run("update the README with the new install steps", git_repo, store, Options(dry_run=True), registry={},
+              classifier=kind("docs"))
+    [warned] = [w for w in orchestrate.warnings(dry.plan.reasons) if "README" in w]
+    assert "this repository has 2: README.md, bench/README.md" in warned and "the one at the top" in warned
+    (git_repo / "bench" / "README.md").unlink()
+    again = run("update the README", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("docs"))
+    assert not [w for w in orchestrate.warnings(again.plan.reasons) if "README" in w]
