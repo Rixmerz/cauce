@@ -1159,6 +1159,12 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         attached = memory_text(store, run["repo"], step["memory"])
         if attached:
             body += "\n\n" + attached
+    if options.get("loop"):
+        from cauce import loops
+
+        # A round of a loop: its goal, mode, the person's rules and the diary so far.
+        if told := loops.round_brief(store, options):
+            body += "\n\n" + told
     # An integrate step starts where its parts started, and joins their branches there; a
     # part that builds on another starts from what that one kept.
     base = (part or {}).get("start") or (joining or {}).get("base") or _base(store, run, defn, step["id"], latest)
@@ -1195,6 +1201,8 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         "reviewed_next": True if reviewed_next(defn, step) else None,
         "ledger": held,
         "integrate": {k: joining[k] for k in ("branches", "contract")} if joins and joining else None,
+        # A round of a loop: the guard reads its mode and rules by this name.
+        "loop": (options.get("loop") or {}).get("name") or None,
         # A run queued after other work: its steps wait for that work to pass, as it does; a
         # part that builds on another part waits for that one.
         after.KEY: (part or {}).get("hold") or options.get(after.KEY)}.items() if v is not None}

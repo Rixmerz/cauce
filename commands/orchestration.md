@@ -14,8 +14,8 @@ This is the core. `cauce guide <topic>` prints the detail when you need it:
 `when` (what earns a worker, splitting), `dispatch` (flags, permissions,
 Node, worktrees, workspaces, the queue), `endings` (every status and what to
 do), `orchestrator` (your role, routes, speed), `workflows`, `panels` (a
-Workflow script of your own, and its findings as cauce work), `notes` (and
-compacting), `memory`, `relay`.
+Workflow script of your own, and its findings as cauce work), `loops` (goals
+that run in rounds), `notes` (and compacting), `memory`, `relay`.
 
 1. **Do it yourself when it fits in what this session already holds** — a
    question, a lookup a few searches settle, a small change in files you have
@@ -25,7 +25,9 @@ compacting), `memory`, `relay`.
    this turn. A judgment that needs this conversation and changes nothing goes
    to Claude Code's own fork (`/subtask`, the Agent tool's `fork`), not to cauce.
    An exhaustive read-only audit or a comparison of designs can be your own
-   Workflow script when that tool is in your list (`cauce guide panels`).
+   Workflow script when that tool is in your list (`cauce guide panels`). A goal
+   that repeats with no end of its own (keep finding leads, keep CI green) is a
+   loop: propose one with `/cauce:loop`, never run its rounds by hand.
 
 2. **Size it before you send it.** One worker has one context and one turn
    budget; past that every turn re-reads everything, and that is where the

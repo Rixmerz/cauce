@@ -703,8 +703,22 @@ def _endings(store: Store, session_id: str, *, via: str, mark: bool = True) -> s
     """Work this session sent that ended since it last heard, each with what to do
     next, marked as reported: a queued task finishes while nobody waits on it,
     and the session that sent it would otherwise never learn it should act.
-    `mark=False` reads them without taking them: a display, not a delivery."""
-    return endings(store, session_id, claim=via if mark else None)[0]
+    `mark=False` reads them without taking them: a display, not a delivery. A loop
+    this session started that stopped is told here too, once (`cauce.loops`)."""
+    told = endings(store, session_id, claim=via if mark else None)[0]
+    if not mark:
+        return told
+    try:
+        from cauce import loops
+
+        stopped = loops.endings(session_id)
+    except Exception:  # a loop that cannot be read never costs the session its endings
+        stopped = []
+    if not stopped:
+        return told
+    loop_text = ("A loop you started stopped. Tell the person what it did and what waits on them "
+                 "(`cauce loop show <name>`):\n" + "\n".join(stopped))
+    return f"{told}\n\n{loop_text}" if told else loop_text
 
 
 def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple[str | None, list[int]]:

@@ -2468,9 +2468,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", type=int)
     p.set_defaults(func=cmd_queue)
 
-    from cauce import investigate, team_cli, workflow_cli
+    from cauce import investigate, loop_cli, team_cli, workflow_cli
 
     workflow_cli.add_parser(sub)
+    loop_cli.add_parser(sub)
     team_cli.add_parser(sub)
     investigate.add_parser(sub)
 
@@ -2893,9 +2894,10 @@ def _starts_work(args: argparse.Namespace) -> bool:
     command = getattr(args, "command", None)
     if (command == "split" and getattr(args, "queue", False)) or command == "merge":
         return True
-    return command in ("run", "resume", "work", "limit-wait") or (
+    return command in ("run", "resume", "work", "limit-wait", "loop-runner") or (
         command, getattr(args, f"{command}_command", None)) in {
-        ("queue", "add"), ("workflow", "run"), ("workflow", "retry"), ("investigate", "start")}
+        ("queue", "add"), ("workflow", "run"), ("workflow", "retry"), ("investigate", "start"),
+        ("loop", "add"), ("loop", "start"), ("loop", "act"), ("loop", "rm")}
 
 
 def _subparser(parser: argparse.ArgumentParser, args: argparse.Namespace) -> argparse.ArgumentParser:

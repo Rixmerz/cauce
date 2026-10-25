@@ -73,6 +73,9 @@ class Capability:
     touches: tuple[str, ...] = ()
     #: It only measures, never changes anything: reading work may have it too.
     measures: bool = False
+    #: Its tools that act on the world (send, post, reply): run behind the `outbound`
+    #: guard, refused outside a loop the person set to act (`cauce.loops`).
+    outbound: tuple[str, ...] = ()
     #: The keys the person's registry entry set: what a neighbour of the same name may
     #: still fill in (`_inherit`).
     declared: frozenset[str] = field(default=frozenset(), compare=False)
@@ -143,9 +146,41 @@ def load(path: Path) -> dict[str, Capability]:
             hint=str(entry.get("hint", "")),
             touches=tuple(str(t) for t in touches),
             measures=bool(entry.get("measures", False)),
+            outbound=_outbound(name, entry),
             declared=frozenset(entry),
         )
+        if registry[name].outbound:
+            from cauce import plugins
+
+            guarded = plugins.guarded(entry["server"], "outbound")
+            guarded["env"] = {**guarded["env"], "CAUCE_OUTBOUND_ACTS": ",".join(registry[name].outbound)}
+            registry[name] = replace(registry[name], server=guarded)
     return registry
+
+
+def _outbound(name: str, entry: Mapping[str, Any]) -> tuple[str, ...]:
+    raw = entry.get("outbound")
+    if raw is None:
+        return ()
+    acts = raw.get("acts") if isinstance(raw, dict) else None
+    if not isinstance(acts, list) or not acts or not all(isinstance(a, str) and a.strip() for a in acts):
+        raise RegistryError(f"capability {name!r}: `outbound` is {{\"acts\": [the tools that act]}}")
+    if "command" not in entry["server"]:
+        raise RegistryError(f"capability {name!r}: `outbound` guards a server run by a `command`")
+    return tuple(a.strip() for a in acts)
+
+
+def for_loop(selection: Selection, loop: str | None, cauce_home: Path) -> Selection:
+    """The servers behind the `outbound` guard told the loop the task is a round of, if
+    any, and where its rules are kept: the guard reads them at each call."""
+    servers = {}
+    for name, server in selection.servers.items():
+        args = list(server.get("args") or ())
+        if args[:3] == ["-m", "cauce.mcp_guard", "outbound"]:
+            server = {**server, "env": {**dict(server.get("env") or {}), "CAUCE_HOME": str(cauce_home),
+                                        **({"CAUCE_LOOP": loop} if loop else {})}}
+        servers[name] = server
+    return replace(selection, servers=servers)
 
 
 def load_all(path: Path, env: Mapping[str, str] | None = None) -> dict[str, Capability]:

@@ -35,8 +35,8 @@ def world(tmp_path: Path, git_repo: Path, _isolated_home: Path):
     (bin_dir / "claude").write_text(f"#!/bin/sh\nexec {sys.executable} {FAKE} \"$@\"\n")
     (bin_dir / "claude").chmod(0o755)
     env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "PYTHONPATH": str(SRC),
-           "CAUCE_AUTOWORK": "on", "CAUCE_LIMIT_GRACE_S": "1", "CLAUDE_CODE_SESSION_ID": "host-session",
-           "CLAUDE_CODE_REMOTE_SESSION_ID": "host-session",
+           "CAUCE_AUTOWORK": "on", "CAUCE_LIMIT_GRACE_S": "1", "CAUCE_LOOP_POLL_S": "0.5",
+           "CLAUDE_CODE_SESSION_ID": "host-session", "CLAUDE_CODE_REMOTE_SESSION_ID": "host-session",
            "FAKE_CLAUDE_SCRIPT": str(tmp_path / "script.json"), "FAKE_CLAUDE_LOG": str(tmp_path / "calls.jsonl")}
     env.pop("CAUCE_SESSION_ID", None)
 
@@ -259,6 +259,37 @@ def test_a_task_the_usage_limit_stopped_resumes_on_its_own_after_the_reset(world
 
 #: How many tasks the long scenario runs one after another in one repository.
 LONG_RUN = 30
+
+
+def test_a_loop_runs_rounds_by_itself_until_its_metric_stops_moving(world, tmp_path):
+    """The loop's own runner, detached, starts each round as a workflow run, measures the
+    metric between rounds, and stops when it no longer moves; the session hears once."""
+    folder = tmp_path / "leads"
+    folder.mkdir()
+    (folder / "count.txt").write_text("0\n")
+    (tmp_path / "round.json").write_text(json.dumps({"name": "probe", "inputs": ["goal"], "steps": [
+        {"id": "work", "prompt": "LOOP-ROUND: work toward {goal}", "kind": "explore"}]}))
+    world.cauce("workflow", "save", str(tmp_path / "round.json"), "--scope", "user")
+    world.script([{"match": "LOOP-ROUND", "do": [
+        {"pass": True, "write": {"count.txt": "2\n"}}, {"pass": True, "write": {"count.txt": "3\n"}},
+        {"pass": True, "write": {"count.txt": "3\n"}}]}])
+    world.cauce("loop", "add", "leads", "--goal", "count the leads", "--workflow", "probe", "--dir",
+                str(folder), "--metric", "cat count.txt", "--stale", "1", "--policy", "offer only the audit")
+    world.cauce("loop", "start", "leads")
+    from cauce import loops
+
+    deadline = time.monotonic() + DEADLINE_S
+    while loops.state("leads").get("status") != "stopped" and time.monotonic() < deadline:
+        time.sleep(0.5)
+    st = loops.state("leads")
+    assert st["status"] == "stopped" and "did not improve" in st["why"], (st, loops.diary("leads"))
+    rounds = loops.diary("leads")
+    assert [(r["before"], r["after"]) for r in rounds] == [(0.0, 2.0), (2.0, 3.0), (3.0, 3.0)]
+    briefs = [c for c in world.calls() if c["rule"] == 0]
+    assert len(briefs) == 3
+    shown = world.cauce("loop", "show", "leads")
+    assert "metric: 0.0 → 3.0" in shown and "rounds: 3 (3 ended)" in shown
+    world.healthy()
 
 
 def test_thirty_tasks_in_one_repository_keep_their_reports_short_and_their_memory_true(world):

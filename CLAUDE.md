@@ -69,6 +69,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/scribe.py` | the scribe: at every turn's end, what a session's transcript gained (requests verbatim, corrections, files written, failed calls and the one that passed after), kept in the cauce home; the thread a task the session sent gets in its brief, when the notes are due, and the relay to a fresh session; no model call |
 | `src/cauce/analysis.py` | where cauce's time and money go (`cauce stats`, the UI's Analysis): runs from `planned` to `finished`, their timed phases (and the gaps before them: advance, pickup, spawn), attempts by cell, the session's thread in briefs, a session's own turns; read only, no model |
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
+| `src/cauce/loops.py` | goals that run in rounds (`cauce loop`): a definition, a diary and a state per loop in the person's cauce home, each round a workflow run, the metric measured by cauce, stops on evidence, strategies tried in arms; `loop_cli.py` is `cauce loop …` and the detached `loop-runner` |
 | `src/cauce/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; a step that fans out over a plan's parts, one that joins their branches, a large change's review by area; `workflow_cli.py` is `cauce workflow …` |
 | `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
 | `src/cauce/services.py` | the servers a task needs up (`--service 'cmd@port'`): started in the task's directory, waited for, stopped with their process group when the run ends |
@@ -76,6 +77,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `commands/orchestration.md` | the one entry point a user types |
 | `commands/habits.md` | review the habit candidates for this repository and install the ones the person picks |
 | `commands/workflow.md` | make, change, copy, run and watch workflows |
+| `commands/loop.md` | `/cauce:loop`: a session proposes a loop with the person (goal, metric, rules, what acts), builds it only on their yes, and starts it as a draft |
 | `commands/watch.md` | a session that watches every other one: `overview`, the endings as they happen, `SendMessage` to send work |
 | `commands/relay.md` | `/cauce:relay`: hand the session's thread to the next session started in the same place (`/clear`), instead of compacting |
 | `bin/cauce` | the launcher every hook and command goes through |
@@ -1020,8 +1022,29 @@ yields the default kind, not a guess.
   `linguist-generated` or `-diff` in `.gitattributes`, or written by a step's
   own check) are no area and count no lines; the review is told they are
   generated, never asked to read them.
+- A loop (`cauce.loops`) is the person's: its definition, diary, state and the log of
+  what its tools sent live in their cauce home, never in a repository, and only
+  `cauce loop add` makes one. Each round is a workflow run started by the loop's detached
+  runner (`loop-runner`), on what the round before kept when it passed; each step is told
+  the goal, the mode, the person's rules and the diary's last `loops.DIARY_SHOWN` rounds
+  (the rest counted), quoted as data. The metric is the last number the person's command
+  prints, run by cauce before the first round and after each, never a worker's word. A
+  loop stops only on evidence: its target, its window, `stale` rounds that did not improve
+  on the best before them (an unmeasured round improves nothing), or a round that waits on
+  what only the person clears; never on money, and its rounds' cost is kept and shown.
+  Variants alternate, the one with fewer measured rounds first, until each has `trial`;
+  the one with the larger mean gain is adopted and recorded. A loop starts as a draft:
+  a capability's `outbound.acts` tools run behind the `outbound` guard of `mcp_guard`,
+  which refuses them outside a loop, in a draft, outside its `hours`, past its `per_hour`
+  (counted across its workers in its log, which keeps no argument) or when they name an
+  `exclude`; `cauce loop act` is the person's word only. What the rules do not allow is
+  listed under `loops.NEEDS` and shown when the loop stops; the session that made the
+  loop hears of its stop once, with the endings (`loops.endings`). `/cauce:loop` proposes
+  a loop and writes nothing, and starts no worker, before the person agrees; it never
+  writes the registry, a settings file or a credential.
 - A worker never starts cauce work (`run`, `resume`, `work`, `queue add`,
-  `workflow run|retry`, `investigate start` refuse under `CAUCE_WORKER_TASK`),
+  `workflow run|retry`, `investigate start`, `loop add|start|act|rm` and the
+  `loop-runner` refuse under `CAUCE_WORKER_TASK`),
   and forks are off inside it (`CLAUDE_CODE_FORK_SUBAGENT=0`): what is left
   goes in its result. The main session does what fits in what it holds, sends
   to cauce what earns a worker, and a judgment that needs the conversation to

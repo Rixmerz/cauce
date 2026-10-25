@@ -27,17 +27,33 @@ The `engram` policy keeps a worker to reading its own project's memory:
 - every call is held to the project cauce resolved (`ENGRAM_PROJECT`): another
   project, every project, and personal scope (which reads across projects) are
   refused.
+
+The `outbound` policy holds the tools that act on the world (a capability lists
+them under `outbound`) to the loop the worker's task is a round of
+(`cauce.loops`), read from the person's cauce home at each call:
+
+- outside a loop, or in a loop that is a draft, an acting call is refused: the
+  worker writes what it would send instead;
+- in a loop the person set to act, a call is refused outside the loop's hours,
+  past its cap of acting calls an hour (across all its workers, counted in the
+  loop's own log, which keeps when and which tool, never the arguments), or
+  when its arguments name something the loop excludes;
+- every other tool of the server passes unchanged.
 """
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import ipaddress
 import json
 import os
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable, Mapping
+from datetime import datetime
+from pathlib import Path
 from typing import Any, BinaryIO
 
 SESSION = "cauce-worker"
@@ -106,8 +122,61 @@ def engram(name: str, arguments: Mapping[str, Any]) -> tuple[str | None, dict[st
     return None, args
 
 
+def cauce_home(env: Mapping[str, str]) -> Path:
+    """cauce's home as `cauce.store.home` reads it (this module imports nothing of cauce)."""
+    if env.get("CAUCE_HOME"):
+        return Path(env["CAUCE_HOME"]).expanduser()
+    xdg = env.get("XDG_DATA_HOME", "")
+    base = Path(xdg) if xdg.startswith("/") else Path(env.get("HOME") or Path.home()) / ".local" / "share"
+    return base / "cauce"
+
+
+def outbound(name: str, arguments: Mapping[str, Any], env: Mapping[str, str] | None = None,
+             now: float | None = None) -> tuple[str | None, dict[str, Any]]:
+    env = os.environ if env is None else env
+    args = dict(arguments)
+    if name not in {a for a in env.get("CAUCE_OUTBOUND_ACTS", "").split(",") if a}:
+        return None, args
+    loop_name = env.get("CAUCE_LOOP", "")
+    if not loop_name or "/" in loop_name:
+        return (f"{name} acts on the world: it runs only in a round of a loop the person set to act "
+                "(`cauce loop act`); write what you would send in your result instead"), args
+    folder = cauce_home(env) / "loops"
+    try:
+        loop = json.loads((folder / f"{loop_name}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return f"loop {loop_name!r} cannot be read: nothing acts", args
+    if loop.get("mode") != "act":
+        return (f"loop {loop_name!r} is a draft: nothing leaves; write what you would send, to whom and why, "
+                "in your result"), args
+    now = time.time() if now is None else now
+    hours = str(loop.get("hours") or "")
+    if hours:
+        start, end = (int(h) for h in hours.split("-", 1))
+        if not start <= datetime.fromtimestamp(now).hour < end:
+            return f"loop {loop_name!r} acts only between {start}:00 and {end}:00; list it for later", args
+    blob = json.dumps(args, ensure_ascii=False).lower()
+    if any(str(x).lower() in blob for x in loop.get("exclude") or () if str(x).strip()):
+        return f"this call names someone or something loop {loop_name!r} excludes", args
+    cap = int(loop.get("per_hour") or 0)
+    log = folder / f"{loop_name}.sent.jsonl"
+    with open(folder / f"{loop_name}.sent.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if cap:
+            recent = 0
+            with contextlib.suppress(FileNotFoundError):
+                for line in log.read_text(encoding="utf-8").splitlines():
+                    with contextlib.suppress(ValueError, TypeError):
+                        recent += float(json.loads(line)["at"]) > now - 3600
+            if recent >= cap:
+                return f"loop {loop_name!r} acts at most {cap} times an hour; list the rest for later", args
+        with log.open("a", encoding="utf-8") as out:
+            out.write(json.dumps({"at": now, "tool": name}) + "\n")
+    return None, args
+
+
 POLICIES: Mapping[str, Callable[[str, Mapping[str, Any]], tuple[str | None, dict[str, Any]]]] = {
-    "rastro": rastro, "engram": engram}
+    "rastro": rastro, "engram": engram, "outbound": outbound}
 
 
 def screen(message: Any, policy: Callable[[str, Mapping[str, Any]], tuple[str | None, dict[str, Any]]]
