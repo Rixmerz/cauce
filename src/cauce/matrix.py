@@ -137,7 +137,9 @@ LADDERS: dict[str, tuple[Cell, ...]] = {
     "debug-unclear": ladder("opus/high", "opus/xhigh", "opus/max"),
     "review-routine": ladder("sonnet/medium", "sonnet/high", "opus/high"),
     "review-critical": ladder("opus/high", "opus/xhigh", "opus/max"),
-    "plan": ladder("opus/xhigh", "opus/max", "fable/high"),
+    # A plan starts at opus/high: on bench/speed's plan for parts it drew the same three parts as
+    # opus/xhigh and opus/max, every one valid, in half xhigh's time and a fifth of max's.
+    "plan": ladder("opus/high", "opus/xhigh", "opus/max", "fable/high"),
     "frontier": ladder("fable/high", "fable/xhigh", "fable/max"),
 }
 

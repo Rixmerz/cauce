@@ -86,3 +86,20 @@ Not built.
 **A review started before the build's own check finished.** The check failed 12 times in 50
 after a worker claimed a pass. Starting the review early would save the check's median 65 s on
 builds of 15 to 40 minutes, and throw away one review in four. Not built.
+
+## C: how much effort a plan for parts needs (`plan.py`)
+
+The plan step of `feature-parallel` was asked for the build of `build.py`, two runs per cell.
+cauce's own parts reader (`launch.read_parts`, strict) judged each answer.
+
+| Cell | Valid | Parts | Wall p50 | Cost p50 |
+|---|---|---|---|---|
+| sonnet/high | 2/2 | 4, 4 | 59 s | $0.18 |
+| opus/high | 2/2 | 3, 3 | 93 s | $0.29 |
+| opus/xhigh | 2/2 | 3, 3 | 189 s | $0.55 |
+| opus/max | 2/2 | 3, 3 | 510 s | $1.56 |
+
+opus/high, opus/xhigh and opus/max drew the same three parts (rules with checkout, receipt,
+export). From 0.45 a plan starts at opus/high, where it started at opus/xhigh. sonnet/high split
+the work another way (checkout apart from the rules). Whether those parts build as well was not
+measured, so it is not the start.

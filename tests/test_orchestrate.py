@@ -242,9 +242,10 @@ def test_runs_end_with_a_status_that_says_why(git_repo, store, results, status):
 
 def test_fable_waits_for_approval(tmp_path, store):
     script = Script(bad(Failure.INCONCLUSIVE, "could not read the queue"),
+                    bad(Failure.INCONCLUSIVE, "the queue is still unclear"),
                     bad(Failure.INCONCLUSIVE, "the scheduler is unclear"))
     report = run("design the system", tmp_path, store, registry={}, launcher=script, classifier=kind("plan"))
-    assert report.status == "needs_approval" and report.cells == ["opus/xhigh", "opus/max"]
+    assert report.status == "needs_approval" and report.cells == ["opus/high", "opus/xhigh", "opus/max"]
 
 
 def test_cost_is_measured_never_a_brake_and_attempts_are_the_ceiling(git_repo, store):

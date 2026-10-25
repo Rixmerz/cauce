@@ -46,6 +46,13 @@
     sonnet/high passed all ten hidden tests 3 times in 3, in 84 s; sonnet/xhigh did too, in 276 s.
     opus/high (189 s) and opus/xhigh (382 s) missed one test once each.
 
+- **A plan starts at opus/high, not opus/xhigh.** The plan ladder now runs opus/high, opus/xhigh,
+  opus/max and then fable/high, which still needs a person. `bench/speed/plan.py` asked for the
+  plan of `feature-parallel`, two runs per cell. Every plan was valid, read strictly by cauce's own
+  parts reader. opus/high, opus/xhigh and opus/max all drew the same three parts, in 93 s, 189 s
+  and 510 s at the median. sonnet/high, at 59 s, drew four other parts; whether they build as well
+  was not measured, so it is not the start.
+
 ### Added
 
 - **`cauce stats` says what each blind review added beside another**: for each workflow step
