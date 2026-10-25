@@ -123,3 +123,37 @@ def test_the_reset_a_limit_stop_keeps_is_the_one_its_resume_waits_for(git_repo, 
     resets = datetime.fromisoformat(stop.extra["resets_at"]).timestamp()
     assert dispatch._due(stop, 0.0) == resets + dispatch.LIMIT_GRACE_S
     assert flow.limited_until(store) == stop.extra["resets_at"]
+
+
+def test_the_base_a_finished_event_keeps_is_what_the_ending_reads_moved_files_from(git_repo, store):
+    """`orchestrate` keeps the work's base on its `finished` event; `hooks._found_before` reads
+    what the checkout's branch changed since from that field alone."""
+    from cauce import hooks
+    from cauce.orchestrate import run
+
+    from .conftest import git
+    from .test_orchestrate import Script, kind, ok
+
+    found = {"where": "landing.md:1", "what": "says no binaries", "evidence_class": "deterministic",
+             "cause": "pre-existing", "proof": "git ls-remote --tags"}
+    report = run("write the radio tests", git_repo, store, Options(), registry={},
+                 launcher=Script(dataclasses.replace(ok(), findings=(found,)), write="t.py"),
+                 classifier=kind("test"))
+    base = store.final_event(report.task_id)["data"]["base"]
+    assert base == git(git_repo, "rev-parse", "HEAD")
+    assert "landing.md:1" in "\n".join(hooks._found_before(store, store.get_task(report.task_id)))
+    (git_repo / "landing.md").write_text("binaries are published\n")
+    git(git_repo, "add", "-A")
+    git(git_repo, "commit", "-qm", "fix the landing")
+    assert "landing.md:1" not in "\n".join(hooks._found_before(store, store.get_task(report.task_id)))
+
+
+def test_the_lines_a_plan_kept_quiet_are_left_out_of_the_ending_s_warnings(git_repo, store):
+    """`orchestrate` keeps the lines a repository already heard today on `planned.quiet`;
+    `hooks._warned` leaves them out from that field alone."""
+    from cauce import hooks
+
+    task = store.create_task("t", status="done", source="cauce")
+    store.add_event(task["id"], "planned", warnings=["CI also runs: e2e", "this task's check exits 0"],
+                    quiet=["CI also runs: e2e"])
+    assert hooks._warned(store, task["id"]) == ["this task's check exits 0"]

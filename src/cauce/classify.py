@@ -342,10 +342,23 @@ def opens_with_change(text: str) -> bool:
     return _CHANGE.match(fold(text).strip()) is not None
 
 
+#: A file a request asks to be written: a verb of change, then within a few words a document's name.
+_WRITES_FILE = re.compile(
+    _OPENS + r"(escribe|escribir|write|crea|crear|create|redacta|redactar|draft|genera|generar|generate|deja|dejalo"
+    r"|guarda|guardar|save|put|pon|ponlo|agrega|add|actualiza|update)\b[^.\n]{0,80}?"
+    r"(\b[\w./-]+\.(md|mdx|rst|txt|adoc)\b|\b(in|into|en|a) (a |un )?(markdown|archivo|file)\b)")
+
+
 def asks_for_change(text: str, found: Classification) -> Classification:
-    """A reading kind for a request that asks for a change becomes `implement`.
-    A tag is a person's word and stays; so does a question."""
+    """A reading kind for a request that asks for a change becomes `implement`, and so does a
+    plan the request asks to be written to a file ("write the plan in docs/PLAN.md"): a plan's
+    worker writes nothing, and a second task would have to. A tag is a person's word and
+    stays; so does a question."""
     folded = fold(text).strip()
+    if found.kind == "plan" and not found.reason.startswith("tagged") and (into := _WRITES_FILE.search(folded)):
+        return Classification("implement", found.complexity, found.source,
+                              f"read as plan, but it asks for it written to a file ({into.group(2)})",
+                              found.cost_usd)
     if found.kind not in _READING or found.reason.startswith("tagged") or folded.endswith("?"):
         return found
     verb = _CHANGE.search(folded)

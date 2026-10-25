@@ -571,6 +571,7 @@ def run(
                       lean=lean_flags(claude_bin, os.environ))
     before = tracked_state(spec.target_dir)
     started = time.monotonic()
+    began = datetime.now(UTC).isoformat(timespec="seconds")
     try:
         proc = runner(
             argv,
@@ -616,8 +617,20 @@ def run(
         return dataclasses.replace(
             fresh, fresh=f"the CLI could not resume session {spec.resume_session}: {line[:200]}")
     changed = changed_paths(before, tracked_state(spec.target_dir), spec.target_dir)
-    return dataclasses.replace(parse(proc, spec, changed, duration_s=time.monotonic() - started),
-                               permission_mode=spec.permission_mode, resumed=bool(spec.resume_session))
+    result = dataclasses.replace(parse(proc, spec, changed, duration_s=time.monotonic() - started),
+                                 permission_mode=spec.permission_mode, resumed=bool(spec.resume_session))
+    return counted_turns(result, began)
+
+
+def counted_turns(result: WorkerResult, since: str, env: Mapping[str, str] | None = None) -> WorkerResult:
+    """The attempt's turns as its worker's transcript counts them (each model call once, from
+    `since`), when that is more than the CLI's `num_turns`: a session that compacted inside
+    the worker counts its turns again from there, and a 48-minute attempt is never "2 turns"."""
+    from cauce import usage
+
+    path = usage.transcript_of(result.session_id, env) if result.session_id else None
+    counted = usage.transcript_turns(path, since=since) if path is not None else 0
+    return dataclasses.replace(result, turns=counted) if counted > result.turns else result
 
 
 def _mode_refused(proc: subprocess.CompletedProcess, spec: LaunchSpec) -> bool:

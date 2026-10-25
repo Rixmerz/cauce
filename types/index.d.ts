@@ -20,6 +20,8 @@ export type CauceCard = {
   current_cell?: string | null
   branch?: string | null
   phase?: string | null
+  /** Why a running task is slow (longer than 9 in 10 of its kind's passes here), when it is. */
+  slow?: string | null
   /** Who clears a card that waits: the person, or the orchestrating session. */
   waits_on?: 'person' | 'orchestrator'
 }

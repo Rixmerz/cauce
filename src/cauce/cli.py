@@ -11,7 +11,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from cauce import (
@@ -34,7 +34,7 @@ from cauce import (
 from cauce import findings as findings_mod
 from cauce.classify import classify
 from cauce.escalate import Attempt, Failure
-from cauce.matrix import KINDS, LADDERS, Cell
+from cauce.matrix import EFFORTS, KINDS, LADDERS, MODEL_ORDER, Cell
 from cauce.store import FIX_OUTCOMES, Store, home
 from cauce.text import clip, title_of
 
@@ -321,7 +321,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
         cause = hidden or ((stop := stops.of(store, task)) and stop.cause)
         # One split for its turns resumes as one that outgrew them: the session's word that it is one piece.
         outgrew = was == "replan" and cause in ("turns", "split")
-        if was not in RESUMABLE and not outgrew:
+        # One that stopped on its surfaces resumes with more of them, its diagnosis in the brief.
+        widened = bool(args.surface) and cause in ("spec", "decision")
+        if was not in RESUMABLE and not outgrew and not widened:
             print(f"task #{args.id} is {was}; only a task that stopped ({', '.join(RESUMABLE)}) resumes"
                   + ("; rewrite it as a new task" if was == "replan" else _instead(args.id, was)), file=sys.stderr)
             return 1
@@ -350,6 +352,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
         options.kind = options.kind or task["kind"]
         options.allow_tools = tuple(dict.fromkeys([*options.allow_tools, *(args.allow or ())]))
         options.verify = args.verify or options.verify
+        if args.surface:
+            options.surfaces = tuple(dict.fromkeys([*options.surfaces, *args.surface]))
         # An approval is a person's, for the run they approved: a resume nobody
         # approved (`--unattended`, a model's) never uses one an earlier run had,
         # and leaves it stored for the person's own next resume.
@@ -368,6 +372,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
             return 1
         start = args.start or waiting or (attempts[-1]["cell"] if attempts else None)
         options.start = Cell.parse(start) if start else None
+        options.resume_why = resume_line(was, [a["cell"] for a in attempts], start,
+                                         "asked" if args.start else "approval" if waiting else "last") + (
+            f"; its surfaces now take {', '.join(args.surface)} too" if args.surface else "")
         denied, granted = store.denials(args.id), store.allowances(args.id)
         history = [Attempt(Cell.parse(a["cell"]), int(a["max_turns"] or 0), bool(a["passed"]),
                            _failure_of(a["failure"]), a["summary"] or "", tuple(denied.get(a["seq"], ())),
@@ -410,6 +417,28 @@ def cmd_resume(args: argparse.Namespace) -> int:
         store.close()
     print(report.text())
     return _exit(report)
+
+
+def _rank(label: str) -> tuple[int, int]:
+    """Where a cell stands in the matrix: its model's depth, then its effort."""
+    cell = Cell.parse(label)
+    model = MODEL_ORDER.index(cell.model) if cell.model in MODEL_ORDER else -1
+    return model, EFFORTS.index(cell.effort) if cell.effort in EFFORTS else -1
+
+
+def resume_line(was: str, cells: Sequence[str], start: str | None, why: str) -> str:
+    """What a resume's plan says of where it starts: after what, at which cell and why (the
+    cell its last attempt ran, the one that waited for an approval, or the one `--start`
+    asked for), and when that is below the highest cell the task already ran."""
+    if not cells or not start:
+        return f"resumed after it {was}, with no attempt before: it starts where its plan does"
+    because = {"asked": "as `--start` asked", "approval": "the cell that waited for an approval"}.get(
+        why, "the cell its last attempt ran")
+    line = f"resumed after it {was} ({len(cells)} attempt(s) before): it starts at {start}, {because}"
+    top = max(cells, key=_rank)
+    if _rank(start) < _rank(top):
+        line += f"; that is below {top}, the highest cell it ran"
+    return line
 
 
 def _go_on(store: Store, key: str | None) -> bool:
@@ -876,20 +905,30 @@ def cmd_tasks(args: argparse.Namespace) -> int:
     store = Store.open()
     try:
         # cauce's own work by default: a session's turns are no task to resume or count.
-        sources = None if args.turns else ("cauce", "queue")
+        sources = None if args.turns and not args.workers else ("cauce", "queue")
         here = _repo_key(args)
         tasks = store.list_tasks(repo=here, status=args.status or None, limit=args.limit, source=sources)
-        waits = {t["id"]: dispatch.waiting(store, t) for t in tasks}
+        if args.workers:
+            tried = {t["id"]: store.attempts(t["id"]) for t in tasks}
+            tasks = sorted((t for t in tasks if tried[t["id"]]), key=lambda t: (str(t.get("repo") or ""), -t["id"]))
+        seen: dict[tuple[str, str], list[float]] = {}
+        waits = {t["id"]: dispatch.waiting(store, t) or flow.slow(store, t, seen=seen) for t in tasks}
         # None here, but work elsewhere: say how much and where to see it.
         elsewhere = [] if tasks or here is None else store.list_tasks(
             status=args.status or None, limit=10_000, source=sources)
     finally:
         store.close()
+    project = None
     for t in tasks:
         cell = t["final_cell"] or t["start_cell"] or ""
         mark = {"hook": " (turn)", "delegation": " (subagent)"}.get(t["source"], "")
         size = str(t.get("points") or "-")
-        where = f"{_project_label(t.get('repo')):<18} " if here is None else ""
+        where = f"{_project_label(t.get('repo')):<18} " if here is None and not args.workers else ""
+        if args.workers:
+            if here is None and t.get("repo") != project:
+                project = t.get("repo")
+                print(f"{_project_label(project)} ({project or 'no repository'})")
+            mark = f"  ({len(tried[t['id']])} attempt(s), ${float(t.get('cost_usd') or 0):.2f})"
         print(f"#{t['id']:<5} {where}{t['status']:<14} {t['kind'] or '-':<16} {cell:<14} {size:>2} "
               f"{t['title']}{mark}")
         if waits[t["id"]]:
@@ -955,6 +994,8 @@ def cmd_show(args: argparse.Namespace) -> int:
                     print(f"      · {line}")
                 for line in move.get("skipped") or ():
                     print(f"      · skipped {line}")
+        for line in run_lines(store, args.id):
+            print(line)
         stop = stops.view(store, task)
         if stop:
             print(f"stopped by {stop['who']}: {stop['reason']}")
@@ -964,6 +1005,23 @@ def cmd_show(args: argparse.Namespace) -> int:
     finally:
         store.close()
     return 0
+
+
+def run_lines(store: Store, task_id: int) -> list[str]:
+    """Each run of a task that ran more than once, in order: how it ended, at which cell it
+    started and why, and how many attempts it made. A task that failed and was resumed to a
+    pass reads as both, never as one "done"."""
+    planned, ended = store.events_of(task_id, "planned"), store.events_of(task_id, "finished")
+    if len(ended) < 2:
+        return []
+    lines = ["runs:"]
+    for n, finished in enumerate(ended, 1):
+        data = finished["data"] or {}
+        plan = (planned[n - 1]["data"] or {}) if n <= len(planned) else {}
+        why = next((r for r in plan.get("reasons") or () if str(r).startswith("resumed after")), "")
+        lines.append(f"  {n}. {data.get('status')} after {data.get('attempts') or 0} attempt(s), started at "
+                     f"{plan.get('start') or '?'}" + (f" ({clip(why, 200)})" if why else ""))
+    return lines
 
 
 def cmd_memory_search(args: argparse.Namespace) -> int:
@@ -2339,6 +2397,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--allow", action="append", metavar="RULE", help=ALLOW_HELP)
     p.add_argument("--verify", help="command whose exit code decides a claimed pass (default: the task's own)")
     p.add_argument("--start", help="the cell to resume at (default: where it stopped)", type=_cell)
+    p.add_argument("--surface", action="append", metavar="PATH",
+                   help="add a path or glob the task may change (repeatable): a task that stopped on its "
+                        "surfaces resumes with them, its diagnosis kept")
     p.add_argument("--allow-approval", action="store_true", help="allow cells that need approval (Fable)")
     p.add_argument("--no-isolate", action="store_true",
                    help="work in the checkout (a task started with --no-isolate already resumes there)")
@@ -2372,6 +2433,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--status", action="append")
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("--turns", action="store_true", help="the sessions' own turns and subagents too")
+    p.add_argument("--workers", action="store_true",
+                   help="only work a worker ran (its attempts and cost on each row), by project with --all")
     p.set_defaults(func=cmd_tasks)
 
     queue = sub.add_parser("queue", help="tasks waiting for a worker; `++ task` in a session queues too")

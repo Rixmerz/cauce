@@ -607,3 +607,30 @@ def test_older_installs_left_in_the_cache_are_named_once_with_how_to_remove_them
     assert hooks._older_installs(tmp_path, env) is None  # once per set
     _plugin(config, "999.0.0")
     assert hooks._older_installs(tmp_path, env) is None  # a newer one: the newer-plugin notice speaks
+
+
+def test_problems_already_there_in_files_changed_since_are_not_offered(store: Store, git_repo):
+    from .conftest import git
+
+    base = git(git_repo, "rev-parse", "HEAD")
+    (git_repo / "landing.md").write_text("binaries are published\n")
+    git(git_repo, "add", "-A")
+    git(git_repo, "commit", "-qm", "landed after the work started")
+    task = store.create_task("write tests for the radio", status="done", source="cauce", session_id="s",
+                             cwd=str(git_repo), repo="r")
+    old = {"where": "landing.md:1", "what": "says no binaries are published", "evidence_class": "deterministic",
+           "cause": "pre-existing", "proof": "git ls-remote --tags"}
+    other = {**old, "where": "src/ble.ts:3", "what": "drops a frame"}
+    open_one = {**old, "where": "src/board.ts:3", "what": "allows one board too many"}
+    store.add_event(task["id"], "finished", status="done", findings=[old, other, open_one], changed=["tests/t.ts"],
+                    base=base)
+    # other passing work here changed src/ble.ts after this one started
+    fixer = store.create_task("fix ble", status="done", source="cauce", repo="r")
+    store.add_event(fixer["id"], "finished", status="done", changed=["src/ble.ts"])
+    lines = hooks._found_before(store, store.get_task(task["id"]))
+    assert lines[0].startswith("  it found 1 problem(s)") and "src/board.ts:3" in lines[1]
+    assert not any("landing.md" in line or "ble.ts" in line for line in lines)
+    assert lines[-1].startswith("    and 2 more in files changed since this work started")
+    store.add_event(task["id"], "finished", status="done", findings=[old], changed=["tests/t.ts"], base=base)
+    assert hooks._found_before(store, store.get_task(task["id"]))[0] == (
+        "  it found 1 problem(s) that were already there: nothing left to offer")

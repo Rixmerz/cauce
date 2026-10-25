@@ -806,3 +806,21 @@ def test_the_session_lets_a_queued_task_start_beside_the_work_ahead(capsys, stor
     store.claim(held["id"])
     assert cli.main(["lanes", "--beside", str(held["id"])]) == 1
     assert "only a queued task" in capsys.readouterr().err
+
+
+def test_a_running_task_longer_than_nine_in_ten_of_its_kind_s_passes_is_slow(store: Store):
+    import time
+
+    for wall in (600, 700, 800, 900, 1000):
+        done = store.create_task("ui", status="done", source="cauce", repo="r", kind="ui")
+        store.add_event(done["id"], "finished", status="done", wall_s=wall)
+    running = store.create_task("the slow one", status="running", source="cauce", repo="r", kind="ui")
+    store.add_event(running["id"], "planned", start="sonnet/high")
+    began = datetime.fromisoformat(store.last_event(running["id"], "planned")["ts"]).timestamp()
+    assert flow.slow(store, store.get_task(running["id"]), now=began + 60) is None  # under SLOW_MIN_S
+    line = flow.slow(store, store.get_task(running["id"]), now=began + 101 * 60)
+    assert line == (f"running 101m: longer than 9 in 10 of the 5 ui tasks that passed here (p90 17m); "
+                    f"`cauce show {running['id']}` says what it is doing")
+    other = store.create_task("docs", status="running", source="cauce", repo="r", kind="docs")
+    store.add_event(other["id"], "planned", start="haiku/medium")
+    assert flow.slow(store, store.get_task(other["id"]), now=time.time() + 3 * 3600) is None  # no history

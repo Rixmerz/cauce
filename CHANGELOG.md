@@ -2,6 +2,55 @@
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-10-25
+
+### Changed
+
+- **Work that fixes a flaky test is checked three times.** A request that names a flaky,
+  intermittent or sporadic failure ("fails 1 of 4 runs") gets its check run three times,
+  and it passes only when every run does. Runs that disagree mean the flake is still there:
+  that is never the one-rerun pass and never excused by the base. The plan says so, and
+  the verdict says how many runs passed. Before, one green run closed a flake fix that
+  failed again on CI.
+- **Problems that were already there are not offered when their file changed since.** An
+  ending used to offer a bugfix for each problem the work found that was there before,
+  even when the checkout's branch, or other work that passed after this one started, had
+  changed its file since. Those are now counted and not offered: they may be fixed
+  already.
+- **Lines a repository hears on every task are said once a day.** A neighbour's state
+  ("engram: absent", "livespec: … stale"), the CI jobs a check leaves out and a role's
+  capability that is not in the registry are said on the first task of the day there.
+  The plan's record keeps them all, and the report says how many it left out.
+- **A plan asked to be written to a file is work that writes.** "Write the plan in
+  docs/PLAN.md" is no longer a read-only plan that a second task has to write down. It
+  runs as `implement`.
+
+### Added
+
+- **A resume says where it starts.** Its plan names what it resumes after, the cell it
+  starts at and why: the last attempt's cell, the one that waited for an approval, or
+  `--start`. It also says when that is below the highest cell the task already ran.
+  `cauce show` lists each run of a task that ran more than once, so "failed, resumed,
+  done" reads as both.
+- **`cauce resume N --surface PATH`.** A task that stopped on a point because its surfaces
+  kept it from the cause (it named a file outside them, or changed one that was undone)
+  offers a resume with those paths added. Its diagnosis goes on in its brief, instead of a
+  dismissal and a new task.
+- **A pass whose worker never ran its own check says so.** When cauce's check passed in
+  place of a worker that ran out of turns or was refused, the verdict says so. The ending
+  then allows opening the diff.
+- **Slow work is said.** A running task that has gone past 20 minutes and past 9 in 10 of
+  its kind's passes in the repository is named slow, with that 90th percentile. It shows
+  in `cauce tasks`, on the board and in the mod's `tasks` tool. Nothing is stopped.
+- **`cauce tasks --workers`.** Only work a worker ran, with each row's attempts and cost,
+  grouped by project with `--all`.
+
+### Fixed
+
+- **An attempt's turns are its transcript's model calls when the CLI counts fewer.** A
+  worker session that compacts restarts the CLI's `num_turns`, so a 48-minute attempt
+  could read "2 turns".
+
 ## [0.38.1] - 2026-10-24
 
 ### Fixed

@@ -127,3 +127,25 @@ def test_a_running_attempt_shows_its_cost_so_far_or_running_never_zero(store: St
     store.add_event(task["id"], "attempt_finished", seq=1, cost_usd=0.4)
     assert usage.so_far(store, store.get_task(task["id"])) == {"cost_usd": 0.0}
     assert usage.transcript_of("../etc/passwd") is None
+
+
+def test_an_attempt_s_turns_are_its_transcript_s_model_calls_when_the_cli_counts_fewer(tmp_path):
+    import dataclasses
+    import json as _json
+
+    from cauce import launch
+
+    config = tmp_path / "config"
+    folder = config / "projects" / "-w"
+    folder.mkdir(parents=True)
+    rows = [{"type": "assistant", "timestamp": "2026-10-23T09:00:00Z", "message": {"id": "old"}}]
+    rows += [{"type": "assistant", "timestamp": "2026-10-23T10:00:05Z", "message": {"id": f"m{n}"}} for n in range(40)]
+    rows += [{"type": "assistant", "timestamp": "2026-10-23T10:00:06Z", "message": {"id": "m1"}},
+             {"type": "user", "timestamp": "2026-10-23T10:00:07Z", "message": {"id": "u"}}]
+    (folder / "sess-1.jsonl").write_text("\n".join(_json.dumps(r) for r in rows) + "\n")
+    env = {"CLAUDE_CONFIG_DIR": str(config)}
+    result = dataclasses.replace(launch.WorkerResult(True, None, "done"), turns=2, session_id="sess-1")
+    assert launch.counted_turns(result, "2026-10-23T10:00:00+00:00", env).turns == 40
+    more = dataclasses.replace(result, turns=50)
+    assert launch.counted_turns(more, "2026-10-23T10:00:00+00:00", env).turns == 50
+    assert launch.counted_turns(dataclasses.replace(result, session_id=""), "x", env).turns == 2

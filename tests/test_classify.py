@@ -173,3 +173,19 @@ def test_haiku_answers_a_narrow_question_at_low_effort():
 
     classify.ask_haiku("s", {"type": "object"}, "q", runner=runner)
     assert seen["argv"][seen["argv"].index("--effort") + 1] == "low"
+
+
+@pytest.mark.parametrize("text", [
+    "Design the system for the firmware update and write it in docs/PLAN.md",
+    "arquitectura del simulador: escribe el plan tecnico en hertzbench/ARCHITECTURE.md",
+    "Draft the technical plan for the ESP-NOW bridge into a markdown file",
+])
+def test_a_plan_asked_written_to_a_file_is_work_that_writes(text):
+    found = classify(text, use_model=False)
+    assert found.kind == "implement" and found.reason.startswith("read as plan, but it asks for it written to a file")
+
+
+def test_a_plan_with_nothing_to_write_stays_a_plan():
+    assert classify("Design the system for the firmware update: what are the trade-offs?", use_model=False).kind \
+        == "plan"
+    assert classify("roadmap for the MCP server #plan, save it in PLAN.md", use_model=False).kind == "plan"

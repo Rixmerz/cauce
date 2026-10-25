@@ -495,3 +495,63 @@ def test_a_repository_s_known_flaky_tests_reach_every_writing_brief(git_repo, st
     reading = run("explain the export", git_repo, store, Options(dry_run=True), registry={},
                   classifier=kind("explore"))
     assert not any(c.startswith("Tests known to flake") for c in reading.plan.context)
+
+
+@pytest.mark.parametrize("text, runs", [
+    ("fix the flaky ESP-NOW test on macOS", 3),
+    ("arregla el test intermitente de view_browser_test.ts", 3),
+    ("the login test fails 1 of 4 runs on CI: fix it", 3),
+    ("make the sporadic timeout in sync.test.ts go away", 3),
+    ("add the export button", 1),
+    ("do step 1 of 4 of the migration", 1),
+])
+def test_work_that_fixes_a_flake_is_checked_several_times(text, runs):
+    assert orchestrate.flake_fix_runs("bugfix", text) == runs
+    assert orchestrate.flake_fix_runs("explore", "why is the login test flaky?") == 1
+
+
+def _flake_baseline(store, where, runs=3):
+    task = store.create_task("fix the flaky test", status="running", source="cauce")
+    return orchestrate.Baseline(store=store, task_id=task["id"], repo_dir=where, base="abc", root=where, runs=runs)
+
+
+def test_a_flake_fix_passes_only_when_every_run_passes(tmp_path, store):
+    baseline = _flake_baseline(store, tmp_path)
+    code, out = orchestrate._steady_check("echo '3 passed'", tmp_path, baseline)
+    assert code == 0 and "ran 3 times and passed every time" in out
+    assert store.last_event(baseline.task_id, "check_repeated")["data"] == {
+        "command": "echo '3 passed'", "runs": 3, "passed": 3, "steady": True}
+    card = orchestrate._check_card("npm test", None, store.last_event(baseline.task_id, "check_repeated"))
+    assert card == {"command": "npm test", "passed": True, "runs": 3}
+    # one run out of three that fails is the flake still there: not the one-rerun pass, never the base's
+    (tmp_path / "n").write_text("")
+    third = "echo x >> n; test $(wc -l < n) -ne 2 && echo '1 passed' || (echo 'FAIL src/a.test.ts'; exit 1)"
+    code, out = orchestrate._steady_check(third, tmp_path, baseline)
+    assert code == 1 and "it passed 2 of 3" in out and baseline.flaked
+    assert store.last_event(baseline.task_id, "check_flaky") is None
+    before, why = orchestrate._against_base(baseline, third, out, tmp_path)
+    assert not before and "the flake is still there" in why
+
+
+def test_a_flake_fix_failing_the_same_way_every_run_is_one_steady_failure(tmp_path, store):
+    baseline = _flake_baseline(store, tmp_path)
+    code, out = orchestrate._steady_check("echo 'FAIL src/b.test.ts'; exit 1", tmp_path, baseline)
+    assert code == 1 and not baseline.flaked and "ran 3 times" not in out
+    assert store.last_event(baseline.task_id, "check_repeated")["data"]["steady"] is True
+    # a check that could not run is not run again
+    assert orchestrate._steady_check("exit 127", tmp_path, baseline)[0] == 127
+    assert store.last_event(baseline.task_id, "check_repeated")["data"]["runs"] == 3
+
+
+def test_the_plan_says_a_flake_fix_is_checked_several_times(git_repo, store):
+    dry = run("fix the flaky login test", git_repo, store, Options(dry_run=True, verify="npm test"), registry={},
+              classifier=kind("bugfix"))
+    assert any("runs 3 times and must pass every time" in r for r in dry.plan.reasons)
+
+
+def test_the_ending_says_how_many_runs_a_flake_fix_passed():
+    from cauce import hooks
+
+    lines = hooks.verdict_lines({"criteria": [], "check": {"command": "npm test", "passed": True, "runs": 3},
+                                 "independent": {"ran": False, "why": "x"}, "attempts": 1})
+    assert any("passed, run by cauce in its worktree 3 times, every run" in line for line in lines)

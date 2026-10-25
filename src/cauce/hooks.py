@@ -39,7 +39,7 @@ import shutil
 import subprocess
 import sys
 import traceback
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TextIO
@@ -837,7 +837,9 @@ def verdict_lines(verdict: Mapping | None) -> list[str]:
                      f"{str(check.get('base') or '')[:12]} too, with the same {check.get('failures')} failure(s), "
                      "so the work stood; they were there before it")
     elif isinstance(check, Mapping):
-        lines.append(f"  check: `{check['command']}` passed, run by cauce in its worktree")
+        runs = int(check.get("runs") or 1)
+        lines.append(f"  check: `{check['command']}` passed, run by cauce in its worktree"
+                     + (f" {runs} times, every run, since this work fixes a flake" if runs > 1 else ""))
     else:
         lines.append("  check: none was given, so nothing ran it: say so to the person")
     for c in verdict.get("criteria") or ():
@@ -849,7 +851,10 @@ def verdict_lines(verdict: Mapping | None) -> list[str]:
                                                  f"{ind.get('blocking')} blocker(s) left, recorded"))
     elif ind.get("why"):
         lines.append(f"  independent check: not run ({ind['why']})")
-    unverified = not isinstance(check, Mapping) or any(not c.get("met") for c in verdict.get("criteria") or ())
+    if verdict.get("unchecked"):
+        lines.append(f"  not self-checked: {verdict['unchecked']}")
+    unverified = not isinstance(check, Mapping) or bool(verdict.get("unchecked")) or any(
+        not c.get("met") for c in verdict.get("criteria") or ())
     lines.append("  this verdict is cauce's own record: do not re-read the code or re-run the check to confirm it"
                  + ("; open the diff only where it says something was not checked or not met" if unverified
                     else "; open the diff only if the person asks"))
@@ -881,14 +886,21 @@ def _found_before(store: Store, ended: Mapping) -> list[str]:
     # likely fixed by it (a test that caught a bug, then the fix), never work left to offer.
     changed = {str(p).lower() for task in tasks
                for p in (((store.final_event(task["id"]) or {}).get("data") or {}).get("changed") or ())}
+    # What changed since the work started, on the checkout's branch or by other passing work
+    # here: a problem in one of those files may be fixed already, so it is counted, not offered.
+    moved = _moved_since(store, ended, tasks)
     fixed: set[str] = set()
+    since: set[str] = set()
     for task in tasks:
         final = store.final_event(task["id"]) if task.get("status") == "done" else None
         for f in ((final or {}).get("data") or {}).get("findings") or ():
             if isinstance(f, Mapping) and f.get("cause") == "pre-existing" and f.get("evidence_class") == \
                     "deterministic":
-                if f.get("fixed") or findings_mod.place(str(f.get("where") or "")) in changed:
+                place = findings_mod.place(str(f.get("where") or ""))
+                if f.get("fixed") or place in changed:
                     fixed.add(findings_mod.key(f))
+                elif place in moved:
+                    since.add(findings_mod.key(f))
                 else:
                     found.setdefault(findings_mod.key(f), f)
         # A check that failed only as it does at the base: its failures are problems that were
@@ -902,9 +914,15 @@ def _found_before(store: Store, ended: Mapping) -> list[str]:
             found.setdefault(f"check:{kept['data'].get('command')}:{kept['data'].get('base')}",
                              _failing_at_base(kept["data"]))
     fixed -= set(found)
+    since -= set(found) | fixed
+    later = [f"    and {len(since)} more in files changed since this work started, on the checkout's branch or by "
+             "other passing work here: they may be fixed already, so none is offered"] if since else []
     if not found:
-        return [f"  it found {len(fixed)} problem(s) that were already there, each in a file this work changed or "
-                "marked fixed by it: nothing left to offer"] if fixed else []
+        if not since:
+            return [f"  it found {len(fixed)} problem(s) that were already there, each in a file this work changed "
+                    "or marked fixed by it: nothing left to offer"] if fixed else []
+        return [f"  it found {len(fixed) + len(since)} problem(s) that were already there: nothing left to offer"] + (
+            [f"    {len(fixed)} in files this work changed or marked fixed by it"] if fixed else []) + later
     after_ref = f"run:{ended['workflow_run']}" if ended.get("workflow_run") else f"task:{ended['id']}"
     shown = list(found.values())[:FOUND_BEFORE_SHOWN]
     lines = [f"  it found {len(found)} problem(s) that were already there, not this change's (each shown with "
@@ -919,7 +937,36 @@ def _found_before(store: Store, ended: Mapping) -> list[str]:
         lines.append(f"    and {len(found) - len(shown)} more: `cauce show {ended['id']}`")
     if fixed:
         lines.append(f"    and {len(fixed)} more in files this work changed or marked fixed by it: not offered")
-    return lines
+    return lines + later
+
+
+def _moved_since(store: Store, ended: Mapping, tasks: Sequence[Mapping]) -> set[str]:
+    """Files (lowercased) changed since the ended work started: on the checkout's branch since
+    each task's base, and by other work here that passed after it started (within `OVERLAP_DAYS`). Empty when
+    git cannot say; an ending never fails on it."""
+    moved: set[str] = set()
+    cwd = Path(str(ended.get("cwd") or ""))
+    if ended.get("cwd") and cwd.is_dir():
+        from cauce import isolate
+
+        top = repo.toplevel(cwd) or cwd
+        for task in tasks:
+            base = (((store.final_event(task["id"]) or {}).get("data")) or {}).get("base")
+            try:
+                moved |= {p.lower() for p in isolate.moved_since(top, str(base or "")) or ()}
+            except Exception:  # noqa: S112 - an ending never fails on what git could not say
+                continue
+    if ended.get("repo"):
+        since = max((datetime.now(UTC) - timedelta(days=OVERLAP_DAYS)).isoformat(timespec="seconds"),
+                    min(str(t.get("created_at") or "") for t in tasks))
+        mine = {t["id"] for t in tasks}
+        for other in store.list_tasks(repo=ended["repo"], source=("cauce", "queue"), limit=300, status=["done"]):
+            if other["id"] in mine or (other.get("updated_at") or "") < since or (
+                    ended.get("workflow_run") and other.get("workflow_run") == ended.get("workflow_run")):
+                continue
+            data = ((store.final_event(other["id"]) or {}).get("data")) or {}
+            moved |= {str(p).lower() for p in data.get("changed") or ()}
+    return moved
 
 
 #: How long work that stopped or passed beside an ending still counts as work to merge beside it.
@@ -992,7 +1039,8 @@ def _behind(store: Store, ended: Mapping) -> list[str]:
 def _warned(store: Store, task_id: int) -> list[str]:
     """What a task's plan warned of when its run started, clipped."""
     planned = (store.last_event(task_id, "planned") or {}).get("data") or {}
-    return [clip(str(warning), 300) for warning in planned.get("warnings") or ()]
+    heard = set(planned.get("quiet") or ())
+    return [clip(str(warning), 300) for warning in planned.get("warnings") or () if warning not in heard]
 
 
 def _went_past(store: Store, ended: Mapping) -> list[str]:
