@@ -435,3 +435,32 @@ def test_a_repository_that_joins_a_workspace_takes_its_standards_and_open_change
     verdict, = standards.judge(store, "ws", now=NOW)
     assert verdict["change"] == carried["id"] and verdict["verdict"] == "kept"
     assert standards.judge(store, "r", now=NOW) == []
+
+
+def test_a_size_with_too_few_tasks_starts_where_the_kind_s_tasks_of_every_size_pass(store):
+    for points in (1, 2, 3, 5, 8):
+        finished(store, ("sonnet/xhigh", True), kind="ui", points=points)
+    changes = standards.calibrate(store, "r", now=NOW)
+    pooled = [c for c in changes if c["band"] == standards.ANY_SIZE]
+    assert [(c["field"], c["new_value"]) for c in pooled] == [("start_cell", "sonnet/xhigh")]
+    assert not [c for c in changes if c["band"] != standards.ANY_SIZE and c["field"] == "start_cell"]
+    used = standards.for_plan(store, "r", "ui", 13, pinned=False, explicit_turns=False)
+    assert used.cell.label == "sonnet/xhigh" and used.changes == (pooled[0]["id"],)
+    assert any("ui here (every size: 13 points has too few tasks)" in r for r in used.reasons)
+    assert standards.for_plan(store, "r", "ui", 13, pinned=True, explicit_turns=False).cell is None
+    assert standards.size(standards.ANY_SIZE) == "any size"
+
+
+def test_an_estimate_is_raised_a_step_where_the_kind_turned_out_bigger(store):
+    from cauce import points
+
+    for _ in range(5):
+        task = finished(store, ("opus/high", True), kind="feature", points=3)
+        store.add_event(task, "finished", status="done", wall_s=60, realized=8)
+    ratio, n = standards.size_ratio(store, "r", "feature")
+    assert n == 5 and ratio > 2
+    raised = points.corrected(points.Score(3, ("kind feature",)), "feature", ratio, n)
+    assert raised.points == 5 and raised.reasons[-1].startswith("feature tasks here turned out")
+    assert points.corrected(points.Score(3), "feature", ratio, 4).points == 3
+    assert points.corrected(points.Score(3), "feature", 1.2, 9).points == 3
+    assert points.corrected(points.Score(13), "feature", 3.0, 9).points == 13

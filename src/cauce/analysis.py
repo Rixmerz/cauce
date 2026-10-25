@@ -173,6 +173,7 @@ def _end(run: dict[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
     for phase in ("worker_s", "check_s", "verifier_s", "wait_s", "hold_s", "advance_s", "pickup_s", "spawn_s",
                   "notes_s"):
         run[phase] = _number(data.get(phase))
+    run["pickup_why"] = {k: float(data[k]) for k in PICKUP_CAUSES if _number(data.get(k))}
     if run["_open_attempt"]:
         # A worker runs at most its attempt's time limit: what passed after it, the run
         # waited dead for someone to notice (a sweep at the next session), not work lost.
@@ -191,6 +192,27 @@ def _end(run: dict[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
     if run["verifier_s"] is None and (run["_timed"] or run["_verifier_s"]):
         run["verifier_s"] = round(run["_verifier_s"], 2)
     return {k: v for k, v in run.items() if not k.startswith("_")}
+
+
+#: What a pickup waited on (`orchestrate.pickup_causes`), as `cauce stats` names each.
+PICKUP_CAUSES = ("pickup_conflict_s", "pickup_limit_s", "pickup_ceiling_s", "pickup_level_s")
+PICKUP_WORDS = {"pickup_conflict_s": "work ahead it was judged to wait for", "pickup_limit_s": "the usage limit",
+                "pickup_ceiling_s": "your ceiling of workers (chosen)", "pickup_level_s": "the machine's level"}
+
+
+def pickup(found: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """The pickup of the runs that measured why it waited, by cause; the rest of the pickup
+    (runs from before causes were kept) apart, never guessed."""
+    seconds = dict.fromkeys(PICKUP_CAUSES, 0.0)
+    told = unknown = 0.0
+    for r in found:
+        why, whole = r.get("pickup_why") or {}, r.get("pickup_s") or 0.0
+        for k, v in why.items():
+            seconds[k] += v
+        told += sum(why.values())
+        unknown += max(whole - sum(why.values()), 0.0) if not why else 0.0
+    return {"seconds": {k: round(v, 1) for k, v in seconds.items()}, "unknown_s": round(unknown, 1),
+            "share": {k: round(v / told, 3) if told else 0.0 for k, v in seconds.items()}}
 
 
 def phases(found: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -418,7 +440,8 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
     moves = Counter(m for r in found for m in r["moves"] if m)
     report = {
         "days": days, "repo": repo, "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
-        "summary": _summary(found), "phases": phases(found), "by_kind": _grouped(found, "kind"),
+        "summary": _summary(found), "phases": phases(found), "pickup": pickup(found),
+        "by_kind": _grouped(found, "kind"),
         "by_source": _grouped(found, "source"),
         "by_workflow": _grouped([r for r in found if r["workflow"]], "workflow"),
         "cells": cells(events, {r["task"] for r in found}), "context": context(found),
@@ -428,6 +451,8 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "daily": daily(found, turn_rows["by_day"]),
         "compactions": compactions(store.session_events(None, COMPACTION_EVENTS, since=since, repo=repo)),
         "primer": cells_mod.trial(store, repo),
+        # Where it stands now: the verdict a brief would get in this repository (none across all).
+        "primer_now": cells_mod.primer_arm(store, repo, 0)[1] if repo else None,
         "role_revisions": revisions.overview(store, repo),
         # Whether racing a first try paid, per repository and kind (`cauce.racing`): its own window.
         "races": racing.table(store, repo),
@@ -545,6 +570,12 @@ def text(report: Mapping[str, Any]) -> str:
             lines.append(f"where the time went ({ph['runs']} timed runs): " + "  ".join(
                 f"{k[:-2]} {_seconds(ph['seconds'][k])} ({_rate(ph['share'][k])})" for k in PHASES
                 if ph["seconds"][k]))
+            told = report.get("pickup") or {}
+            if any((told.get("seconds") or {}).values()):
+                lines.append("  the pickup waited on: " + "  ".join(
+                    f"{PICKUP_WORDS[k]} {_seconds(v)} ({_rate(told['share'][k])})"
+                    for k, v in told["seconds"].items() if v)
+                    + (f"  (not told: {_seconds(told['unknown_s'])})" if told.get("unknown_s") else ""))
             lines.append("")
         lines.append("by kind:")
         for row in report["by_kind"]:
@@ -572,6 +603,8 @@ def text(report: Mapping[str, Any]) -> str:
                              f"{_rate(rate):>4}  calls before the first change p50 "
                              f"{row['calls_before_edit_p50'] if row['calls_before_edit_p50'] is not None else '—'}"
                              f"  input p50 {row['input_tokens_p50'] or '—'}")
+            if report.get("primer_now"):
+                lines.append(f"  now: {report['primer_now']}")
         if report.get("role_revisions"):
             lines += ["", "the roles' lessons here (a revision on trial, its arms' first tries, and its history):"]
             lines += ["  " + line for line in revisions.text(report["role_revisions"], lessons=False)]
@@ -599,8 +632,12 @@ def _compaction_lines(rows: Sequence[Mapping[str, Any]]) -> list[str]:
     if not rows:
         return []
     said = [r for r in rows if r["now"]]
+    # Advice the orchestrating session heard and chose not to take is its call, not a failure.
+    declined = sum(1 for r in said if not r["ran"] and r["delivered"] == "advise")
     lines = ["", f"compaction decisions {len(rows)}  said now {len(said)}  delivered "
-             f"{sum(1 for r in said if r['delivered'])}  ran {sum(1 for r in said if r['ran'])}"]
+             f"{sum(1 for r in said if r['delivered'])}  ran {sum(1 for r in said if r['ran'])}"
+             + (f"  advice the session chose not to take {declined}" if declined else "")
+             + (f"  not run otherwise {n}" if (n := sum(1 for r in said if not r["ran"]) - declined) else "")]
     for r in rows[-COMPACTIONS_SHOWN:]:
         price = (f"warm {_usd(r['warm_usd'])} vs cold {_usd(r['cold_usd'])} ({_rate(r['warm_share'])})"
                  if r["cold_usd"] else "cost not measurable")

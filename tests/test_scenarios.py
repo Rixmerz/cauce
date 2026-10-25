@@ -255,3 +255,44 @@ def test_a_task_the_usage_limit_stopped_resumes_on_its_own_after_the_reset(world
     ended = world.wait(_task(("done",)), "the resume after the reset")
     assert ended["id"] == stopped["id"] and [c["action"].get("limit") is None for c in world.calls()] == [False, True]
     world.healthy()
+
+
+#: How many tasks the long scenario runs one after another in one repository.
+LONG_RUN = 30
+
+
+def test_thirty_tasks_in_one_repository_keep_their_reports_short_and_their_memory_true(world):
+    """A day of work in one repository: what a person's session reads after each task stays
+    short (a line the repository already heard today is not said again), and every problem a
+    failing attempt opened is solved once its task passes."""
+    from cauce import repo as repo_mod
+
+    from .conftest import git
+
+    workflows = world.repo / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "ci.yml").write_text("jobs:\n  e2e:\n    runs-on: ubuntu-latest\n    steps:\n"
+                                      "      - run: npx playwright test\n")
+    git(world.repo, "add", "-A")
+    git(world.repo, "commit", "-qm", "ci")
+    fail = {"pass": True, "block": {"verdict": "fail", "failure": "code_bug", "summary": "the driver still drops it"}}
+    world.script([{"match": f"radio driver {n} ", "do": [fail, {"pass": True, "write": {f"d{n}.py": "ok\n"}}]
+                   if n % 2 else [{"pass": True, "write": {f"d{n}.py": "ok\n"}}]}
+                  # A brief carries earlier tasks' dead ends, never later ones': the latest task's rule first.
+                  for n in reversed(range(LONG_RUN))])
+    reports = [world.cauce("run", "--kind", "bugfix", "--verify", "true", "--max-attempts", "3",
+                           f"fix the radio driver {n} that drops the last frame of a burst")
+               for n in range(LONG_RUN)]
+    assert sum("CI also runs" in r for r in reports) == 1
+    longest = max(len(r) for r in reports[1:])
+    assert longest < 2500, max(reports[1:], key=len)
+    store = Store(world.home / "cauce.db")
+    try:
+        assert {t["status"] for t in store.list_tasks(limit=LONG_RUN + 5)} == {"done"}
+        key = repo_mod.key(world.repo)
+        problems = store.recent_problems(repos=[key], limit=50)
+        assert len(problems) == LONG_RUN // 2 and {p["state"] for p in problems} == {"solved"}
+        assert not [f for f in doctor.check(store) if f.rule in ("problem-open-after-pass", "turns-under-the-wall")]
+    finally:
+        store.close()
+    world.healthy()

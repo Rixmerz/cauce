@@ -678,7 +678,8 @@ def work(
                         started += 1
                         # When the dispatcher started it, to the millisecond: the run measures its
                         # pickup (from queued) and its spawn (to its plan) from here.
-                        store.add_event(task["id"], "dispatched", at=round(time.time(), 3))
+                        store.add_event(task["id"], "dispatched", at=round(time.time(), 3), level=level.value,
+                                        **({"ceiling": ceiling} if isinstance(ceiling, int) else {}))
                         launched.append((task, where))
             for n, (task, where) in enumerate(launched):
                 try:

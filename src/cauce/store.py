@@ -187,7 +187,7 @@ _APPEND_ONLY_TRIGGERS = "".join(
     for table in _APPEND_ONLY for verb in ("update", "delete"))
 
 #: Events that keep the version that wrote them: what `cauce doctor` reads a bug from.
-VERSIONED = frozenset({"planned", "attempt_started", "moved", "finished", "check_preexisting"})
+VERSIONED = frozenset({"planned", "attempt_started", "attempt_finished", "moved", "finished", "check_preexisting"})
 
 #: Words a query and a problem must share for a strict match.
 STRICT_OVERLAP = 3
@@ -1497,9 +1497,12 @@ class Store:
         that solved it stopped holding, and is marked as disproved now.
         """
         stamp = now()
+        # A long request's title is clipped in its middle, so two requests can share it: with a
+        # symptom (the work's own text), a problem is that text's, never another's of the same title.
         row = self._conn.execute(
-            "SELECT id, state FROM problems WHERE title = ? AND repo IS ? ORDER BY id DESC LIMIT 1",
-            (title, repo),
+            "SELECT id, state FROM problems WHERE title = ? AND repo IS ? AND (? = '' OR symptom = ? OR symptom = '') "
+            "ORDER BY (symptom = ?) DESC, id DESC LIMIT 1",
+            (title, repo, symptom, symptom, symptom),
         ).fetchone()
         if row:
             problem_id, state = int(row[0]), row[1]
@@ -1553,6 +1556,30 @@ class Store:
                 "UPDATE problems SET state = 'solved', updated_at = ?, last_seen = ? WHERE id = ?",
                 (stamp, stamp, problem_id))
         return fix_id
+
+    def task_has_failed_fix(self, task_id: int) -> bool:
+        """Whether a task's attempts left a failed fix, in any of its runs."""
+        return self._conn.execute("SELECT 1 FROM fixes WHERE task_id = ? AND outcome = 'failed' LIMIT 1",
+                                  (task_id,)).fetchone() is not None
+
+    def regressed(self, text: str, *, repo: str | None, task_id: int, keep: int | None = None) -> list[int]:
+        """The solved problems of `repo` that work strictly matching `text` failed on again,
+        made `recurring` and their fixes disproved, named by the task that met them: the
+        memory hears of a regression under another title too. `keep` (the failing work's own
+        problem) is left alone. Returns their ids."""
+        stamp, found = now(), []
+        for problem in self.search(text, repo=repo, limit=10, strict=True):
+            if problem["repo"] != repo or problem["state"] != "solved" or problem["id"] == keep or any(
+                    f["task_id"] == task_id for f in problem["fixes"]):
+                continue
+            self._conn.execute("UPDATE problems SET state = 'recurring', last_seen = ?, updated_at = ? WHERE id = ?",
+                               (stamp, stamp, problem["id"]))
+            self._conn.execute(
+                "UPDATE fixes SET invalidated_on = ?, why = CASE WHEN why = '' THEN ? ELSE why || '; ' || ? END "
+                "WHERE problem_id = ? AND outcome = 'worked' AND invalidated_on IS NULL",
+                (stamp, f"task #{task_id} met it again", f"task #{task_id} met it again", problem["id"]))
+            found.append(int(problem["id"]))
+        return found
 
     def invalidate_fix(self, fix_id: int, why: str) -> dict | None:
         """A fix that was believed to work, shown wrong: its problem is open again."""

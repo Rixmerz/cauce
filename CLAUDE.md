@@ -379,6 +379,13 @@ yields the default kind, not a guess.
   its kept branch holds, turns, wall time, attempts), never from the worker,
   and kept on its `finished` event; what was not measured is left out. A
   workflow run's points are its steps', each part counted.
+- A kind's sizes whose own band holds fewer than `standards.MIN_SAMPLES` tasks, two or more
+  of them, are measured together as the kind at any size (`standards.ANY_SIZE`, band 0): its
+  start cell moves by the same rule (never its turns), is judged by the kind's tasks of every
+  size, and a band with no start cell of its own starts there, and the plan says so. A kind's
+  estimate is raised one step of the scale when its tasks here turned out `points.UNDER_RATIO`
+  or more times their estimate at the median of `UNDER_SAMPLES` (`points.corrected`,
+  `standards.size_ratio`); never lowered.
 - A standard is per repository, kind and points band, and only a calibration
   moves it: after every `standards.CALIBRATE_EVERY` endings in a repository,
   in the hooks or the dispatcher (`evolution.settle`), never in a GET, by two
@@ -801,6 +808,11 @@ yields the default kind, not a guess.
   `PRIMER_MARGIN` below (`primer_arm`); the `briefed` event keeps the arm and
   why, and `cauce stats` shows both arms. The `primer` setting turns it off;
   tests run with `CAUCE_PRIMER=off`.
+- A role's candidate whose trial has not filled its arms in `revisions.TRIAL_DAYS` is dropped
+  for too few tasks, recorded with the counts it reached. The primer's arms fill by count (the
+  arm with fewer tasks goes next) and its trial ends early, lost, once each arm has
+  `cells.PRIMER_EARLY` first tries and the primed ones pass worse by more than
+  `PRIMER_EARLY_MARGIN`; `cauce stats` for a repository says where it stands now.
 - A role's instructions improve by measured trial, never by edit
   (`cauce.revisions`, the `role_trials` setting). Every brief records the role
   and the version of its text (`roles.version`: a hash of its resolved
@@ -840,6 +852,15 @@ yields the default kind, not a guess.
   started): it may be fixed already.
 - A worker never inherits the host's session id (`CLAUDE_CODE_SESSION_ID`),
   and an attempt never keeps the host's session as its own.
+- A problem is solved when the work it is about passes: a task whose attempts left a failed
+  fix, in this run or an earlier one, closes its own problem when it passes, and its pass
+  closes the open problems of its repository its own text matches strictly
+  (`orchestrate._solve_matched`). A failure on work that strictly matches a solved problem
+  of its repository makes that problem `recurring` and disproves its fixes (`Store.regressed`).
+  A problem is one request's text, not its clipped title (`Store.open_problem`). `cauce doctor`
+  says a problem still open after its task passed (`problem-open-after-pass`), a flake fix
+  that passed on one run (`flake-fix-checked-once`) and a long attempt that kept few turns
+  (`turns-under-the-wall`).
 - Problems and fixes are kept with their cell (`cauce.cells`): the role the
   worker wore and the areas of what it changed (of its request when it changed
   nothing; tests and docs name an area only when the change holds nothing
@@ -1043,6 +1064,17 @@ yields the default kind, not a guess.
   the team covers, the nearest kind of the same nature (reading or writing)
   when it would be another. A tag or `--kind` is narrowed the same way and
   says so. A team left with no role serves as the bundled one, and says so.
+- A pickup is split by what it waited on, from the task's own records
+  (`orchestrate.pickup_causes`, the `pickup_*_s` of its `finished` event): the spans a dispatch
+  decision said wait, the spans the usage limit held the queue, and the rest a worker: the
+  person's ceiling when the level stood at it (`dispatched.ceiling`, a choice), else the
+  machine's level. The parts add up to the pickup; `cauce stats` shows them, and a pickup from
+  before they were kept as not told. Compaction advice the orchestrating session chose not to
+  take is counted apart from a compaction that did not run.
+- A request about a README in a repository holding several is warned (`orchestrate.readmes`):
+  which one is the session's to say. Notes filed from a conversation are written in English,
+  domain words and quotes kept as the person wrote them; the notes' index says how many wait
+  for review.
 - The analysis is read, never written, and never by a model. A run's phases
   are kept on its events as it runs (`plan_s`, `queued_s`, `since_start_s`,
   each attempt's `wall_s`, `check_s`, `verifier_s`, the waits for a network

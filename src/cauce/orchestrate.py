@@ -505,6 +505,7 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     neighbour_notes += team_notes
     risk = risk_mod.of_request(text, kind)
     size = points_mod.of_request(text, kind, risk, surfaces=options.surfaces, reached=reached)
+    size = points_mod.corrected(size, kind, *standards.size_ratio(store, repo.key(repo_dir), kind))
     if role is not None:
         missing = [s for s in (*role.skills, *role.on_demand) if roles.find_skill(s) is None]
         if missing:
@@ -559,6 +560,8 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     neighbour_notes += _unmet(text, registry, served=bool(options.services), verify=check, where=repo_dir)
     if check and kind not in READ_ONLY_KINDS:
         neighbour_notes += _beside_ci(repo_dir, check, options.services, ci.quiet(store, repo.key(repo_dir)))
+    if kind not in READ_ONLY_KINDS and (several := readmes(text, repo_dir)):
+        reasons.append(several)
     if check and flake_fix_runs(kind, text) > 1:
         reasons.append(f"this work fixes a flaky test: `{check}` runs {FLAKE_FIX_RUNS} times and must pass "
                        "every time, since one pass says nothing of a flake")
@@ -1433,9 +1436,12 @@ def run(
                 report.criteria = result.criteria
                 for adapter, status in the_plan.active:
                     report.impact += adapter.assess(result.changed_paths, repo_dir, status)
-                if len(attempts) > 1:
+                if len(attempts) > 1 or store.task_has_failed_fix(task["id"]):
+                    # A pass after failures, in this run or an earlier one (a resume that started
+                    # fresh passes on its first attempt here): the problem they opened is solved.
                     _remember(store, task, key, attempt, "worked", result, kind=the_plan.kind,
                               role=role_name)
+                _solve_matched(store, task, key, cell, result)
                 if result.orientation:
                     cells.record_orientation(store, task["id"], result.orientation, role=role_name,
                                              areas=cells.of_paths(result.changed_paths) or reach)
@@ -2131,7 +2137,48 @@ def _gaps(store: Store, task_id: int, began: float) -> dict[str, float]:
     queued = _epoch(released["ts"] if released and released["id"] > since else task.get("created_at"))
     if queued is not None:
         out["pickup_s"] = round(max(at - queued, 0.0), 3)
+        out.update(pickup_causes(store, task_id, queued, at, dispatched["data"] or {}))
     return out
+
+
+#: What a task's pickup waited on, each a key of its `finished` event: work ahead it was judged
+#: to wait for, the account's usage limit, the person's ceiling of workers, the machine's level.
+PICKUP_CAUSES = ("pickup_conflict_s", "pickup_limit_s", "pickup_ceiling_s", "pickup_level_s")
+
+
+def pickup_causes(store: Store, task_id: int, queued: float, at: float, dispatched: Mapping[str, Any]
+                  ) -> dict[str, float]:
+    """Its pickup (`queued` to `at`, epoch seconds) split by what it waited on, from its own
+    records: the spans a dispatch decision said wait (`dispatch_decided`, until the next one),
+    the spans a usage limit held the queue (`limit_waiting`), and the rest a worker: the
+    person's ceiling when the level stood at it (`dispatched.ceiling`, a choice), else the
+    machine's level. The parts add up to the pickup; nothing is guessed."""
+    whole = max(at - queued, 0.0)
+    if not whole:
+        return {}
+    spans: dict[str, float] = {"pickup_conflict_s": 0.0, "pickup_limit_s": 0.0}
+    held_from: float | None = None
+    for event in store.events_of(task_id, "dispatch_decided"):
+        when = _epoch(event["ts"])
+        if when is None or when >= at:
+            continue
+        if held_from is not None:
+            spans["pickup_conflict_s"] += max(min(when, at) - max(held_from, queued), 0.0)
+            held_from = None
+        if not event["data"].get("parallel"):
+            held_from = when
+    if held_from is not None:
+        spans["pickup_conflict_s"] += max(at - max(held_from, queued), 0.0)
+    for event in store.events_of(task_id, "limit_waiting"):
+        when, until = _epoch(event["ts"]), event["data"].get("until")
+        if when is not None and isinstance(until, int | float):
+            spans["pickup_limit_s"] += max(min(float(until), at) - max(when, queued), 0.0)
+    known = min(spans["pickup_conflict_s"] + spans["pickup_limit_s"], whole)
+    rest = whole - known
+    ceiling, level = dispatched.get("ceiling"), dispatched.get("level")
+    chosen = isinstance(ceiling, int) and isinstance(level, int) and level >= ceiling
+    spans["pickup_ceiling_s" if chosen else "pickup_level_s"] = rest
+    return {k: round(v, 3) for k, v in spans.items() if v}
 
 
 def _epoch(stamp: str | None) -> float | None:
@@ -2668,6 +2715,22 @@ _FLAKE_FIX = re.compile(
     r"|\d+ (of|de|out of) \d+ (runs?|times|veces|corridas))\b", re.IGNORECASE)
 
 
+def readmes(text: str, repo_dir: Path) -> str | None:
+    """A warning when a request about a README is made in a repository that holds several (a
+    fork's, a package's beside the top one's): which one it means is the session's to say, and
+    the top one is the one its host shows. None when it holds one or the request names none."""
+    if not re.search(r"\breadme\b", text, re.IGNORECASE):
+        return None
+    top = repo.toplevel(repo_dir) or repo_dir
+    found = sorted({str(p.relative_to(top)) for pattern in ("README*", "*/README*")
+                    for p in top.glob(pattern) if p.is_file() and not any(
+                        part.startswith(".") or part == "node_modules" for part in p.relative_to(top).parts)})
+    if len(found) < 2:
+        return None
+    return (f"this task mentions a README and this repository has {len(found)}: {', '.join(found[:6])}; the one at "
+            "the top is the one its host shows. Make sure the task names the one it means")
+
+
 def flake_fix_runs(kind: str, text: str) -> int:
     """How many times a task's check runs: `FLAKE_FIX_RUNS` for writing work whose request is
     about a flaky or intermittent failure, since one run that passes proves nothing of a flake;
@@ -2932,12 +2995,36 @@ def _to_engram(store: Store, task: dict, report: Report, the_plan: Plan, checkou
         store.add_event(task["id"], "engram_saved", project=status.data.get("project"), ids=saved)
 
 
+def _solve_matched(store: Store, task: Mapping[str, Any], key: str | None, cell: Cell,
+                   result: launch.WorkerResult) -> list[int]:
+    """The open problems of this repository the passing work's own text matches strictly (as a
+    dead end is matched): the work was about them, and its pass solves them (a later task that
+    finishes what an earlier one diagnosed). Each gets a fix that worked, by this task. Never
+    another repository's."""
+    solved = []
+    if key is None:
+        return solved
+    for problem in store.search(cells.memory_text(store, task), repo=key, limit=10, strict=True):
+        problem_id = int(problem["id"])
+        if problem["repo"] != key or problem["state"] == "solved" or any(
+                f["task_id"] == task["id"] for f in problem["fixes"] if f["outcome"] == "worked"):
+            continue
+        store.add_fix(problem_id, f"{cell.label}: task #{task['id']}, whose text matched it, passed: "
+                      f"{clip(result.summary, 300)}", "worked", repo=key, evidence=result.evidence,
+                      task_id=task["id"], areas=cells.of_paths(result.changed_paths) or None)
+        solved.append(problem_id)
+    return solved
+
+
 def _remember(store: Store, task: dict, key: str | None, attempt: Attempt, outcome: str,
               result: launch.WorkerResult, *, role: str | None, kind: str) -> None:
     """A fix kept with its cell: the role the worker wore and the areas of what it changed
     (of its request when it changed nothing), matched later by the work's own text."""
     goal = cells.memory_text(store, task)
     problem = store.open_problem(task["title"], repo=key, symptom=goal[:1000])
+    if outcome == "failed":
+        # Work about a problem that was solved here failing again: that fix did not hold.
+        store.regressed(goal, repo=key, task_id=int(task["id"]), keep=problem)
     store.add_fix(
         problem, f"{attempt.cell.label}: {result.summary}", outcome, repo=key,
         why=str(attempt.failure or "") if outcome == "failed" else "",

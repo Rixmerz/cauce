@@ -157,3 +157,18 @@ def test_the_lines_a_plan_kept_quiet_are_left_out_of_the_ending_s_warnings(git_r
     store.add_event(task["id"], "planned", warnings=["CI also runs: e2e", "this task's check exits 0"],
                     quiet=["CI also runs: e2e"])
     assert hooks._warned(store, task["id"]) == ["this task's check exits 0"]
+
+
+def test_the_pickup_causes_a_run_keeps_are_what_stats_reads(store):
+    """`orchestrate.pickup_causes` writes `pickup_*_s` on the `finished` event; `analysis`
+    reads them back as each run's `pickup_why` and adds them up by cause."""
+    from cauce import analysis, orchestrate
+
+    task = store.create_task("t", status="done", source="queue", repo="r")
+    store.add_event(task["id"], "planned", kind="implement", start="sonnet/medium", plan_s=0.1)
+    causes = {"pickup_conflict_s": 30.0, "pickup_ceiling_s": 70.0}
+    assert set(causes) <= set(orchestrate.PICKUP_CAUSES) == set(analysis.PICKUP_CAUSES)
+    store.add_event(task["id"], "finished", status="done", wall_s=10, pickup_s=100.0, **causes)
+    report = analysis.compute(store, days=0)
+    assert report["pickup"]["seconds"]["pickup_conflict_s"] == 30.0
+    assert report["pickup"]["share"]["pickup_ceiling_s"] == 0.7

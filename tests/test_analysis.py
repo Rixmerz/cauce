@@ -293,3 +293,22 @@ def test_stats_expensive_prints_the_section(capsys):
     assert capsys.readouterr().out.startswith("No run cost more")
     assert cli.main(["stats", "--expensive", "--json"]) == 0
     assert capsys.readouterr().out.strip() == "[]"
+
+
+def test_a_pickup_is_split_by_what_it_waited_on(store):
+    from datetime import datetime
+
+    from cauce import analysis, orchestrate
+
+    task = store.create_task("t", status="running", source="queue", repo="r")
+    store.add_event(task["id"], "dispatch_decided", parallel=False, reason="may touch #1")
+    decided = datetime.fromisoformat(store.last_event(task["id"], "dispatch_decided")["ts"]).timestamp()
+    queued, at = decided - 100, decided + 300
+    # judged to wait from the decision to its dispatch; the hundred seconds before, the ceiling
+    out = orchestrate.pickup_causes(store, task["id"], queued, at, {"level": 1, "ceiling": 1})
+    assert out == {"pickup_conflict_s": 300.0, "pickup_ceiling_s": 100.0}
+    assert orchestrate.pickup_causes(store, task["id"], queued, at, {"level": 2})["pickup_level_s"] == 100.0
+    runs = [{"pickup_s": 400.0, "pickup_why": out}, {"pickup_s": 50.0, "pickup_why": {}}]
+    told = analysis.pickup(runs)
+    assert told["seconds"]["pickup_conflict_s"] == 300.0 and told["unknown_s"] == 50.0
+    assert told["share"]["pickup_ceiling_s"] == 0.25
