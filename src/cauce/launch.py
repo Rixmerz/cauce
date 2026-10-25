@@ -163,6 +163,7 @@ When you are done, end your reply with exactly one fenced block:
   "evidence": "the command you ran to check it and its real output, verbatim",
   "learned": ["a durable fact about this project that you confirmed and the next person would want"],
   "orientation": ["what you had to find before your first change: a file, a command, a trap"],
+  "constraints": ["a rule a failing check showed this work must meet, that no file here states"],
   "criteria": [{{"id": "S1", "met": true, "evidence": "what shows it"}}],
   "findings": [{{"where": "path:line", "what": "the problem",
                 "evidence_class": "deterministic" | "inferential" | "insufficient",
@@ -222,6 +223,10 @@ When you are done, end your reply with exactly one fenced block:
   there: where the code for it lives (`path` and what it holds), the command
   that checks it, a trap you hit. Only what you used; never a secret. `[]`
   when you needed nothing.
+- `constraints`: only when a check failed on this task (its output is above)
+  and showed a rule the work must meet that nothing in the repository says (a
+  policy, a limit, a case CI enforces): the rule in one line, and the check line
+  that showed it. The next work here is told to meet it. `[]` otherwise.
 - `criteria`: when the task lists criteria `S1..Sn`, one entry for each, met or
   not, with what shows it. A pass that leaves one out is not a pass, and nor is
   one that says your work does not meet one. `[]` when the task lists none.
@@ -404,6 +409,8 @@ class WorkerResult:
     learned: tuple[str, ...] = ()
     #: What the worker had to find before its first change, for the next one of its cell.
     orientation: tuple[str, ...] = ()
+    #: Rules a failing check of this task showed the work must meet (`notes.CONSTRAINT`).
+    constraints: tuple[str, ...] = ()
     #: The one line the worker proposes as the commit's subject; "" when it gave none.
     commit: str = ""
     #: The report its task asked for (a `cauce-report` block), parsed; None when there is none.
@@ -695,6 +702,7 @@ def parse(
     evidence = str(block.get("evidence") or "")[:4000]
     common["learned"] = learned(block)
     common["orientation"] = orientation(block)
+    common["constraints"] = learned({"learned": block.get("constraints")})
     common["commit"] = commit_subject(block)
     common["report"] = report_block(text)
     common["criteria"] = criteria_mod.read(block)

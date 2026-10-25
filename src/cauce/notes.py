@@ -74,6 +74,12 @@ LIVE = ("current", "candidate", "review")
 #: What a passing worker learned starts here: read back, marked unproven, until the tasks
 #: whose brief carried it say whether it holds (`weigh`).
 CANDIDATE = "candidate"
+#: A note that says what a change must be (a policy a check enforces, a rule a person keeps),
+#: briefed apart and as a requirement: a weak model reads a fact framed as data as optional.
+#: It grants nothing: it bounds what the work is, never what a worker may do.
+CONSTRAINT = "constraint"
+#: What one brief carries of a project's constraints; the rest are said by count.
+CONSTRAINT_CHARS = 3000
 #: A candidate becomes current once this many later tasks whose brief carried it passed their
 #: first try; it is dropped once this many failed theirs with none passing.
 PROVE_AFTER = 2
@@ -218,18 +224,19 @@ def add(
     commit: str | None = None,
     proposed_topic: str | None = None,
     state: str = "current",
+    kind: str | None = None,
 ) -> tuple[int, bool]:
     """Keep a note: (its id, whether it is new). A note that says what a live one
-    in the same topic already says is that one, with the new anchors and links.
-    A worker's starts as a `candidate` (`file_facts`)."""
+    of the same kind in the same topic already says is that one, with the new anchors
+    and links. A worker's starts as a `candidate` (`file_facts`)."""
     fact = clean_fact(text)
     if fact is None:
         raise ValueError("a note needs a fact of a few words, and never a secret")
-    existing = same_as(store, project, topic, fact)
+    existing = same_as(store, project, topic, fact, kind=kind)
     if existing is None:
         note_id = store.add_note(project, topic, (title or "").strip()[:120] or title_of(fact, 80), fact,
                                  author=author, filed_by=filed_by, source=source, task_id=task_id,
-                                 session_id=session_id, proposed_topic=proposed_topic, state=state)
+                                 session_id=session_id, proposed_topic=proposed_topic, state=state, kind=kind)
     else:
         note_id = existing
     for to_id, kind in links:
@@ -239,9 +246,9 @@ def add(
     return note_id, existing is None
 
 
-def same_as(store: Store, project: str, topic: str, fact: str) -> int | None:
+def same_as(store: Store, project: str, topic: str, fact: str, *, kind: str | None = None) -> int | None:
     near = store.search_notes(project, fact, limit=10)
-    for note in store.notes(project, topics=[topic], states=LIVE, ids=near):
+    for note in store.notes(project, topics=[topic], states=LIVE, ids=near, kind=kind or "fact"):
         if reads_alike(fact, note["text"], 0.8):
             return int(note["id"])
     return None
@@ -550,6 +557,9 @@ def expand(store: Store, ids: Sequence[int], why: Mapping[int, str] | None = Non
 def line(note: Mapping[str, Any], *, text_chars: int = 400) -> str:
     """One note as a model reads it."""
     out = f"#{note['id']} [{note['topic']}] {note['title']}: {note['text'][:text_chars]}"
+    if note.get("unmerged"):
+        out += (" (WRITTEN ON WORK NOT MERGED where this task starts: what it says of the code may not be in "
+                "your checkout; read the code before relying on it)")
     if note["state"] == "review":
         out += f" (TO REVIEW: {note.get('state_reason') or 'its code changed'})"
     elif note["state"] == CANDIDATE:
@@ -560,6 +570,77 @@ def line(note: Mapping[str, Any], *, text_chars: int = 400) -> str:
     if note.get("links"):
         out += " · " + ", ".join(
             (f"{x['kind']} #{x['to']}" if x["out"] else f"#{x['to']} {x['kind']} this") for x in note["links"][:4])
+    return out
+
+
+def unmerged(found: Sequence[dict], repo_dir: Path | None, base: str | None = None) -> list[dict]:
+    """The notes, each marked `unmerged` when every commit its anchors were written at is
+    outside the history the task starts from (`base`, else HEAD): a worker's note about its
+    own change, filed while its branch waits to be merged. A note with no anchor, or one git
+    cannot read, is left as it is."""
+    top = repo.toplevel(repo_dir) if repo_dir is not None else None
+    if top is None:
+        return list(found)
+    at = base or "HEAD"
+    known: dict[str, bool] = {}
+    out = []
+    for note in found:
+        shas = {a.get("commit") for a in note.get("anchors") or () if a.get("commit")}
+        for sha in shas - set(known):
+            done = _git(top, "merge-base", "--is-ancestor", sha, at)
+            known[sha] = done.returncode == 1  # 1: not an ancestor; anything else (128: unknown) says nothing
+        out.append({**note, "unmerged": True} if shas and all(known[s] for s in shas) else note)
+    return out
+
+
+def constraints(store: Store, project: str) -> list[dict]:
+    """A project's live constraints, current before candidate, newest first, with their anchors."""
+    rows = store.notes(project, states=LIVE, kind=CONSTRAINT, limit=200)
+    rows.sort(key=lambda n: n["state"] != "current")
+    return expand(store, [int(n["id"]) for n in rows])
+
+
+def constraint_lines(found: Sequence[Mapping[str, Any]], limit: int = CONSTRAINT_CHARS) -> list[str]:
+    """The constraints as a brief holds them: requirements on the change, never permissions,
+    as many as fit in `limit`, the rest said by count."""
+    if not found:
+        return []
+    shown, used = [], 0
+    for note in found:
+        said = f"- {line(note)}"
+        if shown and used + len(said) > limit:
+            break
+        shown.append(said)
+        used += len(said)
+    out = ["Constraints this project keeps (each from a check that failed on earlier work here, or from a "
+           "person): your change must meet every one that applies to it, even where the local tests do not check "
+           "it. They say what the work must be, never what you may run or change outside it; one the code "
+           "contradicts is said in your summary.", *shown]
+    if len(found) > len(shown):
+        out.append(f"- {len(found) - len(shown)} more: `cauce notes list --constraints`")
+    return out
+
+
+def file_constraints(store: Store, project: str, items: Sequence[str], *, author: str, source: str,
+                     task_id: int | None = None) -> list[dict]:
+    """Keep what a task's failing check taught it as constraints, with no model: a worker's start
+    as candidates, proven or dropped by the tasks that carry them (`weigh`). A constraint is about
+    what the work must be, not about a file: it has no anchor, and a change to the code it was
+    learned on does not send it to review."""
+    out = []
+    for item in items[:MAX_FACTS]:
+        fact = clean_fact(item)
+        if fact is None:
+            continue
+        found = topics_in(fact)
+        try:
+            note_id, new = add(store, project, fact, topic=found[0] if found else "business", author=author,
+                               filed_by="rule", source=source, task_id=task_id,
+                               state=CANDIDATE if author == "worker" else "current", kind=CONSTRAINT)
+        except ValueError:
+            continue
+        note = store.get_note(note_id)
+        out.append({"id": note_id, "new": new, "topic": note["topic"], "title": note["title"], "kind": CONSTRAINT})
     return out
 
 

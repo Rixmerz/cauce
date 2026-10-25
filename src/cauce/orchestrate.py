@@ -303,6 +303,8 @@ class Report:
     #: What the passing worker learned, and where each fact was filed in the notes.
     learned: tuple[str, ...] = ()
     noted: list[dict] = field(default_factory=list)
+    #: Rules the passing worker says a failing check of this task showed (`notes.CONSTRAINT`).
+    constraints: tuple[str, ...] = ()
     #: A passing plan's parts and the contract they keep, for the workflow step that fans out over it.
     parts: tuple[dict, ...] = ()
     contract: str = ""
@@ -607,11 +609,19 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     if key and config.enabled("notes", os.environ, options.notes):
         if not options.dry_run:
             notes.review(store, key, repo_dir)
-        known = notes.recall(store, key, text, limit=6)
+        # A note written on work not merged where the task starts is said to be so; the
+        # project's constraints come apart, as requirements, every one that fits.
+        known = notes.unmerged([n for n in notes.recall(store, key, text, limit=6)
+                                if n.get("kind") != notes.CONSTRAINT], repo_dir, options.base)
         if known:
             context += notes.brief_lines(known)
             neighbour_notes.append(f"notes: {len(known)} from this project's memory ("
                                    + ", ".join(f"#{n['id']} {n['topic']}" for n in known) + ")")
+        kept_rules = notes.constraints(store, key)
+        if kept_rules:
+            context += notes.constraint_lines(kept_rules)
+            neighbour_notes.append(f"constraints: {len(kept_rules)} this project keeps")
+            known = [*known, *kept_rules]
     selected = _with_role(caps.select(registry, kind, workdir=repo_dir, paths=touched_paths(text, options),
                                       reading=kind in READ_ONLY_KINDS), role, registry, repo_dir)
     names = tuple(dict.fromkeys([*selected.names, *(a.name for a, _ in active)]))
@@ -1413,7 +1423,8 @@ def run(
                         result, text=text, kind=the_plan.kind, cell=cell, spec=spec, workdir=workdir,
                         base=base_commit, changed=so_far, risk=the_plan.risk, ledger=ledger,
                         corrections=corrections, launcher=launcher, store=store, task_id=task["id"], nth=nth,
-                        say=say, outgrew=outgrew, registry=registry)
+                        say=say, outgrew=outgrew, registry=registry,
+                        rules=[n for n in the_plan.notes if n.get("kind") == notes.CONSTRAINT])
             verifier_s = time.monotonic() - mark
             timing["worker_s"] += worker_s
             timing["check_s"] += check_s
@@ -1486,6 +1497,13 @@ def run(
                 report.status, report.final_cell, report.summary = "done", cell.label, result.summary
                 report.learned, report.parts, report.contract = result.learned, result.parts, result.contract
                 report.criteria = result.criteria
+                if result.constraints:
+                    # A constraint is kept only when a check failed on this task before it passed: a
+                    # rule nothing showed is a fact, kept as one.
+                    if any(not a.passed or a.blockers for a in [*history, *attempts[:-1]]):
+                        report.constraints = result.constraints
+                    else:
+                        report.learned = (*report.learned, *result.constraints)
                 for adapter, status in the_plan.active:
                     report.impact += adapter.assess(result.changed_paths, repo_dir, status)
                 if len(attempts) > 1 or store.task_has_failed_fix(task["id"]):
@@ -1616,6 +1634,13 @@ def run(
             _note(store, task, key, report, the_plan, workspace.repo_dir if workspace else repo_dir,
                   isolate.head(workspace.repo_dir, report.branch) if workspace and report.branch else None,
                   notes_ask)
+        if status == "done" and report.constraints and key and options.keep_learned and config.enabled(
+                "notes", os.environ, options.notes):
+            kept = notes.file_constraints(store, key, report.constraints, author="worker",
+                                          source=f"task #{task['id']}", task_id=task["id"])
+            if kept:
+                report.noted = [*report.noted, *kept]
+                store.add_event(task["id"], "noted", notes=kept, constraints=True)
         if status == "done" and report.learned and options.keep_learned and config.enabled(
                 "engram_write", os.environ):
             _to_engram(store, task, report, the_plan, workspace.repo_dir if workspace else repo_dir)
@@ -2353,9 +2378,11 @@ def kept_evidence(text: str, room: int = 4000) -> str:
 
 
 def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, changed: Sequence[str],
-                   known: Sequence[Mapping[str, str]] = (), why: Sequence[str] = ()) -> str:
-    """What the verifier is given: the request in its words, the change, and why it is
-    checked (the risk's reasons, in the router's words) — never the worker's account."""
+                   known: Sequence[Mapping[str, str]] = (), why: Sequence[str] = (),
+                   rules: Sequence[Mapping[str, Any]] = ()) -> str:
+    """What the verifier is given: the request in its words, the change, why it is checked
+    (the risk's reasons, in the router's words) and the constraints the project keeps —
+    never the worker's account."""
     shown = ", ".join(changed[:20]) + (f" and {len(changed) - 20} more" if len(changed) > 20 else "")
     parts = [f"Check this change. The request it answers ({kind}), verbatim:\n{text}"]
     if listed := criteria_mod.brief(text):
@@ -2372,6 +2399,9 @@ def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, change
     if known:
         parts.append("The previous check found these; say for each whether it is fixed, and report any new "
                      "problem apart:\n" + findings_mod.text(known))
+    if lines := notes.constraint_lines(rules):
+        parts.append("\n".join(lines) + "\nA change that breaks one that applies to it is a finding, shown with "
+                     "the case that breaks it.")
     parts.append("This check is read-only: change no file of the project.")
     return "\n\n".join(parts)
 
@@ -2380,7 +2410,8 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
                        workdir: Path, base: str | None, changed: Sequence[str], risk: risk_mod.Risk,
                        ledger: dict[str, Mapping[str, str]], corrections: int, launcher: Launcher, store: Store,
                        task_id: int, nth: int, say: Callable[[str], None], outgrew: bool = False,
-                       registry: Mapping[str, caps.Capability] | None = None
+                       registry: Mapping[str, caps.Capability] | None = None,
+                       rules: Sequence[Mapping[str, Any]] = ()
                        ) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int,
                                   tuple[dict[str, str], ...]]:
     """A pass checked again by a worker that verifies the request, not the work.
@@ -2407,7 +2438,8 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     measuring.update(touched.servers)
     hints = {name: hints[name] for name in measuring}
     check = dataclasses.replace(
-        spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values()), risk.reasons),
+        spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values()), risk.reasons,
+                                    rules=rules),
         cell=vcell, max_turns=min(spec.max_turns, VERIFIER_TURNS),
         # Its own session, never the worker's: it reads the request and the diff, not the work's account.
         resume_session="", fork_session=False, resume_note="", persist_session=False,

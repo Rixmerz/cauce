@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-10-25
+
+### Added
+
+- **Constraints: rules a change must meet, briefed as requirements.** A constraint is a note
+  of its own kind. It comes from a person (`cauce note "<rule>" --constraint`) or from a worker
+  whose task passed after one of its checks failed and that names the rule the failure showed
+  (the result contract's new `constraints`). Every worker's brief carries the project's
+  constraints apart from its notes, as requirements, and so does the independent verifier's,
+  where breaking one is a finding. A worker's starts as a candidate and is weighed like any
+  note; a claimed rule with no failing check behind it is kept as a fact.
+  `cauce notes list --constraints` lists them.
+- **A note written on work not merged is said to be.** When every anchor of a note was written
+  at a commit outside the history a task starts from (a worker's note about its own change,
+  filed while its branch waits), that task's brief marks it so.
+- **`bench/memory`: the benchmark behind both.** Real workers on a small pricing engine,
+  judged by hidden tests. Across 177 runs:
+  - Opus starting cold was no better than Haiku at what the repository does not say: both
+    failed every such task, silently.
+  - Whose memory a student got hardly mattered.
+  - Haiku ignored a policy briefed as a note and met it every time once it was briefed as a
+    constraint (0/6 → 6/6, and 6/6 on this release's own brief text).
 ## [0.43.0] - 2026-10-25
 
 ### Added

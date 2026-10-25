@@ -290,6 +290,14 @@ Notes are written at three moments, never whenever a model feels like it:
 | every few turns of a session, before it compacts, and when it ends | Haiku | reads what the person and the agent said since the last time (no tool output, no injected context) and keeps the durable facts |
 | any time | a person | `cauce note "<fact>" --topic business --anchor src/cart.ts --link 12:explains` |
 
+A **constraint** is a rule every change must meet, such as a policy CI enforces or a limit
+finance set: `cauce note "<rule>" --constraint`. It is briefed apart from the notes, as a
+requirement, to every worker and to the independent verifier. A worker keeps one too when a
+check failed on its task and taught it a rule nothing in the repository states. Framed as a
+note, a cheap model skipped such a rule; framed as a constraint, it met it every time
+(`bench/memory`). A note written on work not merged where a task starts is marked so in that
+task's brief.
+
 And read back in four places: every worker's brief gets the project's notes
 that match its task (one link away); a prompt that matches notes gets them in
 context; a session that starts, resumes or compacts gets the project's index of
