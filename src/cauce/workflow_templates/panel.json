@@ -1,0 +1,22 @@
+{
+  "name": "panel",
+  "description": "Four blind reviews, each through its own lens (correctness, security, performance, tests), a refuter for what only one saw, a fix of only the confirmed findings, and a re-check of each one; two rounds, then the person",
+  "inputs": ["target"],
+  "steps": [
+    {"id": "correctness", "title": "Correctness review", "kind": "review-routine", "start": "opus/high", "needs": [],
+     "prompt": "Review, without changing any file: {target}\n\nYou are one of four reviewers working apart, each through its own lens; yours is correctness: logic, edge cases, error paths, state and concurrency, what the code does against what it was asked to do. Report each problem in `findings`, with its place, its evidence and whether the change caused it. Say plainly when there is none."},
+    {"id": "security", "title": "Security review", "kind": "review-routine", "start": "sonnet/high", "needs": [],
+     "prompt": "Review, without changing any file: {target}\n\nYou are one of four reviewers working apart, each through its own lens; yours is security: input that reaches a query, a shell, a path or a page, secrets, authentication and who may do what, data that leaves where it should stay. Report each problem in `findings`, with its place, its evidence and whether the change caused it. Say plainly when there is none."},
+    {"id": "performance", "title": "Performance review", "kind": "review-routine", "start": "sonnet/high", "needs": [],
+     "prompt": "Review, without changing any file: {target}\n\nYou are one of four reviewers working apart, each through its own lens; yours is performance: work repeated in a loop, queries per item, unbounded reads, memory held too long, blocking calls where the code must not wait. Report each problem in `findings`, with its place, its evidence and whether the change caused it. Say plainly when there is none."},
+    {"id": "tests", "title": "Tests review", "kind": "review-routine", "start": "sonnet/high", "needs": [],
+     "prompt": "Review, without changing any file: {target}\n\nYou are one of four reviewers working apart, each through its own lens; yours is the tests: behaviour the change adds that no test exercises, tests that pass whatever the code does, and checks that cannot fail. Report each problem in `findings`, with its place, its evidence and whether the change caused it. Say plainly when there is none."},
+    {"id": "refute", "title": "Decide what only one saw", "kind": "review-routine", "start": "opus/xhigh",
+     "ledger": "refute", "needs": ["correctness", "security", "performance", "tests"],
+     "prompt": "Decide, without changing any file, the findings on: {target}"},
+    {"id": "fix", "title": "Fix the confirmed findings", "kind": "implement", "ledger": "fix", "needs": ["refute"],
+     "prompt": "Fix, in: {target}, the confirmed findings below."},
+    {"id": "recheck", "title": "Check each fix", "kind": "review-routine", "ledger": "recheck", "needs": ["fix"],
+     "prompt": "Check, without changing any file, the fix just made in: {target}"}
+  ]
+}

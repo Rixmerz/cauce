@@ -38,7 +38,9 @@ that says `other work here changes the same files` names them; merge one
 first.
 Never send copies of the same task to compare answers: each costs a full
 run and they say the same thing — cauce already stops a task whose cells
-agree. Parts that share state a run uses up (a demo user, its quiz
+agree. Readers that each ask a different question are another thing: a
+review of a change is `cauce workflow run panel`, and a read-only audit can
+be a Workflow script of your own (`cauce guide panels`). Parts that share state a run uses up (a demo user, its quiz
 attempts, a seeded record) get one run between them, or data of their
 own: parallel runs on one account spoil each other's results. A run that
 says it `waits` for the checkout is queued, not hung: let it wait, or run

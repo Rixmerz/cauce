@@ -22,8 +22,8 @@ There are three scopes, and the nearest one wins:
 
 - `project`: `.cauce/workflows/` in this checkout, shared through the repository.
 - `user`: the person's cauce home.
-- `bundled`: the templates `feature`, `feature-parallel`, `bugfix`, `review-fix`
-  and `dual-review`. `feature-parallel` is for a feature that touches several
+- `bundled`: the templates `feature`, `feature-parallel`, `bugfix`, `review-fix`,
+  `dual-review` and `panel` (four blind reviews, one lens each). `feature-parallel` is for a feature that touches several
   areas; with a plan of one part it is `feature`.
 
 A workflow in a nearer scope hides one of the same name further away.
@@ -81,8 +81,8 @@ How to write the steps:
 - **Review ledger:** after review steps, `--ledger refute` decides the
   findings only one review saw, `--ledger fix` fixes only the confirmed ones,
   and `--ledger recheck` checks each one. Reviews never vote. A row still open
-  gets a second round, then the run waits on the person. `dual-review` is
-  built this way.
+  gets a second round, then the run waits on the person. `dual-review` and
+  `panel` are built this way.
 - **Checks:** give a writing step a `verify` command when the repository has
   one. cauce runs it itself.
 - **Memory:** a step can carry cauce memory into its brief, for considerations

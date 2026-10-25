@@ -114,6 +114,11 @@ The coverage floor lives in one place, `[tool.coverage.report] fail_under` in
 
 ## Conventions
 
+- **A bound limits what one brief or view carries, never what is kept.** A
+  worker's findings, a request's criteria and a ledger's rows are kept whole;
+  what one brief or screen cannot carry waits or is said by count, never
+  dropped with a bare slice. A bound that stops work is a rule with evidence,
+  never a number picked once.
 - **Shown text is clipped by `text.clip`**: at a sentence end near the limit,
   else a word boundary, never inside a bracket, marked with "…"; never a bare
   slice.
@@ -319,7 +324,11 @@ yields the default kind, not a guess.
   fix whose diff only touches documentation or instruction files
   (`ledger.written_down`) fixes no row but one about those files, whatever the
   re-check says (`noted_only`). Open rows earn one more
-  round, up to `ledger.ROUNDS`; then the run stops as `review`.
+  round, up to `ledger.ROUNDS`; then the run stops as `review`. The ledger keeps
+  every row a worker reported: a role's brief carries the rows that fit in
+  `ledger.BRIEF_CHARS` (shown and agreed ones first, `ledger.fit`), a fix's rows that
+  did not fit wait for its next round and a refute's go to the person, each said by
+  count. `panel` is this chain after four blind reviews, one lens each.
 - A risk tier is only raised, never lowered; a change that cannot be read is
   high. Its reasons are true: a word is read in its sense ("checkout" in git's,
   `payment` as one name among others is no money until the change touches that

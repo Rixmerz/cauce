@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-10-25
+
+### Fixed
+
+- **Nothing a worker reports is dropped by a count.** Three bounds picked once in 0.12 and
+  0.13 dropped data without saying so: a result's findings past 30, a review ledger's rows
+  past 30, and a request's listed items past 20, which stopped being criteria a pass must
+  answer. All three now keep everything. What is bounded is one brief: a ledger role gets
+  the rows that fit in `ledger.BRIEF_CHARS` (shown and agreed rows first), a fix's rows
+  that did not fit wait for the next fix round, a refute's go to the person, and the brief
+  says how many wait. A re-check may answer for any number of rows.
+
+### Added
+
+- **`panel`, a bundled workflow of four lenses.** Four blind reviews side by side, each
+  asking one question (correctness, security, performance, tests), then the same refute,
+  fix and re-check as `dual-review`. The refuter is told how many reviewers there were.
+- **`cauce guide panels`.** When a session's own Workflow script fits (an exhaustive
+  read-only audit, a comparison of designs, a critique of a plan) and when the work goes
+  to cauce (anything that writes, needs a check or should be remembered, and every review
+  of a change). Inside a panel, readers never vote and a later round never sees what was
+  found; what it finds becomes cauce work as one `bugfix` each, after the person sees the
+  list, and is never filed as a note.
+
 ## [0.40.0] - 2026-10-25
 
 ### Fixed

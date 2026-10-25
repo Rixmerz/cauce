@@ -20,7 +20,6 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 _ITEM = re.compile(r"^\s*(?:[-*•]|\d{1,3}[.)]|\[[ xX]\])\s+(?P<text>\S.*)$")
-MAX_ITEMS = 20
 ITEM_CHARS = 400
 #: Words that put what follows out of this task's scope.
 _OUT_OF_SCOPE = re.compile(
@@ -54,12 +53,12 @@ def _split(text: str) -> tuple[list[str], list[str]]:
 def items(text: str) -> list[str]:
     """The request's listed items in scope, verbatim, when it lists two or more."""
     found, _ = _split(text)
-    return found[:MAX_ITEMS] if len(found) >= 2 else []
+    return found if len(found) >= 2 else []
 
 
 def left_out(text: str) -> list[str]:
     """The listed items the request itself puts out of scope."""
-    return _split(text)[1][:MAX_ITEMS]
+    return _split(text)[1]
 
 
 def ids(text: str) -> tuple[str, ...]:
