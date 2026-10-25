@@ -92,12 +92,13 @@ def repository(variant: str) -> Path:
     return where
 
 
-def worker(where: Path, prompt: str, cell: str, ids: tuple[str, ...] = ()) -> dict:
+def worker(where: Path, prompt: str, cell: str, ids: tuple[str, ...] = (),
+           words: tuple[str, ...] = ledger.WORDS["refute"]) -> dict:
     model, effort = cell.split("/")
     spec = launch.LaunchSpec(prompt=prompt, cell=Cell(model, effort), launch_dir=where, max_turns=MAX_TURNS,
                              timeout_s=launch.timeout_for(MAX_TURNS), permission_mode=grants.mode_for(model),
                              allowed_tools=TOOLS, disallowed_tools=launch.WRITE_TOOLS, judging=True,
-                             verdicts=ids, verdict_words=ledger.WORDS["refute"] if ids else ())
+                             verdicts=ids, verdict_words=words if ids else ())
     began = time.monotonic()
     r = launch.run(spec)
     return {"cell": cell, "passed": r.passed, "failure": r.failure.value if r.failure else None,
