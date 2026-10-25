@@ -36,7 +36,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `trunk`, `overlap`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets, and the jobs a person quieted per repository |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -365,8 +365,13 @@ yields the default kind, not a guess.
   has its own turns (`VERIFIER_TURNS`), never the worker's raised ones, and is
   never told to stash the work it checks. A resume after a `review` stop (a
   dismissed one too) gives its first check the blockers the `verified` event
-  kept.
-  Tests run with `CAUCE_VERIFIER=off`.
+  kept. When the change will need it, the verifier starts beside cauce's own check, not after
+  it (`orchestrate.Ahead`, the `overlap` setting): a passing writing attempt in a worktree, a
+  check to run and no services (their ports would be shared); it reads the diff the check runs
+  on and is told the check is running and not to run it itself. A check that fails stops it, its
+  verdict dropped as one that never ran and its cost kept (`verifier_dropped`); a change the check
+  itself did not write since it started is read again. Its `verified` event says `beside_check`.
+  Tests run with `CAUCE_VERIFIER=off` and `CAUCE_OVERLAP=off`.
 - A task that stops on a point (`spec`, `decision`) because its surfaces kept it from the
   cause (it changed a path outside them, or its worker says so and names one,
   `orchestrate._widen`) keeps those paths on its stop (`widen`), and its next step is

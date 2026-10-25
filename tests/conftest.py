@@ -33,6 +33,8 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("CAUCE_ROUTE", "off")
     monkeypatch.setenv("CAUCE_PRIMER", "off")
     monkeypatch.setenv("CAUCE_TRUNK", "off")
+    # The verifier beside the check runs it on a thread: a test that wants that turns it on.
+    monkeypatch.setenv("CAUCE_OVERLAP", "off")
     # Lean workers read the CLI's `--help`: a test that wants them passes a fake one.
     monkeypatch.setenv("CAUCE_LEAN", "off")
     # A role's revision is a Haiku call and a trial: a test that wants them turns them on with a fake `ask`.
