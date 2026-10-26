@@ -103,3 +103,23 @@ opus/high, opus/xhigh and opus/max drew the same three parts (rules with checkou
 export). From 0.45 a plan starts at opus/high, where it started at opus/xhigh. sonnet/high split
 the work another way (checkout apart from the rules). Whether those parts build as well was not
 measured, so it is not the start.
+
+## Where the time is now
+
+Over this store's 1,148 minutes of runs:
+
+| Phase | Minutes | What shortens it |
+|---|---|---|
+| the workers' own turns | 885 | the start cells: features at sonnet/high, plans at opus/high |
+| the independent verifier | 171 | now beside cauce's check |
+| cauce's check | 81 | now behind the verifier, wherever one runs |
+| pickups | 30 | the lost wake-up, fixed |
+| notes | 8 | |
+| the plan | 1.5 | |
+
+What is left is mostly each turn's model latency, which cauce does not set. Measured and not
+built:
+- skipping cauce's check when the worker ran the same command last: the overlap already hides it
+  wherever a verifier runs, and the rest is about 4% of a build;
+- reviews at lower effort: quality lost;
+- splitting a review of a change with no parts by its folders: slower and dearer.

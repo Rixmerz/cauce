@@ -126,3 +126,17 @@ Splitting by folder bought nothing. `src` held almost every changed line, so its
 long as a whole one, and the other three added cost and rows for the refuter and the fix. From
 0.45 a change with no parts is reviewed whole. One whose parts declared their surfaces (a
 `feature-parallel` run) is still reviewed by those areas, a split that was not measured here.
+
+## How much effort one review of a large change needs (`effort.py`)
+
+One blind review of the `volume` change per run, its findings kept as they came. Three runs per
+cell.
+
+| Cell | Caught | B3 (the tier case against the data) | Wall p50 | Cost p50 |
+|---|---|---|---|---|
+| opus/medium | 38/42 | 0/3 | 78 s | $0.44 |
+| opus/high | 40/42 | 2/3 | 102 s | $0.55 |
+| sonnet/xhigh | 41/42 | 2/3 | 156 s | $0.44 |
+
+opus/medium was a quarter faster and missed the hardest bug every time, which is quality lost.
+Reviews stay where they start, at opus/high.
