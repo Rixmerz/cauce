@@ -10,7 +10,9 @@ classifier.
 The decision is made once, at dispatch time, against what is running and what
 was queued ahead of the task, and it is kept on the task with its reason. It
 fails closed: a model that cannot be run, or does not answer, means the task
-waits its turn. Waiting costs time; a wrong "parallel" costs a broken merge.
+waits its turn. Waiting costs time; a wrong "parallel" costs a broken merge. A
+wait the model gives needs a collision it can name: told to wait "when unsure",
+it held back a third of the independent pairs in `bench/speed/dispatch.py`.
 """
 from __future__ import annotations
 
@@ -58,19 +60,21 @@ _MENTIONS = re.compile(r"\bversion|#\d+")
 _SEGMENT = re.compile(r"\n+|(?<=[.!?])\s+")
 
 SYSTEM_PROMPT = (
-    "You decide whether a new software task can start now, at the same time as other tasks in "
-    "the same repository, or must wait until they finish. Each task runs in its own copy of the "
-    "repository and its changes are merged afterwards. Answer parallel=true only when the new "
-    "task needs nothing another task will produce, and is unlikely to change the same files, the "
-    "same functions or the same behaviour as any of them. Reading-only tasks (questions, reviews, "
-    "searches) can always run in parallel. Each task is shown by the opening of its text and the "
-    "lines further on (marked …) that say how it coordinates with other work. What a task's text "
-    "declares is a fact: a migration or version number it gives itself, while the other tasks take "
-    "the other numbers, is no dependency on the tasks numbered before it; only what its text says "
-    "it needs from another task is. The surfaces a task declared are the only files it may change, "
-    "and the files a running task changed so far are read from git: judge overlap on those, not on "
-    "guesses. When unsure, answer false. The reason is one short sentence naming the task it "
-    "conflicts with, if any."
+    "You decide whether a new software task can start now, beside other tasks in the same repository, "
+    "or must wait until they finish. Each task runs in its own copy of the repository and its changes "
+    "are merged afterwards. Waiting costs the whole time the work ahead takes; starting beside work it "
+    "collides with costs a merge conflict. Answer parallel=false only for a collision you can name: the "
+    "new task needs something another task is building (an endpoint, a table, a field, a function it "
+    "will call), or both change the same feature, file, function, schema or behaviour (a rename, a "
+    "migration or a refactor across the code collides with whatever it touches), or the new task's "
+    "results rest on behaviour another task changes (a rounding, a format, a rule its totals or tests "
+    "depend on), as their texts, the surfaces they declared and the files a running task changed so far "
+    "(read from git) show. Different features in different parts of the code are parallel=true even when "
+    "neither declared its surfaces: a helper both might share, the same router, or the same test setup is "
+    "a guess, not a collision. Reading-only tasks (questions, reviews, searches) can always run in "
+    "parallel. What a task's text declares is a fact: a migration or version number it gives itself, "
+    "while the other tasks take the other numbers, is no dependency on the tasks numbered before it. The "
+    "reason is one short sentence: the collision and the task it is with, or why they do not meet."
 )
 
 SCHEMA = {

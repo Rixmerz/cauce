@@ -318,7 +318,8 @@ yields the default kind, not a guess.
   base; every run failing the same tests is one steady failure, compared with the base as any
   is. The plan says so and the verdict card keeps the runs.
 - A writing worker's brief names the command that runs only the tests near its change
-  (`ci.related`: jest, vitest, pytest), to run as it goes; the full check runs at the end.
+  (`ci.related`: jest, vitest, pytest), to run as it goes; the full check runs at the end, by
+  cauce, and the worker is told not to run it before it reports (`bench/speed/handoff.py`).
 - Reviewers never vote: their findings are added together, so one is enough
   and there is no tie. A row only one saw and could only read from the code is
   decided by a refuter with its own proof, never by a count; a row it cannot
@@ -599,9 +600,13 @@ yields the default kind, not a guess.
 - Tests run with `CAUCE_LIVESPEC=off` and an empty `CLAUDE_CONFIG_DIR`; a
   test that wants livespec builds the fixture index in `tests/livespec_fixture.py`.
 - A dispatch decision fails closed: no answer from Haiku means the task
-  waits. It is made once and kept on the task with its reason, until none of the
+  waits. A wait Haiku gives names a collision (a change the task needs, the same code or
+  behaviour changed), never a guess at a shared helper (`bench/speed/dispatch.py`). It is
+  made once and kept on the task with its reason, until none of the
   work it was judged against is ahead any more: then it is made again
-  (`flow._judged_against_gone`, the event's `again`). `cauce lanes --beside N` is
+  (`flow._judged_against_gone`, the event's `again`); and a wait Haiku gave is asked again,
+  at most every `flow.REJUDGE_S`, once the work ahead changed files it had not when it was
+  judged (the event's `seen` and `moved`). `cauce lanes --beside N` is
   the session's word that a queued task starts beside the work ahead; it never
   moves work held `--after`. A task that will
   not write (`matrix.READ_ONLY_KINDS`, or text `orchestrate.declares_read_only`
