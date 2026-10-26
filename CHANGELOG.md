@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-10-26
+
+### Fixed
+
+- **A start history raised comes back down.** A task's first cell rose to where half of the last
+  tasks of its kind had passed, counting a task that started high and passed there. So a start
+  that history raised kept every later task as high, and the cells below were never tried again.
+  In this machine's store, features started at opus/high though 11 of the last 14 passed where they
+  started, and implement tasks at sonnet/high with 19 of 20. Now only a climb raises a writing
+  kind's start: a task that passed where it started is no evidence that a lower cell fails. In
+  `bench/speed/build.py` the cells this leaves them at were the fastest and as right: implement at
+  sonnet/medium passed both builds 3 of 3 times in 48 s and 69 s. opus/high, where features had
+  risen, took 118 s and 189 s and missed a hidden test once. A reading kind keeps the old count,
+  since its pass is its answer and a review at lower effort missed the hardest bug in
+  `bench/review`.
+
+### Changed
+
+- **An ending reaches an idle session within seconds.** The mod looked for endings every 15 s,
+  running `cauce endings` and the board each time. A task's ending now touches a pulse file beside
+  the store (`Store.pulse`), and the mod checks it every 2 s with a stat, no process, and polls at
+  once when it changed. In this store the mod's deliveries had taken 9 s at the median and 16 s
+  at p90 after the ending. `cauce endings --json` names the pulse.
+
 ## [0.47.0] - 2026-10-26
 
 ### Changed

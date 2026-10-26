@@ -841,7 +841,9 @@ def test_endings_are_peeked_or_delivered_once_and_only_to_their_session(capsys):
     assert cli.main(["endings", "--session", "s1", "--json"]) == 0  # a peek took nothing
     assert json.loads(capsys.readouterr().out)["ids"] == [mine["id"]]
     assert cli.main(["endings", "--session", "s1", "--json"]) == 0  # delivered once
-    assert json.loads(capsys.readouterr().out) == {"notice": None, "ids": [], "statuses": {}}
+    nothing = json.loads(capsys.readouterr().out)
+    assert nothing.pop("pulse").endswith("/pulse")  # where the mod looks between its polls
+    assert nothing == {"notice": None, "ids": [], "statuses": {}}
     assert cli.main(["endings", "--session", "nobody"]) == 0 and capsys.readouterr().out == ""
     store = Store.open()
     assert store.last_event(mine["id"], "reported")["data"]["via"] == "mod"

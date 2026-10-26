@@ -354,6 +354,29 @@ test('what ended while the session was idle starts a turn, once', async ($, on) 
   expect(seen.argv.filter(a => a[0] === 'endings')[0]).toEqual(['endings', '--session', 'sess-1', '--json'])
 })
 
+test('a task that ended touches the pulse, and the idle session hears of it within seconds', async ($, on) => {
+  let mtime = 1000
+  let ended = false
+  on('fs.stat', ($, e) => (e.path === '/home/.cauce/pulse'
+    ? { value: { kind: 'file', size: 0, mtimeMs: mtime, isLink: false } }
+    : { error: 'ENOENT' }) as never)
+  const { seen, clock } = await started($, on, {
+    endings: () => ({ exitCode: 0, stdout: JSON.stringify(ended
+      ? { notice: NOTICE, ids: [21], pulse: '/home/.cauce/pulse' }
+      : { notice: null, ids: [], pulse: '/home/.cauce/pulse' }) }),
+  })
+  await clock.advance(15_000)  // the first poll names the pulse
+  await clock.advance(2_000)  // the first look only learns where it stands
+  expect(seen.prompts).toEqual([])
+  ended = true
+  mtime = 2000
+  await clock.advance(2_000)
+  expect(seen.prompts).toEqual([NOTICE])
+  const asked = seen.argv.filter(a => a[0] === 'endings').length
+  await clock.advance(10_000)  // an unchanged pulse runs nothing
+  expect(seen.argv.filter(a => a[0] === 'endings').length).toBe(asked)
+})
+
 test('the toast says how each task ended, in the board\'s colors', async ($, on) => {
   const { seen, clock } = await started($, on, {
     endings: { exitCode: 0, stdout: JSON.stringify({ notice: NOTICE, ids: [21, 22, 23],

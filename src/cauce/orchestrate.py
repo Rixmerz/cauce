@@ -417,9 +417,10 @@ def choose_start(
 ) -> tuple[Cell, list[str]]:
     """The cell the first attempt runs at, and why.
 
-    History only ever *raises* the start. A kind that always lands two rungs up
+    History only ever *raises* the start. A kind that always climbs two rungs up
     in this repository starts there and skips two failed attempts; a kind that
-    always passes first try already starts at the bottom.
+    passes where it starts (a landing of "", `Store.landings`) is no reason to
+    start higher, wherever it started.
     """
     index, reasons = 0, []
     if complexity == "high" and len(ladder) > 1:
@@ -428,12 +429,12 @@ def choose_start(
     samples, where = (repo_landings, "this repository") if len(repo_landings) >= MIN_REPO_SAMPLES else (
         global_landings, "all repositories")
     if len(samples) >= (MIN_REPO_SAMPLES if where == "this repository" else MIN_GLOBAL_SAMPLES):
-        positions = sorted(_index_of(ladder, Cell.parse(label)) for label in samples)
+        positions = sorted(_index_of(ladder, Cell.parse(label)) if label else 0 for label in samples)
         learned = positions[(len(positions) - 1) // 2]
         if learned > index:
             index = learned
             reasons.append(f"in {where}, half of the last {len(samples)} tasks of this kind "
-                           f"passed at {ladder[learned].label} or above")
+                           f"had to climb to {ladder[learned].label} or above")
     if not reasons:
         reasons.append("the ladder's first cell")
     return ladder[index], reasons
@@ -541,8 +542,10 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
         else:
             start, reasons = choose_start(
                 ladder, classification.complexity,
-                store.landings(kind, repo=key) if key else [],
-                store.landings(kind),
+                # A writing kind's pass is checked, so a pass where it started says the cells
+                # below were never shown to fail; a reading kind's is its answer, kept as before.
+                store.landings(kind, repo=key, climbs=kind not in READ_ONLY_KINDS) if key else [],
+                store.landings(kind, climbs=kind not in READ_ONLY_KINDS),
             )
         if raise_rungs:
             raised = min(_index_of(ladder, start) + raise_rungs, len(ladder) - 1)

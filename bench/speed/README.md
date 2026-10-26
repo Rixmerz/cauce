@@ -172,3 +172,35 @@ code). The held-out set has 6 and 6, written after the prompt was chosen, from r
 From 0.47 the dispatcher asks with the last prompt. A wait it gave is also asked again, at most
 every two minutes, once the work ahead changed files it had not changed when the wait was
 judged. The first judgment is often made when that work has just started and changed nothing.
+
+## G: history kept raising where a task starts (`build.py`, the store)
+
+A task's start rose to where half of the last tasks of its kind had passed. A task that started
+high and passed there counted as a reason to start the next one as high, so a start history had
+raised never came down, and the cells below were never tried again. In this machine's store:
+
+| Kind | Passed where they started (last tasks) | Start history gave | Start from climbs only |
+|---|---|---|---|
+| feature | 11/14 | opus/high | sonnet/high |
+| implement | 19/20 | sonnet/high | sonnet/medium |
+
+`build.py` with the cell the fix leaves implement at, three runs per build, beside the cells
+measured before:
+
+| Cell | Medium build: right, wall p50 | Harder build: right, wall p50 |
+|---|---|---|
+| sonnet/medium | 3/3, 48 s | 3/3, 69 s |
+| sonnet/high | 3/3, 57 s | 3/3, 84 s |
+| opus/high | 3/3, 118 s | 2/3, 189 s |
+
+From 0.48 only a climb raises a writing kind's start. A reading kind keeps the old count: its
+pass is its answer, and `bench/review/effort.py` showed a review at lower effort missing the
+hardest bug.
+
+## H: an ending reaches the idle session sooner (the mod's pulse)
+
+When work ended while the session was idle, the mod heard of it at its next poll, every 15 s
+(`cauce endings` and the board: about 1.2 s of two processes each time). In this store the
+mod's deliveries took 9 s at the median and 16 s at p90 from the ending. A task's ending now
+touches a file beside the store, and the mod stats it every 2 s and polls at once when it
+changed: within about 2 s plus the poll, with no process between endings.

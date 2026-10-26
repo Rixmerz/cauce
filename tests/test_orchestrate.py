@@ -58,6 +58,9 @@ def test_choose_start_rises_with_complexity_and_history_never_falls():
     # a landing off the ladder counts at the highest rung it is not below
     assert choose_start(IMPLEMENT, "medium", ["opus/max"] * 3, [])[0] == Cell("opus", "high")
     assert choose_start(IMPLEMENT, "medium", ["haiku"] * 3, [])[0] == Cell("sonnet", "medium")
+    # a task that passed where it started ("") is no reason to start higher: only climbs raise it
+    assert choose_start(IMPLEMENT, "medium", ["", "", "opus/high"], [])[0] == Cell("sonnet", "medium")
+    assert choose_start(IMPLEMENT, "medium", ["", "opus/high", "opus/high"], [])[0] == Cell("opus", "high")
 
 
 def test_the_model_that_served_is_recorded_and_a_pin_reaches_the_worker(git_repo, store, monkeypatch):
@@ -279,7 +282,7 @@ def test_history_moves_the_next_start(git_repo, store):
     report = run("tweak the layout again", git_repo, store, registry={}, launcher=script,
                  classifier=kind("implement"))
     assert report.cells == ["sonnet/xhigh"]
-    assert any("passed at sonnet/xhigh" in r for r in report.plan.reasons)
+    assert any("had to climb to sonnet/xhigh" in r for r in report.plan.reasons)
 
 
 def test_dead_ends_from_another_repository_reach_the_brief(git_repo, store):

@@ -388,8 +388,11 @@ yields the default kind, not a guess.
 - A move explains itself: `Decision.because` is the evidence chain (what the
   attempt ended with, the rule, where it goes) and `skipped` the rungs passed
   over. A new branch in `decide` gives both; the `moved` event keeps them.
-- History may raise where a task starts, never lower it below its ladder,
-  and so may it the turns it starts with: when at least
+- History may raise where a task starts, never lower it below its ladder, and only on
+  climbs: a writing task that passed where it started is no evidence a lower cell fails
+  (`Store.landings`, `""`), or a start history raised keeps every later task as high; a
+  reading kind's pass is its answer, so its landings count where they passed. So may it
+  raise the turns it starts with: when at least
   `orchestrate.MIN_TURN_SAMPLES` recent tasks of its kind here ran out at the
   kind's turns and passed with more, it starts at the median those passes
   needed (capped at `escalate.MAX_TURNS_CEILING`), and the plan says so. An
@@ -983,7 +986,8 @@ yields the default kind, not a guess.
 - An ending is claimed, not just read, when it is delivered
   (`Store.claim_unreported`). The Stop hook, the next prompt and the mod's
   wake may run at the same moment, and each ending is still handed over once.
-  The mod wakes a session only while no turn runs.
+  The mod wakes a session only while no turn runs, and looks every `PULSE_MS` at the
+  pulse a task's ending touches (`Store.pulse`, a stat, no process) before its full poll.
 - A workflow advances on the engine, never on a session: `workflows.advance`
   runs at the end of every run (`orchestrate.run`), queues what waited on a
   step that passed, inside one write transaction, and starts the dispatcher;

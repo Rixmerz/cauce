@@ -31,6 +31,9 @@ import { commandToast, compactedToast, DEFAULT_TOPICS, endedToast, json, skipped
 
 const BOARD_URL = 'http://127.0.0.1:8790/'
 const POLL_MS = 15_000
+/** How often the mod looks at cauce's pulse, a file touched each time a task ends: a stat,
+ * not a process, so an ending wakes an idle session within it rather than within POLL_MS. */
+const PULSE_MS = 2_000
 /** How long a toast with a `/compact` line to paste, or a fallback to say, stays: the longest the engine takes. */
 const SUGGEST_MS = 60_000
 const KINDS = ['chat', 'explore', 'docs', 'test', 'refactor', 'implement', 'ui', 'feature', 'debug-repro',
@@ -117,6 +120,9 @@ let engine: string | null = null
  * turn's end, so the mod asks after one (and once after a reload), and again
  * only while cauce says a decision waits. */
 let compactionDue = true
+/** cauce's pulse file, as `cauce endings` names it, and the change of it last seen. */
+let pulsePath: string | null = null
+let pulseSeen = 0
 
 async function refresh($: EngineInterface): Promise<void> {
   const cwd = await $.session.cwd()
@@ -129,8 +135,9 @@ async function refresh($: EngineInterface): Promise<void> {
 async function wake($: EngineInterface, enabled: boolean): Promise<boolean> {
   if (!enabled || busy) return false
   const session = await $.session.id()
-  const found = json<{ notice: string | null; ids: number[]; statuses?: Record<string, string | null> }>(
+  const found = json<{ notice: string | null; ids: number[]; statuses?: Record<string, string | null>; pulse?: string }>(
     await cauce($, ['endings', '--session', session, '--json']))
+  if (found?.pulse) pulsePath = found.pulse
   if (!found?.notice) return false
   $.ui.toast(endedToast(found.ids, found.statuses))
   await $.prompt.submit({ text: found.notice })
@@ -230,6 +237,17 @@ async function poll($: EngineInterface, wakes: boolean): Promise<void> {
   } finally {
     polling = false
   }
+}
+
+/** A task ended since the pulse was last seen: poll now, not at the next POLL_MS. The first
+ * look only learns where the pulse stands; an older cauce names no pulse, and polls alone. */
+async function pulse($: EngineInterface, wakes: boolean): Promise<void> {
+  if (!pulsePath || busy || polling) return
+  const stat = await $.fs.stat(pulsePath).catch(() => undefined)
+  if (!stat || stat.mtimeMs <= pulseSeen) return
+  const first = pulseSeen === 0
+  pulseSeen = stat.mtimeMs
+  if (!first) await poll($, wakes)
 }
 
 /** Whether the person delegated the asks for `queue` and `resume`: read at each
@@ -366,6 +384,9 @@ export const register: Register = (on, options) => {
     await $.command.register({ name: 'cauce', description: "cauce's board: what waits on the orchestrator, runs and is queued" })
     $.clock.every(POLL_MS, () => {
       void poll($, wakes).catch(ignore)
+    })
+    $.clock.every(PULSE_MS, () => {
+      void pulse($, wakes).catch(ignore)
     })
     void refresh($).catch(ignore)
     return answer
