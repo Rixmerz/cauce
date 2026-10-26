@@ -962,7 +962,9 @@ yields the default kind, not a guess.
   to be merged) is marked so in that task's brief (`notes.unmerged`), never dropped: what it
   says of the code may not be there yet.
 - A note's anchor is reviewed only against this checkout's history: a change
-  on a branch not merged yet is not a change. Filing notes never fails a run,
+  on a branch not merged yet is not a change. A run files what its worker learned after its
+  `finished` event and the workflow's advance (a `notes_filed` event times it): no ending and no
+  next step waits on that model call. Filing notes never fails a run,
   and a GET in the UI never reviews them. Tests run with `CAUCE_NOTES=off`; a
   test that wants notes turns them on and passes a fake `ask`.
 - The mod adds a way in, never a power. Every tool runs `bin/cauce`. `resume`

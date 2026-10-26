@@ -39,6 +39,9 @@ HARD = (" Also reorganize the rules: move every rule module into `src/tally/rule
         "and `apply_order` to `on_order`, so every rule, the checkout and the tests use the new names and every "
         "rule still prices as it did.")
 MAX_TURNS = 120
+#: An arm `<cell>+batch` adds this to the request: what `launch` would tell every writing worker.
+BATCH = ("Make the tool calls that do not depend on each other in the same turn: read the files you need "
+         "together, and make independent edits together, rather than one call a turn.")
 
 
 def repository(variant: str = "plain") -> Path:
@@ -68,9 +71,11 @@ def hidden(where: Path, variant: str = "plain") -> int:
 
 
 def one(cell: str, variant: str = "plain") -> dict:
-    model, effort = cell.split("/")
+    model, effort = cell.split("+")[0].split("/")
     where = repository(variant)
     ask = ASK.replace("\n\nAdd tests", HARD + "\n\nAdd tests") if variant == "hard" else ASK
+    if cell.endswith("+batch"):
+        ask += "\n\n" + BATCH
     spec = launch.LaunchSpec(prompt=ask, cell=Cell(model, effort), launch_dir=where, max_turns=MAX_TURNS,
                              timeout_s=launch.timeout_for(MAX_TURNS), permission_mode=grants.mode_for(model),
                              allowed_tools=("Bash(make:*)", "Bash(python3:*)", "Bash(git:*)"))

@@ -1644,24 +1644,6 @@ def run(
             store.pause_lane(key, f"task #{task['id']} ended {status}: {clip(report.summary, 200, one_line=True)}")
         if workspace is None:
             report.changed = sorted(changed)
-        mark = time.monotonic()
-        if status == "done" and report.learned and options.keep_learned and config.enabled(
-                "notes", os.environ, options.notes):
-            _note(store, task, key, report, the_plan, workspace.repo_dir if workspace else repo_dir,
-                  isolate.head(workspace.repo_dir, report.branch) if workspace and report.branch else None,
-                  notes_ask)
-        if status == "done" and report.constraints and key and options.keep_learned and config.enabled(
-                "notes", os.environ, options.notes):
-            kept = notes.file_constraints(store, key, report.constraints, author="worker",
-                                          source=f"task #{task['id']}", task_id=task["id"])
-            if kept:
-                report.noted = [*report.noted, *kept]
-                store.add_event(task["id"], "noted", notes=kept, constraints=True)
-        if status == "done" and report.learned and options.keep_learned and config.enabled(
-                "engram_write", os.environ):
-            _to_engram(store, task, report, the_plan, workspace.repo_dir if workspace else repo_dir)
-        # Filing what it learned runs before the ending and the next workflow step: timed.
-        timing["notes_s"] = time.monotonic() - mark
         if status == "done":
             # A security problem the worker named is an alert of its own, never only a note among others.
             report.alerts = notes.security_alerts(report.learned, attempts[-1].findings if attempts else ())
@@ -1692,6 +1674,27 @@ def run(
         except Exception as exc:
             store.add_event(task["id"], "workflow_error", error=str(exc)[:300])
             say(f"cauce: #{task['id']} could not start the work that waits on it: {exc}")
+        # What it learned is filed after its ending and the next step are out (a model call, about
+        # 5 s at the median): no session and no step waits on it. Timed apart.
+        mark, filing = time.monotonic(), False
+        if status == "done" and report.learned and options.keep_learned and config.enabled(
+                "notes", os.environ, options.notes):
+            filing = True
+            _note(store, task, key, report, the_plan, workspace.repo_dir if workspace else repo_dir,
+                  isolate.head(workspace.repo_dir, report.branch) if workspace and report.branch else None,
+                  notes_ask)
+        if status == "done" and report.constraints and key and options.keep_learned and config.enabled(
+                "notes", os.environ, options.notes):
+            kept = notes.file_constraints(store, key, report.constraints, author="worker",
+                                          source=f"task #{task['id']}", task_id=task["id"])
+            if kept:
+                report.noted = [*report.noted, *kept]
+                store.add_event(task["id"], "noted", notes=kept, constraints=True)
+        if status == "done" and report.learned and options.keep_learned and config.enabled(
+                "engram_write", os.environ):
+            _to_engram(store, task, report, the_plan, workspace.repo_dir if workspace else repo_dir)
+        if filing:
+            store.add_event(task["id"], "notes_filed", notes_s=round(time.monotonic() - mark, 2))
     return report
 
 
