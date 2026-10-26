@@ -326,6 +326,10 @@ def _in(column: str, values: Iterable[str] | None) -> tuple[str | None, list[str
     return f"WHERE {column} IN ({', '.join('?' * len(values))})", values
 
 
+#: The file `Store.pulse` touches when a task ends, beside the database.
+PULSE = "pulse"
+
+
 class Store:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -583,21 +587,28 @@ class Store:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def landings(self, kind: str, *, repo: str | None = None, limit: int = 20) -> list[str]:
-        """Where recent finished tasks of this kind passed, newest first.
+    def landings(self, kind: str, *, repo: str | None = None, limit: int = 20, climbs: bool = True) -> list[str]:
+        """Where recent finished tasks of this kind had to climb to, newest first: the cell
+        a task passed at when it climbed there from its start, "" when it passed where it
+        started. A pass at the start is no evidence that a lower cell fails: counted as the
+        cell it landed on, a start history had raised kept every later task as high,
+        whatever the cells below would have done. `climbs=False` gives the cell each
+        passed at, wherever it started: a reading kind's pass is its answer, never proof a
+        lower cell would have answered as well.
 
         Only tasks the core ran count: a prompt answered in a session has no
         cell, and guessing one would teach the router a number nobody measured.
+        A task with no start recorded says neither, and is left out.
         """
         scope = " AND t.repo = ?" if repo is not None else ""
         params: list[Any] = [kind, *([repo] if repo is not None else []), limit]
         rows = self._conn.execute(
-            "SELECT t.final_cell FROM tasks t WHERE t.kind = ? AND t.status = 'done' "  # noqa: S608
-            "AND t.final_cell IS NOT NULL AND t.source = 'cauce' AND t.pinned = 0" + scope
-            + " ORDER BY t.id DESC LIMIT ?",
+            "SELECT t.start_cell, t.final_cell FROM tasks t WHERE t.kind = ? AND t.status = 'done' "  # noqa: S608
+            "AND t.final_cell IS NOT NULL AND t.start_cell IS NOT NULL AND t.source = 'cauce' AND t.pinned = 0"
+            + scope + " ORDER BY t.id DESC LIMIT ?",
             params,
         ).fetchall()
-        return [r[0] for r in rows]
+        return ["" if climbs and start == final else final for start, final in rows]
 
     def turn_history(self, kind: str, *, repo: str, limit: int = 10) -> list[list[tuple[int, bool, str | None]]]:
         """The attempts of the last tasks of this kind here that passed, newest task first:
@@ -1227,7 +1238,20 @@ class Store:
             "INSERT INTO events (task_id, ts, kind, data) VALUES (?, ?, ?, ?)",
             (task_id, now(), event, json.dumps(data, ensure_ascii=False, default=str)),
         )
+        if event == "finished":
+            self.pulse()
         return int(cur.lastrowid)
+
+    @property
+    def pulse_path(self) -> Path:
+        """A file touched each time a task ends (`PULSE`): what the mod looks at between its
+        full polls, a stat instead of a process, to wake its session soon after."""
+        return self.path.parent / PULSE
+
+    def pulse(self) -> None:
+        """Touch `pulse_path`. Never raises: a run's ending is never lost to it."""
+        with contextlib.suppress(OSError):
+            self.pulse_path.touch()
 
     def events(self, *, after: int = 0, task_id: int | None = None, limit: int = 200) -> list[dict]:
         """Events after `after`, oldest first: a watcher keeps the last id it saw

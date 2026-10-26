@@ -2274,10 +2274,11 @@ def cmd_endings(args: argparse.Namespace) -> int:
                 dispatch.recover(store, home(), os.environ)
         text, ids = hooks.endings(store, args.session, claim=None if args.peek else args.via)
         statuses = {str(i): (store.get_task(i) or {}).get("status") for i in ids}
+        pulse = str(store.pulse_path)
     finally:
         store.close()
     if args.json:
-        print(json.dumps({"notice": text, "ids": ids, "statuses": statuses}, ensure_ascii=False))
+        print(json.dumps({"notice": text, "ids": ids, "statuses": statuses, "pulse": pulse}, ensure_ascii=False))
     elif text:
         print(text)
     return 0

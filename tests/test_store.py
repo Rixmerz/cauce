@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from cauce.store import Store, home
@@ -40,7 +42,7 @@ def test_interrupt_sweeps_only_other_hook_tasks(store: Store):
 
 def test_attempts_add_up_and_landings_only_count_finished_core_tasks(store: Store):
     for cell in ("sonnet/high", "sonnet/xhigh", "sonnet/high"):
-        t = store.create_task("t", status="running", source="cauce", kind="ui", repo="r")
+        t = store.create_task("t", status="running", source="cauce", kind="ui", repo="r", start_cell="sonnet/medium")
         store.add_attempt(t["id"], cell="sonnet/high", max_turns=30, passed=0, cost_usd=0.5, changed_paths=["a"])
         seq = store.add_attempt(t["id"], cell=cell, max_turns=30, passed=1, cost_usd=0.25)
         store.set_move(t["id"], 1, "more_effort", "shallow")
@@ -54,6 +56,14 @@ def test_attempts_add_up_and_landings_only_count_finished_core_tasks(store: Stor
     hooked = store.create_task("t", status="done", source="hook", kind="ui", repo="r", final_cell="opus/max")
     assert "opus/max" not in store.landings("ui")
     assert hooked["title"] == "t"
+    # A pass where it started is no climb, wherever it started: history had raised later
+    # starts to such passes, and every task after them started as high. A task with no
+    # start recorded says neither.
+    store.create_task("t", status="done", source="cauce", kind="ui", repo="r", start_cell="opus/high",
+                      final_cell="opus/high")
+    store.create_task("t", status="done", source="cauce", kind="ui", repo="r", final_cell="opus/xhigh")
+    assert store.landings("ui", repo="r") == ["", "sonnet/high", "sonnet/xhigh", "sonnet/high"]
+    assert store.landings("ui", repo="r", climbs=False) == ["opus/high", "sonnet/high", "sonnet/xhigh", "sonnet/high"]
 
 
 def test_memory_finds_dead_ends_across_repositories_this_one_first(store: Store):
@@ -238,3 +248,16 @@ def test_two_requests_whose_clipped_titles_match_are_two_problems(store):
     assert store.open_problem(title, repo="r", symptom="fix the radio driver 1 that drops the last frame of a burst") \
         == one
     assert store.open_problem(title, repo="r") == two  # no text to tell them apart: the latest
+
+
+def test_an_ending_touches_the_pulse_the_mod_looks_at(store: Store):
+    t = store.create_task("t", status="running", source="cauce", kind="ui", repo="r")
+    assert not store.pulse_path.exists()
+    store.add_event(t["id"], "attempt_started")
+    assert not store.pulse_path.exists()  # only an ending wakes a session
+    store.add_event(t["id"], "finished", status="done")
+    first = store.pulse_path.stat().st_mtime_ns
+    assert store.pulse_path.parent == store.path.parent
+    os.utime(store.pulse_path, ns=(first - 10**9, first - 10**9))
+    store.add_event(t["id"], "finished", status="done")
+    assert store.pulse_path.stat().st_mtime_ns > first - 10**9
