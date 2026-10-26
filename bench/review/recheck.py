@@ -6,6 +6,7 @@ the test data instead of the code (U), and one only in the docs (N). It drops a 
 config and changes a test's expected total to hide that (R).
 
     python bench/review/recheck.py run both,recheck,merged 3 3
+    python bench/review/recheck.py run verifier:sonnet/high,verifier:sonnet/medium 3 3
     python bench/review/recheck.py report
 """
 from __future__ import annotations
@@ -71,6 +72,9 @@ def chain(arm: str) -> dict:
         if arm == "both":
             steps["verifier"] = harness.worker(where, verifier_brief(FIX_ASK, "implement", where, base,
                                                                      _changed(where, base)), "sonnet/high")
+        if arm.startswith("verifier:"):  # the fix's verifier alone, at the cell named
+            steps["verifier"] = harness.worker(where, verifier_brief(FIX_ASK, "implement", where, base,
+                                                                     _changed(where, base)), arm.split(":", 1)[1])
         if arm in ("both", "recheck"):
             steps["recheck"] = harness.worker(where, recheck_ask(base, False), "opus/high", ids, words)
         if arm == "merged":
@@ -104,11 +108,11 @@ def main(argv: list[str]) -> None:
     out = HERE / "results-recheck.jsonl"
     if argv[0] == "report":
         rows = [json.loads(x) for x in out.read_text().splitlines() if x.strip()]
-        print(f"{'arm':<9}{'n':>3}{'U':>4}{'N':>4}{'R':>4}{'false':>7}{'cost p50':>10}{'path p50':>10}")
+        print(f"{'arm':<24}{'n':>3}{'U':>4}{'N':>4}{'R':>4}{'false':>7}{'cost p50':>10}{'path p50':>10}")
         for arm in sorted({r["arm"] for r in rows}):
             rs = [r for r in rows if r["arm"] == arm]
             got = [caught(r) for r in rs]
-            print(f"{arm:<9}{len(rs):>3}" + "".join(f"{sum(g[k] for g in got):>4}" for k in "UNR")
+            print(f"{arm:<24}{len(rs):>3}" + "".join(f"{sum(g[k] for g in got):>4}" for k in "UNR")
                   + f"{sum(g['false'] for g in got):>7}{median(r['cost'] for r in rs):>10.3f}"
                   f"{median(r['path_s'] for r in rs):>10.0f}")
         return

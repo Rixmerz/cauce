@@ -5,12 +5,14 @@ prompt as `harness.py`'s `single` arm, at each cell given. Findings are kept as 
 refuter), so recall is the review's own.
 
     python bench/review/effort.py run opus/medium,opus/high,sonnet/xhigh 3 3
+    python bench/review/effort.py run verifier:sonnet/high,verifier:sonnet/medium 3 3
     python bench/review/analyze.py bench/review/results-effort.jsonl
 """
 from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -22,12 +24,19 @@ sys.path.insert(0, str(HERE.parents[1] / "src"))
 import harness  # noqa: E402
 
 from cauce import ledger  # noqa: E402
+from cauce.orchestrate import verifier_brief  # noqa: E402
 
 
 def one(cell: str) -> dict:
     where = harness.repository("volume")
     try:
-        done = harness.worker(where, harness.ALONE.format(target=harness.TARGET), cell)
+        if cell.startswith("verifier:"):  # cauce's independent verifier on the change, at the cell named
+            changed = subprocess.run(["git", "diff", "--name-only", "main", "HEAD"], cwd=where, capture_output=True,
+                                     text=True).stdout.split()
+            done = harness.worker(where, verifier_brief(harness.REQUEST, "feature", where, "main", changed),
+                                  cell.split(":", 1)[1])
+        else:
+            done = harness.worker(where, harness.ALONE.format(target=harness.TARGET), cell)
     finally:
         shutil.rmtree(where.parent, ignore_errors=True)
     rows = ledger.collect([("review", done["findings"])])

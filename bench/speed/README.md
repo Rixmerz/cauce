@@ -227,3 +227,17 @@ A passing run filed what its worker learned (a Haiku call) before its `finished`
 its workflow advanced: 5.3 s at the median and 7.5 s at p90 over 107 runs in this store, on every
 step of every workflow. From 0.49 a run files them after its ending and the advance; a
 `notes_filed` event keeps the time it took.
+
+## K: the independent verifier at medium effort (`bench/review`)
+
+The verifier is 12% of this store's run time. At sonnet/medium it was faster (34 s against 58 s on
+a small fix, 36 s against 51 s on the large change) but caught 20 of 42 planted bugs on the large
+change where sonnet/high caught 27. Quality lost: not built (`bench/review/README.md`).
+
+## L: the classifier's model call
+
+A request no rule claims is classified by Haiku before its plan: 4 to 9 s, nearly all of a small
+task's plan (`cProfile` on `orchestrate.plan`: 8.9 of 9.7 s). The rules claimed 94 of the 118
+requests in this store and the model 12 (the rest predate the field), so it costs about one task
+in ten a few seconds. The rules are deliberately not a keyword list for every request
+(`classify.py`), so this is left as it is.

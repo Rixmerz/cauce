@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`bench/review` measures cauce's independent verifier at medium effort.** It was 30 to 40%
+  faster and caught every slip of a small fix, but caught 20 of 42 planted bugs on the large
+  change where high caught 27, so the verifier stays at high. `bench/speed/README.md` also
+  records the classifier's model call (4 to 9 s, about one task in ten) as left as it is.
+
 ## [0.49.0] - 2026-10-26
 
 ### Changed
