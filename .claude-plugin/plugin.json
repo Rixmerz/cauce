@@ -117,6 +117,12 @@
       "description": "Once a role's workers met enough dead ends and verifier blockers in a repository, Haiku proposes a short list of lessons for that role there (the role's file is never touched). The role's tasks alternate with and without it until each side has 10 first tries; it is kept only where it passed first no worse and did better on one measure, and reverted if it later makes pass-first worse. `cauce roles revisions` shows them. Off: the role's own text alone.",
       "default": true
     },
+    "habit_review": {
+      "type": "boolean",
+      "title": "Review new habits with a worker",
+      "description": "A habit cauce newly finds in a project (an edit followed by the same check, again and again) is reviewed by a read-only worker: whether the tool is here, a command scoped to the edited file, run and timed. Its ending gives the install line, which the session puts to you; nothing is installed without your yes. Off: habits wait for `cauce habits`.",
+      "default": true
+    },
     "engram": {
       "type": "boolean",
       "title": "Read the team's engram memory",

@@ -209,11 +209,18 @@ def test_habits_are_mined_per_repository_and_offered_across_them(store: Store, t
 
     here, elsewhere = habits.for_repo(store.tool_events(), "py")
     assert [c.steps for c in here] == [("edit:.py", "bash:ruff-check")]
+    assert elsewhere == []  # no checkout to read: no evidence npm is there
+    node = tmp_path / "py-with-node"
+    node.mkdir()
+    (node / "package.json").write_text("{}")
+    _, elsewhere = habits.for_repo(store.tool_events(), "py", node)
     assert [(c.steps, c.repos) for c in elsewhere] == [(("edit:.ts", "bash:npm-run"), 2)]
+    _, elsewhere = habits.for_repo(store.tool_events(), "py", tmp_path)
+    assert elsewhere == []  # a Python checkout is never offered a node habit
     here, elsewhere = habits.for_repo(store.tool_events(), "web")
     assert [c.steps for c in here] == [("edit:.ts", "bash:npm-run")]
     assert elsewhere == []  # what it has is not offered again
-    here_new, offered = habits.for_repo(store.tool_events(), "new")  # a repository with no history yet
+    here_new, offered = habits.for_repo(store.tool_events(), "new", node)  # a repository with no history yet
     assert here_new == []
     assert [c.steps for c in offered] == [("edit:.ts", "bash:npm-run")]
 
@@ -221,6 +228,98 @@ def test_habits_are_mined_per_repository_and_offered_across_them(store: Store, t
     habits.install(store, here[0], command="npm run lint", repo_dir=tmp_path / "web-checkout")
     view = api.habit_view(store, "py")
     assert [c["steps"] for c in view["candidates"]] == [["edit:.py", "bash:ruff-check"]]
-    assert view["elsewhere"][0]["repos"] == 2
+    assert view["elsewhere"] == []  # the py checkout has no package.json
     assert view["installed"] == []  # installed in another repository
     assert len(api.habit_view(store)["installed"]) == 1
+
+
+def test_habit_false_positives_are_left_out(store: Store, tmp_path):
+    """Nineteen habits were offered over five repositories and about one in four was worth a
+    hook: the same habit as a write and as an edit, a linter after any note was written, a
+    benchmark's temporary checkouts counted as repositories, and every worker of one session
+    counted as one place."""
+    def run(sid: str, seq: list[str], *, repo: str = "py", task: int | None = None) -> None:
+        store.touch_session(sid, f"/{repo}", repo)
+        for s in seq:
+            store.add_tool_event(session_id=sid, task_id=task, attempt=1 if task else None, tool="x", sig=s,
+                                 arg_hash="h", ok=1)
+
+    for n in range(2):
+        run(f"a{n}", ["write:.py", "bash:pytest"])
+        run(f"b{n}", ["edit:.py", "bash:pytest"])
+        run(f"c{n}", ["edit:.md", "bash:ruff-check"])
+    found = habits.candidates(store.tool_events())
+    assert [(c.steps, c.occurrences) for c in found] == [(("edit:.py", "bash:pytest"), 4)]
+
+    # three workers one session sent are three places, not one
+    for task in (store.create_task(f"t{n}", status="done", source="cauce", repo="w")["id"] for n in range(3)):
+        run("host", ["edit:.ts", "bash:deno-test"], repo="w", task=task)
+    assert [c.sessions for c in habits.candidates(store.tool_events(repo="w"))] == [3]
+
+    assert habits._project(str(tmp_path / "bench")) is None
+    assert habits._project(str(Path.home())) is None
+    assert habits._project("github.com/o/r") == "github.com/o/r"
+    assert habits.checks_its_edit(("edit:Makefile", "bash:make"))
+    assert not habits.checks_its_edit(("edit:.md", "bash:npx"))
+    assert habits.checkout_of(str(tmp_path / "gone")) is None
+
+
+def test_new_habits_are_reviewed_once_by_a_worker_and_installed_only_on_a_yes(store: Store, tmp_path):
+    """Habits waited for a person to type `cauce habits`, and few did. A project's new ones go
+    to one read-only worker, once each; its ending gives the install lines to ask about."""
+    from cauce import hooks
+
+    checkout = tmp_path / "py"
+    (checkout / ".git").mkdir(parents=True)
+    (checkout / "pyproject.toml").write_text("")
+    for n in range(3):
+        store.touch_session(f"s{n}", str(checkout), "py")
+        for s in ("edit:.py", "bash:pytest"):
+            store.add_tool_event(session_id=f"s{n}", tool="x", sig=s, arg_hash="h", ok=1)
+    kicked = []
+    task = habits.queue_review(store, repo="py", cwd=str(checkout / "src"), session_id="s0",
+                               kick=lambda d, k: kicked.append((d, k)))
+    assert task is not None and kicked == [(str(checkout), "py")]
+    hid = habits.Candidate(("edit:.py", "bash:pytest"), 3, 3, 1.0, 1, 9.0).id
+    assert json.loads(task["options"]) == {"kind": "explore", "keep_learned": False, "habit_review": [hid]}
+    assert f"{hid}: after edit:.py" in task["body"] and "$CAUCE_EDITED" in task["body"]
+    assert habits.queue_review(store, repo="py", cwd=str(checkout), session_id="s0") is None  # once each
+
+    evidence = [{"id": "S1", "met": True,
+                 "evidence": f"install {hid}: `deno test -A \"$CAUCE_EDITED\"` 2.1 s, 19 passed"}]
+    done = {**task, "status": "done", "result": "skip 0badc0de: not asked about",
+            "finished_data": {"verdict": {"criteria": evidence}}}
+    lines = hooks.habit_lines(done)
+    assert "ask the person" in lines[0]
+    assert lines[1].strip() == f"cauce habits install {hid} --command 'deno test -A \"$CAUCE_EDITED\"'"
+    assert len(lines) == 2  # an id it was not asked about is no verdict
+    skipped = {**done, "finished_data": {"verdict": {"criteria": [
+        {"evidence": f"skip {hid}: the session's routine; 40 s"}]}}}
+    assert hooks.habit_lines(skipped) == [f"  habits review: nothing worth a hook (1 skipped): skip {hid}: "
+                                          "the session's routine; 40 s"]
+    cut = {**done, "finished_data": {"verdict": {"criteria": [
+        {"evidence": f"install {hid}: `case \"$CAUCE_EDITED\" in *_test.ts) t=1;; esac; if [ -n"}]}}}
+    assert "its command was cut" in hooks.habit_lines(cut)[0]  # never an install line half a command long
+    decimal = habits.review_verdicts([f"skip {hid}: every task runs the whole repo, check 22.3s"], [hid])[1]
+    assert decimal == {hid: "every task runs the whole repo, check 22.3s"}
+    silent = {**done, "result": "", "finished_data": {}}
+    assert hooks.habit_lines(silent)[1].strip() == f"not answered: {hid} (`cauce habits` lists them)"
+    assert hooks.habit_lines({**task, "status": "done", "options": "{}"}) == []
+
+
+def test_a_habit_command_reads_the_edited_file(store: Store, tmp_path):
+    out = tmp_path / "seen"
+    candidate = habits.Candidate(("edit:.py", "bash:pytest"), 3, 2, 1.0, 1, 6.0)
+    hid, _ = habits.install(store, candidate, command=f'echo "$CAUCE_EDITED" > {out}', repo_dir=tmp_path)
+    assert habits.run_habit(store, hid, {"tool_input": {"file_path": "/r/a.py"}, "cwd": str(tmp_path)}) is None
+    assert out.read_text().strip() == "/r/a.py"
+
+
+def test_a_worker_never_installs_or_queues_a_habit_review():
+    import argparse
+
+    from cauce import cli
+
+    for sub in ("install", "review"):
+        assert cli._starts_work(argparse.Namespace(command="habits", habits_command=sub))
+    assert not cli._starts_work(argparse.Namespace(command="habits", habits_command="list"))

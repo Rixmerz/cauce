@@ -42,7 +42,8 @@ A candidate is worth installing here only when all of these hold:
 - **It is fast and touches nothing.** It runs after every edit and the
   session waits for it (110 seconds at most). A type check, a linter, a
   formatter, or the tests of what changed (`--onlyChanged`,
-  `--findRelatedTests`) are; the whole suite, a build, an install, a deploy,
+  `--findRelatedTests`) are, and the edited file's path is in `$CAUCE_EDITED`
+  for a command scoped to it (`ruff check "$CAUCE_EDITED"`); the whole suite, a build, an install, a deploy,
   anything that writes outside the working tree or talks to the network are
   not. A formatter rewrites the file the session just edited: say so.
 - **It is not here already.** The same command on the same file type in

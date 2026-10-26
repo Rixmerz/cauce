@@ -39,6 +39,7 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("CAUCE_LEAN", "off")
     # A role's revision is a Haiku call and a trial: a test that wants them turns them on with a fake `ask`.
     monkeypatch.setenv("CAUCE_ROLE_TRIALS", "off")
+    monkeypatch.setenv("CAUCE_HABIT_REVIEW", "off")
     monkeypatch.setenv("CAUCE_ENGRAM", "off")
     monkeypatch.setenv("CAUCE_ENGRAM_WRITE", "off")
     monkeypatch.delenv("CAUCE_SESSION_ID", raising=False)

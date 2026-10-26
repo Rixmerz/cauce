@@ -6,6 +6,15 @@
 
 ### Fixed
 
+- **Habits offer far fewer false positives.** Over five repositories, 19 habits were offered and
+  about one in four was worth a hook. The same habit was offered twice, once as a write and once
+  as an edit, though one hook takes both. A linter was offered after any Markdown edit, and
+  Python checks were offered to Deno projects. Temporary folders and the home directory counted
+  as repositories, and every worker one session sent counted as one place. Now a write is an
+  edit. A command must check the edit's file type. A habit of other repositories is offered
+  only to a checkout that has its tool (the UI included). Each worker's task is its own place.
+  On the same five repositories, 13 habits are offered, each one's tool in its checkout.
+
 - **Work queued while the last dispatcher was leaving no longer waits for the next hook.** A
   step queued by a run that had just ended kicked its lane while that lane's dispatcher, which
   had read the queue before the step was there, still held its lock. The kick was dropped, and
@@ -62,6 +71,14 @@
   declared their surfaces is still reviewed by those areas.
 
 ### Added
+
+- **New habits are reviewed by a worker, and installed on the person's yes.** A habit newly
+  found in a project goes, once, to a read-only worker queued at SessionStart (at most once a
+  day per repository, the `habit_review` setting, with `autowork`). The worker checks the tool
+  is there, finds a command scoped to the edited file, and runs and times it. Its ending gives
+  the session one `cauce habits install … --command '…'` line per habit worth it, and a reason
+  for each skip. The session asks the person and runs the line only on their yes. A habit's
+  command now reads the edited file from `$CAUCE_EDITED`.
 
 - **`cauce stats` says what each blind review added beside another**: for each workflow step
   that reviewed beside another, its cell, the rows it put on the ledger, the rows no other

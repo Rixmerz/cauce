@@ -596,7 +596,11 @@ def habit_view(store: Store, repo_key: str | None = None, days: int = 30) -> dic
 
     habits.load_events(store)
     events = store.tool_events(days=days)
-    here, elsewhere = habits.for_repo(events, repo_key) if repo_key else (habits.candidates(events), [])
+    if repo_key:
+        cwd = next((p["cwd"] for p in store.projects() if p["repo"] == repo_key), None)
+        here, elsewhere = habits.for_repo(events, repo_key, habits.checkout_of(cwd))
+    else:
+        here, elsewhere = habits.candidates(events), []
     installed = [{**h, "steps": json.loads(h["steps"])} for h in store.habits()]
     if repo_key:
         installed = [h for h in installed if repo_mod.key(Path(h["settings_path"]).parent.parent) == repo_key]

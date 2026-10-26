@@ -400,6 +400,26 @@ def _scribe(event: Mapping[str, Any], root: Path, env: Mapping[str, str]) -> Non
         note_error(root, "Stop (scribe)")
 
 
+def _review_habits(store: Store, root: Path, env: Mapping[str, str], session_id: str, cwd: str,
+                   key: str) -> None:
+    """A project's new habits go to a read-only worker once (`habits.queue_review`), mined at
+    most once a day per repository; its ending brings the session the install lines. Its
+    failure is noted, and never costs the session its start."""
+    if not (config.enabled("habit_review", env) and config.enabled("autowork", env)):
+        return
+    try:
+        from cauce import dispatch, habits
+
+        today = datetime.now(UTC).date().isoformat()
+        if store.meta(f"habits.mined:{key}") == today:
+            return
+        store.set_meta(f"habits.mined:{key}", today)
+        habits.queue_review(store, repo=key, cwd=cwd, session_id=session_id,
+                            kick=lambda d, k: dispatch.start(Path(d), root, k) or dispatch.held(root, k))
+    except Exception:  # the session starts as it would have
+        note_error(root, "SessionStart (habits)")
+
+
 def _revive(store: Store, root: Path, env: Mapping[str, str]) -> None:
     """A worker that died is noticed and resumed (`dispatch.recover`), and a lane with queued
     work and no dispatcher (one died on a full disk, or was killed) gets one again
@@ -627,6 +647,8 @@ def session_start(
     # checkout, and a session opened anywhere else is none of cauce's business.
     if cwd and repo.toplevel(Path(cwd)) is not None and project.find(cwd) is not None:
         blocks += _freshen(Path(cwd), root, env, adapters)
+        if key:
+            _review_habits(store, root, {**os.environ, **env}, str(session_id), str(cwd), key)
     if key:
         from cauce import cells
 
@@ -721,6 +743,35 @@ def _endings(store: Store, session_id: str, *, via: str, mark: bool = True) -> s
     return f"{told}\n\n{loop_text}" if told else loop_text
 
 
+def habit_lines(task: Mapping[str, Any]) -> list[str]:
+    """A habits review's verdicts (`habits.queue_review`), read from its criteria's evidence and
+    its summary: the install lines, built by cauce with the command quoted, go to the person,
+    never run unasked."""
+    from cauce import habits
+
+    try:
+        reviewed = json.loads(task.get("options") or "{}").get("habit_review")
+    except (TypeError, ValueError):
+        return []
+    if not reviewed or task.get("status") != "done":
+        return []
+    data = task.get("finished_data") or {}
+    if isinstance(data, str):
+        data = json.loads(data or "{}")
+    texts = [str(c.get("evidence") or "") for c in (data.get("verdict") or {}).get("criteria") or ()]
+    installs, skips = habits.review_verdicts([*texts, str(task.get("result") or "")], reviewed)
+    skipped = [f"skip {cid}: {why}" for cid, why in skips.items()]
+    unanswered = [cid for cid in reviewed if cid not in installs and cid not in skips]
+    tail = [f"    not answered: {', '.join(unanswered)} (`cauce habits` lists them)"] if unanswered else []
+    if not installs:
+        return [f"  habits review: nothing worth a hook ({len(skips)} skipped)"
+                + (": " + "; ".join(skipped) if skipped else ""), *tail]
+    return ["  habits review: ask the person whether to install each (it writes this repository's "
+            ".claude/settings.local.json); on a yes run its line:",
+            *(f"    cauce habits install {cid} --command {shlex.quote(cmd)}" for cid, cmd in installs.items()),
+            *(f"    {line}" for line in skipped), *tail]
+
+
 def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple[str | None, list[int]]:
     """The notice of what ended since the session last heard, and the tasks it
     covers. With `claim`, they are marked delivered by that route as they are
@@ -755,6 +806,7 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
         lines += _behind(store, t)
         lines += _found_before(store, t)
         lines += _overlaps(store, t)
+        lines += habit_lines(t)
         if t["status"] == "done" and grouped:
             branch = data.get("branch")
             lines.append(f"  passed at {data.get('final_cell') or t['final_cell']}"

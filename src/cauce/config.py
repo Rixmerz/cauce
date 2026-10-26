@@ -68,6 +68,10 @@ DEFAULTS: dict[str, Any] = {
     # them from what the role's workers met there, its tasks alternate with and without them,
     # and they are kept only where they won (`cauce.revisions`). Off: the role's own text alone.
     "role_trials": True,
+    # A habit newly found in a project is reviewed by a read-only worker (its tool here, a
+    # command scoped to the edited file, timed): its ending lists the install line for the
+    # orchestrator to put to the person. Installing stays theirs (`cauce habits install`).
+    "habit_review": True,
     # engram (the team's memory, when its server runs): searched into the brief,
     # and handed to workers read-only. See `cauce.adapters.engram`.
     "engram": True,

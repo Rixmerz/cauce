@@ -36,7 +36,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `trunk`, `overlap`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `trunk`, `overlap`, `habit_review`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets, and the jobs a person quieted per repository |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -732,10 +732,20 @@ yields the default kind, not a guess.
   as it was.
 - Habits are per project: mined from one repository's events and gated on
   them alone; a habit of other repositories is offered apart, never counted as
-  this one's. An event's repository is read from its task or session, never
-  written by the PostToolUse fast path.
+  this one's, and only to a checkout that has its tool (`habits.has_tool`). An
+  event's repository is read from its task or session, never written by the
+  PostToolUse fast path. A write is an edit (one hook matcher takes both), a
+  worker's task is a place of its own, the home directory and temporary folders
+  are no repository (`habits._project`), and a command that does not check the
+  edit's file type is no habit (`habits.ECOSYSTEMS`).
 - Nothing in cauce writes to a settings file except `cauce habits install`,
-  run by a person.
+  run by a person. A project's new habits are reviewed once each by a read-only
+  worker, queued at SessionStart at most once a day (`habits.queue_review`,
+  the `habit_review` setting, with `autowork`): it finds the tool, a command
+  scoped to the edited file (`$CAUCE_EDITED`), runs and times it; its ending
+  gives the install lines for reviewed ids only (`hooks.habit_lines`), which the
+  orchestrator puts to the person and runs only on their yes. Tests run with
+  `CAUCE_HABIT_REVIEW=off`.
 - A check whose failures are mostly the test runners' own timeout lines
   (`launch.check_timed_out`) after a claimed pass is `environment` with
   `load`: the level halves on it, the same cell goes again after each of
