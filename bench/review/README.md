@@ -109,3 +109,20 @@ corrects the fix in its own task.
 The caveat: one family of small changes, three runs per arm. The bugs were findable by one strong
 reader. On a change where they are not, a second blind reader may pay, and the stats line above
 is how that would show.
+
+## A large change reviewed whole, or by area (`areas.py`)
+
+The `volume` change was reviewed by cauce's own area split, `workflows._areas` and
+`_area_brief`: four blind opus/high reviews side by side, one per top-level folder (`top`,
+`docs`, `src`, `tests`), with their findings added up. It is compared with one blind review of
+the whole change. Three runs per arm.
+
+| Arm | Caught | Wall (slowest area) | Cost | Rows that were no planted bug |
+|---|---|---|---|---|
+| one review | 40/42 | 122 s | $0.64 | 8 |
+| four area reviews | 40/42 | 142 s | $1.84 | 32 |
+
+Splitting by folder bought nothing. `src` held almost every changed line, so its review took as
+long as a whole one, and the other three added cost and rows for the refuter and the fix. From
+0.45 a change with no parts is reviewed whole. One whose parts declared their surfaces (a
+`feature-parallel` run) is still reviewed by those areas, a split that was not measured here.

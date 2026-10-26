@@ -957,9 +957,11 @@ def _ordered(store: Store, run: Mapping[str, Any], part: Mapping[str, Any], queu
 def _areas(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Mapping[str, Any],
            latest: Mapping[str, dict], options: Mapping[str, Any]) -> list[dict[str, Any]] | None:
     """The areas a blind review of a large change reads apart, side by side: the surfaces
-    the parts before it declared (`rest` for what none of them holds), else the change's
-    top-level folders (`top` for the files at the top). None for a review that runs
-    whole: no change to read, one area, or at most `AREA_REVIEW_LINES` changed lines."""
+    the parts before it declared (`rest` for what none of them holds). None for a review that
+    runs whole: no change to read, no parts that declared surfaces, one area, or at most
+    `AREA_REVIEW_LINES` changed lines. A change with no parts is reviewed whole: split by its
+    top-level folders it found the same bugs slower, at three times the cost, with four times
+    the rows to refute (`bench/review/areas.py`)."""
     if not str(step.get("kind") or "").startswith("review") or step.get("ledger") or not options.get("origin"):
         return None
     base = _base(store, run, defn, step["id"], latest)
@@ -973,17 +975,15 @@ def _areas(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: 
     declared = {(_part(t) or {}).get("id"): list(json.loads(t.get("options") or "{}").get("surfaces") or ())
                 for s in defn["steps"] if s.get("fanout") and s["id"] in _before(defn, step["id"])
                 for t in _tasks_of(latest.get(s["id"])) if _part(t)}
+    if not any(declared.values()):
+        return None
     groups: dict[str, dict[str, Any]] = {}
     for _, path in changed:
         pid = next((pid for pid, bound in declared.items() if pid and bound and surfaces.allows(bound, path)), None)
         if pid is not None:
             spec = [f":(glob){x}" if any(c in x for c in "*?[") else x for x in declared[pid]]
-        elif declared:
-            pid, spec = "rest", None
-        elif "/" in path:
-            pid, spec = path.split("/", 1)[0], [path.split("/", 1)[0] + "/"]
         else:
-            pid, spec = "top", None
+            pid, spec = "rest", None
         area = groups.setdefault(pid, {"id": pid, "paths": [], "spec": spec})
         area["paths"].append(path)
     if len(groups) < 2:

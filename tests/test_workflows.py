@@ -1327,7 +1327,7 @@ def test_what_no_part_declared_is_reviewed_as_its_own_area(git_repo, store: Stor
     assert workflows.status(store, started["id"])["state"] == "done"
 
 
-def test_a_large_change_with_no_parts_is_reviewed_by_top_level_folder(git_repo, store: Store, kicks, monkeypatch):
+def test_a_large_change_with_no_parts_is_reviewed_whole(git_repo, store: Store, kicks, monkeypatch):
     monkeypatch.setattr(workflows, "AREA_REVIEW_LINES", 1)
     _save({"name": "wide", "inputs": ["goal"], "steps": [
         {"id": "build", "prompt": "Build {goal}", "kind": "implement"},
@@ -1348,9 +1348,9 @@ def test_a_large_change_with_no_parts_is_reviewed_by_top_level_folder(git_repo, 
     started = workflows.start(store, "wide", git_repo, {"goal": "the export"})
     flow.work(store, runner=runner)
     reviews = [t for t in store.run_tasks(started["id"]) if t["workflow_step"] == "review"]
-    assert [json.loads(t["options"])["part"]["id"] for t in reviews] == ["top", "docs", "src"]
-    assert "-- docs/`" in reviews[1]["body"] and "-- README.txt`" in reviews[0]["body"]
-    # Below the threshold it is one review, as today.
+    # Split by top-level folder it found no more, slower and dearer (bench/review/areas.py): one review.
+    assert len(reviews) == 1 and "part" not in json.loads(reviews[0]["options"])
+    # Below the threshold it is one review too.
     monkeypatch.setattr(workflows, "AREA_REVIEW_LINES", 600)
     again = workflows.start(store, "wide", git_repo, {"goal": "the import"})
     flow.work(store, runner=runner)

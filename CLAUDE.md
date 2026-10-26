@@ -1066,8 +1066,9 @@ yields the default kind, not a guess.
   branch, and the parts keep one each, so a definition where another step
   waits on it directly is refused.
 - A blind review of a change over `workflows.AREA_REVIEW_LINES` changed lines
-  that touches two or more areas (the surfaces the parts declared, else the
-  top-level folders) runs as one blind review per area, side by side, each
+  that touches two or more areas (the surfaces the parts declared; a change with no
+  parts is reviewed whole, since split by its top-level folders it found the same
+  bugs slower and dearer, `bench/review/areas.py`) runs as one blind review per area, side by side, each
   given the whole request, its area's diff and the names of the other files
   changed. Their findings add up in the one ledger; refute, fix and recheck
   run once on it. Below the threshold it is one review. Generated files (marked

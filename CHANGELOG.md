@@ -53,6 +53,14 @@
   and 510 s at the median. sonnet/high, at 59 s, drew four other parts; whether they build as well
   was not measured, so it is not the start.
 
+- **A large change with no parts is reviewed whole, not split by its top-level folders.** On
+  `bench/review`'s 1,221-line change, `bench/review/areas.py` ran three blind reviews per arm. Four
+  area reviews side by side (`top`, `docs`, `src`, `tests`) caught the same 40 of 42 planted bugs
+  as one review, but slower (142 s against 122 s at the median, since `src` held almost every
+  change) and at three times the cost ($1.84 against $0.64). They also left four times the rows
+  that were no planted bug (32 against 8) for the refuter and the fix. A change whose parts
+  declared their surfaces is still reviewed by those areas.
+
 ### Added
 
 - **`cauce stats` says what each blind review added beside another**: for each workflow step
