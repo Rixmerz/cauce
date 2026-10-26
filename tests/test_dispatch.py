@@ -328,6 +328,37 @@ def test_a_detached_dispatcher_at_its_limit_hands_queued_work_to_a_fresh_one(git
     assert handed == [str(git_repo.resolve())] and "a fresh dispatcher takes the rest" in capsys.readouterr().out
 
 
+def test_work_queued_while_the_dispatcher_was_leaving_gets_a_fresh_one(git_repo, monkeypatch, capsys):
+    """A step queued by a run that just ended kicks the lane while its last dispatcher, which read
+    the queue before that step was there, still holds the lock: the kick is never lost."""
+    import time
+
+    from cauce.flow import WorkReport
+    from cauce.store import home
+
+    key = str(git_repo.resolve())
+    started = []
+    with dispatch.hold(home(), key):
+        assert dispatch.start(git_repo, home(), key, popen=lambda *a, **kw: started.append(a)) is False
+    assert started == [] and dispatch.woken(home(), key, time.time() - 5)
+
+    def leaving(store, **kw):
+        report = WorkReport([], "nothing runnable is queued", looked_at=time.time())
+        dispatch.wake(home(), key)  # the step queued after its last look, before its lock was let go
+        return report
+
+    handed = []
+    monkeypatch.setattr(cli.flow, "work", leaving)
+    monkeypatch.setattr(dispatch, "start_lane", lambda store, root, k: handed.append(k) or True)
+    assert cli.main(["work", "--repo", str(git_repo)]) == 0
+    assert handed == [key] and "takes what was queued as this one left" in capsys.readouterr().out
+    # Word left before its last look was seen by that look: no second dispatcher.
+    handed.clear()
+    monkeypatch.setattr(cli.flow, "work", lambda store, **kw: WorkReport([], "nothing", looked_at=time.time() + 1))
+    assert cli.main(["work", "--repo", str(git_repo)]) == 0
+    assert handed == []
+
+
 def test_a_run_or_queue_typed_in_a_session_is_that_session_s(git_repo, monkeypatch, capsys):
     monkeypatch.setenv("CAUCE_SESSION_ID", "sess-1")
     assert cli.main(["queue", "add", "write the docs", "--repo", str(git_repo), "--json"]) == 0

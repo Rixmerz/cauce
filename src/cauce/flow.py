@@ -222,6 +222,9 @@ class WorkReport:
     # It stopped on `max_tasks` with work still queued in its lane: a detached
     # dispatcher hands that work to a fresh one (`cli.cmd_work`), never leaves it.
     at_limit: bool = False
+    #: When it last read its queue: work queued after this, while its lock was still held, went
+    #: unseen, and `cli.cmd_work` starts a fresh dispatcher for it once the lock is let go.
+    looked_at: float = 0.0
 
     def text(self) -> str:
         lines = [f"task #{r.task_id}: {r.status}" for r in self.ran]
@@ -664,6 +667,7 @@ def work(
             launched: list[tuple[dict, Path]] = []
             if started < max_tasks:
                 with capacity.held(home()):
+                    report.looked_at = time.time()
                     level = capacity.settle(store, home(), machine=machine(), ceiling=ceiling, wanting=wanting)
                     picked, shares = pick(store, repo, parallel=parallel, decide=decide, level=level.value)
                     wanting = capacity.full(level.value, shares)

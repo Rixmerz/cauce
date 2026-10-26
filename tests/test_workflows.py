@@ -1327,7 +1327,7 @@ def test_what_no_part_declared_is_reviewed_as_its_own_area(git_repo, store: Stor
     assert workflows.status(store, started["id"])["state"] == "done"
 
 
-def test_a_large_change_with_no_parts_is_reviewed_by_top_level_folder(git_repo, store: Store, kicks, monkeypatch):
+def test_a_large_change_with_no_parts_is_reviewed_whole(git_repo, store: Store, kicks, monkeypatch):
     monkeypatch.setattr(workflows, "AREA_REVIEW_LINES", 1)
     _save({"name": "wide", "inputs": ["goal"], "steps": [
         {"id": "build", "prompt": "Build {goal}", "kind": "implement"},
@@ -1348,9 +1348,9 @@ def test_a_large_change_with_no_parts_is_reviewed_by_top_level_folder(git_repo, 
     started = workflows.start(store, "wide", git_repo, {"goal": "the export"})
     flow.work(store, runner=runner)
     reviews = [t for t in store.run_tasks(started["id"]) if t["workflow_step"] == "review"]
-    assert [json.loads(t["options"])["part"]["id"] for t in reviews] == ["top", "docs", "src"]
-    assert "-- docs/`" in reviews[1]["body"] and "-- README.txt`" in reviews[0]["body"]
-    # Below the threshold it is one review, as today.
+    # Split by top-level folder it found no more, slower and dearer (bench/review/areas.py): one review.
+    assert len(reviews) == 1 and "part" not in json.loads(reviews[0]["options"])
+    # Below the threshold it is one review too.
     monkeypatch.setattr(workflows, "AREA_REVIEW_LINES", 600)
     again = workflows.start(store, "wide", git_repo, {"goal": "the import"})
     flow.work(store, runner=runner)
@@ -1598,3 +1598,99 @@ def test_a_goal_that_is_several_features_is_told_before_it_runs():
     assert said and "lists 7 items" in said and "--after run:<N>" in said
     assert workflows.many_features("Build the orders view:\n- it lists orders\n- it pages by 50") is None
     assert workflows.many_features("- a\n- b\n- c\n- d\n- e\n- f\n- g") is None  # many items, small: no advice
+
+
+def test_what_each_blind_review_added_beside_the_other_is_measured(git_repo, store: Store, kicks):
+    shown = {"where": "app.py:3", "what": "the total skips the last line", "evidence_class": "deterministic",
+             "cause": "introduced", "proof": "python3 -c 'print(total([1, 2]))' prints 1"}
+    read = {"where": "app.py:9", "what": "a negative quantity is accepted", "evidence_class": "inferential",
+            "cause": "introduced"}
+    results = [WorkerResult(True, None, "two problems", "read it", findings=(shown, read)),
+               WorkerResult(True, None, "one problem", "read it", findings=(shown,)),
+               WorkerResult(True, None, "decided", "showed it",
+                            verdicts=({"id": "F2", "verdict": "confirmed", "proof": "total([-1]) is -1"},)),
+               ok("fixed both"),
+               WorkerResult(True, None, "checked", "both fixed",
+                            verdicts=({"id": "F1", "verdict": "fixed", "proof": "p"},
+                                      {"id": "F2", "verdict": "fixed", "proof": "p"}))]
+    seen: list[dict] = []
+    workflows.start(store, "dual-review", git_repo, {"target": "the branch"})
+    flow.work(store, runner=_runner(results, seen))
+    rows = {r["step"]: r for r in workflows.reviewer_yield(store)}
+    assert {k: (r["runs"], r["rows"], r["alone"], r["alone_kept"]) for k, r in rows.items()} == {
+        "review-a": (1, 2, 1, 1), "review-b": (1, 1, 0, 0)}
+    from cauce import analysis
+    said = analysis.text(analysis.compute(store, days=0))
+    assert "blind reviews beside another" in said and "review-b" in said
+
+
+def test_a_re_check_the_fix_s_own_check_already_answered_runs_no_worker(git_repo, store: Store, kicks, monkeypatch):
+    from cauce import orchestrate
+
+    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setattr(orchestrate.risk_mod, "needs_verifier", lambda risk, cheap=False: True)
+    found = ({"where": "src/chart.py:3", "what": "the total skips the last line", "evidence_class": "deterministic",
+              "cause": "introduced", "proof": "python3 -c 'print(total([1, 2]))' prints 1"},)
+    asked: list[str] = []
+
+    def launch(spec):
+        asked.append(spec.prompt)
+        if "Check this change" in spec.prompt:  # the fix's independent check
+            assert "Answer every one in `verdicts`" in spec.prompt and spec.verdicts == ("F1",)
+            return WorkerResult(True, None, "checked", "shown", verdicts=(
+                {"id": "F1", "verdict": "fixed", "proof": "total([1, 2]) is 3"},))
+        if "Edit" not in spec.disallowed_tools:
+            (spec.target_dir / "src").mkdir(exist_ok=True)
+            (spec.target_dir / "src" / "chart.py").write_text(f"x = {len(asked)}\n")
+            return ok("built" if len(asked) == 1 else "fixed it")
+        return WorkerResult(True, None, "one problem", "read it", findings=found)
+
+    def runner(text, where, store, options, **kw):
+        return run(text, where, store, options, registry={}, launcher=launch, classifier=kind("implement"),
+                   adapters=[], **kw)
+
+    started = workflows.start(store, "feature", git_repo, {"goal": "the chart"})
+    flow.work(store, runner=runner)
+    assert workflows.status(store, started["id"])["state"] == "done"
+    assert not [p for p in asked if "Ledger (recheck" in p]  # build, review, fix, its check: four workers
+    assert len(asked) == 4
+    recheck = next(t for t in store.run_tasks(started["id"]) if t["workflow_step"] == "recheck")
+    assert "no second reading" in recheck["result"]
+    assert store.last_event(recheck["id"], "ledger_decided")["data"]["by"] == "verifier"
+    # A fix whose check left a row open is re-checked by a worker, as before.
+    assert workflows.reviewer_yield(store) == []
+
+
+def test_a_row_the_fix_s_check_finds_open_earns_the_fix_a_correction(git_repo, store: Store, kicks, monkeypatch):
+    from cauce import orchestrate
+
+    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setattr(orchestrate.risk_mod, "needs_verifier", lambda risk, cheap=False: True)
+    found = ({"where": "src/chart.py:3", "what": "the total skips the last line", "evidence_class": "deterministic",
+              "cause": "introduced", "proof": "python3 -c 'print(total([1, 2]))' prints 1"},)
+    answers = iter(["not_fixed", "fixed"])
+    asked: list[str] = []
+
+    def launch(spec):
+        asked.append(spec.prompt)
+        if "Check this change" in spec.prompt:
+            said = next(answers)
+            return WorkerResult(True, None, "checked", "shown", verdicts=(
+                {"id": "F1", "verdict": said, "proof": "total([1, 2]) is 1" if said != "fixed" else "it is 3"},))
+        if "Edit" not in spec.disallowed_tools:
+            (spec.target_dir / "src").mkdir(exist_ok=True)
+            (spec.target_dir / "src" / "chart.py").write_text(f"x = {len(asked)}\n")
+            return ok("did it")
+        return WorkerResult(True, None, "one problem", "read it", findings=found)
+
+    def runner(text, where, store, options, **kw):
+        return run(text, where, store, options, registry={}, launcher=launch, classifier=kind("implement"),
+                   adapters=[], **kw)
+
+    started = workflows.start(store, "feature", git_repo, {"goal": "the chart"})
+    flow.work(store, runner=runner)
+    assert workflows.status(store, started["id"])["state"] == "done"
+    fix = next(t for t in store.run_tasks(started["id"]) if t["workflow_step"] == "fix")
+    checks = [e["data"] for e in store.events_of(fix["id"], "verified")]
+    assert [c["passed"] for c in checks] == [False, True] and "F1 is not fixed" in checks[0]["blockers"][0]["what"]
+    assert not [p for p in asked if "Ledger (recheck" in p]

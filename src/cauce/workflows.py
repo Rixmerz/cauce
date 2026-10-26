@@ -705,7 +705,7 @@ def _kick(cwd: str, key: str | None) -> bool:
     """Start the repository's dispatcher unless one runs. A workflow run is the
     person asking for its work, so this does not wait for the `autowork` setting."""
     root = home()
-    return dispatch.held(root, key or "*") or dispatch.start(Path(cwd), root, key or "*")
+    return dispatch.start(Path(cwd), root, key or "*") or dispatch.held(root, key or "*")
 
 
 def example(defn: Mapping[str, Any]) -> str:
@@ -957,9 +957,11 @@ def _ordered(store: Store, run: Mapping[str, Any], part: Mapping[str, Any], queu
 def _areas(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Mapping[str, Any],
            latest: Mapping[str, dict], options: Mapping[str, Any]) -> list[dict[str, Any]] | None:
     """The areas a blind review of a large change reads apart, side by side: the surfaces
-    the parts before it declared (`rest` for what none of them holds), else the change's
-    top-level folders (`top` for the files at the top). None for a review that runs
-    whole: no change to read, one area, or at most `AREA_REVIEW_LINES` changed lines."""
+    the parts before it declared (`rest` for what none of them holds). None for a review that
+    runs whole: no change to read, no parts that declared surfaces, one area, or at most
+    `AREA_REVIEW_LINES` changed lines. A change with no parts is reviewed whole: split by its
+    top-level folders it found the same bugs slower, at three times the cost, with four times
+    the rows to refute (`bench/review/areas.py`)."""
     if not str(step.get("kind") or "").startswith("review") or step.get("ledger") or not options.get("origin"):
         return None
     base = _base(store, run, defn, step["id"], latest)
@@ -973,17 +975,15 @@ def _areas(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: 
     declared = {(_part(t) or {}).get("id"): list(json.loads(t.get("options") or "{}").get("surfaces") or ())
                 for s in defn["steps"] if s.get("fanout") and s["id"] in _before(defn, step["id"])
                 for t in _tasks_of(latest.get(s["id"])) if _part(t)}
+    if not any(declared.values()):
+        return None
     groups: dict[str, dict[str, Any]] = {}
     for _, path in changed:
         pid = next((pid for pid, bound in declared.items() if pid and bound and surfaces.allows(bound, path)), None)
         if pid is not None:
             spec = [f":(glob){x}" if any(c in x for c in "*?[") else x for x in declared[pid]]
-        elif declared:
-            pid, spec = "rest", None
-        elif "/" in path:
-            pid, spec = path.split("/", 1)[0], [path.split("/", 1)[0] + "/"]
         else:
-            pid, spec = "top", None
+            pid, spec = "rest", None
         area = groups.setdefault(pid, {"id": pid, "paths": [], "spec": spec})
         area["paths"].append(path)
     if len(groups) < 2:
@@ -1216,7 +1216,8 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         # A run queued after other work: its steps wait for that work to pass, as it does; a
         # part that builds on another part waits for that one.
         after.KEY: (part or {}).get("hold") or options.get(after.KEY)}.items() if v is not None}
-    empty = (held is not None and not held["ids"]) or (joining is not None and not joins)
+    empty = (held is not None and (not held["ids"] or bool(held.get("answered")))) or \
+        (joining is not None and not joins)
     task = store.create_task(body, status="done" if empty else "queued", source="queue", author="workflow",
                              repo=run["repo"], cwd=run["cwd"], session_id=run["session_id"],
                              options=json.dumps(opts),
@@ -1229,8 +1230,14 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         if held is not None:
             nothing = {"refute": "no finding needed a refuter", "fix": "no confirmed finding to fix",
                        "recheck": "no fix to check"}[held["role"]]
-            decided = {"ledger": ledger.Outcome(held["role"], held["round"], confirmed=list(held.get("agreed") or ()),
-                                                held=list(held.get("held") or ())).data()}
+            outcome = ledger.Outcome(held["role"], held["round"], confirmed=list(held.get("agreed") or ()),
+                                     held=list(held.get("held") or ()))
+            if held.get("answered"):
+                nothing = (f"the fix's independent check showed {', '.join(held['ids'])} fixed in the same diff: "
+                           "no second reading")
+                outcome = ledger.outcome(held, held["answered"])
+                store.add_event(task["id"], "ledger_decided", seq=0, by="verifier", **outcome.data())
+            decided = {"ledger": outcome.data()}
         else:
             assert joining is not None
             nothing = ("one part kept a branch: nothing to join, and what follows starts from it"
@@ -1317,6 +1324,40 @@ def _findings_of(store: Store, task: Mapping[str, Any] | None) -> list[dict]:
     return out
 
 
+def reviewer_yield(store: Store, repo: str | None = None, *, limit: int = 200) -> list[dict[str, Any]]:
+    """What each blind review of a ledger with two reviews or more added, over the last
+    `limit` runs (one repository's, or every one): the rows it put on the ledger, the ones no
+    other review saw, and of those the ones the refuter or a proof kept. A review whose rows
+    another always saw too costs its run and adds nothing: `cauce stats` says so, it changes no
+    definition. Read only."""
+    out: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for run in store.list_runs(repos=None if repo is None else {repo}, limit=limit):
+        defn = _definition(run)
+        latest = _latest(store, run["id"])
+        by_id = {s["id"]: s for s in defn["steps"]}
+        for step in defn["steps"]:
+            decided = _decided(store, latest.get(step["id"])) if step.get("ledger") == "refute" else {}
+            if not decided:
+                continue
+            sources = [sid for sid in _before(defn, step["id"]) if not by_id[sid].get("ledger")
+                       and by_id[sid].get("kind") in READ_ONLY_KINDS and latest.get(sid)]
+            if len(sources) < 2:
+                continue
+            rows = ledger.collect([(sid, _findings_of(store, latest[sid])) for sid in sources])
+            kept = set(decided.get("confirmed") or ())
+            for sid in sources:
+                key = (defn["name"], sid, str(latest[sid].get("final_cell") or "?"))
+                row = out.setdefault(key, {"workflow": key[0], "step": sid, "cell": key[2], "runs": 0, "rows": 0,
+                                           "alone": 0, "alone_kept": 0})
+                mine = [r for r in rows if sid in r["seen_by"]]
+                alone = [r for r in mine if r["seen_by"] == [sid]]
+                row["runs"] += 1
+                row["rows"] += len(mine)
+                row["alone"] += len(alone)
+                row["alone_kept"] += sum(1 for r in alone if r["id"] in kept)
+    return sorted(out.values(), key=lambda r: (r["workflow"], r["step"], r["cell"]))
+
+
 def _decided(store: Store, task: Mapping[str, Any] | None) -> dict:
     finished = store.final_event(task["id"]) if task and task.get("status") == "done" else None
     return dict((finished or {}).get("data", {}).get("ledger") or {})
@@ -1383,6 +1424,13 @@ def _ledger(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step:
         spec["base"] = _base(store, run, defn, step["id"], latest) or options.get("origin")
     if noted_only:
         spec["noted_only"] = noted_only
+    if role == "recheck" and mine and not noted_only and fix and fix["status"] == "done":
+        # The fix's own independent check read the same diff and answered every row fixed: the
+        # re-check would read it again, so it is decided with no worker (`orchestrate.verifier_brief`).
+        checked = (store.last_event(fix["id"], "verified") or {}).get("data") or {}
+        said = {v.get("id"): v.get("verdict") for v in checked.get("verdicts") or ()}
+        if checked.get("passed") and all(said.get(r["id"]) == "fixed" for r in mine):
+            spec["answered"] = [v for v in checked["verdicts"] if v.get("id") in spec["ids"]]
     spec["brief"] = ledger.brief(role, mine, round_=round_, sha=sha, diff=diff,
                                  reviewers=max(1, len(reviewers)),
                                  waiting=len(deferred) if role != "recheck" else 0) if mine else \

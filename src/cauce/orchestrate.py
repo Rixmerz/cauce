@@ -1369,7 +1369,11 @@ def run(
             before = isolate.fingerprint(workspace.path) if workspace is not None and options.verify else None
             if baseline is not None and not (raced is not None and raced.checked):
                 baseline.found = None
+            ahead = None
             if result.passed and options.verify and not (raced is not None and raced.checked):
+                ahead = _ahead(result, options=options, verifying=verifying, workspace=workspace, cell=cell,
+                               plan=the_plan, text=text, spec=spec, workdir=workdir, base=base_commit,
+                               ledger=ledger, launcher=launcher, registry=registry)
                 result = _verified(result, options.verify, workdir, baseline)
             elif _settles(result, options.verify) and (
                     isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
@@ -1424,7 +1428,16 @@ def run(
                         base=base_commit, changed=so_far, risk=the_plan.risk, ledger=ledger,
                         corrections=corrections, launcher=launcher, store=store, task_id=task["id"], nth=nth,
                         say=say, outgrew=outgrew, registry=registry,
-                        rules=[n for n in the_plan.notes if n.get("kind") == notes.CONSTRAINT])
+                        rules=[n for n in the_plan.notes if n.get("kind") == notes.CONSTRAINT],
+                        rows=_fixing(options), ahead=_tolerating(ahead, report.check_output))
+                    ahead = None
+            if ahead is not None:
+                # cauce's check failed (or the change needs no check now): what ran beside it is dropped.
+                stopped = ahead.stop()
+                spent = stopped.cost_usd if stopped is not None else 0.0
+                result = dataclasses.replace(result, cost_usd=result.cost_usd + spent)
+                store.add_event(task["id"], "verifier_dropped", seq=nth, cost_usd=round(spent, 4),
+                                ran_s=round(ahead.beside_s, 2), why="cauce's check did not pass")
             verifier_s = time.monotonic() - mark
             timing["worker_s"] += worker_s
             timing["check_s"] += check_s
@@ -2379,7 +2392,7 @@ def kept_evidence(text: str, room: int = 4000) -> str:
 
 def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, changed: Sequence[str],
                    known: Sequence[Mapping[str, str]] = (), why: Sequence[str] = (),
-                   rules: Sequence[Mapping[str, Any]] = ()) -> str:
+                   rules: Sequence[Mapping[str, Any]] = (), rows: Sequence[str] = (), running: str = "") -> str:
     """What the verifier is given: the request in its words, the change, why it is checked
     (the risk's reasons, in the router's words) and the constraints the project keeps —
     never the worker's account."""
@@ -2402,8 +2415,97 @@ def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, change
     if lines := notes.constraint_lines(rules):
         parts.append("\n".join(lines) + "\nA change that breaks one that applies to it is a finding, shown with "
                      "the case that breaks it.")
+    if rows:
+        # A fix of ledger rows: its answers per row decide the re-check after it (`workflows._ledger`).
+        parts.append(f"The request is a fix of the ledger rows {', '.join(rows)}. Answer every one in `verdicts`, "
+                     f"one entry per id, with `verdict` one of {', '.join(ledger_mod.WORDS['recheck'])} and the "
+                     "`proof` that shows it: `fixed` only when you can show it in the change, in the code the row "
+                     "is about; a row only written down (a note, a doc, an instruction file) or answered by "
+                     "changing a test or its data is `not_fixed`; `regression` when the fix broke something at "
+                     "or around it. Report anything else the change broke in `findings`.")
+    if running:
+        # It runs beside cauce's own check (`Ahead`): one run of the suite, not two at once in one directory.
+        parts.append(f"cauce runs the project's check, `{running}`, in this directory now, beside you, and its "
+                     "result decides whether the work passes: do not run it yourself. Probe with narrower "
+                     "commands: one test, one file, a short script.")
     parts.append("This check is read-only: change no file of the project.")
     return "\n\n".join(parts)
+
+
+def _tolerating(ahead: Ahead | None, wrote: Sequence[str]) -> Ahead | None:
+    if ahead is not None:
+        ahead.tolerated = tuple(wrote)
+    return ahead
+
+
+def _fixing(options: Options) -> list[str]:
+    """The ledger rows a fix step's independent check answers (`verifier_brief`'s `rows`)."""
+    held = options.ledger or {}
+    return list(held.get("ids") or ()) if held.get("role") == "fix" else []
+
+
+def _ahead(result: launch.WorkerResult, *, options: Options, verifying: bool,
+           workspace: isolate.Workspace | None, cell: Cell, plan: Plan, text: str, spec: launch.LaunchSpec,
+           workdir: Path, base: str | None, ledger: dict[str, Mapping[str, str]], launcher: Launcher,
+           registry: Mapping[str, caps.Capability] | None) -> Ahead | None:
+    """The independent check, started now beside cauce's check when it will be needed anyway: a
+    passing writing attempt in a worktree, a check to run, a risk that asks for it. Never with
+    services (two runs of their tests would share their ports) or with the `overlap` setting off."""
+    if not (verifying and workspace is not None and options.verify and not options.services
+            and config.enabled("overlap", os.environ)):
+        return None
+    so_far = list(isolate.changed(workspace))
+    risk_mod.of_change(plan.risk, so_far)
+    if not so_far or not risk_mod.needs_verifier(plan.risk, cheap=_cheap(cell)):
+        return None
+    check, _ = _check_spec(text=text, kind=plan.kind, cell=cell, spec=spec, workdir=workdir, base=base,
+                           changed=so_far, risk=plan.risk, ledger=ledger, registry=registry,
+                           rules=[n for n in plan.notes if n.get("kind") == notes.CONSTRAINT],
+                           rows=_fixing(options), running=options.verify)
+    return Ahead(launcher, check, so_far, options.verify)
+
+
+class Ahead:
+    """The independent check started beside cauce's own (the `overlap` setting): it reads the diff the
+    check runs on, so neither waits for the other. A check that fails stops it and its verdict is
+    dropped, as one that never ran; a check that passes waits only for what is left of it."""
+
+    def __init__(self, launcher: Launcher, check: launch.LaunchSpec, changed: Sequence[str], running: str) -> None:
+        self.changed, self.running = tuple(changed), running
+        #: Files cauce's check itself wrote while it ran (a formatter's): no change of the worker's.
+        self.tolerated: tuple[str, ...] = ()
+        self.runner = launch.Stoppable()
+        self.began = time.monotonic()
+        self.ended: float | None = None
+        self._found: launch.WorkerResult | None = None
+        self._error: BaseException | None = None
+        self._thread = threading.Thread(target=self._run, args=(launcher, check), daemon=True)
+        self._thread.start()
+
+    def _run(self, launcher: Launcher, check: launch.LaunchSpec) -> None:
+        try:
+            self._found = _launch(launcher, check, self.runner)
+        except BaseException as exc:  # re-raised where the verdict is read, as a launch's own error is
+            self._error = exc
+        self.ended = time.monotonic()
+
+    @property
+    def beside_s(self) -> float:
+        """How long it ran while cauce's check did, up to now."""
+        return (self.ended or time.monotonic()) - self.began
+
+    def result(self) -> launch.WorkerResult:
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+        assert self._found is not None
+        return self._found
+
+    def stop(self) -> launch.WorkerResult | None:
+        """Stop it (its process group) and wait for it: what it had cost is still kept."""
+        self.runner.stop()
+        self._thread.join()
+        return self._found
 
 
 def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec,
@@ -2411,7 +2513,8 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
                        ledger: dict[str, Mapping[str, str]], corrections: int, launcher: Launcher, store: Store,
                        task_id: int, nth: int, say: Callable[[str], None], outgrew: bool = False,
                        registry: Mapping[str, caps.Capability] | None = None,
-                       rules: Sequence[Mapping[str, Any]] = ()
+                       rules: Sequence[Mapping[str, Any]] = (), rows: Sequence[str] = (),
+                       ahead: Ahead | None = None
                        ) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int,
                                   tuple[dict[str, str], ...]]:
     """A pass checked again by a worker that verifies the request, not the work.
@@ -2425,6 +2528,33 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     leaves the pass standing, and says so. Work whose worker ran out of turns
     before its own check (`outgrew`) failed for room, not for a bug: the next
     attempt gets more turns on the same cell, never a stronger model."""
+    check, vcell = _check_spec(text=text, kind=kind, cell=cell, spec=spec, workdir=workdir, base=base,
+                               changed=changed, risk=risk, ledger=ledger, registry=registry, rules=rules, rows=rows,
+                               running=ahead.running if ahead is not None else "")
+    say(f"cauce: #{task_id} attempt {nth} passed; risk {risk.tier}: an independent check at {vcell.label}"
+        + (" (it ran beside cauce's check)" if ahead is not None else ""))
+    mark = time.monotonic()
+    beside = ahead is not None and set(changed) <= {*ahead.changed, *ahead.tolerated}
+    if beside:
+        assert ahead is not None
+        verdict, overlapped_s = ahead.result(), ahead.beside_s
+        mark = ahead.began
+    else:
+        if ahead is not None:
+            ahead.stop()  # the check changed what it read: read the change as it stands now
+        verdict, overlapped_s = launcher(check), 0.0
+    wall_s = time.monotonic() - mark
+    fixing = tuple(rows)
+    return _judged(result, verdict, vcell=vcell, wall_s=wall_s, overlapped_s=overlapped_s, beside=beside, risk=risk,
+                   ledger=ledger, corrections=corrections, store=store, task_id=task_id, nth=nth, say=say,
+                   outgrew=outgrew, rows=fixing)
+
+
+def _check_spec(*, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec, workdir: Path, base: str | None,
+                changed: Sequence[str], risk: risk_mod.Risk, ledger: Mapping[str, Mapping[str, str]],
+                registry: Mapping[str, caps.Capability] | None, rules: Sequence[Mapping[str, Any]],
+                rows: Sequence[str], running: str = "") -> tuple[launch.LaunchSpec, Cell]:
+    """The independent check's launch: its cell, its brief and the capabilities that measure."""
     role = roles.internal("verifier")
     vcell = verify_cell(cell)
     # It keeps only the capabilities that measure, the work's and any the change touches: what it reports,
@@ -2437,9 +2567,11 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
                           paths=changed, reading=True)
     measuring.update(touched.servers)
     hints = {name: hints[name] for name in measuring}
+    fixing = tuple(rows)
     check = dataclasses.replace(
         spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values()), risk.reasons,
-                                    rules=rules),
+                                    rules=rules, rows=fixing, running=running),
+        verdicts=fixing, verdict_words=ledger_mod.WORDS["recheck"] if fixing else (),
         cell=vcell, max_turns=min(spec.max_turns, VERIFIER_TURNS),
         # Its own session, never the worker's: it reads the request and the diff, not the work's account.
         resume_session="", fork_session=False, resume_note="", persist_session=False,
@@ -2452,13 +2584,25 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
         allowed_tools=tuple(r for r in spec.allowed_tools
                             if not r.startswith("mcp__") or r.removeprefix("mcp__") in measuring)
         + tuple(f"mcp__{name}" for name in touched.servers))
-    say(f"cauce: #{task_id} attempt {nth} passed; risk {risk.tier}: an independent check at {vcell.label}")
-    mark = time.monotonic()
-    verdict = launcher(check)
-    wall_s = time.monotonic() - mark
+    return check, vcell
+
+
+def _judged(result: launch.WorkerResult, verdict: launch.WorkerResult, *, vcell: Cell, wall_s: float,
+            overlapped_s: float, beside: bool, risk: risk_mod.Risk, ledger: dict[str, Mapping[str, str]],
+            corrections: int, store: Store, task_id: int, nth: int, say: Callable[[str], None], outgrew: bool,
+            rows: Sequence[str]) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int,
+                       tuple[dict[str, str], ...]]:
+    """What the independent check's verdict does to the pass: a correction, a stop, or nothing."""
     cost = result.cost_usd + verdict.cost_usd
     shown = findings_mod.read({"findings": list(verdict.findings)})
     blockers = findings_mod.blocking(shown)
+    # A row of the fix it says is still open is a problem of this change, as a finding is.
+    answered = {v["id"]: v for v in verdict.verdicts if v["id"] in rows}
+    blockers += [{"where": v["id"], "what": f"{v['id']} is {v['verdict'].replace('_', ' ')}: {v['proof']}",
+                  "evidence_class": "deterministic" if v["proof"] else "inferential", "cause": "introduced",
+                  "proof": v["proof"]}
+                 for v in answered.values() if v["verdict"] != "fixed"
+                 and not any(findings_mod.same({"where": v["id"], "what": v["proof"]}, b) for b in blockers)]
     if not verdict.passed and not blockers and verdict.verdict == "fail":
         blockers = [{"where": "", "what": verdict.summary or "the check failed without a finding",
                      "evidence_class": "inferential", "cause": "unknown", "proof": ""}]
@@ -2474,7 +2618,8 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
                     blockers=list(blockers)[:20],
                     carried=len(carried), cost_usd=verdict.cost_usd, summary=verdict.summary[:500],
                     round=corrections, wall_s=round(wall_s, 2), duration_s=round(verdict.duration_s, 2),
-                    turns=verdict.turns)
+                    turns=verdict.turns, **({"verdicts": list(answered.values())} if rows else {}),
+                    **({"beside_check": True, "beside_check_s": round(overlapped_s, 2)} if beside else {}))
     if not decided:
         say(f"cauce: #{task_id} the independent check could not decide; the pass stands")
         return dataclasses.replace(result, cost_usd=cost, evidence=result.evidence + "\n\n[independent check "

@@ -36,7 +36,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `trunk`, `overlap`, `habit_review`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets, and the jobs a person quieted per repository |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -54,6 +54,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/racing.py` | whether racing a first try paid, per repository and kind: each race read from its attempts (rung, start, neither), the rung's wins and the time to pass against climbs, the judgement `race_cell` and `cauce stats` read; no model |
 | `src/cauce/cells.py` | where a lesson belongs: the area a path or a change is in, the role that met it, or everyone (`scope`); the text a failure is kept and matched by (a workflow step's goal, never its template); the cell's primer (how its workers got oriented) and its trial; no model |
 | `src/cauce/doctor.py` | `cauce doctor`: states the store should never hold, each a bug that shipped turned into a query (broken: stuck now; suspect: over the last days); read only, no model; SessionStart names what is broken |
+| `bench/review/` | the review benchmark: real review chains (one review, two blind ones, two with different purposes, a classifier before a quality check) on a change with planted bugs, matched by `analyze.py`; what it measured is in its README |
 | `bench/memory/` | the memory benchmark: real workers on a small pricing engine, judged by hidden tests, cold against briefed with a teacher's memory; what it measured is in its README (real money: run on purpose) |
 | `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away; constraints, the rules a change must meet, briefed apart as requirements |
 | `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
@@ -333,6 +334,15 @@ yields the default kind, not a guess.
   `ledger.BRIEF_CHARS` (shown and agreed ones first, `ledger.fit`), a fix's rows that
   did not fit wait for its next round and a refute's go to the person, each said by
   count. `panel` is this chain after four blind reviews, one lens each.
+  What each blind review beside another added (rows no other saw, and of those the ones
+  kept) is measured from the runs (`workflows.reviewer_yield`, `cauce stats`), never a reason
+  the engine changes a definition.
+  A fix's independent verifier answers its rows in the re-check's words (`verifier_brief`'s
+  `rows`): a row it calls open is a blocker of the fix, a correction like any, and when its
+  passing check called every row `fixed` (and the fix wrote none only down) the re-check after
+  it is decided from those answers with no worker (`workflows._ledger`'s `answered`, a
+  `ledger_decided` event `by: verifier`): one reader of one diff, not two in a row. A fix that
+  ran no verifier, or whose check left a row unanswered, is re-checked by a worker as before.
 - A risk tier is only raised, never lowered; a change that cannot be read is
   high. Its reasons are true: a word is read in its sense ("checkout" in git's,
   `payment` as one name among others is no money until the change touches that
@@ -355,8 +365,13 @@ yields the default kind, not a guess.
   has its own turns (`VERIFIER_TURNS`), never the worker's raised ones, and is
   never told to stash the work it checks. A resume after a `review` stop (a
   dismissed one too) gives its first check the blockers the `verified` event
-  kept.
-  Tests run with `CAUCE_VERIFIER=off`.
+  kept. When the change will need it, the verifier starts beside cauce's own check, not after
+  it (`orchestrate.Ahead`, the `overlap` setting): a passing writing attempt in a worktree, a
+  check to run and no services (their ports would be shared); it reads the diff the check runs
+  on and is told the check is running and not to run it itself. A check that fails stops it, its
+  verdict dropped as one that never ran and its cost kept (`verifier_dropped`); a change the check
+  itself did not write since it started is read again. Its `verified` event says `beside_check`.
+  Tests run with `CAUCE_VERIFIER=off` and `CAUCE_OVERLAP=off`.
 - A task that stops on a point (`spec`, `decision`) because its surfaces kept it from the
   cause (it changed a path outside them, or its worker says so and names one,
   `orchestrate._widen`) keeps those paths on its stop (`widen`), and its next step is
@@ -717,10 +732,20 @@ yields the default kind, not a guess.
   as it was.
 - Habits are per project: mined from one repository's events and gated on
   them alone; a habit of other repositories is offered apart, never counted as
-  this one's. An event's repository is read from its task or session, never
-  written by the PostToolUse fast path.
+  this one's, and only to a checkout that has its tool (`habits.has_tool`). An
+  event's repository is read from its task or session, never written by the
+  PostToolUse fast path. A write is an edit (one hook matcher takes both), a
+  worker's task is a place of its own, the home directory and temporary folders
+  are no repository (`habits._project`), and a command that does not check the
+  edit's file type is no habit (`habits.ECOSYSTEMS`).
 - Nothing in cauce writes to a settings file except `cauce habits install`,
-  run by a person.
+  run by a person. A project's new habits are reviewed once each by a read-only
+  worker, queued at SessionStart at most once a day (`habits.queue_review`,
+  the `habit_review` setting, with `autowork`): it finds the tool, a command
+  scoped to the edited file (`$CAUCE_EDITED`), runs and times it; its ending
+  gives the install lines for reviewed ids only (`hooks.habit_lines`), which the
+  orchestrator puts to the person and runs only on their yes. Tests run with
+  `CAUCE_HABIT_REVIEW=off`.
 - A check whose failures are mostly the test runners' own timeout lines
   (`launch.check_timed_out`) after a claimed pass is `environment` with
   `load`: the level halves on it, the same cell goes again after each of
@@ -729,7 +754,11 @@ yields the default kind, not a guess.
 - A dispatcher never dies on a full disk (`flow.disk_full`): it waits and
   tries again with its lock and work kept. The hooks (SessionStart, Stop)
   start a dispatcher for a lane with startable queued work and none holding
-  its lock (`dispatch.revive`, autowork on), never a GET.
+  its lock (`dispatch.revive`, autowork on), never a GET. A start leaves word
+  before it asks whether a dispatcher runs (`dispatch.wake`), and a dispatcher
+  that read its queue before that word was left starts a fresh one once its lock
+  is let go (`cli.cmd_work`, `WorkReport.looked_at`): work queued while the last
+  one was leaving never waits for the next hook (`doctor`: `pickup-nobody-saw`).
 - A project names one orchestrator (`cauce.orchestrator`), in its `.cauce/`,
   never in a repository's files: the first session that sends work, one that
   claims it, a relay from it, the next session that starts where it ended, or
@@ -1047,8 +1076,9 @@ yields the default kind, not a guess.
   branch, and the parts keep one each, so a definition where another step
   waits on it directly is refused.
 - A blind review of a change over `workflows.AREA_REVIEW_LINES` changed lines
-  that touches two or more areas (the surfaces the parts declared, else the
-  top-level folders) runs as one blind review per area, side by side, each
+  that touches two or more areas (the surfaces the parts declared; a change with no
+  parts is reviewed whole, since split by its top-level folders it found the same
+  bugs slower and dearer, `bench/review/areas.py`) runs as one blind review per area, side by side, each
   given the whole request, its area's diff and the names of the other files
   changed. Their findings add up in the one ledger; refute, fix and recheck
   run once on it. Below the threshold it is one review. Generated files (marked

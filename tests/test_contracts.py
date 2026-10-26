@@ -173,3 +173,15 @@ def test_the_pickup_causes_a_run_keeps_are_what_stats_reads(store):
     report = analysis.compute(store, days=0)
     assert report["pickup"]["seconds"]["pickup_conflict_s"] == 30.0
     assert report["pickup"]["share"]["pickup_ceiling_s"] == 0.7
+
+
+def test_the_rows_a_fix_s_check_answers_are_in_the_words_its_re_check_reads():
+    """The fix's independent check answers its rows in the re-check's words, and the engine decides the
+    re-check from them only when every row reads `fixed` (`workflows._ledger`)."""
+    from cauce import ledger
+
+    orchestrate_src = (SRC / "orchestrate.py").read_text()
+    workflows_src = (SRC / "workflows.py").read_text()
+    assert ledger.WORDS["recheck"][0] == "fixed" and 'ledger_mod.WORDS["recheck"]' in orchestrate_src
+    assert '"verdicts": list(answered.values())' in orchestrate_src
+    assert 'checked.get("verdicts")' in workflows_src and '== "fixed"' in workflows_src

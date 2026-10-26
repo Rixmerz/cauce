@@ -1050,3 +1050,52 @@ def test_the_verdict_names_the_independent_check_or_why_it_did_not_run(git_repo,
                launcher=Script(ok(), check("pass"), write="NOTES.md"), classifier=kind("docs"))
     independent = store.final_event(calm.task_id)["data"]["verdict"]["independent"]
     assert independent.get("ran") or independent["why"].startswith("its risk")
+
+
+def _beside(cost=0.05):
+    """A launcher whose worker writes app.py (attempt n) and whose verifier passes, recording both."""
+    seen: list[LaunchSpec] = []
+
+    def launcher(spec):
+        seen.append(spec)
+        if "Check this change" in spec.prompt:
+            return check("pass")
+        workers = sum("Check this change" not in s.prompt for s in seen)
+        (spec.target_dir / "app.py").write_text(f"attempt {workers}\n")
+        return passing()
+
+    return launcher, seen
+
+
+def test_the_independent_check_runs_beside_cauce_s_check_and_is_told_not_to_run_it(
+        git_repo, store, verifier_on, monkeypatch):
+    monkeypatch.setenv("CAUCE_OVERLAP", "on")
+    launcher, seen = _beside()
+    report = run("fix the cart total", git_repo, store, Options(verify="python3 -c 'import time; time.sleep(0.3)'"),
+                 registry={}, launcher=launcher, classifier=kind("implement"))
+    assert report.status == "done"
+    _, verifier = seen
+    assert "beside you" in verifier.prompt and "do not run it yourself" in verifier.prompt
+    assert "time.sleep(0.3)" in verifier.prompt.split("cauce runs the project's check,")[1]
+    checked = store.last_event(report.task_id, "verified")["data"]
+    assert checked["passed"] and checked["beside_check"]
+    # With the setting off, it waits for the check and is told nothing of it.
+    monkeypatch.setenv("CAUCE_OVERLAP", "off")
+    launcher, seen = _beside()
+    run("fix the cart total again", git_repo, store, Options(verify="true"), registry={}, launcher=launcher,
+        classifier=kind("implement"))
+    assert "beside you" not in seen[1].prompt
+
+
+def test_a_check_that_fails_drops_what_ran_beside_it_and_keeps_its_cost(git_repo, store, verifier_on, monkeypatch):
+    monkeypatch.setenv("CAUCE_OVERLAP", "on")
+    launcher, _ = _beside()
+    second = ("python3 -c \"import pathlib, sys; sys.exit(0 if 'attempt 2' in pathlib.Path('app.py').read_text() "
+              "else 1)\"")
+    report = run("fix the cart total", git_repo, store, Options(verify=second), registry={}, launcher=launcher,
+                 classifier=kind("implement"))
+    assert report.status == "done"
+    dropped = store.events_of(report.task_id, "verifier_dropped")
+    assert len(dropped) == 1 and dropped[0]["data"]["cost_usd"] == pytest.approx(0.05)
+    assert [e["data"]["seq"] for e in store.events_of(report.task_id, "verified")] == [2]
+    assert store.attempts(report.task_id)[0]["cost_usd"] == pytest.approx(0.15)

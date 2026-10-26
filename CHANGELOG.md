@@ -2,6 +2,95 @@
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-10-25
+
+### Fixed
+
+- **Habits offer far fewer false positives.** Over five repositories, 19 habits were offered and
+  about one in four was worth a hook. The same habit was offered twice, once as a write and once
+  as an edit, though one hook takes both. A linter was offered after any Markdown edit, and
+  Python checks were offered to Deno projects. Temporary folders and the home directory counted
+  as repositories, and every worker one session sent counted as one place. Now a write is an
+  edit. A command must check the edit's file type. A habit of other repositories is offered
+  only to a checkout that has its tool (the UI included). Each worker's task is its own place.
+  On the same five repositories, 13 habits are offered, each one's tool in its checkout.
+
+- **Work queued while the last dispatcher was leaving no longer waits for the next hook.** A
+  step queued by a run that had just ended kicked its lane while that lane's dispatcher, which
+  had read the queue before the step was there, still held its lock. The kick was dropped, and
+  in one recorded run a review step waited 30 minutes on an idle machine. A start now leaves
+  word before it asks whether a dispatcher runs. A dispatcher that read its queue before that
+  word starts a fresh one once it releases its lock.
+  `cauce doctor` names a pickup that waited with nothing running in its lane
+  (`pickup-nobody-saw`).
+
+### Changed
+
+- **A fix whose own check showed every row fixed is not re-checked by a second worker.** The
+  fix's independent verifier now answers each ledger row it fixes (`fixed`, `not_fixed`,
+  `regression`). A row it calls open is a blocker, and the fix gets a correction round in its
+  own task instead of a stop later. When its passing check called every row fixed, the
+  re-check after it is decided from those answers with no worker. The two had read the same
+  diff one after the other: in this repository's runs they took 2.6 and 3.9 minutes per fix
+  round. On `bench/review`'s fix with planted slips, each caught all three slips alone. The
+  pair took 94 s against 49 s for one reader.
+
+- **The independent check runs beside cauce's own check, not after it** (the `overlap` setting).
+  When a writing attempt in a worktree passes and its change needs the verifier, the verifier
+  starts at once. It reads the same diff, and it is told the check is running and not to run it
+  itself. A check that fails stops it: its verdict is dropped and its cost kept
+  (`verifier_dropped`). It never overlaps for a task that starts services. In
+  `bench/speed/overlap.py` (a cauce worktree, its full suite as the check, a real verifier, 3 reps),
+  check plus verifier went from a median of 822 s to 478 s. The check was not slowed (260 to 263 s),
+  and the verifier passed with the same findings in every run.
+
+- **A feature starts at sonnet/high, a rung below where it started.** The feature ladder now
+  runs sonnet/high, sonnet/xhigh, opus/high, opus/xhigh. A feature classified as high complexity
+  starts a rung up, at sonnet/xhigh as before, and a repository's history and its calibrated
+  standard still raise the start where its features needed more. `bench/speed/build.py` ran two
+  builds, three runs per cell:
+  - **Medium build** (three rules, a receipt and a CSV export): every cell passed all seven hidden
+    tests. sonnet/high took 57 s, opus/high 118 s, sonnet/xhigh 170 s and opus/xhigh 192 s.
+  - **Harder build** (the same, plus moving 24 rules and renaming their methods everywhere):
+    sonnet/high passed all ten hidden tests 3 times in 3, in 84 s; sonnet/xhigh did too, in 276 s.
+    opus/high (189 s) and opus/xhigh (382 s) missed one test once each.
+
+- **A plan starts at opus/high, not opus/xhigh.** The plan ladder now runs opus/high, opus/xhigh,
+  opus/max and then fable/high, which still needs a person. `bench/speed/plan.py` asked for the
+  plan of `feature-parallel`, two runs per cell. Every plan was valid, read strictly by cauce's own
+  parts reader. opus/high, opus/xhigh and opus/max all drew the same three parts, in 93 s, 189 s
+  and 510 s at the median. sonnet/high, at 59 s, drew four other parts; whether they build as well
+  was not measured, so it is not the start.
+
+- **A large change with no parts is reviewed whole, not split by its top-level folders.** On
+  `bench/review`'s 1,221-line change, `bench/review/areas.py` ran three blind reviews per arm. Four
+  area reviews side by side (`top`, `docs`, `src`, `tests`) caught the same 40 of 42 planted bugs
+  as one review, but slower (142 s against 122 s at the median, since `src` held almost every
+  change) and at three times the cost ($1.84 against $0.64). They also left four times the rows
+  that were no planted bug (32 against 8) for the refuter and the fix. A change whose parts
+  declared their surfaces is still reviewed by those areas.
+
+### Added
+
+- **New habits are reviewed by a worker, and installed on the person's yes.** A habit newly
+  found in a project goes, once, to a read-only worker queued at SessionStart (at most once a
+  day per repository, the `habit_review` setting, with `autowork`). The worker checks the tool
+  is there, finds a command scoped to the edited file, and runs and times it. Its ending gives
+  the session one `cauce habits install … --command '…'` line per habit worth it, and a reason
+  for each skip. The session asks the person and runs the line only on their yes. A habit's
+  command now reads the edited file from `$CAUCE_EDITED`.
+
+- **`cauce stats` says what each blind review added beside another**: for each workflow step
+  that reviewed beside another, its cell, the rows it put on the ledger, the rows no other
+  review saw, and how many of those the refuter or a proof kept. It changes no definition.
+- **`bench/review`: two blind reviewers with one purpose against a classifier before a quality
+  check.** These are real review chains on a change with 14 planted bugs in 1,221 diff lines.
+  Every arm caught 40 to 41 of 42. In all six two-review chains, the second (sonnet) reviewer
+  found no bug the opus one missed, for about 60% more cost than one review. The classifier and
+  quality-check funnel cost about as much as a blind review and was the slowest arm, so it was
+  not built.
+
+
 ## [0.44.0] - 2026-10-25
 
 ### Added

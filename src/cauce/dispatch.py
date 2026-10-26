@@ -276,6 +276,29 @@ def hold(root: Path, scope: str) -> Iterator[bool]:
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
+def wake_path(root: Path, scope: str) -> Path:
+    return lock_path(root, scope).with_suffix(".wake")
+
+
+def wake(root: Path, scope: str) -> None:
+    """Leave word that work was queued for `scope`, before asking whether a dispatcher runs:
+    one that read its queue before this goes round again on its way out (`woken`), so work
+    queued while the last dispatcher was leaving never waits for the next hook. Never raises."""
+    with contextlib.suppress(OSError):
+        path = wake_path(root, scope)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{time.time():.6f}")
+
+
+def woken(root: Path, scope: str, since: float) -> bool:
+    """Whether work was queued for `scope` at or after `since`: a dispatcher that last read
+    its queue at `since` did not see it."""
+    try:
+        return float(wake_path(root, scope).read_text().strip() or 0) >= since
+    except (OSError, ValueError):
+        return False
+
+
 def held(root: Path, scope: str) -> bool:
     """Whether a dispatcher runs for `scope` now."""
     with hold(root, scope) as mine:
@@ -304,7 +327,7 @@ def kick(cwd: str | Path | None, key: str | None, env: Mapping[str, str]) -> str
     if not cwd or not config.enabled("autowork", env):
         return "`cauce work` runs the queue."
     root = home(dict(env))
-    if held(root, key or "*") or start(Path(cwd), root, key or "*"):
+    if start(Path(cwd), root, key or "*") or held(root, key or "*"):
         if config.enabled("parallel", env):
             return "A worker takes it now, beside the running ones if Haiku finds it independent, or after them."
         return "A worker takes it when the tasks ahead of it are done."
@@ -320,8 +343,10 @@ def reopened(task: Mapping, env: Mapping[str, str]) -> None:
 
 
 def start(repo_dir: Path, root: Path, scope: str, *, popen: Callable[..., object] = subprocess.Popen) -> bool:
-    """Start a detached `cauce work` for a repository, unless one already runs. Never raises."""
+    """Start a detached `cauce work` for a repository, unless one already runs: then the word
+    left first (`wake`) sends that one round again before it leaves. Never raises."""
     try:
+        wake(root, scope)
         if held(root, scope):
             return False
         log = root / "work" / "dispatcher.log"

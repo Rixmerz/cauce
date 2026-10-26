@@ -41,6 +41,7 @@ from typing import Any
 from cauce import signature as sig
 from cauce.signature import arg_hash, signature  # noqa: F401 - re-exported for callers and tests
 from cauce.store import Store
+from cauce.text import clip
 
 #: The steps a hook can be triggered by: an edit or a write of a file type.
 _EDIT_TRIGGER = re.compile(r"^(edit|write):(.+)$")
@@ -126,12 +127,44 @@ def _runs(events: Sequence[Mapping[str, Any]]) -> dict[str, list[Mapping[str, An
     return by_run
 
 
+def _unit(e: Mapping[str, Any]) -> str:
+    """What counts as one independent place a sequence was seen: a worker's task (its events
+    carry the session that sent it, so every worker of one session would be one place), else
+    the session."""
+    return f"task:{e['task_id']}" if e.get("task_id") else str(e.get("session_id"))
+
+
+def _step(call: str) -> str:
+    """A write is an edit to a hook: its matcher takes `Edit|Write|MultiEdit`, so `write:.py →
+    pytest` and `edit:.py → pytest` are one habit, never two offered side by side."""
+    return "edit:" + call[len("write:"):] if call.startswith("write:") else call
+
+
+def _project(repo: object) -> str | None:
+    """The repository an event belongs to, or None when it is no project: the home directory,
+    the root, a temporary directory (a benchmark's, a test's), Claude Code's or cauce's own
+    folders. Their sequences are kept out of every count of repositories."""
+    if not isinstance(repo, str) or not repo:
+        return None
+    if not repo.startswith("/"):
+        return repo
+    import tempfile
+
+    from cauce import project
+
+    path = Path(repo)
+    temp = Path(tempfile.gettempdir()).resolve()
+    if project._never(path) or path == temp or temp in path.parents or project._tools_home(path):
+        return None
+    return repo
+
+
 def candidates(events: Sequence[Mapping[str, Any]]) -> list[Candidate]:
     """Sequences of 2–4 consecutive signatures that pass every gate, best first."""
     occurrences: dict[tuple[str, ...], list[tuple[str, bool, str, Any]]] = defaultdict(list)
-    for run_key, run in _runs(events).items():
-        session = run_key.split(":", 1)[0]
-        sigs = [e["sig"] for e in run]
+    for run in _runs(events).values():
+        session = _unit(run[0])
+        sigs = [_step(e["sig"]) for e in run]
         for length in range(2, MAX_LENGTH + 1):
             for i in range(len(sigs) - length + 1):
                 steps = tuple(sigs[i:i + length])
@@ -139,7 +172,7 @@ def candidates(events: Sequence[Mapping[str, Any]]) -> list[Candidate]:
                     continue  # the same call repeated is a loop, not a habit
                 window = run[i:i + length]
                 occurrences[steps].append((session, all(e["ok"] for e in window),
-                                           "".join(e["arg_hash"] for e in window), window[0].get("repo")))
+                                           "".join(e["arg_hash"] for e in window), _project(window[0].get("repo"))))
     found = []
     for steps, seen in occurrences.items():
         if not automatable(steps):
@@ -154,8 +187,15 @@ def candidates(events: Sequence[Mapping[str, Any]]) -> list[Candidate]:
         distinct = len({h for _, _, h, _ in seen})
         repos = len({r for _, _, _, r in seen if r}) or 1
         found.append(Candidate(steps, n, sessions, success, distinct, score=n * sessions * success, repos=repos))
-    # A longer sequence that repeats as often as its prefix is the same habit, better described.
-    found.sort(key=lambda c: (-c.score, -len(c.steps)))
+    # A hook runs on the edit that starts a sequence and runs the command that ends it: what
+    # came between changes nothing it does. Sequences with the same edit and the same command
+    # are one habit, its shortest form; a longer one that repeats as often as its prefix is
+    # the same habit, better described.
+    found.sort(key=lambda c: (len(c.steps), -c.score))
+    ends: dict[tuple[str, str], Candidate] = {}
+    for c in found:
+        ends.setdefault((c.steps[0], c.steps[-1]), c)
+    found = sorted(ends.values(), key=lambda c: (-c.score, -len(c.steps)))
     kept: list[Candidate] = []
     for c in found:
         if any(_contains(k.steps, c.steps) and k.occurrences >= c.occurrences for k in kept):
@@ -174,15 +214,52 @@ _SCRIPTS = frozenset({"python", "python3", "node", "bash", "sh", "zsh", "ruby", 
 MIN_REPOS_ELSEWHERE = 2
 
 
-def for_repo(events: Sequence[Mapping[str, Any]], repo: str) -> tuple[list[Candidate], list[Candidate]]:
+#: The files that say a repository has a command's tool. A habit of other repositories is
+#: offered to one only when they are there: `deno test` to a Python project is noise.
+TOOL_MARKERS: dict[str, tuple[str, ...]] = {
+    "pytest": ("pyproject.toml", "setup.cfg", "setup.py", "pytest.ini", "tox.ini"),
+    "ruff": ("pyproject.toml", "ruff.toml", ".ruff.toml"), "mypy": ("pyproject.toml", "mypy.ini", "setup.cfg"),
+    "black": ("pyproject.toml",), "deno": ("deno.json", "deno.jsonc"), "cargo": ("Cargo.toml",),
+    "go": ("go.mod",), "npm": ("package.json",), "pnpm": ("package.json",), "yarn": ("package.json",),
+    "npx": ("package.json",), "bun": ("package.json",), "jest": ("package.json",), "vitest": ("package.json",),
+    "eslint": ("package.json",), "prettier": ("package.json",), "tsc": ("package.json", "tsconfig.json"),
+    "make": ("Makefile",), "gradle": ("build.gradle", "build.gradle.kts"), "mvn": ("pom.xml",),
+}
+
+
+def checkout_of(cwd: str | None) -> Path | None:
+    """The top of the checkout a directory is in, where a tool's marker files live; None when
+    it is gone (a removed worktree) or in none."""
+    if not cwd:
+        return None
+    here = Path(cwd)
+    for d in (here, *here.parents):
+        if (d / ".git").exists():
+            return d
+    return here if here.is_dir() else None
+
+
+def has_tool(repo_dir: Path | None, steps: Sequence[str]) -> bool:
+    """Whether a repository has the tool a habit's command runs: its program's marker files
+    (`TOOL_MARKERS`, by the program's first word, `deno-test` → `deno`). A program cauce
+    knows no marker for is not offered from elsewhere: there is no evidence it is here."""
+    if repo_dir is None:
+        return False
+    program = steps[-1].removeprefix("bash:")
+    markers = TOOL_MARKERS.get(program) or TOOL_MARKERS.get(program.split("-", 1)[0])
+    return bool(markers) and any((repo_dir / m).is_file() for m in markers)
+
+
+def for_repo(events: Sequence[Mapping[str, Any]], repo: str,
+             repo_dir: Path | None = None) -> tuple[list[Candidate], list[Candidate]]:
     """A repository's habits, mined from its own events and gated on them alone,
-    and those other repositories share that it does not have yet. A habit is per
-    project: its command is this project's tooling, and a count summed over
-    unrelated projects says nothing about this one."""
+    and those other repositories share that it does not have yet and whose tool it has
+    (`has_tool`). A habit is per project: its command is this project's tooling, and a
+    count summed over unrelated projects says nothing about this one."""
     here = candidates([e for e in events if e.get("repo") == repo])
     mine = [c.steps for c in here]
-    elsewhere = [c for c in candidates(events)
-                 if c.repos >= MIN_REPOS_ELSEWHERE
+    elsewhere = [c for c in candidates([e for e in events if _project(e.get("repo"))])
+                 if c.repos >= MIN_REPOS_ELSEWHERE and has_tool(repo_dir, c.steps)
                  and not any(c.steps == m or _contains(m, c.steps) or _contains(c.steps, m) for m in mine)]
     return here, elsewhere
 
@@ -196,12 +273,137 @@ def automatable(steps: Sequence[str]) -> bool:
         return False
     last = steps[-1]
     program = last.removeprefix("bash:")
-    return last.startswith("bash:") and program not in _LOOKING and program not in _SCRIPTS
+    return (last.startswith("bash:") and program not in _LOOKING and program not in _SCRIPTS
+            and checks_its_edit(steps))
+
+
+#: The file types a program checks, by its first word. A habit whose command does not check
+#: the file its edit wrote (`edit:.md → ruff-check`) is the session's routine after any
+#: change, not something that edit causes: a hook on it would run the linter on every note.
+#: A program not listed (`make`, a project's own script) may check anything.
+ECOSYSTEMS: dict[str, frozenset[str]] = {
+    **dict.fromkeys(("pytest", "ruff", "mypy", "black", "isort", "flake8", "pylint", "pyright", "coverage", "tox",
+                     "uv", "poetry"), frozenset({".py", ".pyi", ".toml", ".cfg", ".ini"})),
+    **dict.fromkeys(("deno", "npm", "npx", "pnpm", "yarn", "bun", "jest", "vitest", "eslint", "tsc", "node"),
+                    frozenset({".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".json", ".jsonc", ".css",
+                               ".vue", ".svelte", ".html"})),
+    "prettier": frozenset({".ts", ".tsx", ".js", ".jsx", ".mjs", ".json", ".css", ".scss", ".html", ".md", ".yaml",
+                           ".yml", ".vue", ".svelte"}),
+    "cargo": frozenset({".rs", ".toml"}), "go": frozenset({".go", ".mod"}), "gofmt": frozenset({".go"}),
+    "mvn": frozenset({".java", ".xml", ".kt"}), "gradle": frozenset({".java", ".kt", ".kts", ".gradle"}),
+    "rubocop": frozenset({".rb"}), "rspec": frozenset({".rb"}), "bundle": frozenset({".rb", ".gemspec"}),
+    "markdownlint": frozenset({".md"}), "shellcheck": frozenset({".sh", ".bash"}),
+}
+
+
+def checks_its_edit(steps: Sequence[str]) -> bool:
+    """Whether a habit's command checks the kind of file its edit wrote (`ECOSYSTEMS`)."""
+    trigger = _EDIT_TRIGGER.match(steps[0])
+    program = steps[-1].removeprefix("bash:")
+    types = ECOSYSTEMS.get(program) or ECOSYSTEMS.get(program.split("-", 1)[0])
+    return trigger is None or types is None or trigger.group(2) in types
 
 
 def _contains(longer: tuple[str, ...], shorter: tuple[str, ...]) -> bool:
     n = len(shorter)
     return len(longer) > n and any(longer[i:i + n] == shorter for i in range(len(longer) - n + 1))
+
+
+# --- review, by a worker ------------------------------------------------------------
+
+#: The environment variable a habit's command reads the edited file from.
+EDITED_VAR = "CAUCE_EDITED"
+#: Meta key per repository: the candidates a review was already queued for.
+REVIEWED_PREFIX = "habits.reviewed:"
+#: The days of events a review is mined from.
+REVIEW_DAYS = 30
+#: What a review's worker may take at most: the hook stops a command at 110 s.
+REVIEW_SECONDS = 30
+
+
+def unreviewed(store: Store, repo: str, repo_dir: Path | None, *, days: int = REVIEW_DAYS) -> list[Candidate]:
+    """The habits found in a repository that no review was queued for and none installed:
+    its own, and those of other repositories whose tool it has."""
+    load_events(store)
+    here, elsewhere = for_repo(store.tool_events(days=days), repo, repo_dir)
+    done = set(json.loads(store.meta(REVIEWED_PREFIX + repo) or "[]"))
+    installed = {h["candidate"] for h in store.habits() if not h["removed"]
+                 and repo_dir is not None and Path(h["settings_path"]).parent.parent == repo_dir}
+    return [c for c in [*here, *elsewhere] if c.id not in done and c.id not in installed]
+
+
+def review_brief(found: Sequence[Candidate]) -> str:
+    """A read-only worker's request: one criterion per habit, each answered with whether it is
+    worth a hook here and, if so, the exact command, run and timed."""
+    lines = "\n".join(f"- {c.id}: after {c.steps[0]}, the session ran {' → '.join(c.steps[1:])} "
+                       f"({c.occurrences} times in {c.sessions} sessions)" for c in found)
+    return (
+        "Review these habits cauce found in this repository's tool calls, each an edit followed by the same "
+        "command, as candidates for a hook that runs a command after every such edit. Change no file. "
+        "Answer each one below as its own criterion:\n"
+        f"{lines}\n\n"
+        "For each, find whether this repository has the tool and how it is run here (its scripts in "
+        "deno.json, package.json, pyproject.toml or a Makefile), and pick one command for the hook: scoped to "
+        f"the edited file through \"${EDITED_VAR}\" (its path) when the tool takes a file (a linter, a "
+        "formatter's check, the tests next to it), else the narrowest check. Run it once on a real file of "
+        f"that type and time it: over {REVIEW_SECONDS} seconds is too slow for a hook. Skip one too slow, one "
+        "that checks far more than the edit, or one the session ran out of routine rather than because of "
+        f"that edit. The command is one line under {REVIEW_COMMAND_CHARS} characters: a hook that needs a "
+        "script is a skip. Each criterion's evidence starts with its verdict, exactly "
+        f"`install <id>: `<command>`` (the command in backticks, as you ran it) or `skip <id>: <why>`, then "
+        "its wall time and what you found.")
+
+
+#: A habits review's verdict at the start of a criterion's evidence (`review_brief`): a command
+#: whose closing backtick is missing was cut where the evidence was kept.
+VERDICT = re.compile(r"\b(install|skip) ([0-9a-f]{8}):\s*(?:`([^`]+)`|(`?[^\n]+))")
+#: The longest command a review may propose: a hook's one line, read whole from a verdict.
+REVIEW_COMMAND_CHARS = 160
+#: How much of a skip's reason an ending carries.
+SKIP_CHARS = 140
+
+
+def review_verdicts(texts: Sequence[str], reviewed: Sequence[str]) -> tuple[dict[str, str], dict[str, str]]:
+    """The commands to install and the reasons to skip a review gave, by habit id: only the ids
+    it was asked about, the first verdict for each."""
+    installs: dict[str, str] = {}
+    skips: dict[str, str] = {}
+    for text in texts:
+        for verb, cid, command, why in VERDICT.findall(text or ""):
+            if cid not in reviewed or cid in installs or cid in skips:
+                continue
+            if verb == "install" and command.strip():
+                installs[cid] = command.strip()
+            elif verb == "install":
+                skips[cid] = "its command was cut or not given in backticks (`cauce show` has the worker's words)"
+            else:
+                skips[cid] = clip((command or why).strip(), SKIP_CHARS)
+    return installs, skips
+
+
+def queue_review(store: Store, *, repo: str, cwd: str, session_id: str | None,
+                 kick: Any = None) -> dict | None:
+    """Queue one read-only worker that reviews a repository's new habits, once per habit. Its
+    ending reaches the session with the install lines; installing stays the person's."""
+    top = checkout_of(cwd)
+    found = unreviewed(store, repo, top)
+    if not found or top is None:
+        return None
+    with store.immediate():
+        done = json.loads(store.meta(REVIEWED_PREFIX + repo) or "[]")
+        found = [c for c in found if c.id not in done]
+        if not found:
+            return None
+        store.set_meta(REVIEWED_PREFIX + repo, json.dumps([*done, *(c.id for c in found)]))
+        task = store.create_task(review_brief(found), status="queued", source="queue", author="habits",
+                                 repo=repo, cwd=str(top), session_id=session_id,
+                                 title=f"[habits review] {len(found)} habit(s): "
+                                       + ", ".join(c.id for c in found)[:150],
+                                 options=json.dumps({"kind": "explore", "keep_learned": False,
+                                                     "habit_review": [c.id for c in found]}))
+    if kick is not None:
+        kick(str(top), repo)
+    return task
 
 
 def recipes(store: Store, kind: str, *, repo: str | None, limit: int = 2) -> list[str]:
@@ -304,8 +506,10 @@ def run_habit(store: Store, habit_id: int, event: Mapping[str, Any]) -> str | No
     if not path.endswith(habit["trigger_suffix"]):
         return None
     try:
+        # The file the edit wrote, for a command scoped to it (`ruff check "$CAUCE_EDITED"`).
         proc = subprocess.run(habit["command"], shell=True, cwd=event.get("cwd") or None,  # noqa: S602
-                              capture_output=True, text=True, timeout=110, check=False)
+                              capture_output=True, text=True, timeout=110, check=False,
+                              env={**os.environ, EDITED_VAR: path})
         ok, output = proc.returncode == 0, (proc.stdout + proc.stderr).strip()
     except subprocess.TimeoutExpired:
         ok, output = False, "it ran past 110 seconds and was stopped"

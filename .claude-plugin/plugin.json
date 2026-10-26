@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.44.0",
+  "version": "0.45.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -105,10 +105,22 @@
       "description": "A workflow step that names a reading step before it as its trunk (a plan, an exploration) starts as a fork of that step's session instead of reading the code again: its role reaches it as its first message after the fork, and the trunk's part is served by the prompt cache to every step that forks it. Each repository alternates forked and fresh first tries until each side has 10, then keeps forking only where it won (first tries no worse, fewer calls before the first change or less time). Off: every step starts fresh.",
       "default": true
     },
+    "overlap": {
+      "type": "boolean",
+      "title": "Run the independent check beside cauce's check",
+      "description": "When a writing attempt passes and its change needs the independent verifier, the verifier starts at once, beside cauce's own check of the work, instead of after it: both read the same change, the verifier is told the check is running and not to run it itself, and a check that fails stops it (its cost is kept). Never for a task that starts services. Off: the verifier waits for the check.",
+      "default": true
+    },
     "role_trials": {
       "type": "boolean",
       "title": "Improve each role's lessons by trial",
       "description": "Once a role's workers met enough dead ends and verifier blockers in a repository, Haiku proposes a short list of lessons for that role there (the role's file is never touched). The role's tasks alternate with and without it until each side has 10 first tries; it is kept only where it passed first no worse and did better on one measure, and reverted if it later makes pass-first worse. `cauce roles revisions` shows them. Off: the role's own text alone.",
+      "default": true
+    },
+    "habit_review": {
+      "type": "boolean",
+      "title": "Review new habits with a worker",
+      "description": "A habit cauce newly finds in a project (an edit followed by the same check, again and again) is reviewed by a read-only worker: whether the tool is here, a command scoped to the edited file, run and timed. Its ending gives the install line, which the session puts to you; nothing is installed without your yes. Off: habits wait for `cauce habits`.",
       "default": true
     },
     "engram": {

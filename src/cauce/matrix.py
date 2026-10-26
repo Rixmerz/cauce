@@ -129,12 +129,17 @@ LADDERS: dict[str, tuple[Cell, ...]] = {
     "refactor": ladder("sonnet/medium", "sonnet/high", "opus/high"),
     "implement": ladder("sonnet/medium", "sonnet/high", "sonnet/xhigh", "opus/high"),
     "ui": ladder("sonnet/high", "sonnet/xhigh", "opus/high"),
-    "feature": ladder("sonnet/xhigh", "opus/high", "opus/xhigh"),
+    # A feature starts at sonnet/high: on bench/speed's builds (a medium one and one with a 24-rule
+    # refactor), it passed every hidden test 6 times in 6, 3 to 4 times sooner than sonnet/xhigh,
+    # which passed them no better. High complexity starts a rung up, and history raises the start.
+    "feature": ladder("sonnet/high", "sonnet/xhigh", "opus/high", "opus/xhigh"),
     "debug-repro": ladder("sonnet/high", "sonnet/xhigh", "opus/high", "opus/xhigh"),
     "debug-unclear": ladder("opus/high", "opus/xhigh", "opus/max"),
     "review-routine": ladder("sonnet/medium", "sonnet/high", "opus/high"),
     "review-critical": ladder("opus/high", "opus/xhigh", "opus/max"),
-    "plan": ladder("opus/xhigh", "opus/max", "fable/high"),
+    # A plan starts at opus/high: on bench/speed's plan for parts it drew the same three parts as
+    # opus/xhigh and opus/max, every one valid, in half xhigh's time and a fifth of max's.
+    "plan": ladder("opus/high", "opus/xhigh", "opus/max", "fable/high"),
     "frontier": ladder("fable/high", "fable/xhigh", "fable/max"),
 }
 

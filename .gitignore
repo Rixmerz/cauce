@@ -15,3 +15,5 @@ dist/
 .claude-plugin/types/
 node_modules/
 bench/memory/results-*.jsonl
+bench/review/results-*.jsonl
+bench/speed/results-*.jsonl

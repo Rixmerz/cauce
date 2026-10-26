@@ -1524,7 +1524,10 @@ def cmd_work(args: argparse.Namespace) -> int:
                                defaults=orchestrate.Options(use_model_classifier=not args.no_model))
         finally:
             store.close()
-    if report.at_limit and getattr(args, "detached", False):
+    # Work queued while this one was leaving found its lock held and was left to it (`dispatch.wake`):
+    # it read its queue before that work was there, so a fresh dispatcher takes it now, not the next hook.
+    unseen = dispatch.woken(home(), key or "*", report.looked_at)
+    if unseen or (report.at_limit and getattr(args, "detached", False)):
         # The bound is per process: a detached dispatcher that reached it with work
         # still queued starts a fresh one after its lock is released, since nothing
         # else would (a step's parts all queue at once, and the step waits for them).
@@ -1536,7 +1539,8 @@ def cmd_work(args: argparse.Namespace) -> int:
         finally:
             store.close()
         if handed:
-            report.stopped_because += "; a fresh dispatcher takes the rest"
+            report.stopped_because += ("; a fresh dispatcher takes what was queued as this one left" if unseen
+                                       and not report.at_limit else "; a fresh dispatcher takes the rest")
     print(report.text())
     return 0 if all(r.status == "done" for r in report.ran) else 1
 
@@ -2038,6 +2042,20 @@ def cmd_habits(args: argparse.Namespace) -> int:
             print(f"installed habit #{habit_id}: after {found[args.candidate].steps[0]}, run `{args.command}`. "
                   f"`cauce habits uninstall {habit_id}` removes it.")
             return 0
+        if args.habits_command == "review":
+            directory = str(Path(args.repo or os.getcwd()).resolve())
+            key = _habit_repo(args.repo)
+            if key is None:
+                print("not in a repository", file=sys.stderr)
+                return 1
+            project.enroll(directory)
+            task = habits.queue_review(store, repo=key, cwd=directory, session_id=os.environ.get("CAUCE_SESSION_ID"),
+                                       kick=lambda d, k: dispatch.start(Path(d), home(), k) or dispatch.held(home(), k))
+            if task is None:
+                print("no habit here that a review has not seen; `cauce habits` lists them")
+                return 0
+            print(f"queued #{task['id']}: {task['title']}")
+            return 0
         if args.habits_command == "uninstall":
             if not habits.uninstall(store, args.habit_id):
                 print(f"no habit #{args.habit_id}", file=sys.stderr)
@@ -2060,7 +2078,8 @@ def cmd_habits(args: argparse.Namespace) -> int:
             here, elsewhere = _candidates(store, args.days), []
         else:
             habits.load_events(store)
-            here, elsewhere = habits.for_repo(store.tool_events(days=args.days), key)
+            here, elsewhere = habits.for_repo(store.tool_events(days=args.days), key,
+                                              Path(args.repo or os.getcwd()).resolve())
         if args.json:
             print(json.dumps({"repo": key, "here": [c.data() for c in here[: args.limit]],
                               "elsewhere": [c.data() for c in elsewhere[: args.limit]]}))
@@ -2751,6 +2770,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo")
     p.add_argument("--days", type=int, default=30)
     p.set_defaults(func=cmd_habits)
+    p = hsub.add_parser("review", help="queue a read-only worker that reviews this repository's new habits; "
+                                       "its ending gives the install lines")
+    p.add_argument("--repo")
+    p.set_defaults(func=cmd_habits)
     p = hsub.add_parser("uninstall", help="the kill switch")
     p.add_argument("habit_id", type=int)
     p.set_defaults(func=cmd_habits)
@@ -2904,7 +2927,8 @@ def _starts_work(args: argparse.Namespace) -> bool:
     return command in ("run", "resume", "work", "limit-wait", "loop-runner") or (
         command, getattr(args, f"{command}_command", None)) in {
         ("queue", "add"), ("workflow", "run"), ("workflow", "retry"), ("investigate", "start"),
-        ("loop", "add"), ("loop", "start"), ("loop", "act"), ("loop", "rm")}
+        ("loop", "add"), ("loop", "start"), ("loop", "act"), ("loop", "rm"),
+        ("habits", "review"), ("habits", "install")}
 
 
 def _subparser(parser: argparse.ArgumentParser, args: argparse.Namespace) -> argparse.ArgumentParser:
