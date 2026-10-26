@@ -813,8 +813,12 @@ def test_a_passing_worker_s_learned_facts_are_filed_and_later_workers_read_them(
     learned = WorkerResult(True, None, "done", "1 passed", learned=("Prices are stored in cents in every table",))
     asked = []
 
+    ended = []
+
     def ask(system, schema, question, **kw):
         asked.append(question)
+        # Filed after the ending is out: no session or next step waits on the model call.
+        ended.append(store.last_event(1, "finished") is not None)
         return {"notes": [{"fact": 0, "keep": True, "topic": "business", "title": "Prices in cents",
                            "duplicate_of": None, "links": [], "paths": ["prices.py"], "new_topic": None}]}, 0.0, ""
 
@@ -822,7 +826,8 @@ def test_a_passing_worker_s_learned_facts_are_filed_and_later_workers_read_them(
                  classifier=kind("implement"), notes_ask=ask)
     assert report.noted == [{"id": 1, "new": True, "topic": "business", "title": "Prices in cents"}]
     assert "notes: kept #1 [business] Prices in cents" in report.text()
-    assert "- prices.py" in asked[0]
+    assert "- prices.py" in asked[0] and ended == [True]
+    assert "notes_s" in store.last_event(report.task_id, "notes_filed")["data"]
     anchor = store.note_anchors([1])[0]
     assert anchor["path"] == "prices.py" and anchor["commit_sha"] == git(git_repo, "rev-parse", "cauce/task-1")
     assert store.last_event(report.task_id, "noted")["data"]["notes"][0]["id"] == 1

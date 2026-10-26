@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-10-26
+
+### Changed
+
+- **A step's ending and the next step no longer wait for its notes.** A passing run filed what its
+  worker learned (a Haiku call) before it recorded its ending and advanced its workflow: 5.3 s at
+  the median and 7.5 s at p90 over 107 runs in this store, on every step. The run now files them
+  after its ending and the advance, and a `notes_filed` event keeps the time.
+
+### Added
+
+- **`bench/speed/build.py` takes a `+batch` arm** that asks workers to make independent tool calls
+  in the same turn. It was slower on both builds (80 s against 76 s, 111 s against 100 s at the
+  median, all right), so workers are not told so.
+
 ## [0.48.0] - 2026-10-26
 
 ### Fixed

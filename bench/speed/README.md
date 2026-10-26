@@ -9,6 +9,7 @@ python bench/speed/build.py run sonnet/high,sonnet/xhigh,opus/high,opus/xhigh 3 
 python bench/speed/plan.py run opus/high,opus/xhigh,opus/max 2 3 && python bench/speed/plan.py report
 python bench/speed/handoff.py run self,cauce 4 4 && python bench/speed/handoff.py report
 python bench/speed/dispatch.py current,named2 3 && python bench/speed/dispatch.py report
+python bench/speed/build.py run sonnet/high,sonnet/high+batch 4 4      # a `+batch` arm asks for parallel calls
 ```
 
 ## Where the time went (this machine's store, before 0.45)
@@ -204,3 +205,25 @@ When work ended while the session was idle, the mod heard of it at its next poll
 mod's deliveries took 9 s at the median and 16 s at p90 from the ending. A task's ending now
 touches a file beside the store, and the mod stats it every 2 s and polls at once when it
 changed: within about 2 s plus the poll, with no process between endings.
+
+## I: asking workers to make independent tool calls in one turn (`build.py`, `+batch`)
+
+Worker transcripts here made 1.18 tool calls per turn, and 64% of a worker's wall time was the
+model's own latency. Fewer turns could be faster. The `+batch` arm adds one line to the request:
+make the calls that do not depend on each other in the same turn. sonnet/high, four runs per arm:
+
+| Build | Arm | Right | Wall p50 | Turns p50 |
+|---|---|---|---|---|
+| medium | as briefed | 4/4 | 76 s | 5.5 |
+| medium | `+batch` | 4/4 | 80 s | 30 |
+| harder | as briefed | 4/4 | 100 s | 11 |
+| harder | `+batch` | 4/4 | 111 s | 26.5 |
+
+It was slower in both, so it was not built.
+
+## J: filing notes off the critical path
+
+A passing run filed what its worker learned (a Haiku call) before its `finished` event and before
+its workflow advanced: 5.3 s at the median and 7.5 s at p90 over 107 runs in this store, on every
+step of every workflow. From 0.49 a run files them after its ending and the advance; a
+`notes_filed` event keeps the time it took.
