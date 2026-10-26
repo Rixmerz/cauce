@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-10-26
+
+### Changed
+
+- **A worker no longer runs the full check before it reports; cauce runs it right after.** The
+  brief told a writing worker to run the tests near its change as it goes and the whole check
+  "yourself once, at the end". cauce then ran the same check again. Worker transcripts on this
+  machine spent 29% of their time in tests they ran themselves, often the whole suite three or
+  four times in one task. The brief now says cauce runs the check as soon as the worker reports
+  and hands it the failures. In `bench/speed/handoff.py` (a 60 s suite, sonnet/high, hidden
+  tests as the judge), a medium build went from 216 s to 131 s at the median, and a harder one
+  from 208 s to 152 s. Both arms were as right (7 of 7 builds against 6 of 7), and no run needed
+  a second round.
+
+- **The dispatcher starts independent work beside running work instead of holding it back.** Its
+  prompt said "when unsure, answer false". It held clearly separate tasks (an invoice export
+  beside a profile page) because neither declared its surfaces, or because the two "might share"
+  a helper. A wait now needs a collision it can name: a change the task needs from the other, the
+  same code or behaviour changed by both, or results that rest on what the other changes. In
+  `bench/speed/dispatch.py` (real Haiku calls, 3 runs per pair), independent pairs started 42 of
+  42 times, against 29 of 42 before, and colliding pairs 0 of 48, as before. On pairs written
+  after the prompt was chosen, independent pairs started 18 of 18 times against 14 of 18, and
+  colliding pairs 0 of 18 in both.
+
+- **A wait the dispatcher's judgment gave is asked again once the work ahead has changed
+  files.** The judgment was made once and kept for the whole run of the work ahead. It is often
+  made when that work has just started and changed nothing, so it could only guess. Now, at most
+  every two minutes (`flow.REJUDGE_S`), a wait Haiku gave is asked again when the running work
+  changed files it had not changed then. The `dispatch_decided` event keeps what each running task
+  had changed (`seen`) and which work moved (`moved`). A wait that surfaces or named files gave
+  stands.
+
 ## [0.46.0] - 2026-10-26
 
 ### Changed

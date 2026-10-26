@@ -365,8 +365,14 @@ def _judged(store: Store, task: dict, ahead: list[dict], decide: Decide,
             store.set_parallel(task["id"], True, NOTHING_WRITES_AHEAD)
         return {**task, "parallel": 1}
     stale = _judged_against_gone(store, task, writing)
+    moved: list[int] = []
     if task["parallel"] is not None and not stale:
-        return task
+        if not _may_have_moved(store, task):
+            return task
+        read_changes()
+        writing = [t for t in ahead if not reads_only(t)]
+        if not (moved := _moved_since_judged(store, task, writing)):
+            return task
     read_changes()
     writing = [t for t in ahead if not reads_only(t)]
     settled = by_surfaces(task, writing)
@@ -375,7 +381,8 @@ def _judged(store: Store, task: dict, ahead: list[dict], decide: Decide,
     store.add_event(task["id"], "dispatch_decided", parallel=decision.parallel,
                     reason=decision.reason, behind=_behind(decision, writing),
                     ahead=[t["id"] for t in writing], by="surfaces" if settled else "haiku",
-                    **({"again": stale} if stale else {}))
+                    seen={str(t["id"]): sorted(t["changed"]) for t in writing if t.get("changed") is not None},
+                    **({"again": stale} if stale else {"moved": moved} if moved else {}))
     if decision.cost_usd:
         store.update_task(task["id"], cost_usd=(task["cost_usd"] or 0) + decision.cost_usd)
     return {**task, "parallel": int(decision.parallel)}
@@ -391,6 +398,37 @@ def _judged_against_gone(store: Store, task: dict, writing: list[dict]) -> list[
     judged = [int(i) for i in decided.get("ahead") or () if isinstance(i, int)]
     now = {int(t["id"]) for t in writing}
     return judged if judged and not now.intersection(judged) else []
+
+
+#: How long a "wait" the dispatcher's judgment gave stands before the work it waits for is
+#: read again: what that work changed since may show the two never meet.
+REJUDGE_S = 120.0
+
+
+def _may_have_moved(store: Store, task: dict) -> bool:
+    """Whether a kept "wait" is worth reading git for: the dispatcher's judgment gave it (one
+    surfaces or names gave is a fact, and stands), at least `REJUDGE_S` ago."""
+    if task["parallel"] != 0:
+        return False
+    decided = store.last_event(task["id"], "dispatch_decided")
+    if not decided or (decided.get("data") or {}).get("by") != "haiku":
+        return False
+    try:
+        at = datetime.fromisoformat(decided["ts"])
+    except (TypeError, ValueError):
+        return False
+    return (datetime.now(UTC) - (at if at.tzinfo else at.replace(tzinfo=UTC))).total_seconds() >= REJUDGE_S
+
+
+def _moved_since_judged(store: Store, task: dict, writing: list[dict]) -> list[int]:
+    """The running work a "wait" was judged against that changed files it had not when it was
+    judged (git, `changed`): the judgment read less than there is now, often nothing at all
+    when that work had just started, and is made again. [] when nothing moved."""
+    decided = (store.last_event(task["id"], "dispatch_decided") or {}).get("data") or {}
+    seen = decided.get("seen") or {}
+    judged = {int(i) for i in decided.get("ahead") or () if isinstance(i, int)}
+    return [t["id"] for t in writing if t["id"] in judged and t.get("changed") is not None
+            and set(t["changed"]) - set(seen.get(str(t["id"])) or ())]
 
 
 def _walk(store: Store, repo: str | None, *, parallel: bool, decide: Decide) -> Iterator[dict]:

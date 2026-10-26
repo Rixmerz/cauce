@@ -40,7 +40,9 @@ def test_any_failure_means_waiting_never_a_guess():
         assert got.parallel is False and got.reason.startswith("waits its turn")
     blank = dispatch.decide(NEW, [RUNNING], runner=_runner(_reply(parallel=True, reason="  ")))
     assert blank == dispatch.Decision(True, "independent", 0.001)
-    assert "When unsure, answer false." in dispatch.SYSTEM_PROMPT
+    # A wait the model gives names its collision: "when unsure" held independent work back.
+    assert "only for a collision you can name" in dispatch.SYSTEM_PROMPT
+    assert "When unsure" not in dispatch.SYSTEM_PROMPT
 
 
 def _build_step(version: int) -> str:

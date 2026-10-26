@@ -7,6 +7,8 @@ does today, and keeps the result that decides it.
 python bench/speed/overlap.py <commit> 3            # cauce's check beside the verifier, or after it
 python bench/speed/build.py run sonnet/high,sonnet/xhigh,opus/high,opus/xhigh 3 4 && python bench/speed/build.py report
 python bench/speed/plan.py run opus/high,opus/xhigh,opus/max 2 3 && python bench/speed/plan.py report
+python bench/speed/handoff.py run self,cauce 4 4 && python bench/speed/handoff.py report
+python bench/speed/dispatch.py current,named2 3 && python bench/speed/dispatch.py report
 ```
 
 ## Where the time went (this machine's store, before 0.45)
@@ -123,3 +125,50 @@ built:
   wherever a verifier runs, and the rest is about 4% of a build;
 - reviews at lower effort: quality lost;
 - splitting a review of a change with no parts by its folders: slower and dearer.
+
+## E: the worker's own full check before it reports (`handoff.py`)
+
+Worker transcripts on this machine (28 sessions, 13,123 s) spent 64% of their wall time waiting on
+the model and 29% (3,793 s) in tests the workers ran themselves. Many of those runs were the whole
+suite, 130 to 180 s each, three or four times in one task. The brief told a worker to run the near
+tests as it goes and the full check "yourself once, at the end, before you report". Then cauce ran
+the same check again.
+
+The pricing engine got a slow suite: 12 more test files of 5 s each, 60 s in all. The worker,
+sonnet/high, got cauce's own brief in two arms. `self` was the line before 0.47. `cauce` said:
+"Do not run it yourself before you report: cauce runs it as soon as you do, and hands you its
+failures to fix." cauce's check ran after the worker. A red check would have continued the
+worker's session with its output, up to twice. Hidden tests judged each build.
+
+| Build | Arm | Right | Green | Wall p50 | Worker's own full runs |
+|---|---|---|---|---|---|
+| medium | self | 3/4 | 4/4 | 216 s | 6 |
+| medium | cauce | 4/4 | 4/4 | 131 s | 0 |
+| harder | self | 3/3 | 3/3 | 208 s | 3 |
+| harder | cauce | 3/3 | 3/3 | 152 s | 1 |
+
+No run in either arm needed a second round, and none was less right without its own full run.
+From 0.47 the brief says the `cauce` line.
+
+## F: does the dispatcher's judgment hold independent work back (`dispatch.py`)
+
+A queued writing task that is told to wait waits for the whole run of the work ahead, often
+10 minutes or more. Haiku decides whether it starts beside that work, and its prompt said "when
+unsure, answer false". Asked about clearly separate work (an invoice CSV export beside a profile page),
+it waited 8 times in 8. Its reasons were "declares no surfaces" and helpers the two "might share".
+
+Real `dispatch.decide` calls, 3 runs per pair. The pairs come in two sets. The tuning set has 14
+independent pairs and 16 that collide (one needs the other's change, or both change the same
+code). The held-out set has 6 and 6, written after the prompt was chosen, from real requests.
+
+| Prompt | Set | Independent pairs started | Colliding pairs started |
+|---|---|---|---|
+| before 0.47 ("when unsure, answer false") | tuning | 29/42 | 0/48 |
+| a wait names its collision | tuning | 42/42 | 1/48 |
+| the same, and a result resting on behaviour the other changes is a collision | tuning | 42/42 | 0/48 |
+| before 0.47 | held out | 14/18 | 0/18 |
+| the last one | held out | 18/18 | 0/18 |
+
+From 0.47 the dispatcher asks with the last prompt. A wait it gave is also asked again, at most
+every two minutes, once the work ahead changed files it had not changed when the wait was
+judged. The first judgment is often made when that work has just started and changed nothing.

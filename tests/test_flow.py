@@ -139,7 +139,7 @@ def test_a_held_back_task_says_what_it_waits_for_wherever_it_is_shown(capsys, st
     # its reason names, else the first ahead of it.
     decided = store.last_event(held["id"], "dispatch_decided")["data"]
     assert decided == {"parallel": False, "reason": f"it changes the importer #{first['id']} rewrites",
-                       "behind": first["id"], "ahead": [first["id"], second["id"]], "by": "haiku"}
+                       "behind": first["id"], "ahead": [first["id"], second["id"]], "by": "haiku", "seen": {}}
     assert store.last_event(second["id"], "dispatch_decided")["data"]["behind"] == first["id"]
     line = f"waits for #{first['id']}: it changes the importer #{first['id']} rewrites"
     assert dispatch.waiting(store, store.get_task(held["id"])) == line
@@ -824,3 +824,46 @@ def test_a_running_task_longer_than_nine_in_ten_of_its_kind_s_passes_is_slow(sto
     other = store.create_task("docs", status="running", source="cauce", repo="r", kind="docs")
     store.add_event(other["id"], "planned", start="haiku/medium")
     assert flow.slow(store, store.get_task(other["id"]), now=time.time() + 3 * 3600) is None  # no history
+
+
+def test_a_wait_is_judged_again_once_the_work_ahead_changed_files(store: Store, monkeypatch):
+    first = store.enqueue("build the course API", repo="r", cwd="/x")
+    store.claim(first["id"])
+    held = store.enqueue("add the student page", repo="r", cwd="/x")
+    changed: list[str] = []
+    monkeypatch.setattr(flow, "with_changes", lambda store, t: {**t, "changed": list(changed)})
+    asked = []
+
+    def decide(task, ahead):
+        asked.append([t.get("changed") for t in ahead])
+        files = ahead[0].get("changed")
+        if not files:
+            return dispatch.Decision(False, f"unsure: #{first['id']} changed nothing yet")
+        return dispatch.Decision(True, "the API changes no page")
+
+    # Judged when the work ahead had changed nothing yet: it waits, and git is read again only
+    # once the wait is old enough.
+    assert flow.runnable(store, "r", parallel=True, decide=decide) == []
+    changed[:] = ["src/api/courses.ts"]
+    assert flow.runnable(store, "r", parallel=True, decide=decide) == []
+    assert asked == [[[]]]
+    monkeypatch.setattr(flow, "REJUDGE_S", 0.0)
+    assert [t["id"] for t in flow.runnable(store, "r", parallel=True, decide=decide)] == [held["id"]]
+    again = store.last_event(held["id"], "dispatch_decided")["data"]
+    assert again["moved"] == [first["id"]] and again["seen"] == {str(first["id"]): ["src/api/courses.ts"]}
+
+
+def test_a_wait_stands_while_the_work_ahead_changed_nothing_new(store: Store, monkeypatch):
+    first = store.enqueue("build the course API", repo="r", cwd="/x")
+    store.claim(first["id"])
+    held = store.enqueue("add the student page", repo="r", cwd="/x")
+    monkeypatch.setattr(flow, "with_changes", lambda store, t: {**t, "changed": ["src/api/courses.ts"]})
+    monkeypatch.setattr(flow, "REJUDGE_S", 0.0)
+    assert flow.runnable(store, "r", parallel=True,
+                         decide=lambda task, ahead: dispatch.Decision(False, "both change the API")) == []
+    # Nothing new ahead: the wait stands and asks nothing, however old it is.
+    assert flow.runnable(store, "r", parallel=True, decide=_never) == []
+    # A wait surfaces or names gave is a fact: never asked again.
+    store.add_event(held["id"], "dispatch_decided", parallel=False, reason="names", ahead=[first["id"]],
+                    by="surfaces", seen={})
+    assert flow.runnable(store, "r", parallel=True, decide=_never) == []

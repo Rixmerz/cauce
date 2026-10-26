@@ -2689,8 +2689,8 @@ def brief(
         if writes and (near := ci.related(verify, workdir)):
             files = "<the test files of what you changed>" if near[0] == "pytest" else "<the files you changed>"
             parts.append(f"While you work, run only the tests near your change ({near[1].format(files=files)}): "
-                         f"the full `{verify}` is slow, and cauce runs it when you are done. Run it yourself once, "
-                         "at the end, before you report.")
+                         f"the full `{verify}` is slow, and cauce runs it when you are done. Do not run it yourself "
+                         "before you report: cauce runs it as soon as you do, and hands you its failures to fix.")
     if dead_ends:
         lines = ["Fixes already tried against similar problems, here or in another repository. "
                  "Do not repeat one without saying why it would work this time:"]
