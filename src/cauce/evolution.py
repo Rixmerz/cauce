@@ -105,12 +105,17 @@ def settle(store: Store, *, now: datetime | None = None, tz: tzinfo | None = Non
         found = {**found, "roles": revisions.settle(store, now=now)}
     # A worker-learned note proven or dropped by the tasks whose brief carried it.
     weighed = notes.weigh(store)
+    from cauce import habits
+    from cauce.store import home
+
+    # A habits review's proposals that pass cauce's own check are installed (`habits.apply_reviews`).
+    installed = habits.apply_reviews(store, home())
     taken = None
     if found["ended"]:
         with store.immediate():
             if json.loads(store.meta(SNAPSHOT_KEY) or "{}").get("day") != _today(now, tz):
                 taken = _take(store, now, tz, False)
-    return {**found, "snapshot": taken, "notes": weighed}
+    return {**found, "snapshot": taken, "notes": weighed, "habits": installed}
 
 
 # --- the report --------------------------------------------------------------------------------

@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-10-26
+
+### Changed
+
+- **Reviewed habits are installed by cauce, as the standards settle, once its own check
+  passes** (the `habit_auto` setting). The review worker proposes; its word is never
+  trusted. When the evolution settles, or when the review's ending is about to be told,
+  cauce checks each proposal itself. It must be one
+  simple command that runs the habit's own program: no second command, pipe, redirection,
+  substitution or other variable. It must pass on a tracked file of its type at HEAD in a
+  temporary worktree, within 30 s, and write nothing. What passes is installed in the
+  repository's `.claude/settings.local.json`. What fails is refused with why. The ending
+  says each, with the line that removes an install. An installed habit that runs past 60 s
+  now counts toward turning itself off, as three failures in a row already did. Off: the
+  ending gives the install lines for the person, as in 0.45.0.
+
 ## [0.45.0] - 2026-10-25
 
 ### Fixed

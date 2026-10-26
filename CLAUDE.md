@@ -36,7 +36,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `trunk`, `overlap`, `habit_review`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `trunk`, `overlap`, `habit_review`, `habit_auto`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets, and the jobs a person quieted per repository |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -738,14 +738,24 @@ yields the default kind, not a guess.
   worker's task is a place of its own, the home directory and temporary folders
   are no repository (`habits._project`), and a command that does not check the
   edit's file type is no habit (`habits.ECOSYSTEMS`).
-- Nothing in cauce writes to a settings file except `cauce habits install`,
-  run by a person. A project's new habits are reviewed once each by a read-only
-  worker, queued at SessionStart at most once a day (`habits.queue_review`,
-  the `habit_review` setting, with `autowork`): it finds the tool, a command
-  scoped to the edited file (`$CAUCE_EDITED`), runs and times it; its ending
-  gives the install lines for reviewed ids only (`hooks.habit_lines`), which the
-  orchestrator puts to the person and runs only on their yes. Tests run with
-  `CAUCE_HABIT_REVIEW=off`.
+- Nothing in cauce writes to a settings file but a habit: `cauce habits install`, run by a
+  person, or cauce itself installing a reviewed habit (`habits.apply_reviews`, the
+  `habit_auto` setting), and only the repository's `.claude/settings.local.json`. A
+  project's new habits are reviewed once each by a read-only worker, queued at
+  SessionStart at most once a day (`habits.queue_review`, the `habit_review` setting,
+  with `autowork`): it finds the tool, a command scoped to the edited file
+  (`$CAUCE_EDITED`), runs and times it. Its proposal is never trusted: in
+  `evolution.settle` and in the review's ending before it is told (whichever way it is
+  delivered), never a GET, cauce installs only what passes its own check
+  (`habits.vet`): one simple command that runs the habit's own program (`shaped`: no
+  second command, pipe, redirection, substitution or other variable), passing on a
+  tracked file of its type at HEAD in a temporary worktree, within
+  `habits.REVIEW_SECONDS`, writing nothing. Each install and refusal is an event on the
+  review (`habit_installed`, `habit_refused`) and its ending says it with the line that
+  removes it; with `habit_auto` off the ending gives the install lines for the person. A
+  worker never runs `cauce habits install` or `review`. An installed habit that fails
+  three times in a row, or runs past `habits.SLOW_SECONDS`, turns itself off. Tests run
+  with `CAUCE_HABIT_REVIEW=off` and `CAUCE_HABIT_AUTO=off`.
 - A check whose failures are mostly the test runners' own timeout lines
   (`launch.check_timed_out`) after a claimed pass is `environment` with
   `load`: the level halves on it, the same cell goes again after each of
