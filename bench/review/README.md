@@ -140,3 +140,18 @@ cell.
 
 opus/medium was a quarter faster and missed the hardest bug every time, which is quality lost.
 Reviews stay where they start, at opus/high.
+
+## How much effort cauce's independent verifier needs (`recheck.py`, `effort.py`)
+
+Each arm is the verifier alone (`verifier_brief`, read-only, no ledger rows), three runs per cell.
+
+| Change | Cell | Caught | False rows | Wall p50 | Cost p50 |
+|---|---|---|---|---|---|
+| the fix with three slips (`recheck.py`) | sonnet/high | U 3/3, N 3/3, R 3/3 | 0 | 58 s | $0.23 |
+| the fix with three slips | sonnet/medium | U 3/3, N 3/3, R 3/3 | 0 | 34 s | $0.09 |
+| `volume` (`effort.py`, 14 bugs a run) | sonnet/high | 27/42 | | 51 s | $0.15 |
+| `volume` | sonnet/medium | 20/42, no H bug | | 36 s | $0.10 |
+
+At medium the verifier was 30 to 40% faster and caught every slip of a small fix, but missed a
+quarter of what high caught on the large change, every hidden-behaviour bug among them. The
+verifier stays at high.
