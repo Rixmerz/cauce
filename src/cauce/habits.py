@@ -31,7 +31,9 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
+import time
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -348,8 +350,9 @@ def review_brief(found: Sequence[Candidate]) -> str:
         "formatter's check, the tests next to it), else the narrowest check. Run it once on a real file of "
         f"that type and time it: over {REVIEW_SECONDS} seconds is too slow for a hook. Skip one too slow, one "
         "that checks far more than the edit, or one the session ran out of routine rather than because of "
-        f"that edit. The command is one line under {REVIEW_COMMAND_CHARS} characters: a hook that needs a "
-        "script is a skip. Each criterion's evidence starts with its verdict, exactly "
+        f"that edit. The command is one line under {REVIEW_COMMAND_CHARS} characters, one simple command "
+        "with no `;`, `&&`, pipe, redirection or `$(…)`: a hook that needs a script is a skip. cauce runs it "
+        "again itself before it installs it. Each criterion's evidence starts with its verdict, exactly "
         f"`install <id>: `<command>`` (the command in backticks, as you ran it) or `skip <id>: <why>`, then "
         "its wall time and what you found.")
 
@@ -404,6 +407,129 @@ def queue_review(store: Store, *, repo: str, cwd: str, session_id: str | None,
     if kick is not None:
         kick(str(top), repo)
     return task
+
+
+#: What a reviewed command may never hold: a second command, a pipe, a redirection, a command
+#: substitution, or a variable other than the edited file. A hook cauce installs on its own
+#: runs exactly the habit's program on that file, nothing else.
+_SHELL = re.compile(r"[;&|<>`\n\\]|\$\(|\$(?!\{?CAUCE_EDITED\}?)")
+#: Runners a habit's program may be started through (`uv run pytest`, `npx eslint`).
+_RUNNERS = frozenset({"uv", "npx", "pnpm", "yarn", "bunx", "poetry", "python", "python3", "-m", "run", "exec",
+                      "dlx"})
+#: A run of an installed habit over this many seconds counts toward turning it off.
+SLOW_SECONDS = 2 * REVIEW_SECONDS
+#: The setting that has cauce install a review's vetted habits itself.
+AUTO = "habit_auto"
+
+
+def shaped(command: str, candidate: Candidate) -> str | None:
+    """Why a review's command cannot be installed without a person, or None: it must be one
+    simple command (`_SHELL`) that runs the habit's own program (`deno-fmt` → `deno fmt`),
+    after any `VAR=value` and a runner."""
+    if len(command) > REVIEW_COMMAND_CHARS:
+        return f"it is over {REVIEW_COMMAND_CHARS} characters"
+    if _SHELL.search(command):
+        return "it is more than one simple command (a pipe, a redirection, a substitution or another variable)"
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return "it does not parse as a command"
+    words = [w for w in words if not re.fullmatch(r"[A-Z_][A-Z0-9_]*=\S*", w)]
+    program = candidate.steps[-1].removeprefix("bash:").split("-")
+    while words and words[0] in _RUNNERS and words[0] != program[0]:
+        words = words[1:]
+    if not words or Path(words[0]).name != program[0] or (len(program) > 1 and program[1] not in words[1:3]):
+        return f"it does not run the habit's program ({' '.join(program)})"
+    return None
+
+
+def vet(command: str, candidate: Candidate, repo_dir: Path, root: Path) -> tuple[str | None, float | None]:
+    """cauce's own check of a review's command before it installs it, never the worker's word:
+    its shape (`shaped`), then a run in a temporary worktree at HEAD on a tracked file of the
+    habit's type, which must pass, finish in `REVIEW_SECONDS` and write nothing. Why it cannot
+    be installed (None when it can), and the seconds the run took."""
+    if (why := shaped(command, candidate)) is not None:
+        return why, None
+    from cauce import isolate
+
+    suffix = candidate.steps[0].split(":", 1)[1]
+    try:
+        with isolate.at_base(repo_dir, "HEAD", root) as tree:
+            files = subprocess.run(["git", "ls-files", "-z", f"*{suffix}"], cwd=tree, capture_output=True,
+                                   text=True, check=False).stdout.split("\0")
+            target = next((f for f in files if f and not Path(f).name.startswith(".")), None)
+            if target is None:
+                return f"no tracked {suffix} file to try it on", None
+            before = isolate.fingerprint(tree)
+            started = time.monotonic()
+            try:
+                proc = subprocess.run(command, shell=True, cwd=tree, capture_output=True, text=True,  # noqa: S602
+                                      timeout=REVIEW_SECONDS, check=False,
+                                      env={**os.environ, EDITED_VAR: str(tree / target)})
+            except subprocess.TimeoutExpired:
+                return f"it ran past {REVIEW_SECONDS} s on {target}", float(REVIEW_SECONDS)
+            seconds = round(time.monotonic() - started, 2)
+            if proc.returncode != 0:
+                return (f"it failed on {target} at HEAD (exit {proc.returncode}): a hook must pass on clean code",
+                        seconds)
+            if before is None or isolate.fingerprint(tree) != before:
+                return "it wrote files: a hook checks, it never changes the work", seconds
+            return None, seconds
+    except (isolate.IsolationError, OSError) as exc:
+        return f"it could not be tried: {exc}", None
+
+
+def apply_reviews(store: Store, root: Path, *, env: Mapping[str, str] | None = None,
+                  task_ids: Sequence[int] | None = None) -> list[dict[str, Any]]:
+    """Install what passing habits reviews proposed and cauce's own check (`vet`) passed, once
+    per review, as the evolution settles: from `evolution.settle`, never a GET. Every install
+    and every refusal is an event on the review (`habit_installed`, `habit_refused`), and its
+    ending says each with the line that removes it. Nothing with `habit_auto` off."""
+    from cauce import config
+
+    if not config.enabled(AUTO, dict(os.environ) if env is None else env):
+        return []
+    done: list[dict[str, Any]] = []
+    tasks = ([t for t in (store.get_task(i) for i in task_ids) if t and t["status"] == "done"]
+             if task_ids is not None else store.list_tasks(source=("queue",), status=("done",), limit=200))
+    for task in tasks:
+        options = json.loads(task.get("options") or "{}")
+        reviewed = options.get("habit_review")
+        if not reviewed or store.meta(f"habits.applied:{task['id']}"):
+            continue
+        with store.immediate():
+            if store.meta(f"habits.applied:{task['id']}"):
+                continue
+            store.set_meta(f"habits.applied:{task['id']}", "1")
+        top = checkout_of(task.get("cwd"))
+        finished = next((e["data"] for e in reversed(store.events(task_id=task["id"], limit=500))
+                         if e["kind"] == "finished"), {})
+        texts = [str(c.get("evidence") or "") for c in (finished.get("verdict") or {}).get("criteria") or ()]
+        installs, _ = review_verdicts([*texts, str(task.get("result") or "")], reviewed)
+        known = {c.id: c for c in current(store, task.get("repo"), top)}
+        for cid, command in installs.items():
+            candidate = known.get(cid)
+            why, seconds = (("it no longer passes the gates", None) if candidate is None else
+                            ("its checkout is gone", None) if top is None else vet(command, candidate, top, root))
+            if why is None and candidate is not None and top is not None:
+                habit_id, _ = install(store, candidate, command=command, repo_dir=top)
+                store.add_event(task["id"], "habit_installed", habit=habit_id, candidate=cid, command=command,
+                                seconds=seconds)
+                done.append({"task": task["id"], "candidate": cid, "habit": habit_id})
+            else:
+                store.add_event(task["id"], "habit_refused", candidate=cid, command=command, why=why,
+                                seconds=seconds)
+                done.append({"task": task["id"], "candidate": cid, "refused": why})
+    return done
+
+
+def current(store: Store, repo: str | None, repo_dir: Path | None) -> list[Candidate]:
+    """Every habit a repository has now, its own and offered: what a review's ids are read against."""
+    if not repo:
+        return []
+    load_events(store)
+    here, elsewhere = for_repo(store.tool_events(days=REVIEW_DAYS), repo, repo_dir)
+    return [*here, *elsewhere]
 
 
 def recipes(store: Store, kind: str, *, repo: str | None, limit: int = 2) -> list[str]:
@@ -506,11 +632,14 @@ def run_habit(store: Store, habit_id: int, event: Mapping[str, Any]) -> str | No
     if not path.endswith(habit["trigger_suffix"]):
         return None
     try:
+        started = time.monotonic()
         # The file the edit wrote, for a command scoped to it (`ruff check "$CAUCE_EDITED"`).
         proc = subprocess.run(habit["command"], shell=True, cwd=event.get("cwd") or None,  # noqa: S602
                               capture_output=True, text=True, timeout=110, check=False,
                               env={**os.environ, EDITED_VAR: path})
         ok, output = proc.returncode == 0, (proc.stdout + proc.stderr).strip()
+        if ok and time.monotonic() - started > SLOW_SECONDS:
+            ok, output = False, f"it passed but took over {SLOW_SECONDS} s: too slow to run after every edit"
     except subprocess.TimeoutExpired:
         ok, output = False, "it ran past 110 seconds and was stopped"
     except OSError as exc:

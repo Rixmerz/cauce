@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.45.0",
+  "version": "0.46.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -121,6 +121,12 @@
       "type": "boolean",
       "title": "Review new habits with a worker",
       "description": "A habit cauce newly finds in a project (an edit followed by the same check, again and again) is reviewed by a read-only worker: whether the tool is here, a command scoped to the edited file, run and timed. Its ending gives the install line, which the session puts to you; nothing is installed without your yes. Off: habits wait for `cauce habits`.",
+      "default": true
+    },
+    "habit_auto": {
+      "type": "boolean",
+      "title": "Install reviewed habits on their own",
+      "description": "A habit the review worker proposes is installed by cauce once its own check passes: one simple command that runs the habit's program, passes on clean code at HEAD in a temporary worktree, finishes within 30 s and writes nothing. The ending says what was installed and the line that removes it; a habit that fails three times in a row, or keeps running past 60 s, turns itself off. Off: the session asks you before each install.",
       "default": true
     },
     "engram": {

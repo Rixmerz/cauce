@@ -743,10 +743,10 @@ def _endings(store: Store, session_id: str, *, via: str, mark: bool = True) -> s
     return f"{told}\n\n{loop_text}" if told else loop_text
 
 
-def habit_lines(task: Mapping[str, Any]) -> list[str]:
-    """A habits review's verdicts (`habits.queue_review`), read from its criteria's evidence and
-    its summary: the install lines, built by cauce with the command quoted, go to the person,
-    never run unasked."""
+def habit_lines(task: Mapping[str, Any], store: Store | None = None) -> list[str]:
+    """A habits review's outcome (`habits.queue_review`): what cauce installed after its own
+    check (`habits.apply_reviews`) and what it refused, each with why; else the install lines,
+    built by cauce with the command quoted, for the person (with `habit_auto` off)."""
     from cauce import habits
 
     try:
@@ -763,6 +763,23 @@ def habit_lines(task: Mapping[str, Any]) -> list[str]:
     skipped = [f"skip {cid}: {why}" for cid, why in skips.items()]
     unanswered = [cid for cid in reviewed if cid not in installs and cid not in skips]
     tail = [f"    not answered: {', '.join(unanswered)} (`cauce habits` lists them)"] if unanswered else []
+    if store is not None and task.get("id"):
+        try:  # the review is applied before it is told, whichever way its ending is delivered
+            habits.apply_reviews(store, home(), task_ids=[int(task["id"])])
+        except Exception:  # its ending still goes out, with the lines for the person
+            note_error(home(), "endings (habits)")
+    applied = [e for e in (store.events(task_id=int(task["id"]), limit=500) if store and task.get("id") else ())
+               if e["kind"] in ("habit_installed", "habit_refused")]
+    if applied:
+        lines = ["  habits review: cauce checked each proposal itself (one simple command, passing at HEAD, "
+                 "fast, writing nothing). Tell the person:"]
+        for e in applied:
+            d = e["data"]
+            took = f", {d['seconds']} s" if d.get("seconds") is not None else ""
+            lines.append(f"    installed habit #{d['habit']} ({d['candidate']}): `{d['command']}` after each edit"
+                         f"{took}; `cauce habits uninstall {d['habit']}` removes it" if e["kind"] == "habit_installed"
+                         else f"    not installed {d['candidate']}: {d['why']} (proposed `{d['command']}`)")
+        return [*lines, *(f"    {line}" for line in skipped), *tail]
     if not installs:
         return [f"  habits review: nothing worth a hook ({len(skips)} skipped)"
                 + (": " + "; ".join(skipped) if skipped else ""), *tail]
@@ -806,7 +823,7 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
         lines += _behind(store, t)
         lines += _found_before(store, t)
         lines += _overlaps(store, t)
-        lines += habit_lines(t)
+        lines += habit_lines(t, store)
         if t["status"] == "done" and grouped:
             branch = data.get("branch")
             lines.append(f"  passed at {data.get('final_cell') or t['final_cell']}"

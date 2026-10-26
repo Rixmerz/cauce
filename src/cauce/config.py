@@ -72,6 +72,10 @@ DEFAULTS: dict[str, Any] = {
     # command scoped to the edited file, timed): its ending lists the install line for the
     # orchestrator to put to the person. Installing stays theirs (`cauce habits install`).
     "habit_review": True,
+    # A review's habits that pass cauce's own check (one simple command running the habit's
+    # program, passing on clean code at HEAD, fast, writing nothing) are installed by cauce
+    # itself, said in the ending with the line that removes them. Off: the person installs.
+    "habit_auto": True,
     # engram (the team's memory, when its server runs): searched into the brief,
     # and handed to workers read-only. See `cauce.adapters.engram`.
     "engram": True,
