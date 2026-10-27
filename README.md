@@ -621,6 +621,15 @@ queued without spending a turn; `cauce queue add "<task>" --verify "<cmd>"`
 does the same from a shell. Either way the task stays the session's: it shows
 under that session in the UI.
 
+Queueing says how long tasks like it took in this repository, when there are
+enough of them. While it runs, the status line shows how far each task got:
+`🔵 1 running (#389 implementing · 4m of ≈7m · 3 files +120 −8)`. That is its
+worker's phase, or cauce's check or the independent check when its worker is
+done; its time against the usual for its kind here; and what it wrote so far,
+read from its worktree. A worker with no tool call for five minutes is said
+quiet: a long command, or stuck. The board, the task page, `cauce tasks` and
+the mod's `tasks` tool say the same.
+
 A `++` or a `cauce queue add` also starts the repository's dispatcher
 (`autowork`, on by default), so queued work runs at once in workers, never in
 the session's context; `cauce work` starts it by hand. One dispatcher runs per

@@ -26,6 +26,7 @@ from cauce import (
     hooks,
     orchestrate,
     orchestrator,
+    progress,
     project,
     repo,
     stops,
@@ -241,9 +242,12 @@ def _queue_after(args: argparse.Namespace, options: orchestrate.Options) -> int:
         said = _held_line(store, task["id"])
         if held and (note := after.caveat(store, held, task["repo"])):
             said += f" ({note})"
+        eta = progress.expected_line(store, task)
     finally:
         store.close()
     print(f"queued #{task['id']} — {task['title']}: {said}. {then}")
+    if eta:
+        print(eta)
     print(f"watch it: `cauce show {task['id']}`, or `cauce events --task {task['id']} --follow`; "
           "its ending reaches the session that sent it")
     return 0
@@ -941,7 +945,8 @@ def cmd_tasks(args: argparse.Namespace) -> int:
             tried = {t["id"]: store.attempts(t["id"]) for t in tasks}
             tasks = sorted((t for t in tasks if tried[t["id"]]), key=lambda t: (str(t.get("repo") or ""), -t["id"]))
         seen: dict[tuple[str, str], list[float]] = {}
-        waits = {t["id"]: dispatch.waiting(store, t) or flow.slow(store, t, seen=seen) for t in tasks}
+        waits = {t["id"]: (progress.line(progress.of(store, t)) if t["status"] == "running" else "")
+                 or dispatch.waiting(store, t) or flow.slow(store, t, seen=seen) for t in tasks}
         # None here, but work elsewhere: say how much and where to see it.
         elsewhere = [] if tasks or here is None else store.list_tasks(
             status=args.status or None, limit=10_000, source=sources)
@@ -1476,11 +1481,14 @@ def cmd_queue(args: argparse.Namespace) -> int:
             said = _held_line(store, task["id"]) if args.after is not None else None
             if said and (note := after.caveat(store, options[after.KEY], task["repo"])):
                 said += f" ({note})"
+            eta = progress.expected_line(store, task)
             if args.json:
                 print(json.dumps({**{k: task[k] for k in ("id", "title", "status", "repo", "cwd")}, "then": then,
-                                  **({"waits": said} if said else {})}, ensure_ascii=False))
+                                  **({"waits": said} if said else {}), **({"expected": eta} if eta else {})},
+                                 ensure_ascii=False))
             else:
-                print(f"queued #{task['id']} — {task['title']}" + (f": {said}" if said else "") + f". {then}")
+                print(f"queued #{task['id']} — {task['title']}" + (f": {said}" if said else "") + f". {then}"
+                      + (f"\n{eta}" if eta else ""))
             return 0
         if args.queue_command == "rm":
             task = store.get_task(args.id)

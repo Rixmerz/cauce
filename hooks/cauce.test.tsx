@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
+import { statusLine } from './cauce-cli'
 
 type Run = { exitCode: number; stdout: string; stderr?: string }
 type Answer = Run | ((argv: readonly string[]) => Run)
@@ -311,6 +312,7 @@ const BOARD = {
     { id: 9, title: 'docs', status: 'done', branch: 'cauce/task-9', asks: 'review branch cauce/task-9, then merge it' },
   ],
   running: [{ id: 14, title: 'write stats', status: 'running', current_cell: 'sonnet/medium',
+    progress_line: 'implementing · 4m of ≈7m · 3 files +120 −8',
     slow: 'running 101m: longer than 9 in 10 of the 6 ui tasks that passed here (p90 40m)' }],
   queued: [{ repo: 'r', paused: false, reason: null, tasks: [{ id: 15, title: 'add median', status: 'queued' }] }],
 }
@@ -322,7 +324,7 @@ test('tasks says what waits on the person and how it goes on', async ($, on) => 
   expect(answer.result).toContain('yours to decide (resume, rewrite or dismiss with why): #13 [replan] reduce the app')
   expect(answer.result).toContain("allow it: cauce resume 12 --allow 'Bash(npm test:*)'")
   expect(answer.result).toContain('review branch cauce/task-9, then merge it')
-  expect(answer.result).toContain('running: #14 write stats (sonnet/medium)\n  slow: running 101m: longer than 9 in 10')
+  expect(answer.result).toContain('running: #14 write stats (sonnet/medium)\n  now: implementing · 4m of ≈7m · 3 files +120 −8\n  slow: running 101m')
   expect(answer.result).toContain('queued: #15 add median')
 })
 
@@ -669,14 +671,15 @@ test('the status entry counts the board and clears when it is empty', async ($, 
   let board = JSON.stringify(BOARD)
   const { seen, clock } = await started($, on, { board: () => ({ exitCode: 0, stdout: board }) })
   await clock.advance(15_000)
-  expect(seen.status.at(-1)).toBe('cauce · 🟣 3 for the orchestrator · 🔵 1 running · ⚪ 1 queued')
-  board = JSON.stringify({ ...BOARD, running: [{ ...BOARD.running[0], phase: 'checking' }] })
+  expect(seen.status.at(-1)).toBe('cauce · 🟣 3 for the orchestrator · 🔵 1 running (#14 implementing · 4m of ≈7m · 3 files +120 −8) · ⚪ 1 queued')
+  // a cauce that says no progress: the phases, as before
+  board = JSON.stringify({ ...BOARD, running: [{ ...BOARD.running[0], phase: 'checking', progress_line: null }] })
   await clock.advance(15_000)
   expect(seen.status.at(-1)).toBe('cauce · 🟣 3 for the orchestrator · 🔵 1 running (checking) · ⚪ 1 queued')
   // the waits this session sent come first, the rest of the project's apart
   board = JSON.stringify({ ...BOARD, counts: { ...BOARD.counts, mine: 1 } })
   await clock.advance(15_000)
-  expect(seen.status.at(-1)).toBe('cauce · 🟣 1 for the orchestrator · 2 more in the project · 🔵 1 running · ⚪ 1 queued')
+  expect(seen.status.at(-1)).toBe('cauce · 🟣 1 for the orchestrator · 2 more in the project · 🔵 1 running (#14 implementing · 4m of ≈7m · 3 files +120 −8) · ⚪ 1 queued')
   expect(seen.argv.some(a => a[0] === 'board' && a.includes('--session') && a.includes('sess-1'))).toBe(true)
   board = EMPTY_BOARD
   await clock.advance(15_000)
@@ -696,4 +699,12 @@ test('/cauce starts the web board detached and says where it is; no pane, no ban
   const spawned = seen.argv.find(args => args[0] === '-c')
   expect(spawned?.[1]).toContain('ui --open --tabs --session "$1"')
   expect(spawned?.[3]).toBeTruthy()
+})
+
+test('the status line tells each of a few running tasks how far it got, and counts more', () => {
+  const counts = { needs_you: 0, running: 1, queued: 0 }
+  expect(statusLine(counts, [{ id: 7, phase: 'implementing', progress_line: 'implementing · 4m of ≈7m · 2 files +40 −3' }]))
+    .toBe('cauce · 🔵 1 running (#7 implementing · 4m of ≈7m · 2 files +40 −3)')
+  const many = [1, 2, 3].map(id => ({ id, phase: 'exploring', progress_line: 'exploring · 1m' }))
+  expect(statusLine({ ...counts, running: 3 }, many)).toContain('3 running (exploring)')
 })

@@ -85,7 +85,8 @@ export async function renderBoard(ctx) {
       column("Running", running.length, [
         ...running.map((t) => card(t, ctx.openTask, [statusBadge("running"),
           t.phase ? h("span", { class: `chip phase p-${t.phase}` }, t.phase) : null, h("span", {}, `attempt ${t.attempt ?? 1}`),
-          h("span", {}, when(t.updated_at))])),
+          // How far it got: its stage, time against its kind's usual here, what it wrote, a quiet worker.
+          t.progress_line ? h("span", { class: "progress-line" }, t.progress_line) : h("span", {}, when(t.updated_at))])),
         ...(answering ? [h("div", { class: "empty" }, `${answering} session${answering === 1 ? "" : "s"} answering a prompt now`)] : [])],
         "running"),
       column("Queued", b.queued.reduce((n, lane) => n + lane.tasks.filter(keep).length, 0), [

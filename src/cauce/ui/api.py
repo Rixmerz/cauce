@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from cauce import capacity, config, dispatch, flow, habits, phase, project, stops, usage
+from cauce import capacity, config, dispatch, flow, habits, phase, progress, project, stops, usage
 from cauce.matrix import LADDERS
 from cauce.store import Store
 
@@ -120,6 +120,9 @@ def board(store: Store, repos: set[str] | None = None, session: str | None = Non
             steps = len((item.get("flow") or {}).get("steps", []))
             item["worker"] = worker_of(store, t, steps) if item.get("flow") else None
             item["slow"] = flow.slow(store, t, seen=slow_seen)
+            # How far it got: time against its kind's usual, its stage, what it wrote, a quiet worker.
+            item["progress"] = progress.of(store, t)
+            item["progress_line"] = progress.line(item["progress"])
             running.append(item)
         elif t["status"] == "done":
             finished = store.final_event(t["id"])
@@ -310,7 +313,9 @@ def _live(store: Store, task: dict[str, Any], attempts: list[dict] | None = None
     if not seq:
         ran = attempts if attempts is not None else store.attempts(task["id"])
         seq = ran[-1]["seq"] + 1 if ran else 1
-    return {"attempt_now": seq, "phase": phase.of(task["id"], seq), "recent_calls": phase.calls(task["id"], seq)}
+    found = progress.of(store, task)
+    return {"attempt_now": seq, "phase": phase.of(task["id"], seq), "recent_calls": phase.calls(task["id"], seq),
+            "progress": found, "progress_line": progress.line(found)}
 
 
 def task_live(store: Store, task_id: int) -> dict[str, Any] | None:
