@@ -105,6 +105,47 @@ def diffstat(where: Path) -> dict:
     return {"files": len(rows), "added": added, "removed": removed, "added_tests": tests}
 
 
+#: The medium build as the two tasks a session would send side by side: files apart, merged after.
+SPLIT = (
+    ("feature", "Add pricing rules: loyalty members get their tier's discount on the order (gold 10%, silver "
+     "5%); cart lines tagged promo get 15% off; a line of 10 or more of one item gets 5% off that line. Add tests "
+     "for them."),
+    ("implement", "Add a printed receipt, `tally.receipt.receipt(cart, customer) -> str`, one row per line and "
+     "one per discount the checkout applies (with its sign) and then the total, and a CSV export of an order for "
+     "finance, `tally.export.rows(cart, customer) -> list[str]`, a header row, one row per line (item, qty, unit "
+     "price, line total) and a total row. Take the discounts from the checkout as it applies them; do not add or "
+     "change pricing rules. Add tests for them."),
+)
+
+
+def split(where: Path) -> dict:
+    """`cauce-split`: the two tasks of `SPLIT` run at once, each with the kind a session gives it, in one cauce
+    home; their branches merged into the checkout after (a conflict is recorded, nothing resolved)."""
+    home = Path(tempfile.mkdtemp(prefix="cauce-home-"))
+    env = {**os.environ, "CAUCE_HOME": str(home), "CAUCE_AUTOWORK": "off", "CAUCE_NAMES": "off"}
+    env.pop("CAUCE_SESSION_ID", None)
+    env.pop("CLAUDE_CODE_SESSION_ID", None)
+    runs = [subprocess.Popen([str(ROOT / "bin" / "cauce"), "run", text, "--verify", "make test", "--kind", kind],
+                             cwd=where, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for kind, text in SPLIT]
+    for run in runs:
+        run.wait(timeout=7200)
+    db = sqlite3.connect(home / "cauce.db")
+    tasks = db.execute("SELECT id, status, cost_usd FROM tasks WHERE source = 'cauce' ORDER BY id").fetchall()
+    db.close()
+    shutil.rmtree(home, ignore_errors=True)
+    git = ["git", "-c", "user.email=b@b", "-c", "user.name=b"]
+    conflict = False
+    for task_id, _, _ in tasks:
+        merged = subprocess.run([*git, "merge", "--no-ff", "-q", "-m", f"task {task_id}", f"cauce/task-{task_id}"],
+                                cwd=where, capture_output=True, text=True)
+        if merged.returncode != 0:
+            conflict = True
+            subprocess.run(["git", "merge", "--abort"], cwd=where, capture_output=True)
+    return {"cost": round(sum(float(c or 0) for _, _, c in tasks), 4), "status": [s for _, s, _ in tasks],
+            "conflict": conflict}
+
+
 def one(arm: str, variant: str) -> dict:
     where = build.repository(variant)
     if arm.startswith("karpathy:") or arm.endswith("+karpathy"):
@@ -114,7 +155,8 @@ def one(arm: str, variant: str) -> dict:
                        cwd=where, check=True)
     began = time.monotonic()
     try:
-        got = (cauce(where, ask(variant), arm.removesuffix("+karpathy")) if arm.startswith("cauce")
+        got = (split(where) if arm == "cauce-split"
+               else cauce(where, ask(variant), arm.removesuffix("+karpathy")) if arm.startswith("cauce")
                else plain(arm.removeprefix("karpathy:"), where, ask(variant)))
     except subprocess.TimeoutExpired:
         got = {"error": "timed out"}

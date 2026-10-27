@@ -327,7 +327,8 @@ export const register: Register = (on, options) => {
           verify: { type: 'string', description: "the repository's own check, e.g. npm test" },
           kind: {
             type: 'string',
-            description: `only when you know it: ${KINDS.join(', ')}; left out, cauce classifies the task`,
+            description: `the kind you read the task as: ${KINDS.join(', ')}. Given, cauce starts the worker `
+              + 'without classifying it again (a model call of a few seconds); left out, cauce classifies the task',
           },
         },
         required: ['task'],

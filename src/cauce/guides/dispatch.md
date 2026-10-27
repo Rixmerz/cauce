@@ -28,10 +28,12 @@ it needs of those. Add `--verify` whenever the repository has a command that pro
 worker's own claim of success is not evidence, and cauce runs the check
 itself, so it needs no permission. The report says what the task cost;
 nothing limits it for money: its room is its turns.
-Leave `--kind` out: cauce classifies the task. Pass it only with one of
-`explore`, `review-routine`, `review-critical`, `plan`, `docs`, `test`,
-`ui`, `refactor`, `implement`, `feature`, `debug-repro`, `debug-unclear`
-(`cauce run --help` lists them). A task that must change nothing says
+Pass `--kind` with the kind you read the request as, one of `explore`,
+`review-routine`, `review-critical`, `plan`, `docs`, `test`, `ui`, `refactor`,
+`implement`, `feature`, `debug-repro`, `debug-unclear` (`cauce run --help`
+lists them): you have read it already, and cauce's classifier would read it
+again in a model call of its own, a few seconds before the worker starts. Left
+out, cauce classifies it. A task that must change nothing says
 "read-only" in its text: that is enough, whatever kind it gets.
 
 Never pipe a run through `tail`, `head` or `grep`: the pipe hides its exit
