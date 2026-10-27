@@ -2,7 +2,44 @@
 
 ## [Unreleased]
 
+### Added
+
+- **The first task in a small repository starts with livespec's index:** a repository livespec
+  has not indexed is indexed before its first task when it is small enough (its tracked files
+  within 20 per second of the wait), so the task gets the code map and livespec's tools instead
+  of running without them. The wait is `index_wait` (seconds, 20 by default; `cauce config
+  index_wait N`, `CAUCE_INDEX_WAIT`, or the plugin option; `0` never waits) and the run is cut at
+  it. A larger repository, an index that outlasts the wait and one another run holds go on in the
+  background as before, and the plan says which.
+- **The independent check gets livespec's tools:** where the repository has an index, the check
+  (the late one too) is handed livespec's MCP server behind a new `livespec` policy of
+  `mcp_guard`, an allow-list of reading tools; anything that could change the index or the specs
+  is refused, whatever a tool's own read-only hint says (`export_openspec` carries it and writes
+  files). Before, it only read the reach as text.
+- **`cauce specs` reports the specs' structure:** where livespec runs, it syncs `openspec/` into
+  its index and asks its `validate_openspec` (a tool with no command line, so over MCP on stdio),
+  and prints the problems (a requirement with no scenario, no normative keyword, no title) after
+  the drift, or says why it could not. A repository livespec has not indexed is indexed first, within
+  `index_wait`; one too large for it says it is not validated yet.
+
+### Changed
+
+- **livespec is pinned to 0.34.0, and follows the installed plugin:** 0.34.0 fixes a `group_db`
+  bug. When cauce runs livespec through `uvx` it now uses the release in the newest installed
+  livespec plugin's own manifest, else the one it was built against, and a test fails when that
+  falls behind the plugin cache.
+- **A failed index is tried again by the next task:** it was kept until the checkout moved, so a
+  repository whose index broke for a reason since gone stayed without it. The failure is still
+  said once.
+- **`cauce specs first on` with no `openspec/` says so plainly:** spec-first is on but nothing is
+  enforced until `openspec/` exists, on the command that turns it on and on each look after it.
+
 ### Fixed
+
+- **A change of tests, lockfiles, config or generated files no longer "owes a spec":** in a spec-first
+  repository, any file outside `docs/` that was not a document counted as code that owed its spec,
+  so a build that only touched `package-lock.json`, a CI file, a test or `dist/` was held back for a
+  spec it had nothing to write. Those files are left out.
 
 - **A task sent from a folder that holds several repositories showed nothing of its work:** such
   a folder is no checkout, so the task runs with no worktree, and its progress line, `cauce peek`

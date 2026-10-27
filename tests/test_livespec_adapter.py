@@ -6,6 +6,8 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from cauce.adapters import ABSENT, PRESENT, UNREADABLE, Status
 from cauce.adapters import livespec as livespec_mod
 from cauce.adapters.livespec import _HINTS, PINNED, TOOLS, Livespec, is_test_path
@@ -246,17 +248,14 @@ def test_the_real_schema_is_read_read_only(tmp_path, git_repo):
         assert conn.execute("SELECT count(*) FROM spec").fetchone()[0] == 1
 
 
-def test_a_failed_index_is_not_tried_again_until_the_checkout_moves(tmp_path, git_repo):
+def test_a_failed_index_is_remembered_until_one_succeeds_and_tried_again_by_the_next_task(tmp_path, git_repo):
     failing = adapter(tmp_path, tool(tmp_path, "uvx"), runner=lambda argv, **kw: subprocess.CompletedProcess(
         argv, 1, "", "Workspace directory not found: /old/path"))
     assert failing.last_failure(git_repo) is None
     failing.refresh(git_repo)
     assert failing.last_failure(git_repo) == "Workspace directory not found: /old/path"
-    (git_repo / "next.py").write_text("x\n")
-    subprocess.run(["git", "add", "-A"], cwd=git_repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "next"], cwd=git_repo, check=True)
-    assert failing.last_failure(git_repo) is None  # the checkout moved: worth one more try
-    failing.refresh(git_repo)
+    # The checkout stays where it failed: the failure still stands, and it is no reason not to try.
+    assert failing.last_failure(git_repo) == "Workspace directory not found: /old/path"
     working = adapter(tmp_path, tool(tmp_path, "uvx"),
                       runner=lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "{}", ""))
     working.refresh(git_repo)
@@ -305,3 +304,148 @@ def test_a_resolver_error_on_a_plugin_release_is_read_as_unpublished_never_as_a_
     assert a.last_failure(git_repo) == "Workspace directory not found: /old"
     assert a.failure_said(git_repo) is False and a.failure_said(git_repo) is True
     assert a.last_failure(git_repo) == "Workspace directory not found: /old"
+
+
+def plugin_manifest(tmp_path: Path, version: str, *, mcp: bool = False) -> None:
+    folder = tmp_path / "cc" / "plugins" / "cache" / "rixmerz" / "livespec" / version
+    (folder / ".claude-plugin").mkdir(parents=True)
+    (folder / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "livespec", "version": version}))
+    if mcp:
+        (folder / ".mcp.json").write_text(json.dumps(
+            {"mcpServers": {"livespec": {"command": "uvx", "args": [f"livespec@{version}"]}}}))
+
+
+def test_the_pin_follows_the_installed_plugins_own_manifest(tmp_path):
+    assert adapter(tmp_path).pin() == PINNED
+    plugin_manifest(tmp_path, "0.31.0")
+    plugin_manifest(tmp_path, "0.99.0")  # newest by version, not by name order
+    a = adapter(tmp_path, tool(tmp_path, "uvx"))
+    assert a.pin() == "0.99.0"
+    # No `.mcp.json` to run: the manifest's release is what `uvx` is given.
+    assert a.server() == {"command": "uvx", "args": ["livespec@0.99.0"]}
+
+
+def test_a_manifest_release_uv_found_unpublished_is_not_pinned(tmp_path):
+    plugin_manifest(tmp_path, "0.99.0", mcp=True)
+    a = adapter(tmp_path, tool(tmp_path, "uvx"))
+    a._remember_unpublished("0.99.0")
+    assert a.pin() == PINNED
+    assert a.server() == {"command": "uvx", "args": [f"livespec@{PINNED}"]}
+
+
+def test_a_broken_manifest_leaves_the_built_in_pin(tmp_path):
+    folder = tmp_path / "cc" / "plugins" / "cache" / "rixmerz" / "livespec" / "0.40.0" / ".claude-plugin"
+    folder.mkdir(parents=True)
+    (folder / "plugin.json").write_text("{not json")
+    assert adapter(tmp_path).pin() == PINNED
+
+
+def test_the_built_in_pin_is_not_behind_the_newest_livespec_plugin_installed():
+    cache = Path("~/.claude/plugins/cache").expanduser()
+    newest = max((livespec_mod._version_tuple(p.name) or (0,) for p in cache.glob("*/livespec/*") if p.is_dir()),
+                 default=None)
+    if newest is None:
+        pytest.skip("no livespec plugin in this machine's plugin cache")
+    assert livespec_mod._version_tuple(PINNED) >= newest, (
+        f"PINNED is {PINNED} but the plugin cache holds livespec {'.'.join(map(str, newest))}: raise PINNED "
+        "(and check TOOLS and the hints against that release)")
+
+
+def test_a_first_index_within_a_budget_says_done_failed_large_or_pending(tmp_path, git_repo, monkeypatch):
+    seen = []
+
+    def runs(code, err=""):
+        def runner(argv, **kw):
+            seen.append(kw["timeout"])
+            return subprocess.CompletedProcess(argv, code, "{}", err)
+        return adapter(tmp_path, tool(tmp_path, "uvx"), runner=runner)
+
+    assert runs(0).refresh_within(git_repo, 20) == ("done", "livespec index refreshed")
+    assert len(seen) == 1 and 19 < seen[0] <= 20  # the run is cut at the budget, not at INDEX_TIMEOUT_S
+    outcome, words = runs(1, "boom").refresh_within(git_repo, 20)
+    assert outcome == "failed" and "boom" in words
+    # Too many files for the seconds offered: nothing runs.
+    monkeypatch.setattr(livespec_mod, "_tracked_files", lambda root: 20 * livespec_mod.FILES_PER_SECOND + 1)
+    seen.clear()
+    outcome, words = runs(0).refresh_within(git_repo, 20)
+    assert outcome == "large" and seen == [] and "401 tracked files" in words
+    # Another run holds the index and outlasts the budget: pending, the caller goes to the background.
+    monkeypatch.setattr(livespec_mod, "_tracked_files", lambda root: 3)
+    held = runs(0)
+    with lock(held.lock_path(git_repo), wait_s=0) as (got, _):
+        assert got
+        assert held.refresh_within(git_repo, 1)[0] == "pending"
+
+
+FAKE_SERVER = '''#!{python}
+import json, sys
+mode = {mode!r}
+for line in sys.stdin:
+    message = json.loads(line)
+    if "id" not in message:
+        continue
+    open({log!r}, "a").write(json.dumps(message) + "\\n")
+    if mode == "hang":
+        continue
+    if message["method"] == "initialize":
+        reply = {{"protocolVersion": "2024-11-05", "capabilities": {{}}}}
+    elif mode == "die" and message["params"]["name"] == "validate_openspec":
+        sys.exit(0)
+    elif mode == "error":
+        reply = {{"content": [{{"type": "text", "text": "boom"}}], "isError": True}}
+    elif message["params"]["name"] == "sync_openspec":
+        print("a log line that is no message", flush=True)
+        reply = {{"content": [{{"type": "text", "text": json.dumps({{"synced": 1}})}}]}}
+    else:
+        data = {{"valid": True, "error_count": 0, "warning_count": 1, "findings": []}}
+        reply = {{"content": [{{"type": "text", "text": "[]"}}], "structuredContent": data}}
+    print(json.dumps({{"jsonrpc": "2.0", "id": message["id"], "result": reply}}), flush=True)
+'''
+
+
+def fake_livespec(tmp_path: Path, mode: str = "ok") -> tuple[Livespec, Path]:
+    import sys
+
+    log = tmp_path / "asked.log"
+    exe = tmp_path / "bin" / "livespec"
+    exe.parent.mkdir(exist_ok=True)
+    exe.write_text(FAKE_SERVER.format(python=sys.executable, mode=mode, log=str(log)))
+    exe.chmod(0o755)
+    return adapter(tmp_path, str(exe.parent)), log
+
+
+def test_livespec_is_asked_for_validate_openspec_over_stdio_after_syncing_the_specs(tmp_path, git_repo):
+    a, log = fake_livespec(tmp_path)
+    assert a.validate_openspec(git_repo) == {"valid": True, "error_count": 0, "warning_count": 1, "findings": []}
+    asked = [json.loads(line) for line in log.read_text().splitlines()]
+    assert [m["method"] for m in asked] == ["initialize", "tools/call", "tools/call"]
+    assert [m["params"]["name"] for m in asked[1:]] == ["sync_openspec", "validate_openspec"]
+    assert all(m["params"]["arguments"]["workspace"] == str(git_repo.resolve()) for m in asked[1:])
+
+
+@pytest.mark.parametrize(("mode", "said"), [("error", "boom"), ("die", "closed before it answered"),
+                                            ("hang", "closed before it answered")])
+def test_a_livespec_that_errors_dies_or_hangs_is_an_error_not_a_hang(tmp_path, git_repo, mode, said):
+    a, _ = fake_livespec(tmp_path, mode)
+    with pytest.raises(livespec_mod.LivespecError, match=said):
+        a.call_tools(git_repo, [("validate_openspec", {})], timeout_s=2)
+
+
+def test_nothing_to_ask_or_a_server_that_does_not_start_is_an_error(tmp_path, git_repo):
+    with pytest.raises(livespec_mod.LivespecError, match="no livespec"):
+        adapter(tmp_path).call_tools(git_repo, [("validate_openspec", {})])
+
+    def broken(*a, **kw):
+        raise OSError("no such file")
+
+    with pytest.raises(livespec_mod.LivespecError, match="did not start"):
+        adapter(tmp_path, tool(tmp_path, "livespec"), popen=broken).call_tools(git_repo, [("search", {})])
+
+
+def test_validate_openspec_waits_for_the_lock_every_index_run_takes(tmp_path, git_repo):
+    a, log = fake_livespec(tmp_path)
+    with lock(a.lock_path(git_repo), wait_s=0) as (got, _):
+        assert got
+        with pytest.raises(livespec_mod.LivespecError, match="holds the index"):
+            a.validate_openspec(git_repo, timeout_s=0)
+    assert not log.exists()

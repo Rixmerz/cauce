@@ -182,6 +182,12 @@
       "title": "Workers at once",
       "description": "The most workers this machine runs at once, every repository's together. auto: no ceiling; cauce starts at what the machine can hold (its CPUs, free memory and free disk), adds one when work waits and the last tasks ended with no limit, and halves on a rate limit, an overloaded API, a worker the machine starved, or low memory or disk. A number: your ceiling, and the level still adapts under it. Each repository with work is reserved its share, and lends what it does not use. Cost never moves it.",
       "default": "auto"
+    },
+    "index_wait": {
+      "type": "string",
+      "title": "Seconds to wait for livespec's first index",
+      "description": "The first task in a repository livespec has not indexed waits up to this many seconds for the index when the repository is small enough to build one that fast, so that task starts with the code map and livespec's tools. A larger repository indexes in the background and that task runs without it. 0: never wait.",
+      "default": "20"
     }
   },
   "types": "./types/index.d.ts"

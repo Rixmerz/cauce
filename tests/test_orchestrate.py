@@ -1685,13 +1685,107 @@ def test_a_second_attempt_starts_whatever_the_first_cost(git_repo, store):
     assert len(script.specs) == 2 and report.status == "done" and report.stop is None
 
 
-def test_an_index_that_failed_at_this_commit_is_not_restarted_by_each_task(git_repo, store, tmp_path, monkeypatch):
-    adapter = _livespec(tmp_path, popen=lambda argv, **kw: pytest.fail("no refresh while it still fails"))
+def test_an_index_that_failed_is_tried_again_by_the_next_task_and_said_once(git_repo, store, tmp_path, monkeypatch):
+    started = []
+    adapter = _livespec(tmp_path, popen=lambda argv, **kw: started.append(argv))
     monkeypatch.setattr(adapter, "last_failure", lambda repo_dir: "Workspace directory not found: /old")
-    report = run("parse_amount rounds wrong", git_repo, store, Options(dry_run=True), registry={},
+    dry = run("parse_amount rounds wrong", git_repo, store, Options(dry_run=True), registry={},
+              classifier=kind("implement"), adapters=[adapter])
+    assert "livespec: its last index here failed (Workspace directory not found: /old); trying again" \
+        in dry.plan.reasons
+    assert "livespec: would index in the background" in dry.plan.reasons and started == []
+    # Not the same checkout rule any more: the checkout has not moved and the index is started anyway.
+    report = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=Script(ok()),
                  classifier=kind("implement"), adapters=[adapter])
-    assert any("its last index here failed (Workspace directory not found: /old); not tried again" in r
-               for r in report.plan.reasons)
+    assert len(started) == 1 and "livespec: indexing in the background; this task runs without it" \
+        in report.plan.reasons
+
+
+def _first_index(git_repo, tmp_path, monkeypatch, runner):
+    """A repository nobody indexed, a first task that may wait for the index, a runner that stands for livespec."""
+    monkeypatch.setenv("CAUCE_INDEX_WAIT", "20")
+    started = []
+    return started, _livespec(tmp_path, runner=runner, popen=lambda argv, **kw: started.append(argv))
+
+
+def test_a_small_repository_is_indexed_before_its_first_task_so_the_task_has_the_map(
+        git_repo, store, tmp_path, monkeypatch):
+    import subprocess as sp
+
+    from .livespec_fixture import build
+
+    asked = []
+
+    def runner(argv, **kw):
+        asked.append(kw["timeout"])
+        build(git_repo)
+        return sp.CompletedProcess(argv, 0, "{}", "")
+
+    started, adapter = _first_index(git_repo, tmp_path, monkeypatch, runner)
+    script = Script(ok())
+    report = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"), adapters=[adapter])
+    assert "livespec: indexed before this task started" in report.plan.reasons
+    assert "22 caller(s)" in script.specs[0].prompt and "livespec" in script.specs[0].mcp_servers
+    assert started == []
+    assert len(asked) == 1 and asked[0] <= 20  # the run is cut at what the task may wait
+
+
+def test_a_repository_too_large_for_the_wait_indexes_in_the_background_and_says_so(
+        git_repo, store, tmp_path, monkeypatch):
+    from cauce.adapters import livespec as ls
+
+    monkeypatch.setattr(ls, "_tracked_files", lambda root: 5000)
+    started, adapter = _first_index(git_repo, tmp_path, monkeypatch,
+                                    lambda argv, **kw: pytest.fail("a large repository is not indexed in the wait"))
+    report = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=Script(ok()),
+                 classifier=kind("implement"), adapters=[adapter])
+    assert any(r.startswith("livespec: 5000 tracked files take longer than the 20 s") and
+               r.endswith("indexing in the background instead") for r in report.plan.reasons)
+    assert len(started) == 1 and "livespec: indexing in the background; this task runs without it" \
+        in report.plan.reasons
+
+
+def test_an_index_that_outlasts_the_wait_goes_on_in_the_background_and_is_no_failure(
+        git_repo, store, tmp_path, monkeypatch):
+    import subprocess as sp
+
+    def slow(argv, **kw):
+        raise sp.TimeoutExpired(argv, kw["timeout"])
+
+    started, adapter = _first_index(git_repo, tmp_path, monkeypatch, slow)
+    report = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=Script(ok()),
+                 classifier=kind("implement"), adapters=[adapter])
+    assert len(started) == 1 and adapter.last_failure(git_repo) is None
+    assert any("did not run" in r and r.endswith("indexing in the background instead") for r in report.plan.reasons)
+
+
+def test_an_index_that_breaks_in_the_wait_is_said_and_the_next_task_tries_again(
+        git_repo, store, tmp_path, monkeypatch):
+    import subprocess as sp
+
+    from .livespec_fixture import build
+
+    state = {"ok": False}
+
+    def runner(argv, **kw):
+        if state["ok"]:
+            build(git_repo)
+            return sp.CompletedProcess(argv, 0, "{}", "")
+        return sp.CompletedProcess(argv, 1, "", "Workspace directory not found: /old")
+
+    started, adapter = _first_index(git_repo, tmp_path, monkeypatch, runner)
+    first = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=Script(ok()),
+                classifier=kind("implement"), adapters=[adapter])
+    assert any("livespec index failed: Workspace directory not found: /old" in r and
+               r.endswith("the next task tries again") for r in first.plan.reasons)
+    assert started == [] and adapter.last_failure(git_repo)
+    state["ok"] = True
+    script = Script(ok())
+    second = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"), adapters=[adapter])
+    assert "livespec: indexed before this task started" in second.plan.reasons
+    assert "22 caller(s)" in script.specs[0].prompt and adapter.last_failure(git_repo) is None
 
 
 def test_an_attempt_keeps_the_start_and_the_end_of_long_evidence():
@@ -2039,7 +2133,8 @@ def test_a_passing_worker_that_names_a_security_problem_raises_an_alert_with_the
 
 
 def test_an_index_failure_is_said_in_one_plan_not_in_every_one(git_repo, store, tmp_path):
-    adapter = _livespec(tmp_path, popen=lambda argv, **kw: pytest.fail("no refresh while it still fails"))
+    started = []
+    adapter = _livespec(tmp_path, popen=lambda argv, **kw: started.append(argv))
     adapter._remember_failure(git_repo, "Workspace directory not found: /old")
     said = []
     for _ in range(3):
@@ -2047,6 +2142,7 @@ def test_an_index_failure_is_said_in_one_plan_not_in_every_one(git_repo, store, 
                      classifier=kind("explore"), adapters=[adapter])
         said.append(any("its last index here failed" in r for r in report.plan.reasons))
     assert said == [True, False, False]
+    assert len(started) == 3  # said once, but every task tries the index again
     # A dry run shows it every time, and marks nothing.
     report = run("where is parse_amount", git_repo, store, Options(dry_run=True), registry={},
                  classifier=kind("explore"), adapters=[adapter])

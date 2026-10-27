@@ -25,7 +25,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/criteria.py` | a request's listed items as criteria `S1..Sn`, verbatim; a pass answers each |
 | `src/cauce/findings.py` | findings as records: where, what, `evidence_class`, `cause`; which block a change |
 | `src/cauce/ledger.py` | a review's findings as one frozen ledger `F1..Fn`: who decides each row (refuter, fix, re-check), two rounds, then the person |
-| `src/cauce/specs.py` | whether a repository's OpenSpec specs keep up with its code: days and code commits since `openspec/` changed, the writing brief's line and the ending's offer; git only, no model |
+| `src/cauce/specs.py` | whether a repository's OpenSpec specs keep up with its code: days and code commits since `openspec/` changed, the writing brief's line and the ending's offer, the files of a change that owe a spec (not tests, lockfiles, config or generated files), and livespec's `validate_openspec` for the specs' structure (`cauce specs`); git and livespec, no model |
 | `src/cauce/tracer.py` | the TRACER method of a repository that keeps one (`docs/tracer/`): the method's files in a writing brief, and the CORRECT lines of the flows a request names and the anti-pattern catalogue in the independent check's; read only |
 | `src/cauce/risk.py` | a change's tier (passive, medium, high) from its request, kind and files; only raised; no model |
 | `src/cauce/points.py` | a task's size on the Fibonacci scale, no model: the estimate when it is planned (criteria, kind, risk and its areas, files named, livespec's reach, length) and the realized size when it ends (files, lines, turns, wall time, attempts) |
@@ -655,10 +655,27 @@ yields the default kind, not a guess.
   `engram mcp` behind the `engram` guard: reading tools only, held to the
   project cauce resolved. Tests run with `CAUCE_ENGRAM=off`; a test that wants
   it passes a fake `http`.
-- An index livespec failed to build is not tried again until the checkout
-  moves (`Livespec.last_failure`); the plan says so once per task. A release
-  a plugin names that uv reports missing from the registry is remembered
-  (`Livespec.unpublished`) and the pinned one runs instead.
+- A repository's first index is built before its first task when it is small enough
+  (`Livespec.refresh_within`: tracked files within `FILES_PER_SECOND` of the `index_wait` seconds,
+  20 by default, `0` never; the run is cut at that budget): the task then starts with the code
+  map and livespec's server. A larger repository, a run that outlasts the wait or one that finds
+  another running indexes in the background, and the plan says which (`orchestrate._ready_index`).
+  A refresh of a stale index is always background. An index that failed is tried again by the next
+  task, never gated on the checkout moving (`Livespec.last_failure` holds the error until one
+  succeeds); the plan says it once per failure. A release a plugin names that uv reports missing
+  from the registry is remembered (`Livespec.unpublished`) and the pinned one runs instead. Tests
+  run with `CAUCE_INDEX_WAIT=0`; a test that wants the wait sets it with a fake runner.
+- What `uvx` runs when no plugin entry and no `livespec` on PATH is used is `Livespec.pin()`: the
+  release in the newest installed livespec plugin's own manifest (`.claude-plugin/plugin.json`), else
+  `PINNED`; a test fails when `PINNED` is behind the newest plugin in the plugin cache.
+- The independent check is handed the code index where one is present (`orchestrate._index_servers`):
+  livespec behind `mcp_guard`'s `livespec` policy, an allow-list of reading tools (`LIVESPEC_READ`;
+  a tool's own `readOnlyHint` is not trusted, `export_openspec` carries it and writes files). The late
+  check gets the same, kept on its deferred work.
+- livespec's `validate_openspec` has no command line, so it is asked over MCP on stdio
+  (`Livespec.call_tools`, a minimal client cut at its timeout), after `sync_openspec` (the tool
+  validates the index, not the folder), under the index lock; `cauce specs` reports the structure
+  beside the drift, indexing a repository with no index first within `index_wait`. `cauce specs first on` where there is no `openspec/` says nothing is enforced.
 - Every livespec tool a hint names is in `adapters/livespec.TOOLS`, checked
   against the release in `MINIMUM_VERSION`. Check a name against livespec
   before adding it, and bump `PINNED` only after checking the new release.

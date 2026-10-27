@@ -716,12 +716,17 @@ def cmd_specs(args: argparse.Namespace) -> int:
         store.close()
     found = specs.drift(where)
     if found is None:
-        print(f"no `{specs.OPENSPEC}/` here: nothing to keep up" + (" (spec-first has no effect without one)"
-                                                                   if first else ""))
+        if first:
+            print(f"spec-first is on for this repository, but nothing is enforced: there is no `{specs.OPENSPEC}/` "
+                  f"here. A build is held back for its spec only once `{specs.OPENSPEC}/` exists.")
+        else:
+            print(f"no `{specs.OPENSPEC}/` here: nothing to keep up")
         return 0
     print(f"specs: {found.text()}" + (" — behind" if found.behind else ""))
     print("spec-first: " + ("on (a build that writes no spec is not accepted)" if first
                             else "off (`cauce specs first on` makes builds here owe their spec)"))
+    for line in specs.structure(where):
+        print(line)
     return 0
 
 
@@ -1373,6 +1378,15 @@ def cmd_config(args: argparse.Namespace) -> int:
             # A number is only a ceiling: what runs under it already moves by itself.
             print("a ceiling only: the level under it already adapts to the API, memory, disk and load "
                   "(`cauce lanes` says where it is and why); `auto` puts no ceiling over it")
+        return 0
+    if args.key == "index_wait":
+        picked = config.seconds_word(args.value)
+        if picked is None:
+            print("expected whole seconds from 0: how long the first task of an unindexed repository waits for "
+                  "livespec's index (0 never waits)", file=sys.stderr)
+            return 1
+        config.save({args.key: picked})
+        print(f"{args.key} = {json.dumps(picked)}")
         return 0
     if args.key in config.CHOICES:
         picked = config.word(args.key, args.value)

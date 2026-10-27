@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
+import types
 from pathlib import Path
 
 import pytest
 
-from cauce import workflows
+from cauce import plugins, workflows
 from cauce.store import Store
 
 
@@ -42,12 +45,24 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("CAUCE_ROLE_TRIALS", "off")
     monkeypatch.setenv("CAUCE_HABIT_REVIEW", "off")
     monkeypatch.setenv("CAUCE_HABIT_AUTO", "off")
+    # The first task of an unindexed repository would wait for livespec's index: a test that wants
+    # that sets CAUCE_INDEX_WAIT with a fake runner.
+    monkeypatch.setenv("CAUCE_INDEX_WAIT", "0")
     monkeypatch.setenv("CAUCE_ENGRAM", "off")
     monkeypatch.setenv("CAUCE_ENGRAM_WRITE", "off")
     monkeypatch.delenv("CAUCE_SESSION_ID", raising=False)
     # cauce's own suite may run inside a cauce worker, which refuses to start work.
     monkeypatch.delenv("CAUCE_WORKER_TASK", raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    # A neighbour found on PATH (rastro) is the machine's, not the test's: only a program the test
+    # put under its own folder is found, so a suite gives the same answer wherever it runs.
+    real_which = shutil.which
+
+    def which_under_tmp(cmd: str, mode: int = os.F_OK | os.X_OK, path: str | None = None) -> str | None:
+        found = real_which(cmd, mode=mode, path=path)
+        return found if found and Path(found).resolve().is_relative_to(tmp_path.resolve()) else None
+
+    monkeypatch.setattr(plugins, "shutil", types.SimpleNamespace(which=which_under_tmp))
     # The dispatcher's level starts at what the machine holds: in a test, a fixed machine
     # of three CPUs whose memory, disk and load say nothing (calm), whatever runs the suite.
     from cauce import capacity

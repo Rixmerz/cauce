@@ -564,8 +564,9 @@ not told to start one.
 
 `cauce run` prints the task number at once, and each attempt as it starts
 and ends, on stderr; the report comes on stdout when the task stops. A
-livespec index that is missing or stale is rebuilt in the background, never
-before the task. `cauce run` writes in a git worktree on `cauce/task-<id>`; nothing reaches
+livespec index that is missing and small enough to build in `index_wait` seconds
+(20 by default; `cauce config index_wait 0` never waits) is built before the first task, so
+it starts with the code map; a larger one, and a stale one, are rebuilt in the background. `cauce run` writes in a git worktree on `cauce/task-<id>`; nothing reaches
 your checkout until you merge that branch. A task that passed leaves it to
 review; one that stopped for a person (blocked, waiting on approval) leaves it
 too, committed as unverified, and `cauce resume <id>` continues on it; one that

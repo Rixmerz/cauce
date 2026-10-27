@@ -107,6 +107,11 @@ DEFAULTS: dict[str, Any] = {
     # ceiling over the level the dispatcher adapts to the API and the machine; a number
     # is the person's ceiling, and the level still adapts under it.
     "max_parallel": "auto",
+    # The first task in a repository livespec has not indexed waits up to this many seconds for
+    # the index when the repository is small enough to build one that fast (`cauce.adapters.
+    # livespec`); a larger one indexes in the background and that task runs without it. `0`
+    # never waits.
+    "index_wait": "20",
 }
 
 #: Settings that take one of a few words rather than on or off.
@@ -179,13 +184,27 @@ def max_parallel(env: Mapping[str, str]) -> int | None:
     return None if picked == "auto" else int(picked)
 
 
+def seconds_word(raw: Any) -> str | None:
+    """`raw` as `index_wait` takes it: whole seconds from 0 as text; None otherwise."""
+    value = str(raw).strip() if isinstance(raw, str | int) and not isinstance(raw, bool) else ""
+    return value if value.isdigit() else None
+
+
+def index_wait(env: Mapping[str, str]) -> int:
+    """Seconds the first task of an unindexed repository waits for livespec's index: the
+    `CAUCE_INDEX_WAIT` variable, else the file; a value it does not take reads as unset."""
+    return int(seconds_word(env.get("CAUCE_INDEX_WAIT")) or seconds_word(load(env).get("index_wait"))
+               or DEFAULTS["index_wait"])
+
+
 def sync_plugin_options(env: Mapping[str, str]) -> None:
     """Copy `CLAUDE_PLUGIN_OPTION_<KEY>` values into the file, for the commands
     that never see them."""
     updates: dict[str, Any] = {}
     for key in DEFAULTS:
         raw = env.get(f"CLAUDE_PLUGIN_OPTION_{key.upper()}")
-        value = ceiling_word(raw) if key == "max_parallel" else word(key, raw) if key in CHOICES else _bool(raw)
+        value = (ceiling_word(raw) if key == "max_parallel" else seconds_word(raw) if key == "index_wait"
+                 else word(key, raw) if key in CHOICES else _bool(raw))
         if value is not None:
             updates[key] = value
     if updates and any(load(env).get(k) != v for k, v in updates.items()):
