@@ -359,3 +359,14 @@ def test_a_stopped_task_whose_kept_work_landed_leaves_the_board_from_the_hooks(s
     hooks.stop({"session_id": "s", "cwd": str(git_repo)}, store)
     assert stops.of(store, store.get_task(open_work["id"])).cause == "landed"
     assert stops.landed(store, git_repo) == []
+
+
+@pytest.mark.parametrize("cause", ["base_unknown", "same_failures"])
+def test_a_stop_that_waits_on_a_comparison_the_orchestrator_makes_resumes_with_a_plain_line(cause):
+    stop = stops.Stop(cause, "x")
+    assert stop.status == "blocked"
+    assert stop.who == "cauce"
+    assert stops.next_step(7, stop) == "cauce resume 7"
+    assert stops.what_to_do(stop) != "read the attempts"
+    assert not stops.for_person(stop)
+    assert cause not in stops.PERSON_ONLY

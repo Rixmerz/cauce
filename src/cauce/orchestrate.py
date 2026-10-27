@@ -89,7 +89,7 @@ from cauce.escalate import (
 )
 from cauce.matrix import DEFAULT_TURNS, READ_ONLY_KINDS, Cell, ladder_for, turns_for
 from cauce.store import Store, home
-from cauce.text import clip
+from cauce.text import clip, few
 
 #: Failures that describe something tried against the problem, worth keeping
 #: as a dead end. A timeout or a turn ceiling says nothing about the fix.
@@ -830,7 +830,7 @@ def _raced_attempt(raced: Raced, turns: int) -> Attempt:
     o = raced.other
     return Attempt(raced.other_cell, turns, False, o.failure or Failure.INCONCLUSIVE, o.summary, o.denied,
                    allow=o.allow, changed=o.changed_paths, evidence=o.evidence[-1500:], transient=o.transient,
-                   findings=o.findings)
+                   findings=o.findings, failing=o.failing, base_unknown=o.base_unknown)
 
 
 def _launch(launcher: Launcher, spec: launch.LaunchSpec, runner: launch.Stoppable) -> launch.WorkerResult:
@@ -1625,8 +1625,8 @@ def run(
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
                               transient=result.transient, findings=result.findings, network=result.network,
-                              load=result.load, shape=result.shape, limited=result.limited,
-                              retry_after_s=result.retry_after_s,
+                              load=result.load, failing=result.failing, base_unknown=result.base_unknown,
+                              shape=result.shape, limited=result.limited, retry_after_s=result.retry_after_s,
                               blockers=open_blockers, stands=bool(stands) and result.failure in REPLAN)
             attempts.append(attempt)
             if raced is not None and not raced_first:
@@ -2270,14 +2270,25 @@ def _widen(store: Store, task_id: int, surfaces: Sequence[str], result: launch.W
         :WIDEN_MAX]
 
 
+def _blocked_cause(decision: Decision, attempt: Attempt) -> str:
+    """What blocked the run, from the failure that led to it."""
+    if attempt.failure is Failure.PERMISSION or attempt.denied:
+        return "permission"
+    if attempt.limited == "usage" and attempt.failure is Failure.ENVIRONMENT:
+        return "limit"
+    if attempt.base_unknown:
+        return "base_unknown"
+    if decision.stuck:
+        return "same_failures"
+    if attempt.network:
+        return "network"
+    return "load" if attempt.load else "environment"
+
+
 def _cause(decision: Decision, attempt: Attempt) -> str:
     """What ended the run, from the move and the failure that led to it."""
     if decision.move is Move.BLOCKED:
-        if attempt.failure is Failure.PERMISSION or attempt.denied:
-            return "permission"
-        if attempt.limited == "usage" and attempt.failure is Failure.ENVIRONMENT:
-            return "limit"
-        return "network" if attempt.network else "load" if attempt.load else "environment"
+        return _blocked_cause(decision, attempt)
     if decision.move is Move.NEEDS_APPROVAL:
         return "approval"
     if decision.move is Move.CONVERGED:
@@ -3109,14 +3120,37 @@ def _equip(selection: caps.Selection, the_plan: Plan, repo_dir: Path, workdir: P
     return caps.Selection(servers, tuple(hints), tuple(names), selection.read_dirs)
 
 
-def _run_check(command: str, workdir: Path) -> tuple[int | None, str]:
-    """The repository's own check: (exit code, or None on a timeout; its whole output)."""
+#: The run of a check at a base gets what the work's own run of it took times this, plus the margin:
+#: the base shares the machine with whatever else runs, and a check that fits its limit in the work
+#: by minutes may not at the base, where a timeout says nothing of what failed there.
+BASE_TIMEOUT_FACTOR, BASE_TIMEOUT_MARGIN_S = 2, 300
+
+
+def base_timeout_s(took_s: float) -> float:
+    """The time a check's run at the base is given, from how long the work's own run took (0 when
+    none was seen): never under the limit the work's own run has, and above what it took."""
+    return max(VERIFY_TIMEOUT_S, took_s * BASE_TIMEOUT_FACTOR + BASE_TIMEOUT_MARGIN_S)
+
+
+def _run_check(command: str, workdir: Path, timeout: float | None = None) -> tuple[int | None, str]:
+    """The repository's own check: (exit code, or None on a timeout; its whole output). It has
+    `VERIFY_TIMEOUT_S` unless `timeout` says otherwise (the base's run: `base_timeout_s`)."""
     try:
         proc = subprocess.run(command, shell=True, cwd=str(workdir), capture_output=True, text=True,  # noqa: S602
-                              timeout=VERIFY_TIMEOUT_S, check=False, env={**os.environ, **runtime.env_for(workdir)})
+                              timeout=VERIFY_TIMEOUT_S if timeout is None else timeout, check=False,
+                              env={**os.environ, **runtime.env_for(workdir)})
     except subprocess.TimeoutExpired:
         return None, ""
     return proc.returncode, (proc.stdout + proc.stderr).strip()
+
+
+def _timed_check(command: str, workdir: Path, baseline: Baseline | None) -> tuple[int | None, str]:
+    """`_run_check`, its duration noted on the baseline: the run at the base is sized from it."""
+    mark = time.monotonic()
+    ran = _run_check(command, workdir)
+    if baseline is not None:
+        baseline.took(time.monotonic() - mark)
+    return ran
 
 
 #: How much of a check's output an attempt's evidence keeps.
@@ -3126,6 +3160,9 @@ CHECK_OUTPUT_KEPT = 3000
 #: Where a check's run at a base commit is kept (`Store.meta`), and for how long: a task's
 #: later attempts, its verifier rounds and its sibling parts on the same base read it there.
 BASE_RUN_META, BASE_RUN_KEPT_S = "check_base:", 24 * 3600
+#: Where the last base run of a command in a repository that could tell what failed there is kept
+#: (`Store.meta`), at whatever commit: what a base that cannot tell is read against. It does not expire.
+KNOWN_BASE_META = "check_base_last:"
 #: How many failing lines a `check_preexisting` event and an attempt's evidence name.
 FAILURES_SHOWN = 10
 
@@ -3147,6 +3184,10 @@ class Baseline:
     flaked: bool = False
     #: The last check's account when its failures were all there at the base, else None.
     found: dict[str, Any] | None = None
+    #: How long the work's own run of the check took, the longest seen: the base's run is sized from it.
+    check_s: float = 0.0
+    #: Why the last check's failure could not be told from the base's, else "" (`_against_base`).
+    unknown: str = ""
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _owner: int = field(default_factory=threading.get_ident, repr=False)
 
@@ -3162,11 +3203,30 @@ class Baseline:
         finally:
             other.close()
 
+    def took(self, seconds: float) -> None:
+        """Note how long a run of the work's own check took: the longest is kept."""
+        self.check_s = max(self.check_s, seconds)
+
+    def _known_key(self, command: str) -> str:
+        return KNOWN_BASE_META + hashlib.sha256(f"{self.repo_dir}\0{command}".encode()).hexdigest()[:32]
+
+    def known(self, command: str) -> dict[str, Any] | None:
+        """The last base run of the command in this repository that could tell what failed there, at
+        whatever commit: {"at", "base", "failures"}, or None when none ever could."""
+        with self._db() as db:
+            kept = db.meta(self._known_key(command))
+        try:
+            found = json.loads(kept) if kept else None
+        except ValueError:
+            return None
+        return found if isinstance(found, dict) and found.get("base") else None
+
     def at_base(self, command: str) -> dict[str, Any]:
         """The command's run at the base: {"code", "failures", "cannot"}, from the store's
         meta when it ran there in the last `BASE_RUN_KEPT_S`, else run now and kept. A run
         that timed out, could not run, lost the network or timed its tests out is `cannot`:
-        it cannot tell what was there before."""
+        it cannot tell what was there before. Its time is sized from the work's own run
+        (`base_timeout_s`), and the last run that could tell is kept apart (`known`)."""
         digest = hashlib.sha256(f"{self.repo_dir}\0{self.base}\0{command}".encode()).hexdigest()[:32]
         key = BASE_RUN_META + digest
         with self._lock:
@@ -3176,7 +3236,7 @@ class Baseline:
                 return json.loads(kept)
             try:
                 with isolate.at_base(self.repo_dir, self.base, self.root) as path:
-                    code, output = _run_check(command, path)
+                    code, output = _run_check(command, path, timeout=base_timeout_s(self.check_s))
                     failures = launch.check_failures(output, roots=(path,))
             except (isolate.IsolationError, OSError) as exc:
                 return {"code": None, "failures": [],
@@ -3184,11 +3244,16 @@ class Baseline:
             cannot = ("it timed out" if code is None else "" if code == 0 else
                       cannot_run(code, output) or launch.check_timed_out(output) or launch.check_offline(output))
             found = {"at": time.time(), "code": code, "failures": sorted(failures), "cannot": cannot}
-            if not (code and (launch.check_timed_out(output) or launch.check_offline(output))):
-                # A loaded machine or a dropped network is a moment's: the next try runs it again.
+            # A timeout, a loaded machine or a dropped network is a moment's: the next try runs it again
+            # (a timeout kept would read as the base's answer to every task on the same commit for a day).
+            moment = code is None or bool(code and (launch.check_timed_out(output) or launch.check_offline(output)))
+            if not moment:
                 with self._db() as db:
                     db.set_meta(key, json.dumps(found))
                     db.drop_meta([k for k, v in db.metas(BASE_RUN_META).items() if _expired(v)])
+                    if not cannot:
+                        db.set_meta(self._known_key(command), json.dumps(
+                            {"at": found["at"], "base": self.base, "failures": found["failures"]}))
             return found
 
 
@@ -3200,14 +3265,17 @@ def _expired(kept: str) -> bool:
         return True
 
 
-def _against_base(baseline: Baseline | None, command: str, output: str, workdir: Path) -> tuple[bool, str]:
+def _against_base(baseline: Baseline | None, command: str, output: str, workdir: Path,
+                  claim: str = "") -> tuple[bool, str]:
     """Whether a check that ran and failed on the work failed the same way at the base
     (`launch.preexisting`), and what the next attempt reads of the comparison. Fails closed:
-    when the base passes, could not run, or no failing line can be read from either output,
-    the failure is the work's."""
+    when the base passes, or no failing line can be read from either output, the failure is the
+    work's. A base that could not tell (`_unsure`) is neither: `baseline.unknown` says why. `claim`
+    is the worker's own account, which that comparison reads the failing tests against."""
     if baseline is None:
         return False, ""
     baseline.found = None
+    baseline.unknown = ""
     if baseline.flaked:
         return False, (f"this work fixes a flaky test, and its check gave different results over {baseline.runs} "
                        "runs: the flake is still there, whatever the base does")
@@ -3218,8 +3286,7 @@ def _against_base(baseline: Baseline | None, command: str, output: str, workdir:
     at = baseline.at_base(command)
     short = baseline.base[:12]
     if at.get("cannot"):
-        return False, (f"at the base commit {short} the same check could not tell ({at['cannot']}): the failure "
-                       "is read as this work's")
+        return _unsure(baseline, command, work, at, claim)
     if at.get("code") == 0:
         return False, f"at the base commit {short} the same check passes: every failure here is this work's"
     base = frozenset(at.get("failures") or ())
@@ -3248,12 +3315,49 @@ def _against_base(baseline: Baseline | None, command: str, output: str, workdir:
     return False, said
 
 
+def _unsure(baseline: Baseline, command: str, work: frozenset[str], at: Mapping[str, Any],
+            claim: str) -> tuple[bool, str]:
+    """The same check at the base could not tell what fails there (it timed out, or could not run).
+    The work's failing tests are read against the last known base result of this check here
+    (`Baseline.known`): when every one is in it they were there before, as a base run would have
+    said, and the pass stands. Otherwise nothing separates the work's failures from the
+    environment's, and they are not charged to the work: `baseline.unknown` says so, with the
+    comparison (the last known result, and how many of them the worker's own account names), and
+    the task stops as `base unknown`."""
+    said = f"at the base commit {baseline.base[:12]} the same check could not tell ({at['cannot']})"
+    known = baseline.known(command)
+    before = frozenset(known.get("failures") or ()) if known else frozenset()
+    if known and launch.preexisting(work, before, must_fix=baseline.must_fix):
+        baseline.found = {"command": command, "base": known["base"], "known_at": known["base"], "n": len(work),
+                          "base_n": len(before), "fixed": len(before - work), "added": 0,
+                          "failures": [clip(x, 200, one_line=True) for x in sorted(work)[:FAILURES_SHOWN]]}
+        with baseline._db() as db:
+            db.add_event(baseline.task_id, "check_preexisting", **baseline.found)
+        return True, ""
+    new = sorted(work - before)
+    if known is None:
+        earlier = "no earlier run of it at a base is known here to compare with"
+    elif new:
+        earlier = f"{len(new)} of them are not in the last known base result at {known['base'][:12]} ({few(new)})"
+    else:
+        earlier = (f"all of them are in the last known base result at {known['base'][:12]}, but this task's job is "
+                   "to make a failure go away")
+    named = sum(1 for line in work if _named(line, claim))
+    baseline.unknown = (f"cauce's check failed {len(work)} test(s) ({few(sorted(work))}) and {said}; {earlier}; "
+                        f"its own account names {named} of the {len(work)} failing test(s)")
+    return False, baseline.unknown
+
+
 def preexisting_line(found: Mapping[str, Any] | None) -> str:
     """The report's line for a check whose failures were all there before the work."""
     if not found:
         return ""
     fixed, n, command = int(found.get("fixed") or 0), int(found.get("n") or 0), found.get("command")
     failures = f"{n} failure{'' if n == 1 else 's'}"
+    if known := found.get("known_at"):
+        return (f"`{command}` fails with {failures}, all in the last known base result at {str(known)[:12]} (this "
+                "task's base run could not tell): they were there before this work, not caused by it"
+                + (f", and {fixed} more that failed then pass now" if fixed else ""))
     if not fixed:
         return (f"`{command}` fails at the base too, with the same {failures}: they were there before this work, "
                 "not caused by it")
@@ -3350,7 +3454,7 @@ def _steady_check(command: str, workdir: Path, baseline: Baseline | None) -> tup
     instead (`_repeated_check`)."""
     if baseline is not None:
         baseline.flaked = False
-    code, full = _run_check(command, workdir)
+    code, full = _timed_check(command, workdir, baseline)
     if baseline is not None and baseline.runs > 1 and (code == 0 or _ran_and_failed(code, full)):
         return _repeated_check(command, workdir, baseline, code, full)
     if not _ran_and_failed(code, full):
@@ -3358,7 +3462,7 @@ def _steady_check(command: str, workdir: Path, baseline: Baseline | None) -> tup
     failing = launch.check_failures(full, roots=(workdir,))
     if not failing or len(failing) > FLAKY_MAX:
         return code, full
-    again, second = _run_check(command, workdir)
+    again, second = _timed_check(command, workdir, baseline)
     if again != 0:
         return code, full
     lines = sorted(clip(x, 200, one_line=True) for x in failing)
@@ -3382,7 +3486,7 @@ def _repeated_check(command: str, workdir: Path, baseline: Baseline, code: int |
     (`Baseline.flaked`), never excused by the base. Kept as a `check_repeated` event."""
     results = [(code, full)]
     while len(results) < baseline.runs and results[-1][0] is not None:
-        results.append(_run_check(command, workdir))
+        results.append(_timed_check(command, workdir, baseline))
     failed = [(c, out) for c, out in results if c != 0]
     shapes = {frozenset(launch.check_failures(out, roots=(workdir,))) for _, out in failed}
     steady = not failed or (len(failed) == len(results) and len(shapes) == 1)
@@ -3438,12 +3542,22 @@ def _verified(result: launch.WorkerResult, command: str, workdir: Path,
             result, passed=False, failure=Failure.ENVIRONMENT, evidence=output, network=dropped,
             summary=f"claimed a pass, but `{command}` lost the network ({dropped}): {result.summary}",
         )
-    before, compared = _against_base(baseline, command, full, workdir)
+    before, compared = _against_base(baseline, command, full, workdir, claim=f"{result.summary}\n{result.evidence}")
     if before:
         return result
+    shown = f"{output}\n\n{compared}" if compared else output
+    failing = launch.check_failures(full, roots=(workdir,))
+    if baseline is not None and baseline.unknown:
+        # The base could not say what fails there: nothing shows the work caused this, so it is no
+        # `code_bug` and no climb (`escalate._unknown_base`).
+        return dataclasses.replace(
+            result, passed=False, failure=Failure.ENVIRONMENT, evidence=shown, failing=failing,
+            base_unknown=baseline.unknown,
+            summary=f"claimed a pass, but `{command}` exited {code} and the base could not say whether its failures "
+                    f"were there before: {result.summary}",
+        )
     return dataclasses.replace(
-        result, passed=False, failure=Failure.CODE_BUG,
-        evidence=f"{output}\n\n{compared}" if compared else output,
+        result, passed=False, failure=Failure.CODE_BUG, evidence=shown, failing=failing,
         summary=f"claimed a pass, but `{command}` exited {code}: {result.summary}",
     )
 
