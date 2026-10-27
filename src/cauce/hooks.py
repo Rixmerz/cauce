@@ -44,7 +44,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TextIO
 
-from cauce import after, config, orchestrator, project, repo, stops
+from cauce import after, config, orchestrator, project, repo, specs, stops
 from cauce import findings as findings_mod
 from cauce.notes import _SECRET
 from cauce.store import OPEN_FOR_A_RELAY, Store, home
@@ -822,6 +822,8 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
         lines += _went_past(store, t)
         lines += _behind(store, t)
         lines += _found_before(store, t)
+        lines += specs.ending_lines(t, changed, data.get("specs"),
+                                    after=f"run:{t['workflow_run']}" if t.get("workflow_run") else f"task:{t['id']}")
         lines += _overlaps(store, t)
         lines += habit_lines(t, store)
         if t["status"] == "done" and grouped:

@@ -25,6 +25,8 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/criteria.py` | a request's listed items as criteria `S1..Sn`, verbatim; a pass answers each |
 | `src/cauce/findings.py` | findings as records: where, what, `evidence_class`, `cause`; which block a change |
 | `src/cauce/ledger.py` | a review's findings as one frozen ledger `F1..Fn`: who decides each row (refuter, fix, re-check), two rounds, then the person |
+| `src/cauce/specs.py` | whether a repository's OpenSpec specs keep up with its code: days and code commits since `openspec/` changed, the writing brief's line and the ending's offer; git only, no model |
+| `src/cauce/tracer.py` | the TRACER method of a repository that keeps one (`docs/tracer/`): the method's files in a writing brief, and the CORRECT lines of the flows a request names and the anti-pattern catalogue in the independent check's; read only |
 | `src/cauce/risk.py` | a change's tier (passive, medium, high) from its request, kind and files; only raised; no model |
 | `src/cauce/points.py` | a task's size on the Fibonacci scale, no model: the estimate when it is planned (criteria, kind, risk and its areas, files named, livespec's reach, length) and the realized size when it ends (files, lines, turns, wall time, attempts) |
 | `src/cauce/standards.py` | where a repository's tasks of each kind and size start, as measured: a standard per points band, the calibration's two rules, each change's verdict and its revert; recorded, never edited |
@@ -36,7 +38,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `habit_review`, `habit_auto`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `specs`, `tracer`, `habit_review`, `habit_auto`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets, and the jobs a person quieted per repository |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -597,6 +599,20 @@ yields the default kind, not a guess.
   and after it) is committed with the work and said: a `check_rewrote` event,
   the report's line beside `changed (from git)`, and a `Cauce-Check-Output`
   trailer. It is never a verdict.
+- A repository's specs are kept alive, never written by cauce (`cauce.specs`): where `openspec/` exists, a
+  writing worker is told a change of behaviour updates the spec it reaches in the same work, the plan says how
+  far the specs are behind (said once a day), and an ending whose change wrote no spec, where they are
+  `specs.BEHIND_COMMITS` or more code commits behind, offers the docs task that catches them up. Offered,
+  never started: the orchestrator decides.
+- The TRACER method of a repository (`docs/tracer/`) is data in a writing brief and requirements in the
+  independent check's (`cauce.tracer`), never instructions of cauce's own: a flow reaches a brief only when
+  every word of its file name is in the request, and the method's files are carried up to
+  `tracer.BRIEF_CHARS`, the rest said by count. Its phases that need the person (contract, empathy, scope)
+  stay in the session; `tracer-slice` is the bundled workflow for one slice.
+- What livespec's index says a change reaches (`adapter.assess`: specs touched, callers outside it) goes in
+  the independent check's brief as where to probe, data, never findings (`orchestrate._impact`); whether
+  workers handed livespec call it is counted from the tool-call log (`Store.capability_use`), observed, never
+  a trial.
 - An adopted neighbour is read, never written: the livespec index is opened
   `mode=ro`, and the index is built only through livespec's own CLI. Absent
   and unreadable are different states and neither stops a run. The one

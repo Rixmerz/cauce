@@ -68,6 +68,14 @@ DEFAULTS: dict[str, Any] = {
     # after its ending: the run ends on cauce's own check, and a blocker the verifier shows
     # reopens it as `review`. Off: the ending waits for the verifier.
     "late_verifier": True,
+    # A repository that keeps OpenSpec specs (`openspec/`): a writing worker is told to keep the
+    # ones its change reaches, and an ending whose change touched none, where the specs are behind
+    # the code, offers the task that catches them up (`cauce.specs`). Off: specs are only read.
+    "specs": True,
+    # A repository that follows TRACER (`docs/tracer/`): its writing workers read the audience,
+    # floors, anti-patterns, identity and the flows their request names, and the independent check
+    # holds the change to those flows' CORRECT lines and the catalogue (`cauce.tracer`).
+    "tracer": True,
     # A role's lessons in each repository improve by measured trial: an editor (Haiku) proposes
     # them from what the role's workers met there, its tasks alternate with and without them,
     # and they are kept only where they won (`cauce.revisions`). Off: the role's own text alone.

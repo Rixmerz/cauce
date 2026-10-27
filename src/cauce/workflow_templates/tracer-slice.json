@@ -1,0 +1,54 @@
+{
+  "name": "tracer-slice",
+  "description": "Build one TRACER slice test-first on the final architecture, then verify it blind as its audience would: its critical flows' CORRECT lines, the component floors and the anti-pattern catalogue; fix only what is confirmed. For repositories with a docs/tracer/ folder",
+  "inputs": [
+    "slice"
+  ],
+  "steps": [
+    {
+      "id": "build",
+      "title": "Build the slice, test-first",
+      "kind": "feature",
+      "prompt": "Build this TRACER slice: {slice}\n\nFirst check it is ready, from docs/tracer/ and the project's specs: its requirements exist with scenarios, it lands on one capability of docs/tracer/capabilities.md and duplicates none, its audience, critical flows (success and failure paths, WORKS and CORRECT) and inherited component floors are written, and it needs no new architecture. If one of these is missing, change nothing and report it as the task being wrong, naming what is missing.\n\nThen read the audience profile, the flows, the floors, docs/tracer/identity.md and the anti-pattern catalogue before any code. Turn each scenario into a test and each critical flow into an interface-driven end-to-end test that asserts its CORRECT lines; see them fail; implement until they pass, touching only what the slice needs. Link every new or changed symbol and test to its requirement (`@spec:`). Note anything outside the slice in your result instead of building it."
+    },
+    {
+      "id": "verify",
+      "title": "Verify it as its audience would",
+      "kind": "review-critical",
+      "needs": [
+        "build"
+      ],
+      "prompt": "Verify, without changing any file, the TRACER slice built for: {slice}\n\nYou are the verifier, not the builder: work from docs/tracer/ (the audience profile, the critical flows, floors.md, anti-patterns.md, identity.md) and the diff named below, never from the builder's account. For every critical flow the change reaches, follow its success path and every failure path (through the interface when a browser capability is given, else by reading the code and the tests that drive it) and check each CORRECT line; check every component on its screens against its floor, the rendered text for ids, storage keys, paths and stack traces, and every entry of the anti-pattern catalogue. Report each line that does not hold in `findings`: its place, what the person would see, how it is known (`deterministic` with the step, test or rendered text as `proof`, else `inferential`) and whether this change caused it. Something wrong that no spec, floor or catalogue entry covers is an escaped expectation: say so, and the CORRECT line or catalogue entry it calls for."
+    },
+    {
+      "id": "refute",
+      "title": "Decide what the verification only read",
+      "kind": "review-routine",
+      "ledger": "refute",
+      "needs": [
+        "verify"
+      ],
+      "prompt": "Decide, without changing any file, the findings on the TRACER slice for: {slice}"
+    },
+    {
+      "id": "fix",
+      "title": "Fix the confirmed findings",
+      "kind": "implement",
+      "ledger": "fix",
+      "needs": [
+        "refute"
+      ],
+      "prompt": "Fix the confirmed findings below, in the TRACER slice for: {slice}\n\nA finding that is an escaped expectation also adds its CORRECT line to the flow's spec in docs/tracer/flows/ and its entry to docs/tracer/floors.md or docs/tracer/anti-patterns.md, so it cannot escape again. Run the tests before you stop."
+    },
+    {
+      "id": "recheck",
+      "title": "Check each fix",
+      "kind": "review-routine",
+      "ledger": "recheck",
+      "needs": [
+        "fix"
+      ],
+      "prompt": "Check, without changing any file, the fix just made in the TRACER slice for: {slice}"
+    }
+  ]
+}

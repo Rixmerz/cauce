@@ -1202,3 +1202,24 @@ def test_a_detached_process_that_fails_keeps_its_error(store, tmp_path):
     spool.write_bytes(b"not a pickle")
     orchestrate._detached(str(spool))
     assert "after-ending" in (home() / "hook-errors.log").read_text()
+
+
+def test_the_independent_check_is_told_what_the_code_index_says_the_change_reaches(git_repo, store, verifier_on,
+                                                                                  tmp_path):
+    from cauce.adapters.livespec import Livespec
+
+    from .livespec_fixture import build
+
+    build(git_repo)
+    index = Livespec(env={"HOME": str(tmp_path / "home"), "PATH": "", "CLAUDE_CONFIG_DIR": str(tmp_path / "cc"),
+                          "CAUCE_HOME": str(home())})
+    (git_repo / "src").mkdir(exist_ok=True)
+    (git_repo / "src" / "billing.py").write_text("total = 0\n")
+    subprocess.run(["git", "add", "-A"], cwd=git_repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "billing"], cwd=git_repo, check=True)
+    script = Script(passing(), check("pass"), write="src/billing.py")
+    report = run("fix the cart total in billing", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"), adapters=[index])
+    assert report.status == "done"
+    verifier = script.specs[1].prompt
+    assert "code index says this change reaches" in verifier and "SPEC-7" in verifier

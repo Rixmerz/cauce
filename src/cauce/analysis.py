@@ -215,6 +215,19 @@ def pickup(found: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "share": {k: round(v / told, 3) if told else 0.0 for k, v in seconds.items()}}
 
 
+def capability_use(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Attempts handed a capability, how many called it, and the pass rate of those that did and
+    those that did not. Observed: the two groups differ in more than the calls."""
+    used = [r for r in rows if r["calls"]]
+    idle = [r for r in rows if not r["calls"]]
+
+    def rate(rs: Sequence[Mapping[str, Any]]) -> float | None:
+        return round(sum(r["passed"] for r in rs) / len(rs), 3) if rs else None
+
+    return {"given": len(rows), "used": len(used), "calls": sum(r["calls"] for r in rows),
+            "passed_used": rate(used), "passed_idle": rate(idle)}
+
+
 def phases(found: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Seconds per phase over the runs whose phases were measured, and each one's share."""
     timed = [r for r in found if r["wall_s"] is not None and r["plan_s"] is not None]
@@ -465,6 +478,8 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "trunk": trunks.trial(store, repo),
         "trunk_now": trunks.arm(store, repo, 0)[1] if repo else None,
         "role_revisions": revisions.overview(store, repo),
+        # Whether workers handed livespec used it, and how their attempts went: observed, not a trial.
+        "livespec_use": capability_use(store.capability_use("livespec", since=since, repo=repo)),
         # Whether racing a first try paid, per repository and kind (`cauce.racing`): its own window.
         "races": racing.table(store, repo),
         # What each blind review of a two-review ledger added that no other saw (`workflows.reviewer_yield`).
@@ -589,6 +604,12 @@ def text(report: Mapping[str, Any]) -> str:
                     f"{PICKUP_WORDS[k]} {_seconds(v)} ({_rate(told['share'][k])})"
                     for k, v in told["seconds"].items() if v)
                     + (f"  (not told: {_seconds(told['unknown_s'])})" if told.get("unknown_s") else ""))
+            lines.append("")
+        use = report.get("livespec_use") or {}
+        if use.get("given"):
+            lines.append(f"livespec: handed to {use['given']} attempt(s), called in {use['used']} ({use['calls']} "
+                         f"call(s)); passed {_rate(use['passed_used'])} when called, {_rate(use['passed_idle'])} "
+                         "when not (observed, not a trial)")
             lines.append("")
         lines.append("by kind:")
         for row in report["by_kind"]:
