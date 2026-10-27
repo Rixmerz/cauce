@@ -1467,6 +1467,7 @@ def run(
                 risk_mod.of_change(the_plan.risk, so_far if (workspace or base_commit) else None)
                 if so_far and risk_mod.needs_verifier(the_plan.risk, cheap=_cheap(cell)) and late:
                     deferred = {"cell": cell, "spec": spec, "changed": so_far, "nth": nth,
+                                "impact": _impact(the_plan, so_far, repo_dir),
                                 "rules": [n for n in the_plan.notes if n.get("kind") == notes.CONSTRAINT]}
                     store.add_event(task["id"], "verifier_deferred", seq=nth, risk=the_plan.risk.tier)
                     say(f"cauce: #{task['id']} attempt {nth} passed; risk {the_plan.risk.tier}: its independent "
@@ -1478,7 +1479,8 @@ def run(
                         corrections=corrections, launcher=launcher, store=store, task_id=task["id"], nth=nth,
                         say=say, outgrew=outgrew, registry=registry,
                         rules=[n for n in the_plan.notes if n.get("kind") == notes.CONSTRAINT],
-                        rows=_fixing(options), ahead=_tolerating(ahead, report.check_output))
+                        rows=_fixing(options), ahead=_tolerating(ahead, report.check_output),
+                        impact=_impact(the_plan, so_far, repo_dir))
                     ahead = None
             if ahead is not None:
                 # cauce's check failed (or the change needs no check now): what ran beside it is dropped.
@@ -2445,7 +2447,8 @@ def kept_evidence(text: str, room: int = 4000) -> str:
 
 def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, changed: Sequence[str],
                    known: Sequence[Mapping[str, str]] = (), why: Sequence[str] = (),
-                   rules: Sequence[Mapping[str, Any]] = (), rows: Sequence[str] = (), running: str = "") -> str:
+                   rules: Sequence[Mapping[str, Any]] = (), rows: Sequence[str] = (), running: str = "",
+                   impact: Sequence[str] = ()) -> str:
     """What the verifier is given: the request in its words, the change, why it is checked
     (the risk's reasons, in the router's words) and the constraints the project keeps —
     never the worker's account."""
@@ -2462,6 +2465,10 @@ def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, change
     where = (f"The change is in {workdir}: `git diff {base}` shows it against the base commit {base}, the state "
              "before it." if base else f"The change is in {workdir}, uncommitted: `git diff` shows it.")
     parts.append(f"{where} Files it changed: {shown}.")
+    if impact:
+        # What the code index (livespec) says the change reaches beyond its own files: where to probe.
+        parts.append("What the project's code index says this change reaches (data, not findings: probe what "
+                     "matters):\n" + "\n".join(f"- {line}" for line in impact))
     if known:
         parts.append("The previous check found these; say for each whether it is fixed, and report any new "
                      "problem apart:\n" + findings_mod.text(known))
@@ -2585,7 +2592,8 @@ def _late_check(store: Store, task_id: int, *, text: str, kind: str, risk: risk_
             spec = dataclasses.replace(deferred["spec"], launch_dir=where, workdir=None)
             check, vcell = _check_spec(text=text, kind=kind, cell=deferred["cell"], spec=spec, workdir=where,
                                        base=base, changed=deferred["changed"], risk=risk, ledger={},
-                                       registry=registry, rules=deferred["rules"], rows=())
+                                       registry=registry, rules=deferred["rules"], rows=(),
+                                       impact=deferred.get("impact") or ())
             mark = time.monotonic()
             verdict = launcher(check)
             wall_s = time.monotonic() - mark
@@ -2615,6 +2623,18 @@ def _late_check(store: Store, task_id: int, *, text: str, kind: str, risk: risk_
         attempt=deferred["nth"], account=clip(findings_mod.text(blockers), 2000)))
 
 
+def _impact(plan: Plan, changed: Sequence[str], repo_dir: Path) -> list[str]:
+    """What the adopted neighbours' indexes say a change reaches (livespec: the specs it touches,
+    the callers outside it), for the independent check to probe. Never fails a run."""
+    lines: list[str] = []
+    for adapter, status in plan.active:
+        try:
+            lines += [x for x in adapter.assess(changed, repo_dir, status) if " could not " not in x]
+        except Exception:  # noqa: S112 - an index that cannot say is no reason to skip the check
+            continue
+    return lines
+
+
 def _fixing(options: Options) -> list[str]:
     """The ledger rows a fix step's independent check answers (`verifier_brief`'s `rows`)."""
     held = options.ledger or {}
@@ -2638,7 +2658,8 @@ def _ahead(result: launch.WorkerResult, *, options: Options, verifying: bool,
     check, _ = _check_spec(text=text, kind=plan.kind, cell=cell, spec=spec, workdir=workdir, base=base,
                            changed=so_far, risk=plan.risk, ledger=ledger, registry=registry,
                            rules=[n for n in plan.notes if n.get("kind") == notes.CONSTRAINT],
-                           rows=_fixing(options), running=options.verify)
+                           rows=_fixing(options), running=options.verify,
+                           impact=_impact(plan, so_far, workspace.repo_dir))
     return Ahead(launcher, check, so_far, options.verify)
 
 
@@ -2691,7 +2712,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
                        task_id: int, nth: int, say: Callable[[str], None], outgrew: bool = False,
                        registry: Mapping[str, caps.Capability] | None = None,
                        rules: Sequence[Mapping[str, Any]] = (), rows: Sequence[str] = (),
-                       ahead: Ahead | None = None
+                       ahead: Ahead | None = None, impact: Sequence[str] = ()
                        ) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int,
                                   tuple[dict[str, str], ...]]:
     """A pass checked again by a worker that verifies the request, not the work.
@@ -2707,7 +2728,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     attempt gets more turns on the same cell, never a stronger model."""
     check, vcell = _check_spec(text=text, kind=kind, cell=cell, spec=spec, workdir=workdir, base=base,
                                changed=changed, risk=risk, ledger=ledger, registry=registry, rules=rules, rows=rows,
-                               running=ahead.running if ahead is not None else "")
+                               running=ahead.running if ahead is not None else "", impact=impact)
     say(f"cauce: #{task_id} attempt {nth} passed; risk {risk.tier}: an independent check at {vcell.label}"
         + (" (it ran beside cauce's check)" if ahead is not None else ""))
     mark = time.monotonic()
@@ -2730,7 +2751,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
 def _check_spec(*, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec, workdir: Path, base: str | None,
                 changed: Sequence[str], risk: risk_mod.Risk, ledger: Mapping[str, Mapping[str, str]],
                 registry: Mapping[str, caps.Capability] | None, rules: Sequence[Mapping[str, Any]],
-                rows: Sequence[str], running: str = "") -> tuple[launch.LaunchSpec, Cell]:
+                rows: Sequence[str], running: str = "", impact: Sequence[str] = ()) -> tuple[launch.LaunchSpec, Cell]:
     """The independent check's launch: its cell, its brief and the capabilities that measure."""
     role = roles.internal("verifier")
     vcell = verify_cell(cell)
@@ -2747,7 +2768,7 @@ def _check_spec(*, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec, wo
     fixing = tuple(rows)
     check = dataclasses.replace(
         spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values()), risk.reasons,
-                                    rules=rules, rows=fixing, running=running),
+                                    rules=rules, rows=fixing, running=running, impact=impact),
         verdicts=fixing, verdict_words=ledger_mod.WORDS["recheck"] if fixing else (),
         cell=vcell, max_turns=min(spec.max_turns, VERIFIER_TURNS),
         # Its own session, never the worker's: it reads the request and the diff, not the work's account.

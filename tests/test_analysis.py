@@ -312,3 +312,20 @@ def test_a_pickup_is_split_by_what_it_waited_on(store):
     told = analysis.pickup(runs)
     assert told["seconds"]["pickup_conflict_s"] == 300.0 and told["unknown_s"] == 50.0
     assert told["share"]["pickup_ceiling_s"] == 0.25
+
+
+def test_livespec_use_is_counted_from_the_attempts_it_was_handed(store):
+    from cauce import analysis
+
+    task = store.create_task("build it", status="done", source="cauce")
+    for seq, passed, calls in ((1, False, 0), (2, True, 3)):
+        store.add_event(task["id"], "attempt_started", seq=seq, capabilities=["livespec"])
+        store._conn.execute("INSERT INTO attempts (task_id, seq, cell, max_turns, passed, created_at) "
+                            "VALUES (?, ?, 'sonnet/high', 40, ?, '2026')", (task["id"], seq, int(passed)))
+        for _ in range(calls):
+            store._conn.execute("INSERT INTO tool_events (task_id, attempt, ts, tool, sig, arg_hash, ok) "
+                                "VALUES (?, ?, '2026', 'mcp__livespec__who_calls', 'x', '', 1)", (task["id"], seq))
+    other = store.create_task("other", status="done", source="cauce")
+    store.add_event(other["id"], "attempt_started", seq=1, capabilities=[])
+    use = analysis.capability_use(store.capability_use("livespec"))
+    assert use == {"given": 2, "used": 1, "calls": 3, "passed_used": 1.0, "passed_idle": 0.0}

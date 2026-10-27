@@ -1085,6 +1085,27 @@ class Store:
                        duration_s=float(first[2] or 0) if first else 0.0, calls_before_edit=edit)
         return [r for r in out.values() if r["input_tokens"] or r["passed_first"]]
 
+    def capability_use(self, name: str, *, since: str = "", repo: str | None = None) -> list[dict]:
+        """Every attempt that was handed the capability `name` (its `attempt_started` event lists
+        it): how many of the worker's calls went to its tools, and whether the attempt passed."""
+        rows = self._conn.execute(
+            "SELECT e.task_id, e.data FROM events e JOIN tasks t ON t.id = e.task_id "
+            "WHERE e.kind = 'attempt_started' AND e.ts >= ? AND (? IS NULL OR t.repo = ?) ORDER BY e.id",
+            (since, repo, repo)).fetchall()
+        out = []
+        for task_id, raw in rows:
+            data = json.loads(raw)
+            if name not in (data.get("capabilities") or ()):
+                continue
+            seq = data.get("seq")
+            calls = self._conn.execute(
+                "SELECT COUNT(*) FROM tool_events WHERE task_id = ? AND attempt = ? AND tool LIKE ?",
+                (task_id, seq, f"mcp__{name}__%")).fetchone()[0]
+            done = self._conn.execute("SELECT passed FROM attempts WHERE task_id = ? AND seq = ?",
+                                      (task_id, seq)).fetchone()
+            out.append({"task_id": task_id, "seq": seq, "calls": int(calls), "passed": bool(done and done[0])})
+        return out
+
     def briefs(self, repo: str) -> list[dict]:
         """Each task of a repository with its first `briefed` event (a resume's brief is not
         the one its first try ran under): the task's id and status, and the brief's time and data."""
