@@ -18,6 +18,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import pickle
 import re
 import shlex
 import socket
@@ -25,6 +26,7 @@ import sqlite3
 import statistics
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Collection, Mapping, Sequence
@@ -65,6 +67,7 @@ from cauce import capabilities as caps
 from cauce import criteria as criteria_mod
 from cauce import findings as findings_mod
 from cauce import ledger as ledger_mod
+from cauce import notes as notes_mod
 from cauce import points as points_mod
 from cauce import risk as risk_mod
 from cauce import services as services_mod
@@ -1718,35 +1721,15 @@ def run(
         if late_check is not None:
             report.late_check = True
 
-        def after_ending(store: Store) -> None:
-            # What it learned is filed after its ending and the next step are out (a model call, about
-            # 5 s at the median): no session and no step waits on it. Timed apart.
-            mark, filing = time.monotonic(), False
-            if status == "done" and report.learned and options.keep_learned and config.enabled(
-                    "notes", os.environ, options.notes):
-                filing = True
-                _note(store, task, key, report, the_plan, workspace.repo_dir if workspace else repo_dir,
-                      isolate.head(workspace.repo_dir, report.branch) if workspace and report.branch else None,
-                      notes_ask)
-            if status == "done" and report.constraints and key and options.keep_learned and config.enabled(
-                    "notes", os.environ, options.notes):
-                kept = notes.file_constraints(store, key, report.constraints, author="worker",
-                                              source=f"task #{task['id']}", task_id=task["id"])
-                if kept:
-                    report.noted = [*report.noted, *kept]
-                    store.add_event(task["id"], "noted", notes=kept, constraints=True)
-            if status == "done" and report.learned and options.keep_learned and config.enabled(
-                    "engram_write", os.environ):
-                _to_engram(store, task, report, the_plan, workspace.repo_dir if workspace else repo_dir)
-            if filing:
-                store.add_event(task["id"], "notes_filed", notes_s=round(time.monotonic() - mark, 2))
-            if late_check is not None:
-                _late_check(store, task["id"], text=text, kind=the_plan.kind, risk=the_plan.risk,
-                            repo_dir=workspace.repo_dir if workspace else repo_dir, base=base_commit,
-                            commit=report.commit, deferred=late_check, launcher=launcher, registry=registry,
-                            say=say)
-
-        _after_ending(after_ending, store, detach=options.detach_after)
+        checkout = workspace.repo_dir if workspace else repo_dir
+        filing = status == "done" and options.keep_learned and config.enabled("notes", os.environ, options.notes)
+        _after_ending(store, detach=options.detach_after, task=task, key=key, report=report, plan=the_plan,
+                      checkout=checkout, commit=isolate.head(workspace.repo_dir, report.branch)
+                      if workspace and report.branch and filing and report.learned else None,
+                      notes=filing, engram=status == "done" and options.keep_learned
+                      and config.enabled("engram_write", os.environ),
+                      notes_ask=notes_ask, late_check=late_check, text=text, base=base_commit,
+                      launcher=launcher, registry=registry, say=say)
     return report
 
 
@@ -2504,34 +2487,80 @@ def _awaited(store: Store, task_id: int) -> bool:
     return any(after.hold(t) == {"task": task_id} for t in store.queued_everywhere())
 
 
-def _after_ending(work: Callable[[Store], None], store: Store, *, detach: bool) -> None:
-    """Run what follows a run's ending: in a child process with its own store when `detach` (the
-    command that started the run returns at once, its output closed), else here."""
-    if detach and hasattr(os, "fork"):
+def _follow_ending(store: Store, *, task: dict, key: str | None, report: Report, plan: Plan, checkout: Path,
+                   commit: str | None, notes: bool, engram: bool, notes_ask: notes_mod.Ask | None,
+                   late_check: Mapping[str, Any] | None, text: str, base: str | None, launcher: Launcher,
+                   registry: Mapping[str, caps.Capability] | None, say: Callable[[str], None]) -> None:
+    """What follows a run's ending: filing what its worker learned (a model call, about 5 s at the
+    median, timed apart by a `notes_filed` event), giving it to engram, and the late independent
+    check. No session and no step waits on any of it."""
+    mark = time.monotonic()
+    if notes and report.learned:
+        _note(store, task, key, report, plan, checkout, commit, notes_ask)
+    if notes and report.constraints and key:
+        kept = notes_mod.file_constraints(store, key, report.constraints, author="worker",
+                                          source=f"task #{task['id']}", task_id=task["id"])
+        if kept:
+            report.noted = [*report.noted, *kept]
+            store.add_event(task["id"], "noted", notes=kept, constraints=True)
+    if engram and report.learned:
+        _to_engram(store, task, report, plan, checkout)
+    if notes and report.learned:
+        store.add_event(task["id"], "notes_filed", notes_s=round(time.monotonic() - mark, 2))
+    if late_check is not None and report.commit:
+        _late_check(store, task["id"], text=text, kind=plan.kind, risk=plan.risk, repo_dir=checkout, base=base,
+                    commit=report.commit, deferred=late_check, launcher=launcher, registry=registry, say=say)
+
+
+#: Starts the detached process (a test passes its own).
+_spawn = subprocess.Popen
+
+
+def _quiet(_: str) -> None:
+    """What a detached process says: nothing, its output is closed."""
+
+
+def _after_ending(store: Store, *, detach: bool, **work: Any) -> None:
+    """Run `_follow_ending`: in a fresh process when `detach` (the command that started the run
+    returns at once), else here. Fresh, never a fork: a SQLite connection does not survive one,
+    and a forked child's writes were lost when it closed. Its arguments go in a file in the cauce
+    home that the process reads and removes; work that cannot be written so runs here."""
+    if detach:
+        name = ""
         try:
-            pid = os.fork()
-        except OSError:
-            pid = -1
-        if pid == 0:
-            try:
-                os.setsid()
-                quiet = os.open(os.devnull, os.O_RDWR)
-                for fd in (0, 1, 2):
-                    os.dup2(quiet, fd)
-                child = Store.open()
-                try:
-                    work(child)
-                finally:
-                    child.close()
-            except BaseException:  # a detached child never reaches the caller: its error is kept
-                with contextlib.suppress(Exception):
-                    from cauce import hooks
-                    hooks.note_error(home(), "after-ending")
-            finally:
-                os._exit(0)
-        if pid > 0:
+            spool = home() / "work"
+            spool.mkdir(parents=True, exist_ok=True)
+            fd, name = tempfile.mkstemp(prefix="after-", suffix=".pickle", dir=spool)
+            with os.fdopen(fd, "wb") as fh:
+                pickle.dump({**work, "say": _quiet}, fh)
+            source = str(Path(__file__).resolve().parents[1])
+            code = (f"import sys; sys.path.insert(0, {source!r}); "
+                    f"from cauce.orchestrate import _detached; _detached({name!r})")
+            _spawn([sys.executable, "-c", code], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, start_new_session=True, env=dict(os.environ))
             return
-    work(store)
+        except Exception:  # what cannot be detached runs here, as before
+            with contextlib.suppress(Exception):
+                os.unlink(name)
+    _follow_ending(store, **work)
+
+
+def _detached(path: str) -> None:
+    """The detached process `_after_ending` starts: read its work, remove the file, run it on a
+    store of its own. An error is kept where the next SessionStart reports it."""
+    try:
+        with open(path, "rb") as fh:
+            work = pickle.load(fh)  # noqa: S301 - written by this cauce, in the person's own cauce home
+        os.unlink(path)
+        store = Store.open()
+        try:
+            _follow_ending(store, **work)
+        finally:
+            store.close()
+    except BaseException:
+        with contextlib.suppress(Exception):
+            from cauce import hooks
+            hooks.note_error(home(), "after-ending")
 
 
 def _late_check(store: Store, task_id: int, *, text: str, kind: str, risk: risk_mod.Risk, repo_dir: Path,

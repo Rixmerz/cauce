@@ -1,11 +1,11 @@
 """What was asked, findings as records, risk, and the independent check."""
 from __future__ import annotations
 
-import contextlib
 import json
 import os
+import re
 import subprocess
-import time
+import sys
 
 import pytest
 
@@ -1177,15 +1177,28 @@ def test_opus_at_low_effort_is_no_cheap_cell_and_a_model_below_it_is():
     assert not orchestrate._cheap(Cell("sonnet", "medium"))
 
 
-def test_what_follows_an_ending_detached_runs_in_a_child_with_its_own_store(store, tmp_path):
-    mark = tmp_path / "done"
-    orchestrate._after_ending(lambda s: mark.write_text(str(s.path)), store, detach=True)
-    deadline = time.monotonic() + 10
-    while not mark.exists() and time.monotonic() < deadline:
-        time.sleep(0.05)
-    with contextlib.suppress(ChildProcessError):
-        os.waitpid(-1, 0)
-    assert mark.read_text() == str(store.path)
-    # Without detaching, it runs here, on the caller's store.
-    orchestrate._after_ending(lambda s: mark.write_text(str(id(s))), store, detach=False)
-    assert mark.read_text() == str(id(store))
+def test_what_follows_an_ending_detached_goes_to_a_fresh_process_through_a_file(git_repo, store, late,
+                                                                                  monkeypatch):
+    started = []
+    monkeypatch.setattr(orchestrate, "_spawn", lambda argv, **kw: started.append((argv, kw)))
+    script = Script(passing(), check("fail", [BUG]), write="app.py")
+    report = run("fix the cart total", git_repo, store, Options(verify="true", detach_after=True), registry={},
+                 launcher=script, classifier=kind("implement"))
+    # The run ended without its check: a fresh process, never a fork, does it from a file.
+    assert report.status == "done" and report.late_check
+    assert not store.events_of(report.task_id, "verified")
+    (argv, kw), = started
+    assert kw["start_new_session"] and argv[0] == sys.executable and "_detached(" in argv[-1]
+    spool = re.search(r"_detached\('([^']+)'\)", argv[-1]).group(1)
+    orchestrate._detached(spool)
+    assert not os.path.exists(spool)
+    verified = store.last_event(report.task_id, "verified")["data"]
+    assert verified["late"] and verified["blocking"] == 1
+    assert store.final_event(report.task_id)["data"]["stop"]["cause"] == "review"
+
+
+def test_a_detached_process_that_fails_keeps_its_error(store, tmp_path):
+    spool = tmp_path / "after-x.pickle"
+    spool.write_bytes(b"not a pickle")
+    orchestrate._detached(str(spool))
+    assert "after-ending" in (home() / "hook-errors.log").read_text()
