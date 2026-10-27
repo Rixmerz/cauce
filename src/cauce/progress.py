@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from cauce import isolate, phase
+from cauce import criteria, isolate, phase
 from cauce.config import home
 
 #: A worker with no tool call for this long is said to be quiet: a long command, or stuck.
@@ -77,7 +77,7 @@ def changes(task_id: int, base: str | None, root: Path | None = None) -> dict[st
     """What a task's worker has written in its worktree so far, against the commit it started on:
     the files and the lines added and removed, new files counted whole. None when it works in no
     worktree, or git cannot say."""
-    path = (root or home()) / "worktrees" / f"task-{task_id}"
+    path = worktree(task_id, root)
     if not path.is_dir():
         return None
     numstat = _git(path, "diff", "--numstat", base or "HEAD", "--")
@@ -99,7 +99,84 @@ def changes(task_id: int, base: str | None, root: Path | None = None) -> dict[st
         except OSError:
             continue
     files.update(new)
-    return {"files": len(files), "added": added, "removed": removed}
+    return {"files": len(files), "added": added, "removed": removed, "paths": sorted(files)}
+
+
+def worktree(task_id: int, root: Path | None = None) -> Path:
+    return (root or home()) / "worktrees" / f"task-{task_id}"
+
+
+#: The most of a running worker's diff one look carries; the rest is said cut.
+PEEK_BYTES = 200_000
+
+
+def peek(task_id: int, base: str | None, root: Path | None = None) -> dict[str, Any] | None:
+    """A running worker's diff so far: its worktree against the commit it started on, new files
+    whole, a tool's artifacts left out. Read only (no index, no stash): None when it works in no
+    worktree, or git cannot say."""
+    path = worktree(task_id, root)
+    if not path.is_dir():
+        return None
+    tracked = _git(path, "diff", "--stat", "--patch", "--no-color", base or "HEAD", "--")
+    untracked = _git(path, "ls-files", "--others", "--exclude-standard")
+    if tracked is None or untracked is None:
+        return None
+    text = [tracked]
+    for name in [p for p in untracked.splitlines() if p and not _artifact(p)][:NEW_FILES]:
+        try:
+            done = subprocess.run(["git", "diff", "--no-index", "--no-color", "--", "/dev/null", name], cwd=path,
+                                  capture_output=True, text=True, timeout=10, errors="replace")
+        except (OSError, subprocess.SubprocessError):
+            continue
+        text.append(done.stdout)
+    raw = "".join(text)
+    return {"diff": raw[:PEEK_BYTES], "cut": len(raw) > PEEK_BYTES, "worktree": str(path)}
+
+
+#: The most files a view of the texts carries; the rest is said by count.
+TEXT_FILES = 20
+
+
+def _text(raw: str | None) -> str | None:
+    return None if raw is None or "\0" in raw or len(raw) > NEW_FILE_BYTES else raw
+
+
+def texts(where: Path, base: str | None, head: str | None = None) -> dict[str, Any] | None:
+    """Each file a change touched, before and after, for a view that draws its own diff (an editor
+    over ACP): against `base`, the commit `head` when given, else the working tree as it is now
+    (new files included). A tool's artifacts, binaries and files over `NEW_FILE_BYTES` are left
+    out; past `TEXT_FILES` the rest is counted. Read only; None when git cannot say."""
+    if not where.is_dir():
+        return None
+    base = base or "HEAD"
+    listed = _git(where, "diff", "--name-only", base, *([head] if head else []), "--")
+    if listed is None:
+        return None
+    names = listed.splitlines()
+    if head is None:
+        names += (_git(where, "ls-files", "--others", "--exclude-standard") or "").splitlines()
+    names = sorted({n for n in names if n and not _artifact(n)})
+    files = []
+    for name in names[:TEXT_FILES]:
+        old = _git(where, "show", f"{base}:{name}")
+        if head:
+            new = _git(where, "show", f"{head}:{name}")
+        else:
+            try:
+                new = (where / name).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                new = None
+        if (old is not None and _text(old) is None) or (new is not None and _text(new) is None):
+            continue
+        files.append({"path": name, "old": old, "new": new})
+    return {"files": files, "more": max(0, len(names) - TEXT_FILES)}
+
+
+def asked(task: Mapping[str, Any]) -> list[dict[str, str]]:
+    """The request's own criteria, `S1..Sn`, verbatim: the subtasks a running task shows. Its
+    worker keeps no list of its own: one that kept a task list spent ~5x the model calls and
+    ~19% more time on a four-item task (3 runs each), so the request's items stand for it."""
+    return [{"id": f"S{i}", "text": item} for i, item in enumerate(criteria.items(str(task.get("body") or "")), 1)]
 
 
 def of(store: Any, task: Mapping[str, Any], *, now: float | None = None, root: Path | None = None,
@@ -126,8 +203,13 @@ def of(store: Any, task: Mapping[str, Any], *, now: float | None = None, root: P
             out["quiet_s"] = round(now - last)
     if (expected := estimate(store, task)) is not None:
         out["estimate"] = expected
+    if items := asked(task):
+        out["criteria"] = items
     if (written := changes(task_id, ((started or {}).get("data") or {}).get("base"), root)) is not None:
         out["changes"] = written
+        # A worker that writes through its shell (`cat >`, `sed -i`) makes no write call.
+        if written["files"] and out.get("phase") == "exploring":
+            out["phase"] = "implementing"
     return out
 
 
@@ -157,6 +239,19 @@ def line(p: Mapping[str, Any]) -> str:
     if (quiet := p.get("quiet_s")) is not None and quiet >= IDLE_S:
         parts.append(f"no tool call for {_minutes(quiet)} (a long command, or stuck)")
     return " · ".join(parts)
+
+
+#: The most file names one line says; the rest is said by count.
+FILES_SHOWN = 5
+
+
+def files_line(p: Mapping[str, Any]) -> str:
+    """The files a running worker has written so far, by name: `wrote calc.py, test_calc.py`."""
+    paths = list(((p.get("changes") or {}).get("paths")) or [])
+    if not paths:
+        return ""
+    more = len(paths) - FILES_SHOWN
+    return "wrote " + ", ".join(paths[:FILES_SHOWN]) + (f" and {more} more" if more > 0 else "")
 
 
 def expected_line(store: Any, task: Mapping[str, Any]) -> str:

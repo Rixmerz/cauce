@@ -123,6 +123,7 @@ def board(store: Store, repos: set[str] | None = None, session: str | None = Non
             # How far it got: time against its kind's usual, its stage, what it wrote, a quiet worker.
             item["progress"] = progress.of(store, t)
             item["progress_line"] = progress.line(item["progress"])
+            item["files_line"] = progress.files_line(item["progress"])
             running.append(item)
         elif t["status"] == "done":
             finished = store.final_event(t["id"])
@@ -315,7 +316,7 @@ def _live(store: Store, task: dict[str, Any], attempts: list[dict] | None = None
         seq = ran[-1]["seq"] + 1 if ran else 1
     found = progress.of(store, task)
     return {"attempt_now": seq, "phase": phase.of(task["id"], seq), "recent_calls": phase.calls(task["id"], seq),
-            "progress": found, "progress_line": progress.line(found)}
+            "progress": found, "progress_line": progress.line(found), "files_line": progress.files_line(found)}
 
 
 def task_live(store: Store, task_id: int) -> dict[str, Any] | None:
@@ -339,6 +340,15 @@ def task_diff(store: Store, task_id: int) -> dict[str, Any] | None:
     task = store.get_task(task_id)
     if task is None:
         return None
+    if task["status"] == "running":
+        # Nothing kept yet: what its worker wrote so far, read from its worktree.
+        started = store.last_event(task_id, "attempt_started")
+        found = progress.peek(task_id, ((started or {}).get("data") or {}).get("base"))
+        if found is None:
+            return {"branch": None, "diff": "", "why": "it works in no worktree of its own, or git cannot say",
+                    "running": True}
+        return {"branch": None, "diff": found["diff"], "cut": found["cut"], "running": True,
+                "why": "" if found["diff"] else "nothing written yet"}
     finished = store.final_event(task_id)
     branch = (finished["data"].get("branch") if finished else None) or f"cauce/task-{task_id}"
     where = task.get("cwd")

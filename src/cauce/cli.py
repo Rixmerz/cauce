@@ -945,8 +945,10 @@ def cmd_tasks(args: argparse.Namespace) -> int:
             tried = {t["id"]: store.attempts(t["id"]) for t in tasks}
             tasks = sorted((t for t in tasks if tried[t["id"]]), key=lambda t: (str(t.get("repo") or ""), -t["id"]))
         seen: dict[tuple[str, str], list[float]] = {}
-        waits = {t["id"]: (progress.line(progress.of(store, t)) if t["status"] == "running" else "")
+        now = {t["id"]: progress.of(store, t) for t in tasks if t["status"] == "running"}
+        waits = {t["id"]: (progress.line(now[t["id"]]) if t["id"] in now else "")
                  or dispatch.waiting(store, t) or flow.slow(store, t, seen=seen) for t in tasks}
+        files = {i: progress.files_line(p) for i, p in now.items()}
         # None here, but work elsewhere: say how much and where to see it.
         elsewhere = [] if tasks or here is None else store.list_tasks(
             status=args.status or None, limit=10_000, source=sources)
@@ -967,6 +969,8 @@ def cmd_tasks(args: argparse.Namespace) -> int:
               f"{t['title']}{mark}")
         if waits[t["id"]]:
             print(f"       {waits[t['id']]}")
+        if files.get(t["id"]):
+            print(f"       {files[t['id']]}")
     if elsewhere:
         projects = len({t.get("repo") for t in elsewhere})
         print(f"no tasks in this project ({here}); {len(elsewhere)} in {projects} other project(s): "
@@ -979,6 +983,45 @@ def cmd_tasks(args: argparse.Namespace) -> int:
 def _project_label(key: str | None) -> str:
     """A project's key as a row names it: its folder's name."""
     return Path(key).name if key else "-"
+
+
+def cmd_peek(args: argparse.Namespace) -> int:
+    """A running worker's diff so far, read and never written; a task that ended has its kept
+    branch instead, which `cauce show` names."""
+    store = Store.open()
+    try:
+        task = store.get_task(args.id)
+        if task is None:
+            print(f"no task #{args.id}", file=sys.stderr)
+            return 1
+        if task["status"] != "running":
+            branch = ((store.final_event(args.id) or {}).get("data") or {}).get("branch")
+            print(f"#{args.id} is {task['status']}, not running" + (
+                f": its work is on {branch} (git -C {task['cwd']} diff HEAD...{branch})" if branch else ""),
+                file=sys.stderr)
+            return 1
+        started = store.last_event(args.id, "attempt_started")
+        base = ((started or {}).get("data") or {}).get("base")
+        if args.stat:
+            written = progress.changes(args.id, base)
+            if written is None:
+                print(f"#{args.id} works in no worktree of its own, or git cannot say", file=sys.stderr)
+                return 1
+            print(progress.line({"changes": written}) or "nothing written yet")
+            if names := progress.files_line({"changes": written}):
+                print(names)
+            return 0
+        found = progress.peek(args.id, base)
+    finally:
+        store.close()
+    if found is None:
+        print(f"#{args.id} works in no worktree of its own, or git cannot say", file=sys.stderr)
+        return 1
+    print(found["diff"] or "nothing written yet", end="" if found["diff"] else "\n")
+    if found["cut"]:
+        print(f"… cut at {progress.PEEK_BYTES} bytes; the whole of it: "
+              f"git -C {found['worktree']} diff {base or 'HEAD'}")
+    return 0
 
 
 def cmd_show(args: argparse.Namespace) -> int:
@@ -1003,6 +1046,14 @@ def cmd_show(args: argparse.Namespace) -> int:
             print(f"realized {ended['realized']}: {', '.join(ended.get('realized_why') or ()) or 'a small change'}")
         if waits := dispatch.waiting(store, task):
             print(waits)
+        if task["status"] == "running":
+            now = progress.of(store, task)
+            for line in (progress.line(now), progress.files_line(now)):
+                if line:
+                    print(f"now: {line}")
+            for c in now.get("criteria") or ():
+                print(f"  asked {c['id']}: {c['text']}")
+            print(f"  its diff so far: cauce peek {args.id}")
         refused = store.denials(args.id)
         climbed = {e["data"]["seq"]: e["data"] for e in store.events_of(args.id, "moved") if "seq" in e["data"]}
         checks: dict[int, list[dict]] = {}
@@ -2645,6 +2696,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--last-id", action="store_true", help="print the newest event id: where a watcher starts")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_events)
+
+    p = sub.add_parser("peek", help="what a running task's worker wrote so far: its worktree's diff against its base")
+    p.add_argument("id", type=int)
+    p.add_argument("--stat", action="store_true", help="only the files and their lines")
+    p.set_defaults(func=cmd_peek)
 
     p = sub.add_parser("show", help="one task: its attempts and its messages")
     p.add_argument("id", type=int)

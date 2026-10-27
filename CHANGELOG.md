@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [0.55.0] - 2026-10-27
+
+### Added
+
+- **`cauce peek N`:** a running worker's diff so far, its worktree against the commit it
+  started on, new files included and a tool's artifacts left out. `--stat` gives the files
+  alone. The task page of a running task shows the same diff with a button. Read only: no
+  index, no stash.
+- **The files a worker wrote, by name:** shown under its progress line on the board, the task
+  page, `cauce tasks` and the mod's `tasks` tool (`wrote calc.py, test_calc.py`).
+- **A running task's subtasks are its request's items:** `cauce show N` and the task page list
+  `S1..Sn` as asked, answered when the task ends. A worker is not asked to keep a task list.
+  `claude -p` gives a worker none by default (`TaskCreate` can be enabled). A worker that kept
+  one spent 14–15 model calls instead of 3, a median of 31 s instead of 26 s, and $0.295
+  instead of $0.25, on a four-item task (3 runs each).
+- **`cauce acp` shows the plan and the diffs:**
+  - The request's items go to the editor as `plan` entries: pending, then in progress once the
+    task starts, completed when it passes.
+  - The worker's files go as `diff` content: read again from its worktree every ten seconds
+    while it runs, and from the branch it kept once it ends.
+
+### Fixed
+
+- **A worker that wrote said "exploring":** the phase read only the attempt's last six calls,
+  and a worker reads again after it writes. Now a write anywhere in the attempt makes it
+  implementing. So does a worktree with changes, since a worker that writes through its shell
+  (`cat >`, `sed -i`) makes no write call.
+
 ## [0.54.0] - 2026-10-27
 
 ### Added

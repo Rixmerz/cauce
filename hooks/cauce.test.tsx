@@ -312,7 +312,7 @@ const BOARD = {
     { id: 9, title: 'docs', status: 'done', branch: 'cauce/task-9', asks: 'review branch cauce/task-9, then merge it' },
   ],
   running: [{ id: 14, title: 'write stats', status: 'running', current_cell: 'sonnet/medium',
-    progress_line: 'implementing · 4m of ≈7m · 3 files +120 −8',
+    progress_line: 'implementing · 4m of ≈7m · 3 files +120 −8', files_line: 'wrote stats.py, test_stats.py',
     slow: 'running 101m: longer than 9 in 10 of the 6 ui tasks that passed here (p90 40m)' }],
   queued: [{ repo: 'r', paused: false, reason: null, tasks: [{ id: 15, title: 'add median', status: 'queued' }] }],
 }
@@ -324,7 +324,7 @@ test('tasks says what waits on the person and how it goes on', async ($, on) => 
   expect(answer.result).toContain('yours to decide (resume, rewrite or dismiss with why): #13 [replan] reduce the app')
   expect(answer.result).toContain("allow it: cauce resume 12 --allow 'Bash(npm test:*)'")
   expect(answer.result).toContain('review branch cauce/task-9, then merge it')
-  expect(answer.result).toContain('running: #14 write stats (sonnet/medium)\n  now: implementing · 4m of ≈7m · 3 files +120 −8\n  slow: running 101m')
+  expect(answer.result).toContain('running: #14 write stats (sonnet/medium)\n  now: implementing · 4m of ≈7m · 3 files +120 −8\n  wrote stats.py, test_stats.py\n  slow: running 101m')
   expect(answer.result).toContain('queued: #15 add median')
 })
 

@@ -83,13 +83,13 @@ def session_of(task_id: int, attempt: int | None, env: Mapping[str, str] | None 
 
 
 def of(task_id: int, attempt: int | None, env: Mapping[str, str] | None = None) -> str | None:
-    """The attempt's phase now, or None before its first call."""
-    calls = recent(task_id, attempt, env)
-    if not calls:
+    """The attempt's phase now, or None before its first call. A write anywhere in the attempt
+    makes it implementing, not only one of its last calls: a worker reads again after it writes."""
+    sigs = [str(e.get("sig") or "") for e in _calls(task_id, attempt, env)]
+    if not sigs:
         return None
-    kinds = [kind_of(s) for s in calls]
-    if "checking" in kinds[-3:]:
+    if "checking" in [kind_of(s) for s in sigs[-3:]]:
         return "checking"
-    if "implementing" in kinds:
+    if any(kind_of(s) == "implementing" for s in sigs):
         return "implementing"
     return "exploring"

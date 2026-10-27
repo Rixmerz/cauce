@@ -33,7 +33,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/evolution.py` | the evolution history: a snapshot a day per repository and kind, the report (`cauce evolution`, the UI's Evolution), and `settle`, which the hooks and the dispatcher run after work ends |
 | `src/cauce/surfaces.py` | where a task may write (`--surface`, a step's `surfaces`): checked after each attempt, and whether two tasks can never touch the same file |
 | `src/cauce/phase.py` | what a running worker is doing (exploring, implementing, checking), read from the tail of the tool-call log |
-| `src/cauce/progress.py` | how far a running task got: time against its kind's usual here, its stage (worker, cauce's check, the independent check), what its worker wrote so far (its worktree's git), a worker gone quiet; read only, no model |
+| `src/cauce/progress.py` | how far a running task got: time against its kind's usual here, its stage (worker, cauce's check, the independent check), what its worker wrote so far (its worktree's git: counts, names, `peek`'s diff, `texts` before and after), the request's items as its subtasks, a worker gone quiet; read only, no model |
 | `src/cauce/roles_internal/` | roles cauce runs itself and no team holds: the independent `verifier`, and the `surveyor` that investigates for `/cauce:init` |
 | `skills/init/` | the plugin's one skill (`/cauce:init`): scope and an estimate of its cost agreed with the person, `cauce investigate` digs, and from the reports one team for every flow, one workflow per flow, and the memory of what was solved, through cauce's own commands only |
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
@@ -89,7 +89,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `bin/cauce` | the launcher every hook and command goes through |
 | `src/cauce/interpreter.py` | which Python runs cauce; imported before the version check, so it must run on any python3 |
 | `src/cauce/link.py` | `cauce link`: a shim on a terminal's PATH that survives plugin updates; `forward_to`, which sends a typed command from an old install to the newest (never a hook, never a checkout) |
-| `src/cauce/acp.py` | `cauce acp`: cauce as an Agent Client Protocol agent over stdio (Zed's `agent_servers`): JSON-RPC lines, one session per `session/new` and its folder, each prompt a `cauce run` (or `cauce tasks`/`stats` for `/tasks`/`/stats`) in its own process group, its stderr progress as one tool call, its report as the answer, a cancel as `cauce cancel N` then a kill; spawning injectable; stdlib |
+| `src/cauce/acp.py` | `cauce acp`: cauce as an Agent Client Protocol agent over stdio (Zed's `agent_servers`): JSON-RPC lines, one session per `session/new` and its folder, each prompt a `cauce run` (or `cauce tasks`/`stats` for `/tasks`/`/stats`) in its own process group, its stderr progress as one tool call, its report as the answer, a cancel as `cauce cancel N` then a kill, the request's items as its `plan` and the worker's files as `diff` content; spawning injectable; stdlib |
 
 ## Verify before reporting done
 
@@ -512,8 +512,12 @@ yields the default kind, not a guess.
   over to cauce's check and the independent check, what its worktree holds against its base (files, lines
   added and removed, a tool's artifacts left out), and a worker with no tool call for `progress.IDLE_S`
   said quiet ("a long command, or stuck"), never stopped. The status line tells each of up to
-  `SHOWN_RUNNING` tasks so, and the board, the task page, `cauce tasks` and the mod's `tasks` tool too;
-  queueing says how long tasks like it took here.
+  `SHOWN_RUNNING` tasks so, and the board, the task page, `cauce tasks` and the mod's `tasks` tool too,
+  with the files it wrote by name; queueing says how long tasks like it took here. Its phase is
+  implementing once any call of the attempt wrote, or its worktree holds changes (a shell writes with no
+  write call). `cauce peek N` and the task page show its diff so far, read only. Its subtasks are its
+  request's items (`progress.asked`), never a list its worker keeps: a worker that kept one spent ~5x the
+  model calls and ~19% more time on a four-item task.
 - A resume's plan says what it resumes after, the cell it starts at and why, and when that
   is below the highest cell the task ran (`cli.resume_line`); `cauce show` lists every run of
   a task that ran more than once, so a fail resumed to a pass reads as both.
@@ -1021,7 +1025,9 @@ yields the default kind, not a guess.
   needs a rule or an approval is the person's as anywhere, and the `mcpServers` a client sends are never
   handed to a worker (the registry is the person's cauce home only; the first answer says so). stdout
   carries protocol messages alone; a cancel runs `cauce cancel N` and kills the process group only if the
-  run outlasts `acp.CANCEL_GRACE_S`.
+  run outlasts `acp.CANCEL_GRACE_S`. The editor gets the request's items as `plan` entries (completed only
+  on a pass) and the worker's files as `diff` content, read from its worktree every `acp.DIFF_EVERY_S`
+  and from its kept branch once it ends; reading them never fails a prompt.
 - The mod adds a way in, never a power. Every tool runs `bin/cauce`. `resume`
   runs with `--unattended`, which refuses what only a person may clear, and
   no model input ever reaches `--allow`, `--allow-approval` or `--keep`: only

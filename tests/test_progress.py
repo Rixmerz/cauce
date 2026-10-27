@@ -60,12 +60,17 @@ def test_what_the_worker_wrote_so_far_is_read_from_its_worktree(git_repo, store)
     base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=git_repo, capture_output=True, text=True).stdout.strip()
     path = home() / "worktrees" / f"task-{task['id']}"
     git(git_repo, "worktree", "add", "-q", "-b", f"cauce/task-{task['id']}", str(path))
-    assert progress.changes(task["id"], base) == {"files": 0, "added": 0, "removed": 0}
+    assert progress.changes(task["id"], base) == {"files": 0, "added": 0, "removed": 0, "paths": []}
     (path / "new.py").write_text("a = 1\nb = 2\n")
     (path / "__pycache__").mkdir()
     (path / "__pycache__" / "x.pyc").write_text("junk\n")  # a tool's artifact is no change
-    assert progress.changes(task["id"], base) == {"files": 1, "added": 2, "removed": 0}
+    assert progress.changes(task["id"], base) == {"files": 1, "added": 2, "removed": 0, "paths": ["new.py"]}
     assert progress.changes(999, base) is None  # no worktree: nothing to say
+    # A worker that wrote through its shell made no write call: its worktree says it implements.
+    from .test_checking import log
+
+    log([(task["id"], 1, "bash:cat")])
+    assert progress.of(store, task)["phase"] == "implementing"
 
 
 def test_the_line_says_time_against_the_usual_and_past_it():
@@ -94,3 +99,51 @@ def test_cauce_tasks_shows_a_running_task_s_progress(store, capsys):
     main(["tasks", "--all"])
     out = capsys.readouterr().out
     assert f"#{task['id']}" in out and "\n       " in out  # its progress line under it
+
+
+def test_peek_shows_a_running_worker_s_diff_so_far(git_repo, store, capsys):
+    from cauce.ui import api
+
+    task = _running(store)
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=git_repo, capture_output=True, text=True).stdout.strip()
+    store.add_event(task["id"], "attempt_started", seq=1, base=base)
+    path = home() / "worktrees" / f"task-{task['id']}"
+    git(git_repo, "worktree", "add", "-q", "-b", f"cauce/task-{task['id']}", str(path))
+    assert main(["peek", str(task["id"])]) == 0 and "nothing written yet" in capsys.readouterr().out
+    (path / "logout.py").write_text("def logout():\n    return True\n")
+    assert main(["peek", str(task["id"])]) == 0
+    out = capsys.readouterr().out
+    assert "+def logout():" in out and "logout.py" in out
+    assert main(["peek", str(task["id"]), "--stat"]) == 0 and "1 file +2 −0" in capsys.readouterr().out
+    found = api.task_diff(store, task["id"])
+    assert found["running"] and "+def logout():" in found["diff"]
+    store.update_task(task["id"], status="done")
+    assert main(["peek", str(task["id"])]) == 1 and "not running" in capsys.readouterr().err
+
+
+def test_texts_give_each_file_before_and_after_live_and_kept(git_repo, store):
+    from cauce import acp
+
+    task = _running(store)
+    store.update_task(task["id"], cwd=str(git_repo))
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=git_repo, capture_output=True, text=True).stdout.strip()
+    store.add_event(task["id"], "attempt_started", seq=1, base=base)
+    path = home() / "worktrees" / f"task-{task['id']}"
+    branch = f"cauce/task-{task['id']}"
+    git(git_repo, "worktree", "add", "-q", "-b", branch, str(path))
+    (path / "logout.py").write_text("def logout():\n    return True\n")
+    (path / "blob.bin").write_bytes(b"\0\1\2")  # a binary is no text to show
+    found = progress.texts(path, base)
+    assert found == {"files": [{"path": "logout.py", "old": None, "new": "def logout():\n    return True\n"}],
+                     "more": 0}
+    shown = acp.task_diffs(task["id"], True)
+    assert shown == [{"type": "diff", "path": str(git_repo / "logout.py"), "oldText": None,
+                      "newText": "def logout():\n    return True\n"}]
+    # Once it ended, the branch it kept is what the editor sees.
+    git(path, "add", "logout.py")
+    git(path, "commit", "-qm", "logout")
+    store.add_event(task["id"], "finished", status="done", branch=branch, base=base)
+    store.update_task(task["id"], status="done")
+    assert acp.task_diffs(task["id"], False)[0]["newText"].startswith("def logout")
+    assert progress.of(store, {**task, "body": "Add:\n- a logout button\n- its test"})["criteria"][1] == {
+        "id": "S2", "text": "its test"}

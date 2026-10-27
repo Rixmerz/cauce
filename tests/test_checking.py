@@ -681,6 +681,9 @@ def test_a_running_attempt_s_phase_is_read_from_its_last_calls():
     log([(1, 1, "bash:npm:test")])
     assert phase.of(1, 1) == "checking" and phase.of(1, None) == "checking" and phase.of(1, 2) is None
     assert phase.kind_of("write:ts") == "implementing" and phase.kind_of("bash:ls") == "exploring"
+    # A worker reads again after it writes: the write, out of its last calls, still counts.
+    log([(3, 1, "write:py")] + [(3, 1, "read:py")] * (phase.LAST + 2))
+    assert phase.of(3, 1) == "implementing"
 
 
 def test_the_board_and_the_drawer_show_the_phase_the_risk_and_the_checks(git_repo, store, verifier_on):
@@ -700,7 +703,7 @@ def test_the_board_and_the_drawer_show_the_phase_the_risk_and_the_checks(git_rep
     diff = api.task_diff(store, report.task_id)
     assert diff["branch"] == report.branch and "app.py" in diff["diff"] and not diff["cut"]
     assert api.task_diff(store, 999) is None
-    assert "no kept branch" in api.task_diff(store, running["id"])["why"]
+    assert "no worktree" in api.task_diff(store, running["id"])["why"]  # a running task: its worktree, none here
     gone = store.create_task("x", status="done", source="cauce", cwd="/nowhere")
     assert "not here" in api.task_diff(store, gone["id"])["why"]
 

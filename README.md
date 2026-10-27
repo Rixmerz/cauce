@@ -628,7 +628,12 @@ worker's phase, or cauce's check or the independent check when its worker is
 done; its time against the usual for its kind here; and what it wrote so far,
 read from its worktree. A worker with no tool call for five minutes is said
 quiet: a long command, or stuck. The board, the task page, `cauce tasks` and
-the mod's `tasks` tool say the same.
+the mod's `tasks` tool say the same, with the names of the files it wrote, and
+`cauce show N` lists the request's items it was asked. `cauce peek N` prints its
+diff so far (`--stat` for the files alone), and the task page shows it with a
+button. A worker keeps no task list of its own: one that kept one spent about
+five times the model calls and a fifth more time on a four-item task, so the
+request's items stand for its subtasks.
 
 A `++` or a `cauce queue add` also starts the repository's dispatcher
 (`autowork`, on by default), so queued work runs at once in workers, never in
@@ -726,6 +731,9 @@ on PATH that `cauce link` puts there:
 
 Each prompt is one `cauce run` in the project's folder: its progress (the lines
 cauce prints on stderr) shows as one tool call, and its report is the answer.
+The request's listed items are the agent's plan, completed when the task passes,
+and the files its worker writes show as diffs: from its worktree while it runs,
+from the branch it kept once it ends.
 `/tasks` and `/stats` run `cauce tasks` and `cauce stats`. Cancelling a prompt
 runs `cauce cancel` on its task, and stops the process if it has not ended ten
 seconds later. It is a way in, never a power: no rule or approval is passed, so
