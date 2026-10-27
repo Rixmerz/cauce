@@ -2550,9 +2550,11 @@ def _late_check(store: Store, task_id: int, *, text: str, kind: str, risk: risk_
             mark = time.monotonic()
             verdict = launcher(check)
             wall_s = time.monotonic() - mark
-    except Exception as exc:
+    except BaseException as exc:  # a detached check that stops on a signal still says so
         store.add_event(task_id, "verified", seq=deferred["nth"], late=True, passed=None,
-                        summary=f"the late independent check could not run: {exc}"[:500])
+                        summary=f"the late independent check could not run: {exc!r}"[:500])
+        if not isinstance(exc, Exception):
+            raise
         return
     shown = findings_mod.read({"findings": list(verdict.findings)})
     blockers = findings_mod.blocking(shown)
