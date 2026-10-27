@@ -185,10 +185,11 @@ def one(arm: str, variant: str) -> dict:
                else plain(arm.removeprefix("karpathy:"), where, ask(variant)))
     except subprocess.TimeoutExpired:
         got = {"error": "timed out"}
-    wall = time.monotonic() - began
+    # The wall time ends when the command exits: a late check waited for after it is `late_s`.
+    wall = time.monotonic() - began - float(got.get("late_s") or 0)
     visible = subprocess.run(["make", "test"], cwd=where, capture_output=True, text=True, timeout=600).returncode == 0
     label = arm.replace("cauce", f"cauce {__version__}", 1) if arm.startswith("cauce") else arm
-    row = {"arm": label, "variant": variant, "wall_s": round(wall, 1),
+    row = {"arm": label, "variant": variant, "wall_s": round(wall, 1), "foreground": True,
            "visible": visible,
            "hidden": build.hidden(where, variant), "of": 10 if variant == "hard" else 7, **got,
            **diffstat(where)}
@@ -203,6 +204,8 @@ def main(argv: list[str]) -> None:
         rows = [json.loads(x) for x in OUT.read_text().splitlines() if x.strip()]
         for r in rows:
             r["arm"] = "cauce 0.49.0" if r["arm"] == "cauce" else r["arm"]  # rows from before versions were kept
+            if r.get("late_s") and not r.get("foreground"):  # rows whose wall time held the late wait
+                r["wall_s"] = round(r["wall_s"] - r["late_s"], 1)
         print(f"{'build':<7}{'arm':<34}{'n':>3}{'right':>8}{'hidden':>9}{'wall p50':>10}{'mean':>7}{'$ p50':>8}"
               f"{'$ mean':>8}{'+lines p50':>12}{'-lines p50':>12}")
         for key in sorted({(r["variant"], r["arm"]) for r in rows}):

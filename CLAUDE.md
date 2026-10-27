@@ -384,8 +384,9 @@ yields the default kind, not a guess.
   its session hears of; one that cannot decide leaves the pass. Never late for a workflow step, a
   fix of ledger rows, or work something queued `--after` waits on (`orchestrate._awaited`): what
   those release could not be taken back. `cauce run` and the resumes the dispatcher starts do what
-  follows an ending (notes, the late check) in a detached child with its own store
-  (`Options.detach_after`), so the command exits with the ending.
+  follows an ending (notes, the late check) in a fresh detached process with its own store
+  (`Options.detach_after`, `orchestrate._after_ending`), so the command exits with the ending: never
+  a fork, since a forked child's SQLite writes were lost when it closed.
   Tests run with `CAUCE_VERIFIER=off`, `CAUCE_OVERLAP=off` and `CAUCE_LATE_VERIFIER=off`.
 - A task that stops on a point (`spec`, `decision`) because its surfaces kept it from the
   cause (it changed a path outside them, or its worker says so and names one,
