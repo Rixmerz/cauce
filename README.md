@@ -529,6 +529,9 @@ From a shell:
 cauce route "the login redirect drops the query string"        # where it would start, and why
 cauce run "the login redirect drops the query string" --verify "pytest -q tests/test_auth.py"
 cauce run "build the training module" --verify "npm run build" --allow "Bash(npm run build)"
+cauce run - --verify "pytest -q" <<'EOF'                          # backticks or $(…) in the request: a quoted heredoc keeps them text
+fix the `parse()` call in src/api.py
+EOF
 cauce resume 12 --allow "Bash(node:*)"                         # a task that stopped, from its kept work
 cauce resume 12 --allow "Bash(node:*)" --keep                  # …and every task here gets the rule from now on
 cauce resume 12 --surface src/sync/clock.ts                    # …one its surfaces kept from the cause, with more

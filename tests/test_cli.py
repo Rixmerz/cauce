@@ -1528,3 +1528,58 @@ def test_tasks_workers_lists_only_work_a_worker_ran_by_project(capsys):
     assert out[0] == "hertzbench (/w/hertzbench)" and out[2] == "site (/w/site)"
     assert out[1].startswith(f"#{ran['id']}") and out[1].endswith("fix the radio  (1 attempt(s), $3.20)")
     assert len(out) == 4 and not any("never ran" in x or "(turn)" in x for x in out)
+
+
+@pytest.mark.parametrize("argv, bad", [
+    (["merge", "N"], "'N'"),
+    (["merge", "3", "#x"], "'#x'"),
+    (["merge", "²"], "'²'"),
+    (["pr", "N"], "'N'"),
+])
+def test_a_command_that_wants_task_ids_refuses_a_word_that_is_none_in_one_line(argv, bad, capsys):
+    """A placeholder (`N`) left in a request the shell had run backticks of crashed `cmd_merge` with
+    `ValueError: invalid literal for int() with base 10: 'N'`."""
+    assert cli.main(argv) == 2
+    out, err = capsys.readouterr()
+    assert err.strip() == f"cauce {argv[0]}: {bad} is not a task number (N or #N)"
+    assert out == ""
+
+
+def test_a_task_number_may_carry_a_hash(git_repo, capsys):
+    assert cli.main(["merge", "#999", "--repo", str(git_repo), "--dry-run"]) == 1
+    assert "no task #999" in capsys.readouterr().err
+
+
+def test_split_reads_a_non_ascii_digit_as_a_request_not_a_task(capsys, git_repo):
+    cli.main(["split", "²", "--repo", str(git_repo), "--no-model"])  # `int("²")` raised ValueError
+    out, err = capsys.readouterr()
+    assert "no split" in out
+    assert "no task" not in err
+
+
+def test_queue_add_reads_the_request_from_stdin_as_it_is(git_repo, monkeypatch):
+    """Backticks and `$(…)` in a request sent through a quoted heredoc are text: nothing runs them."""
+    import io
+
+    text = "fix `cauce merge N`, then read `cauce guide dispatch` and $(echo hi)\n"
+    monkeypatch.setattr("sys.stdin", io.StringIO(text))
+    assert cli.main(["queue", "add", "-", "--repo", str(git_repo), "--json"]) == 0
+    store = Store.open()
+    try:
+        assert store.list_tasks(status=["queued"], limit=1)[0]["body"] == text
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("argv", [["run", "-", "--dry-run", "--no-model"], ["queue", "add", "-"]])
+def test_a_request_from_an_empty_stdin_is_refused_before_anything_starts(argv, git_repo, monkeypatch, capsys):
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("  \n"))
+    assert cli.main([*argv, "--repo", str(git_repo)]) == 2
+    assert "the request read from stdin is empty" in capsys.readouterr().err
+    store = Store.open()
+    try:
+        assert store.list_tasks(limit=5) == []
+    finally:
+        store.close()

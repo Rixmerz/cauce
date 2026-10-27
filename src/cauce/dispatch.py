@@ -466,6 +466,52 @@ def _alive(pid: int | None) -> bool:
     return True
 
 
+#: How long a resume that was just started is left to take hold: it flips its task to running within
+#: seconds, and until then a second `recover` (the dispatcher's, a waiter's, a turn's end) sees the
+#: same stopped task and would start a second worker on it.
+RESUME_STARTING_S = 120
+
+
+def _claim_resume(store: Store, task_id: int, stop: Any, ended_id: int) -> bool:
+    """Record the resume of `task_id` before anything starts it, in one write transaction, so two
+    `recover` calls at once (separate processes) never both start it; False when one was started
+    after its ending (`ended_id`) in the last `RESUME_STARTING_S`. One that took hold and ended
+    again is no obstacle; one that never took hold is tried again after that."""
+    with store.immediate():
+        for event in store.events_of(task_id, "auto_resumed"):
+            if int(event["id"]) < ended_id:
+                continue
+            try:
+                started = datetime.fromisoformat(str(event["ts"])).timestamp()
+            except ValueError:
+                continue
+            if 0 <= time.time() - started < RESUME_STARTING_S:
+                return False
+        store.add_event(task_id, "auto_resumed", after=stop.reason, cause=stop.cause)
+        # Its stop is no ending to hand a session: the resume's own ending is.
+        store.add_event(task_id, "reported", via="auto_resume")
+    return True
+
+
+def _start_resume(task: Mapping[str, Any], stop: Any, root: Path, env: Mapping[str, str],
+                  start: Callable[..., object]) -> bool:
+    """`cauce resume --unattended` for a stopped task, detached, in the worktree it left, with more
+    turns for one that outgrew them; False when it could not start. That leaves the claim: it is
+    one of the tries, and the next one waits out `RESUME_STARTING_S`."""
+    from cauce import stops
+
+    more = ["--max-turns", str(stops.RESUME_TURNS)] if stop.cause == "turns" else []
+    try:
+        (root / "work").mkdir(parents=True, exist_ok=True)
+        with open(root / "work" / "auto-resume.log", "a") as out:
+            start([sys.executable, "-m", "cauce", "resume", str(task["id"]), "--unattended", *more],
+                  cwd=str(task["cwd"]), env=child_env(env), stdin=subprocess.DEVNULL, stdout=out,
+                  stderr=subprocess.STDOUT, start_new_session=True)
+    except OSError:
+        return False
+    return True
+
+
 def recover(store: Store, root: Path, env: Mapping[str, str], *, popen: Callable[..., object] | None = None,
             is_alive: Callable[[int | None], bool] = _alive, now: float | None = None) -> list[int]:
     """Workers that died mid-attempt (a restart, a killed process) cost the time until somebody
@@ -510,17 +556,8 @@ def recover(store: Store, root: Path, env: Mapping[str, str], *, popen: Callable
             continue
         if now - due > AUTO_RESUME_WITHIN_S:
             continue
-        try:
-            (root / "work").mkdir(parents=True, exist_ok=True)
-            with open(root / "work" / "auto-resume.log", "a") as out:
-                more = ["--max-turns", str(stops.RESUME_TURNS)] if stop.cause == "turns" else []
-                start([sys.executable, "-m", "cauce", "resume", str(task["id"]), "--unattended", *more],
-                      cwd=str(task["cwd"]), env=child_env(env), stdin=subprocess.DEVNULL, stdout=out,
-                      stderr=subprocess.STDOUT, start_new_session=True)
-        except OSError:
+        if not _claim_resume(store, task["id"], stop, int((ended or {}).get("id") or 0)):
             continue
-        store.add_event(task["id"], "auto_resumed", after=stop.reason, cause=stop.cause)
-        # Its stop is no ending to hand a session: the resume's own ending is.
-        store.add_event(task["id"], "reported", via="auto_resume")
-        resumed.append(int(task["id"]))
+        if _start_resume(task, stop, root, env, start):
+            resumed.append(int(task["id"]))
     return resumed

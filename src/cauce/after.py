@@ -29,6 +29,7 @@ Light: the dispatcher, its views and `stops` read it.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -94,7 +95,8 @@ def ref(value: str) -> dict[str, int]:
     `ValueError` with what it takes."""
     kind, _, number = str(value).strip().rpartition(":")
     kind = kind or "task"
-    if kind not in ("task", "run") or not number.isdigit():
+    # ASCII digits only: `²` is a digit to isdigit, and int() refuses it
+    if kind not in ("task", "run") or not re.fullmatch(r"\d+", number, re.ASCII):
         raise ValueError(f"--after takes a task number (N or task:N) or a workflow run (run:N), not {value!r}")
     return {kind: int(number)}
 

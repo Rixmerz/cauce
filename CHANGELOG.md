@@ -2,6 +2,48 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A request's backticks no longer reach the shell, and a bad task id is one line, not a
+  traceback:** a dispatch whose text sat in a double-quoted argument had its backticks run by the
+  shell (it ran `cauce merge N` and `cauce guide dispatch`) and the task started with those words
+  missing; the `N` it left behind then crashed `cauce merge` with `ValueError: invalid literal for
+  int()`. The orchestration skill and `cauce guide dispatch` now send the request on stdin through
+  a quoted heredoc (`cauce run - <<'EOF'`, the same for `cauce queue add -`), so the shell never
+  interpolates it; an empty stdin is refused (exit 2) before a task is made. `cauce merge` and
+  `cauce pr` refuse a word that is not `N` or `#N` in one line (exit 2), and `cauce split` and
+  `cauce dismiss` read a non-ASCII digit (`²`) as text, not as a task number; so do `--after ²` and
+  `cauce config max_parallel ²`, which no longer reach `int()`.
+- **A stopped task is resumed once when several things notice it at the same time:** the
+  dispatcher's loop, a `limit-wait` waiter and a turn's end all call `dispatch.recover`, and the
+  first resume had not flipped its task to running yet, so a second one started a second worker on
+  it (the usage-limit scenario failed with three worker calls instead of two under load). The resume
+  is now recorded in one write transaction before it starts, and one started since the task's last
+  ending, in the last two minutes, is left to take hold; one that took hold and stopped again is not.
+- **The test suite no longer depends on what the machine has on its PATH:** `rastro` in
+  `~/.local/bin` failed the three capability tests; the tests now hide the programs cauce adopts
+  from the PATH unless a test puts its own there.
+- **A task sent from a folder that holds several repositories showed nothing of its work:** such
+  a folder is no checkout, so the task runs with no worktree, and its progress line, `cauce peek`
+  and phase all diffed a worktree that was not there ("works in no worktree of its own, or git
+  cannot say", no files or lines written, the phase stuck on "exploring"). A run now
+  records, as its first attempt starts, the commit each repository inside the folder (or the
+  checkout itself, for a run with `--no-isolate`) was at and the files already modified there; a
+  retry or a climb reads from that same point, so the work of its earlier attempts still shows.
+  Progress, `cauce
+  peek` (`--stat` too), the task page's diff, the phase and the files a running task is said to
+  have changed read each of those repositories against that record, files named from the folder
+  (`api/src/x.js`), so what the person already had uncommitted is not the worker's. They are read
+  without touching the repositories' indexes (`git diff-index`; `git diff` rewrites one to refresh
+  its stat data, under a lock the person's own `git add` may be waiting for).
+- **The ending says which repositories were changed in place:** a run with no worktree in a
+  folder of several repositories ended with "these changes are in your checkout". It now names
+  each repository and its file count, and says none of them has a branch to review or merge.
+- **Still in place, said so:** such a task works directly in the person's checkouts, with no
+  branch per repository to merge; one worktree per repository is a larger change (a branch, a
+  commit and a merge for each). The lines of a file the person had already modified before the
+  attempt include what they wrote.
+
 ## [0.55.0] - 2026-10-27
 
 ### Added

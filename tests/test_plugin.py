@@ -78,3 +78,12 @@ def test_the_skill_is_short_and_every_guide_it_names_exists(capsys):
     assert cli.main(["guide", "endings"]) == 0
     assert "`replan` with `split`" in capsys.readouterr().out
     assert cli.main(["guide", "nope"]) == 2
+
+
+def test_the_dispatch_instructions_send_the_request_through_a_quoted_heredoc():
+    """Request text in a double-quoted argument has its backticks run by the shell."""
+    skill = (ROOT / "commands" / "orchestration.md").read_text(encoding="utf-8")
+    guide = (ROOT / "src" / "cauce" / "guides" / "dispatch.md").read_text(encoding="utf-8")
+    for text in (skill, guide):
+        assert "cauce run - " in text and "<<'EOF'" in text
+        assert 'cauce run "<the task' not in text

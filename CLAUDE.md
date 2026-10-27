@@ -518,6 +518,15 @@ yields the default kind, not a guess.
   write call). `cauce peek N` and the task page show its diff so far, read only. Its subtasks are its
   request's items (`progress.asked`), never a list its worker keeps: a worker that kept one spent ~5x the
   model calls and ~19% more time on a four-item task.
+- A run with no worktree (`--no-isolate`, or a folder that holds several repositories and is no
+  checkout itself) records where each checkout it may change stands when the run starts, once, at
+  its first attempt (`isolate.stand`, `places` on `attempt_started`, repeated on each later attempt:
+  commit and the files already modified), so a later attempt reads its earlier ones' work as the
+  task's. Progress, `peek`, the phase and `isolate.changed_so_far` read each of them against that
+  record, files named from the folder; a file the person already had modified is the worker's only
+  when its content changed since. They read with `git diff-index`, never `git diff`, which rewrites
+  the index of a checkout the person (or the worker) may be running `git add` in. Its ending names the repositories changed in place (`finished.in_place`): there is
+  no branch per repository, and it says so.
 - A resume's plan says what it resumes after, the cell it starts at and why, and when that
   is below the highest cell the task ran (`cli.resume_line`); `cauce show` lists every run of
   a task that ran more than once, so a fail resumed to a pass reads as both.

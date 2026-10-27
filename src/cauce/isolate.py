@@ -495,12 +495,65 @@ def rewritten(before: Mapping[str, str] | None, after: Mapping[str, str] | None)
     return tuple(sorted(p for p in {*before, *after} if before.get(p) != after.get(p)))
 
 
+#: git's empty tree: what a checkout with no commit yet is compared against.
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def stand(directory: Path, checkouts: Sequence[Path]) -> list[dict[str, Any]]:
+    """Where each checkout a run with no worktree may change stands as an attempt starts: its
+    commit and the files already differing from it, with the blob of each. Kept on the attempt's
+    start so what the worker wrote can be read later in each of them, against what the person
+    already had there. `name` is the checkout's path from `directory` ("" for the directory
+    itself), the prefix its files are listed under. A checkout git cannot read is left out."""
+    out = []
+    for top in checkouts:
+        try:
+            head = _git(top, "rev-parse", "--verify", "--quiet", "HEAD", check=False) or EMPTY_TREE
+        except OSError:
+            continue
+        dirty = fingerprint(top)
+        if dirty is None:
+            continue
+        # A checkout above the folder lists its files from its own root: no name in front.
+        name = "" if top.resolve() == directory.resolve() or not top.resolve().is_relative_to(directory.resolve()) \
+            else top.resolve().relative_to(directory.resolve()).as_posix()
+        out.append({"path": str(top), "name": name, "head": head, "dirty": dirty})
+    return out
+
+
+def named(place: Mapping[str, Any], path: str) -> str:
+    """A file of a checkout as the folder that holds it lists it: the checkout's name in front."""
+    return f"{place['name']}/{path}" if place.get("name") else path
+
+
+def moved_in_place(place: Mapping[str, Any]) -> tuple[str, ...] | None:
+    """What changed in a checkout since `stand` read it, paths from the checkout: a file whose
+    content differs from what it held then (one already dirty and left alone is not it), and
+    what was committed after that commit. None when git cannot say."""
+    top = Path(place["path"])
+    try:
+        now = fingerprint(top)
+        committed = _git(top, "diff", "--name-only", place["head"], "HEAD", check=False).splitlines()
+    except OSError:
+        return None
+    if now is None:
+        return None
+    paths = {*rewritten(place.get("dirty"), now), *(p for p in committed if p and not is_artifact(p))}
+    return tuple(sorted(paths))
+
+
 def changed_so_far(root: Path, repo_dir: Path, task_id: int, started: Mapping[str, Any]) -> tuple[str, ...] | None:
     """What a running task changed so far in its worktree, against the base its
     attempt started from (`started` is its `attempt_started` event's data, which
-    names the base and the linked dependencies). None when git cannot say: no
-    worktree, no base, a git that failed."""
+    names the base and the linked dependencies); with no worktree, in each checkout
+    the attempt recorded (`places`), against how it stood then. None when git cannot
+    say: no worktree and no places, no base, a git that failed."""
     path = root / "worktrees" / f"task-{task_id}"
+    if not path.is_dir() and started.get("places"):
+        found = [(place, moved_in_place(place)) for place in started["places"]]
+        if any(moved is None for _, moved in found):
+            return None
+        return tuple(sorted(named(place, p) for place, moved in found for p in moved or ()))
     if not path.is_dir() or not started.get("base"):
         return None
     ws = Workspace(repo_dir, path, branch_for(task_id), str(started["base"]), links=tuple(started.get("links") or ()))

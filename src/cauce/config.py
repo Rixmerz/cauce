@@ -12,6 +12,7 @@ file, the default.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -169,7 +170,7 @@ def choice(key: str, env: Mapping[str, str]) -> str:
 def ceiling_word(raw: Any) -> str | None:
     """`raw` as `max_parallel` takes it: `auto`, or a whole number from 1 as text; None otherwise."""
     value = str(raw).strip().lower() if isinstance(raw, str | int) and not isinstance(raw, bool) else ""
-    return value if value == "auto" or (value.isdigit() and int(value) >= 1) else None
+    return value if value == "auto" or (re.fullmatch(r"\d+", value, re.ASCII) and int(value) >= 1) else None
 
 
 def max_parallel(env: Mapping[str, str]) -> int | None:

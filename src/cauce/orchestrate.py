@@ -276,6 +276,17 @@ class WorkerSession:
     attempt: int
 
 
+def in_place_files(names: Sequence[str], changed: Sequence[str]) -> dict[str, list[str]]:
+    """The changed files of a run with no worktree, grouped by the checkout (one of `names`, the
+    path from the folder it started in) that holds them; files in none of them are under the
+    folder itself, "(the folder)". Only the checkouts that changed."""
+    found: dict[str, list[str]] = {}
+    for path in changed:
+        owner = next((n for n in sorted(names, key=len, reverse=True) if path.startswith(n + "/")), "(the folder)")
+        found.setdefault(owner, []).append(path)
+    return dict(sorted(found.items()))
+
+
 @dataclass
 class Report:
     task_id: int | None
@@ -298,6 +309,9 @@ class Report:
     check_output: list[str] = field(default_factory=list)
     #: Whether it worked in a worktree; outside one, its changes are in the checkout.
     isolated: bool = False
+    #: The checkouts, by name from the folder the run started in, that a run with no worktree changed in
+    #: place: a folder that holds several repositories is no checkout, and has none per repository.
+    in_place: list[str] = field(default_factory=list)
     #: What checked the work it left: "cauce" (its check, or `--verify`, passed), "worker"
     #: (only the worker's own check, not re-run by cauce), or "" (nothing passed).
     checked: str = ""
@@ -395,7 +409,14 @@ class Report:
         elif self.task_id and self.changed and not self.isolated:
             # No worktree (asked for, or a folder that is no checkout): there is no
             # branch to review, the files themselves are the work.
-            lines.append(f"these changes are in your checkout (the run had no worktree), {self.checked_text()}")
+            if self.in_place:
+                counts = ", ".join(f"{name} ({len(files)} file{'s' if len(files) != 1 else ''})"
+                                   for name, files in in_place_files(self.in_place, self.changed).items())
+                lines.append(f"these changes are in your checkouts, repository by repository: {counts}; the run had "
+                             f"no worktree (it started in a folder that holds several repositories), so none of them "
+                             f"has a branch to review or merge; {self.checked_text()}")
+            else:
+                lines.append(f"these changes are in your checkout (the run had no worktree), {self.checked_text()}")
         elif self.task_id and self.status != "done" and self.changed:
             lines.append("nothing of it was kept")
         if said := preexisting_line(self.preexisting):
@@ -1235,6 +1256,7 @@ def run(
                                       MAX_TURNS_CEILING)
     attempts: list[Attempt] = []
     changed: set[str] = set()
+    started_at: list[dict[str, Any]] | None = None
     decision: Decision | None = None
     # What the brief says of work set aside when a new model started from the base.
     aside: list[str] = []
@@ -1372,8 +1394,16 @@ def run(
             )
             store.update_task(task["id"], current_cell=cell.label)
             say(f"cauce: #{task['id']} attempt {nth} at {cell.label}")
+            # With no worktree, where each checkout the run may change stood when it started: what the
+            # worker wrote is read in them (`isolate.moved_in_place`) as a worktree is read against its
+            # base. Taken once, at the first attempt: a later one starts on its earlier attempts' work,
+            # which is the task's own and no more the person's.
+            if in_place and started_at is None:
+                started_at = isolate.stand(repo_dir, in_place_checkouts(repo_dir))
+            places = started_at or []
             store.add_event(task["id"], "attempt_started", seq=nth, cell=cell.label,
                             **({"base": workspace.base, "links": list(workspace.links)} if workspace else {}),
+                            **({"places": places} if places else {}),
                             model=spec.model_id or cell.model,
                             max_turns=turns, capabilities=list(selection.names),
                             since_start_s=round(time.monotonic() - clock, 2), brief_chars=len(spec.prompt),
@@ -1726,6 +1756,7 @@ def run(
             store.pause_lane(key, f"task #{task['id']} ended {status}: {clip(report.summary, 200, one_line=True)}")
         if workspace is None:
             report.changed = sorted(changed)
+            report.in_place = _changed_places(repo_dir, report.changed)
         if status == "done":
             # A security problem the worker named is an alert of its own, never only a note among others.
             report.alerts = notes.security_alerts(report.learned, attempts[-1].findings if attempts else ())
@@ -1741,7 +1772,7 @@ def run(
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
                         tip=_tip(workspace, report.branch), base=workspace.base if workspace else None,
                         commit=report.commit, checked=report.checked, isolated=report.isolated,
-                        alerts=report.alerts,
+                        **({"in_place": report.in_place} if report.in_place else {}), alerts=report.alerts,
                         **({"specs": drifted.data()} if drifted else {}),
                         changed=report.changed[:CHANGED_KEPT], changed_n=len(report.changed),
                         stop=report.stop.data() if report.stop else None,
@@ -2444,6 +2475,22 @@ def _fill_worktree(store: Store, task_id: int, workspace: isolate.Workspace, tex
         lines.append("Named by the task but ignored by git and too big to copy here: " + ", ".join(big)
                      + ". If the task needs them, say so (`environment`).")
     return lines
+
+
+def in_place_checkouts(repo_dir: Path) -> list[Path]:
+    """The checkouts a run with no worktree in `repo_dir` may change: its own, or, in a folder that
+    is no checkout, the ones inside it (the ones `launch.tracked_state` reads)."""
+    top = repo.toplevel(repo_dir)
+    return [top] if top is not None else launch.nested_checkouts(repo_dir)
+
+
+def _changed_places(repo_dir: Path, changed: Sequence[str]) -> list[str]:
+    """The checkouts inside a folder that is none that a run with no worktree changed files in, by
+    name; [] in a checkout, whose one place needs no name."""
+    if repo.toplevel(repo_dir) is not None:
+        return []
+    names = [c.relative_to(repo_dir).as_posix() for c in launch.nested_checkouts(repo_dir)]
+    return [n for n in in_place_files(names, changed) if n != "(the folder)"]
 
 
 def _head(repo_dir: Path) -> str | None:

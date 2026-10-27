@@ -343,7 +343,8 @@ def task_diff(store: Store, task_id: int) -> dict[str, Any] | None:
     if task["status"] == "running":
         # Nothing kept yet: what its worker wrote so far, read from its worktree.
         started = store.last_event(task_id, "attempt_started")
-        found = progress.peek(task_id, ((started or {}).get("data") or {}).get("base"))
+        begun = (started or {}).get("data") or {}
+        found = progress.peek(task_id, begun.get("base"), places=begun.get("places"))
         if found is None:
             return {"branch": None, "diff": "", "why": "it works in no worktree of its own, or git cannot say",
                     "running": True}
