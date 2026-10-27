@@ -29,6 +29,7 @@ class FakeProc:
         self.argv, self.kwargs, self.pid, self.code = argv, kwargs, 4242, code
         self.stdout = io.StringIO(stdout)
         self._stderr = list(stderr or [])
+        self._later: queue.Queue[str] = queue.Queue()
         self._released = threading.Event()
         if not hold:
             self._released.set()
@@ -36,8 +37,22 @@ class FakeProc:
     @property
     def stderr(self) -> Iterator[str]:
         yield from (line + "\n" for line in self._stderr)
-        # The pipe closes when the process ends.
-        self._released.wait(WAIT_S)
+        # Lines said later, until the pipe closes when the process ends.
+        while True:
+            try:
+                line = self._later.get(timeout=0.01)
+            except queue.Empty:
+                if self._released.is_set() and self._later.empty():
+                    return
+                continue
+            yield line + "\n"
+
+    @property
+    def running(self) -> bool:
+        return not self._released.is_set()
+
+    def say(self, line: str) -> None:
+        self._later.put(line)
 
     def release(self) -> None:
         self._released.set()
@@ -49,17 +64,24 @@ class FakeProc:
 
 
 class Spawner:
-    """The injected popen: the first call is the run, a `cancel` command is answered at once."""
+    """The injected popen: each prompt is a run; the `cauce cancel` the agent asks for on its own (its
+    output discarded) is answered at once, and ends the first run unless told not to."""
 
     def __init__(self, release_on_cancel: bool = True, **run: Any) -> None:
         self.run, self.release_on_cancel = run, release_on_cancel
         self.calls: list[tuple[list[str], dict[str, Any]]] = []
         self.procs: list[FakeProc] = []
         self.killed: list[tuple[int, int]] = []
+        self.cancelled = threading.Event()
+        self.was_killed = threading.Event()
+
+    def asked_to_cancel(self) -> list[list[str]]:
+        return [argv for argv, kwargs in self.calls if argv[3] == "cancel" and kwargs["stdout"] == subprocess.DEVNULL]
 
     def __call__(self, argv: list[str], **kwargs: Any) -> FakeProc:
         self.calls.append((argv, kwargs))
-        if argv[3] == "cancel":
+        if argv[3] == "cancel" and kwargs["stdout"] == subprocess.DEVNULL:
+            self.cancelled.set()
             if self.release_on_cancel:
                 self.procs[0].release()
             return FakeProc(argv, kwargs)
@@ -69,6 +91,7 @@ class Spawner:
 
     def killpg(self, pid: int, sig: int) -> None:
         self.killed.append((pid, sig))
+        self.was_killed.set()
         self.procs[0].release()
 
 
@@ -187,7 +210,8 @@ def test_a_new_session_is_answered_before_its_commands_are_announced(client):
     assert commands["params"] == {"sessionId": session, "update": {
         "sessionUpdate": "available_commands_update",
         "availableCommands": [{"name": "tasks", "description": acp.COMMANDS["tasks"]},
-                              {"name": "stats", "description": acp.COMMANDS["stats"]}]}}
+                              {"name": "stats", "description": acp.COMMANDS["stats"]},
+                              {"name": "cancel", "description": acp.COMMANDS["cancel"]}]}}
     assert c.new_session() != session
 
 
@@ -303,30 +327,183 @@ def test_a_text_that_only_starts_with_a_slash_command_is_a_request(client):
     assert spawner.calls[0][0][3:] == ["run", "/tasks now"]
 
 
-def test_a_cancel_asks_cauce_to_cancel_the_task_the_run_named(client):
+def first_title(update_title: str):
+    return lambda m: m.get("params", {}).get("update", {}).get("title") == update_title
+
+
+def test_a_cancel_nothing_follows_asks_cauce_to_cancel_the_task_the_run_named(client, monkeypatch):
+    monkeypatch.setattr(acp, "CANCEL_WINDOW_S", 0.05)
     spawner = Spawner(stderr=[TASK_LINE, "cauce: #8 other"], hold=True, code=-15)
     c = client(spawner)
     session = c.new_session("/work/app")
     request = c.prompt(session, "go")
-    c.out.wait_for(lambda m: m.get("params", {}).get("update", {}).get("title") == TASK_LINE)
+    c.out.wait_for(first_title(TASK_LINE))
     c.notify("session/cancel", {"sessionId": session})
     reply = c.answer(request)
     assert reply["result"] == {"stopReason": "cancelled"}
+    assert spawner.cancelled.wait(WAIT_S)
+    c.close()
     argv, kwargs = spawner.calls[1]
     assert argv == [sys.executable, "-m", "cauce", "cancel", "7"]
     assert kwargs["cwd"] == "/work/app"
     assert spawner.killed == []
-    assert [u["status"] for u in c.updates(session) if "status" in u] == ["in_progress", "failed"]
+    # The turn ended with its answer: the run's own ending is not said after it.
+    assert [u["status"] for u in c.updates(session) if "status" in u] == ["in_progress"]
+    assert c.out.messages()[-1] == reply
 
 
-def test_a_run_that_outlasts_its_cancel_is_killed_with_its_process_group(client):
+def test_a_run_that_outlasts_its_cancel_is_killed_with_its_process_group(client, monkeypatch):
+    monkeypatch.setattr(acp, "CANCEL_WINDOW_S", 0.05)
     spawner = Spawner(release_on_cancel=False, stderr=[TASK_LINE], hold=True, code=-9)
     c = client(spawner, grace=0.2)
     session = c.new_session()
     request = c.prompt(session, "go")
     c.notify("session/cancel", {"sessionId": session})
     assert c.answer(request)["result"] == {"stopReason": "cancelled"}
+    assert spawner.was_killed.wait(WAIT_S)
     assert spawner.killed == [(4242, signal.SIGKILL)]
+
+
+def test_a_cancel_is_answered_at_once_and_holds_the_task_for_a_prompt_that_may_follow(client, monkeypatch):
+    monkeypatch.setattr(acp, "CANCEL_WINDOW_S", 60.0)  # longer than the test may wait: only a closed input ends it
+    spawner = Spawner(stderr=[TASK_LINE], hold=True)
+    c = client(spawner)
+    session = c.new_session()
+    request = c.prompt(session, "go")
+    c.out.wait_for(first_title(TASK_LINE))
+    c.notify("session/cancel", {"sessionId": session})
+    assert c.answer(request)["result"] == {"stopReason": "cancelled"}
+    assert spawner.procs[0].running
+    assert spawner.asked_to_cancel() == []
+    # Nothing can follow a closed input: the cancel stands without waiting out the window.
+    c.close()
+    assert spawner.asked_to_cancel() == [[sys.executable, "-m", "cauce", "cancel", "7"]]
+
+
+def test_a_prompt_after_a_cancel_leaves_the_task_running_and_starts_its_own(client, monkeypatch):
+    """What Zed does when a person sends a request while one runs: `session/cancel`, the answer to the
+    turn, then the new `session/prompt`. The first task is delegated work, not that turn."""
+    monkeypatch.setattr(acp, "CANCEL_WINDOW_S", 60.0)  # the window must end by the prompt, not by its time
+    spawner = Spawner(stderr=[TASK_LINE], stdout="old report\n", hold=True, code=-15)
+    c = client(spawner)
+    session = c.new_session("/work/app")
+    first = c.prompt(session, "one")
+    c.out.wait_for(first_title(TASK_LINE))
+    c.notify("session/cancel", {"sessionId": session})
+    assert c.answer(first)["result"] == {"stopReason": "cancelled"}
+    spawner.run.update(hold=False, stdout="new report\n", stderr=[])
+    second = c.prompt(session, "two")
+    assert c.answer(second)["result"] == {"stopReason": "end_turn"}
+
+    assert spawner.asked_to_cancel() == []
+    assert spawner.killed == []
+    assert spawner.procs[0].running
+    assert spawner.calls[1][0][3:] == ["run", "two"]
+    assert spawner.calls[1][1]["cwd"] == "/work/app"
+
+    # The first turn is over: what its run does from here is not said to the editor, nor answered again.
+    first_call = c.updates(session)[1]["toolCallId"]
+    spawner.procs[0].say("cauce: #7 attempt 2 at opus/high")
+    spawner.procs[0].release()
+    c.close()
+    updates = c.updates(session)
+    assert [u.get("title") for u in updates if u.get("toolCallId") == first_call] == ["cauce run", TASK_LINE]
+    assert len([m for m in c.out.messages() if m.get("id") == first]) == 1
+    # The notice comes before the new prompt's own tool call, and the old report is never said.
+    assert [u.get("content", {}).get("text", u["sessionUpdate"]) for u in updates
+            if u["sessionUpdate"] in ("tool_call", "agent_message_chunk")] == [
+        "tool_call", acp.kept_notice(7), "tool_call", "new report\n"]
+    assert spawner.asked_to_cancel() == []
+
+
+def test_the_notice_of_a_task_left_running_names_it_when_it_is_known():
+    assert "#7" in acp.kept_notice(7)
+    assert "/cancel 7" in acp.kept_notice(7)
+    assert "#" not in acp.kept_notice(None)
+    assert "/tasks" in acp.kept_notice(None)
+
+
+def test_a_prompt_after_a_cancel_does_not_say_a_task_that_already_ended_keeps_running():
+    sink, spawner = Sink(), Spawner()
+    agent = acp.Agent(sink, io.StringIO(), spawner, spawner.killpg, 30.0, lambda task, live: [])
+    ended = acp.Run(proc=None, call_id="cauce-old", request_id=1, task=7, released=True, answered=True)
+    ended.exited.set()
+    session = acp.Session(cwd="/work/app", mcp_ignored=False, waiting=ended)
+    agent._sessions["sess_x"] = session
+    agent._handle(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "session/prompt", "params": {
+        "sessionId": "sess_x", "prompt": [{"type": "text", "text": "two"}]}}))
+    agent.serve([])
+    assert ended.decided.is_set()
+    assert session.waiting is None
+    assert [m for m in sink.messages() if "keeps running" in json.dumps(m)] == []
+    assert [m["result"] for m in sink.messages() if m.get("id") == 2] == [{"stopReason": "end_turn"}]
+
+
+def test_a_prompt_is_answered_once_whichever_of_its_end_and_a_cancel_comes_first():
+    spawner = Spawner()
+    agent = acp.Agent(Sink(), io.StringIO(), spawner, spawner.killpg, 30.0)
+    session = acp.Session(cwd="/work/app", mcp_ignored=False)
+    run = session.run = acp.Run(proc=None, call_id="cauce-x", request_id=1)
+    assert agent._claim(session, run, released=True)
+    assert session.run is None
+    assert session.waiting is run
+    assert run.released
+    assert not agent._claim(session, run)
+    assert run.released  # the late end did not take the answer back
+
+
+@pytest.mark.parametrize("said", ["/cancel 7", "/cancel #7", "  /cancel   7  "])
+def test_cancel_with_a_task_number_runs_cauce_cancel_as_a_prompt(client, said):
+    spawner = Spawner(stdout="cancelled #7\n")
+    c = client(spawner)
+    session = c.new_session()
+    assert c.answer(c.prompt(session, said))["result"] == {"stopReason": "end_turn"}
+    assert spawner.calls[0][0] == [sys.executable, "-m", "cauce", "cancel", "7"]
+    assert spawner.asked_to_cancel() == []  # it is the prompt's run, not the agent's own cancel
+    updates = c.updates(session)
+    assert updates[1]["title"] == "cauce cancel"
+    assert updates[-1]["content"]["text"] == "cancelled #7\n"
+
+
+@pytest.mark.parametrize("said", ["/cancel", "/cancel soon", "/cancel 7 8", "/cancel #"])
+def test_cancel_without_one_task_number_is_refused_and_starts_no_worker(client, said):
+    spawner = Spawner()
+    c = client(spawner)
+    session = c.new_session()
+    error = c.answer(c.prompt(session, said))["error"]
+    assert error["code"] == -32602
+    assert "/cancel 7" in error["message"]
+    assert spawner.calls == []
+    # The session is not left busy by the refusal.
+    assert c.answer(c.prompt(session, "go"))["result"] == {"stopReason": "end_turn"}
+
+
+def test_a_cancel_command_after_a_cancel_is_what_stops_the_task(client):
+    spawner = Spawner(stderr=[TASK_LINE], hold=True)
+    c = client(spawner)
+    session = c.new_session()
+    first = c.prompt(session, "go")
+    c.out.wait_for(first_title(TASK_LINE))
+    c.notify("session/cancel", {"sessionId": session})
+    assert c.answer(first)["result"] == {"stopReason": "cancelled"}
+    spawner.run.update(hold=False)
+    c.answer(c.prompt(session, "/cancel 7"))
+    assert spawner.calls[1][0][3:] == ["cancel", "7"]
+    assert spawner.procs[0].running  # the fake `cauce cancel` is a prompt's run: nothing stopped it
+    assert spawner.asked_to_cancel() == []
+
+
+def test_loading_a_saved_thread_is_answered_with_what_to_do_instead(client):
+    c = client()
+    params = {"sessionId": "7a9d7340-ef99-4d9c-8958-08877ef812da", "cwd": "/work/app", "mcpServers": []}
+    error = c.answer(c.request("session/load", params))["error"]
+    assert error["code"] == acp.SESSION_NOT_FOUND
+    assert "open a new thread" in error["message"]
+    c.notify("session/load", params)  # as a notification it has nobody to answer: ignored
+    assert c.answer(c.request("authenticate"))["result"] == {}
+    assert len(c.out.messages()) == 2
+    # A thread opened after the refusal works as any.
+    assert c.new_session("/work/app").startswith("sess_")
 
 
 def test_a_second_prompt_while_one_runs_is_refused_and_the_first_goes_on(client):

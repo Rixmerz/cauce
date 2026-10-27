@@ -31,9 +31,23 @@
 - **`cauce doctor` flags the livespec index:** `index-missing`, `index-unreadable` and
   `index-stale` for repositories recent runs were in, and `specs-with-no-code` for specs in the
   index that no symbol implements. Suspect, never broken.
+- **`/cancel N` in `cauce acp`:** stops task N from the editor (`cauce cancel N`), the one way to
+  cancel a task on purpose now that stopping a turn does not. `/cancel` without a task's number is
+  refused, since read as a request it would start a worker on that word.
 
 ### Fixed
 
+- **A new request in the same Zed thread no longer cancels the task still running:** Zed sends
+  `session/cancel` before the `session/prompt` of a follow-up, so `cauce acp` cancelled the first
+  request's task ("you cancelled it with cauce cancel before it finished") though the person only
+  wanted to ask for more. A cancel now ends the turn at once (the editor waits for its answer before
+  sending the next prompt) and stops showing that run's updates, but the task goes on, in `/tasks`
+  and on the board; the prompt that follows within `acp.CANCEL_WINDOW_S` (3 s) leaves it running,
+  says so, and starts a task of its own. A cancel nothing follows (or the input closes first)
+  cancels the task as before.
+- **Restoring a saved thread in Zed:** `cauce acp` advertises `loadSession: false`, yet Zed asks to
+  load a saved thread and showed "no thread found with ID". `session/load` is now answered with why
+  and what to do: cauce keeps no saved threads, open a new thread.
 - **A request's backticks no longer reach the shell, and a bad task id is one line, not a
   traceback:** a dispatch whose text sat in a double-quoted argument had its backticks run by the
   shell (it ran `cauce merge N` and `cauce guide dispatch`) and the task started with those words
