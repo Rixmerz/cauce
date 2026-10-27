@@ -1372,6 +1372,15 @@ def cmd_config(args: argparse.Namespace) -> int:
             print("a ceiling only: the level under it already adapts to the API, memory, disk and load "
                   "(`cauce lanes` says where it is and why); `auto` puts no ceiling over it")
         return 0
+    if args.key == "livespec_wait":
+        seconds = config.seconds_word(args.value)
+        if seconds is None:
+            print("expected whole seconds from 0: how long a task waits for livespec's index before its worker "
+                  "starts (0 never waits)", file=sys.stderr)
+            return 1
+        config.save({args.key: seconds})
+        print(f"{args.key} = {json.dumps(seconds)}")
+        return 0
     if args.key in config.CHOICES:
         picked = config.word(args.key, args.value)
         if picked is None:

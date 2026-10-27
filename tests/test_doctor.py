@@ -249,3 +249,103 @@ def test_work_picked_up_late_while_its_lane_was_idle_is_suspect(store: Store):
     found = rules(store, now=LATER, alive=lambda pid: True)["pickup-nobody-saw"]
     assert [(f.severity, f.task_id) for f in found] == [(doctor.SUSPECT, lost["id"]), (doctor.FIXED, old["id"])]
     assert "waited 20 min" in found[0].what and held["id"] != busy["id"]
+
+
+# --- livespec's index ----------------------------------------------------------------
+
+
+def _ran_in(store: Store, where, *, status="done"):
+    task = store.create_task("work", status=status, source="cauce", cwd=str(where))
+    store.add_event(task["id"], "planned", kind="implement")
+    return task
+
+
+def _livespec(tmp_path, *, runnable=True):
+    from .test_livespec_adapter import adapter, tool
+
+    return adapter(tmp_path, tool(tmp_path, "uvx") if runnable else "")
+
+
+def test_a_repository_with_no_livespec_index_is_suspect_and_the_fix_is_the_command_that_builds_it(
+        store: Store, git_repo, tmp_path):
+    from cauce import repo
+
+    _ran_in(store, git_repo)
+    found = rules(store, livespec=_livespec(tmp_path))["index-missing"]
+    assert len(found) == 1
+    assert found[0].severity == doctor.SUSPECT and found[0].repo == repo.key(git_repo)
+    assert found[0].fix == f"cauce index-livespec {git_repo.resolve()}"
+    assert "repo: no livespec index" in found[0].what and "not indexed yet" in found[0].what
+    cannot = rules(store, livespec=_livespec(tmp_path, runnable=False))["index-missing"][0]
+    assert "needs livespec, or `uv` to run the pinned release" in cannot.fix
+
+
+def test_an_index_older_than_the_last_commit_or_one_that_cannot_be_read_is_suspect(store: Store, git_repo, tmp_path):
+    from .livespec_fixture import build
+
+    _ran_in(store, git_repo)
+    db = build(git_repo, indexed_at="2000-01-01 00:00:00")
+    found = rules(store, livespec=_livespec(tmp_path))
+    assert [f.severity for f in found["index-stale"]] == [doctor.SUSPECT]
+    assert "older than the last commit" in found["index-stale"][0].what and "index-missing" not in found
+    db.write_bytes(b"not a database")
+    assert "cannot be read" in rules(store, livespec=_livespec(tmp_path))["index-unreadable"][0].what
+
+
+def test_a_current_index_is_clean_and_specs_it_holds_with_no_code_are_named(store: Store, git_repo, tmp_path):
+    import sqlite3
+
+    from .livespec_fixture import build
+
+    _ran_in(store, git_repo)
+    db = build(git_repo)
+    assert rules(store, livespec=_livespec(tmp_path)) == {}  # SPEC-7 is linked to charge_card
+    with sqlite3.connect(db) as conn:
+        for n in range(8):
+            conn.execute("INSERT INTO spec (project_id, spec_id, title) VALUES (1, ?, ?)", (f"loose-{n}", f"Loose {n}"))
+        conn.execute("INSERT INTO spec (project_id, spec_id, title, status) VALUES (1, 'gone', 'Gone', 'deprecated')")
+        conn.execute("INSERT INTO spec (id, project_id, spec_id, title) VALUES (99, 1, 'related', 'Related')")
+        conn.execute("INSERT INTO spec_symbol (spec_id, symbol_id, relation) VALUES (99, 2, 'references')")
+    found = rules(store, livespec=_livespec(tmp_path))["specs-with-no-code"]
+    assert len(found) == 1 and found[0].severity == doctor.SUSPECT
+    # A deprecated spec owes no code; a spec that code only references is still unimplemented.
+    assert "9 spec(s)" in found[0].what and "gone" not in found[0].what
+    assert "loose-0, loose-1, loose-2, loose-3, loose-4 and 4 more" in found[0].what
+    assert "`@spec:<id>`" in found[0].fix and f"cauce index-livespec {git_repo.resolve()}" in found[0].fix
+
+
+def test_a_folder_of_repositories_is_read_through_each_one_and_never_as_the_folder(store: Store, tmp_path):
+    from .test_livespec_adapter import make_repo
+
+    folder = tmp_path / "folder"
+    make_repo(folder, "api")
+    make_repo(folder, "web")
+    _ran_in(store, folder)
+    _ran_in(store, folder)
+    found = rules(store, livespec=_livespec(tmp_path))["index-missing"]
+    assert sorted(f.what.split(":")[0] for f in found) == ["api", "web"]
+    assert {f.fix for f in found} == {f"cauce index-livespec {folder.resolve() / name}" for name in ("api", "web")}
+
+
+def test_the_index_rules_say_nothing_with_livespec_off_or_for_a_repository_no_run_was_in(
+        store: Store, git_repo, tmp_path, monkeypatch):
+    _ran_in(store, git_repo)
+    monkeypatch.setenv("CAUCE_LIVESPEC", "off")
+    assert doctor.check(store, days=0) == []  # the setting, with no adapter handed in
+    monkeypatch.setenv("CAUCE_LIVESPEC", "on")
+    quiet = Store(tmp_path / "other.db")
+    try:
+        assert doctor.check(quiet, days=0, livespec=_livespec(tmp_path)) == []
+        _ran_in(quiet, tmp_path / "gone")  # a folder that is no longer there
+        assert doctor.check(quiet, days=0, livespec=_livespec(tmp_path)) == []
+    finally:
+        quiet.close()
+
+
+def test_the_doctor_filters_the_index_findings_to_one_repository(store: Store, git_repo, tmp_path):
+    from cauce import repo
+
+    _ran_in(store, git_repo)
+    mine = doctor.check(store, days=0, repo=repo.key(git_repo), livespec=_livespec(tmp_path))
+    elsewhere = doctor.check(store, days=0, repo="github.com/x/y", livespec=_livespec(tmp_path))
+    assert [f.rule for f in mine] == ["index-missing"] and elsewhere == []

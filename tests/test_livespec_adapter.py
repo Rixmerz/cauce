@@ -11,6 +11,7 @@ from cauce.adapters import livespec as livespec_mod
 from cauce.adapters.livespec import _HINTS, PINNED, TOOLS, Livespec, is_test_path
 from cauce.adapters.livespec import _lock as lock
 
+from .conftest import git
 from .livespec_fixture import build
 
 
@@ -305,3 +306,248 @@ def test_a_resolver_error_on_a_plugin_release_is_read_as_unpublished_never_as_a_
     assert a.last_failure(git_repo) == "Workspace directory not found: /old"
     assert a.failure_said(git_repo) is False and a.failure_said(git_repo) is True
     assert a.last_failure(git_repo) == "Workspace directory not found: /old"
+
+
+# --- index before dispatch ------------------------------------------------------
+
+
+class Handle:
+    """The `cauce index-livespec` the adapter started: what its `wait` does is the test's."""
+
+    def __init__(self, on_wait):
+        self.on_wait, self.killed = on_wait, False
+
+    def wait(self, timeout=None):
+        return self.on_wait(timeout)
+
+    def kill(self):
+        self.killed = True
+
+
+def make_repo(parent: Path, name: str) -> Path:
+    where = parent / name
+    where.mkdir(parents=True)
+    git(where, "init", "-q", "-b", "main")
+    (where / "a.py").write_text("x = 1\n")
+    git(where, "add", "-A")
+    git(where, "commit", "-q", "-m", "init")
+    return where.resolve()
+
+
+def spawner(started: list, on_wait):
+    """A `popen` that records the argv and hands back a process whose `wait` is `on_wait(root, timeout)`."""
+    def popen(argv, **kw):
+        started.append(argv)
+        return Handle(lambda timeout: on_wait(Path(argv[-1]), timeout))
+    return popen
+
+
+def builds(root, timeout):
+    build(root)
+    return 0
+
+
+def test_roots_are_the_checkout_or_each_repository_inside_a_folder(tmp_path, git_repo):
+    a = adapter(tmp_path)
+    assert a.roots(git_repo) == [git_repo.resolve()]
+    (git_repo / "sub").mkdir()
+    assert a.roots(git_repo / "sub") == [git_repo.resolve()]
+    folder = tmp_path / "folder"
+    two, one = make_repo(folder, "two"), make_repo(folder, "one")
+    (folder / "notes").mkdir()
+    assert a.roots(folder) == [one, two]
+    assert a.indexable(folder)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert a.roots(empty) == []
+    assert not a.indexable(empty)
+
+
+def test_a_folder_of_repositories_is_never_indexed_itself(tmp_path):
+    folder = tmp_path / "folder"
+    make_repo(folder, "one")
+    make_repo(folder, "two")
+    started, ran = [], []
+    a = adapter(tmp_path, tool(tmp_path, "uvx"), popen=spawner(started, builds),
+                runner=lambda argv, **kw: ran.append(argv))
+    status = a.inspect(folder)
+    assert status.state == ABSENT
+    assert "folder of 2 repositories (one, two)" in status.detail and "never the folder" in status.detail
+    assert "not indexed yet" not in status.detail
+    assert "never indexes a folder" in a.refresh(folder)
+    assert a.start_refresh(folder, tmp_path / "log") is None
+    assert started == [] and ran == []
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert "no git repository: nothing to index" in a.inspect(empty).detail
+
+
+def test_ensure_fresh_leaves_a_current_index_alone(tmp_path, git_repo):
+    build(git_repo)
+    started = []
+    a = adapter(tmp_path, tool(tmp_path, "uvx"), popen=spawner(started, builds))
+    found = a.ensure_fresh(git_repo, 30)
+    assert [(f.root, f.outcome) for f in found] == [(git_repo.resolve(), livespec_mod.FRESH)]
+    assert found[0].line() == "" and started == []
+
+
+def test_ensure_fresh_builds_a_missing_index_and_waits_for_it(tmp_path, git_repo):
+    started, said = [], []
+    a = adapter(tmp_path, tool(tmp_path, "uvx"), popen=spawner(started, builds))
+    found = a.ensure_fresh(git_repo, 30, say=said.append)
+    assert [(f.root, f.outcome) for f in found] == [(git_repo.resolve(), livespec_mod.BUILT)]
+    assert started[0][1:] == ["-m", "cauce", "index-livespec", str(git_repo.resolve())]
+    assert said == ["cauce: livespec is indexing repo before the worker starts (waits up to 30 s)"]
+    assert found[0].line().startswith("livespec: repo: indexed before the worker started")
+    assert a.inspect(git_repo).present
+
+
+def test_ensure_fresh_gives_a_slow_index_the_wait_and_never_kills_it(tmp_path, git_repo):
+    slow = []
+
+    def too_long(root, timeout):
+        slow.append(timeout)
+        raise subprocess.TimeoutExpired("index-livespec", timeout)
+
+    handles = []
+
+    def popen(argv, **kw):
+        handles.append(Handle(lambda timeout: too_long(Path(argv[-1]), timeout)))
+        return handles[-1]
+
+    a = adapter(tmp_path, tool(tmp_path, "uvx"), popen=popen)
+    found = a.ensure_fresh(git_repo, 7)
+    assert [f.outcome for f in found] == [livespec_mod.LATE]
+    assert 0 < slow[0] <= 7
+    assert "still indexing after the 7 s cauce waits; this task runs without it" in found[0].line()
+    assert not handles[0].killed
+
+
+def test_ensure_fresh_reports_a_failed_index_and_does_not_retry_it_at_the_same_commit(tmp_path, git_repo):
+    started = []
+    a = adapter(tmp_path, tool(tmp_path, "uvx"))
+
+    def fails(root, timeout):
+        a._remember_failure(root, "index crashed")
+        return 1
+
+    a.popen = spawner(started, fails)
+    found = a.ensure_fresh(git_repo, 30)
+    assert [f.outcome for f in found] == [livespec_mod.FAILED]
+    assert "indexing failed (index crashed); this task runs without it" in found[0].detail
+    again = a.ensure_fresh(git_repo, 30)
+    assert [f.outcome for f in again] == [livespec_mod.FAILED]
+    assert "not tried again until the checkout moves" in again[0].detail
+    assert len(started) == 1
+    nowhere = adapter(tmp_path / "other").ensure_fresh(git_repo, 30)
+    assert "cannot index here" in nowhere[0].detail
+
+
+def test_ensure_fresh_waits_on_a_refresh_another_process_holds(tmp_path, git_repo):
+    started, clock_now = [], [0.0]
+    a = adapter(tmp_path, tool(tmp_path, "uvx"), popen=spawner(started, builds))
+
+    def pause(seconds):
+        clock_now[0] += seconds
+
+    with lock(a.lock_path(git_repo), wait_s=0):
+        late = a.ensure_fresh(git_repo, 3, pause=pause, clock=lambda: clock_now[0])
+    assert [f.outcome for f in late] == [livespec_mod.LATE] and started == []
+    assert clock_now[0] >= 3
+
+    clock_now[0] = 0.0
+    held = contextlib.ExitStack()
+    held.enter_context(lock(a.lock_path(git_repo), wait_s=0))
+
+    def release_after_a_while(seconds):
+        clock_now[0] += seconds
+        if clock_now[0] >= 1:
+            build(git_repo)
+            held.close()
+
+    done = a.ensure_fresh(git_repo, 30, pause=release_after_a_while, clock=lambda: clock_now[0])
+    assert [f.outcome for f in done] == [livespec_mod.BUILT] and started == []
+
+
+def test_ensure_fresh_indexes_each_repository_of_a_folder_and_never_the_folder(tmp_path):
+    folder = tmp_path / "folder"
+    one, two = make_repo(folder, "one"), make_repo(folder, "two")
+    started = []
+    a = adapter(tmp_path, tool(tmp_path, "uvx"), popen=spawner(started, builds))
+    found = a.ensure_fresh(folder, 30)
+    assert sorted(f.root for f in found) == [one, two]
+    assert {f.outcome for f in found} == {livespec_mod.BUILT}
+    assert sorted(Path(argv[-1]) for argv in started) == [one, two]
+    assert folder.resolve() not in {Path(argv[-1]) for argv in started}
+    assert not (folder / ".mcp-docs").exists()
+
+
+def test_ensure_fresh_honours_a_shared_group_index(tmp_path):
+    folder = tmp_path / "folder"
+    one, two = make_repo(folder, "one"), make_repo(folder, "two")
+    shared = tmp_path / "shared"
+    db = build(shared, project_root=one)
+    for member in (one, two):
+        (member / ".livespec.toml").write_text(f'[workspace]\ngroup_db = "{db}"\n')
+    started = []
+    a = adapter(tmp_path, tool(tmp_path, "uvx"), popen=spawner(started, lambda root, timeout: 1))
+    found = {f.root: f.outcome for f in a.ensure_fresh(folder, 30)}
+    # `one` has its project in the shared file and is current; `two` has none there and is indexed on its own.
+    assert found[one] == livespec_mod.FRESH
+    assert found[two] != livespec_mod.FRESH
+    assert [Path(argv[-1]) for argv in started] == [two]
+    assert a.lock_path(one) == a.lock_path(two)
+
+
+# --- spec-first orientation ------------------------------------------------------
+
+
+def _named(lines) -> set[str]:
+    import re
+
+    return {m for line in lines for m in re.findall(r"`([a-z_]+)`", line)}
+
+
+def test_every_tool_the_orientation_and_the_spec_links_name_exists_in_livespec(tmp_path, git_repo):
+    named = _named([*livespec_mod.orientation("implement"), *livespec_mod.orientation("explore", has_specs=False),
+                    *adapter(tmp_path).spec_links_brief(git_repo)])
+    assert {"list_specs", "get_spec_implementation", "quick_orient", "read_unit", "search_similar",
+            "git_diff_impact", "index_project"} <= named
+    assert named <= TOOLS, named - TOOLS
+
+
+def test_the_orientation_goes_spec_then_code_then_symbol_then_file_and_writers_get_two_more_rules():
+    text = "\n".join(livespec_mod.orientation("feature"))
+    order = [text.index(t) for t in ("list_specs", "get_spec_implementation", "quick_orient", "read_unit",
+                                     "Open a whole file only when that is not enough")]
+    assert order == sorted(order)
+    assert "search_similar" in text and "git_diff_impact" in text
+    reading = "\n".join(livespec_mod.orientation("explore"))
+    assert "read_unit" in reading
+    assert "search_similar" not in reading and "git_diff_impact" not in reading
+    bare = "\n".join(livespec_mod.orientation("feature", has_specs=False))
+    assert "list_specs" not in bare and "holds no specs" in bare
+
+
+def test_orient_reads_whether_the_index_holds_specs_and_says_nothing_when_it_cannot(tmp_path, git_repo):
+    a = adapter(tmp_path)
+    assert a.orient("implement", a.inspect(git_repo)) == ()  # no index
+    db = build(git_repo)
+    status = a.inspect(git_repo)
+    assert "list_specs" in "\n".join(a.orient("implement", status))
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM spec_symbol")
+        conn.execute("DELETE FROM spec")
+    assert "holds no specs" in "\n".join(a.orient("implement", status))
+    db.write_bytes(b"not a database")
+    assert a.orient("implement", status) == ()
+
+
+def test_the_spec_links_brief_tells_a_shared_index_not_to_be_indexed_from_a_worktree(tmp_path, git_repo):
+    a = adapter(tmp_path)
+    own = "\n".join(a.spec_links_brief(git_repo))
+    assert "`@spec:<capability>-<requirement-name>`" in own and "`index_project`" in own
+    assert "a warning" in own and "blocks" in own
+    (git_repo / ".livespec.toml").write_text(f'[workspace]\ngroup_db = "{tmp_path / "shared" / "docs.db"}"\n')
+    shared = "\n".join(a.spec_links_brief(git_repo))
+    assert "do not index the directory you work in" in shared and "index_project" not in shared

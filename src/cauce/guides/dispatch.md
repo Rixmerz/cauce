@@ -67,6 +67,22 @@ person the command it gives (`cauce workspace add <folder> --with …`); run
 it only on their yes, since it moves what each repository kept to the
 folder. `cauce workspace list` shows the ones they have.
 
+**livespec is a step of the work, not a tool the worker may ignore.** Before a worker
+starts, cauce indexes or refreshes the repository's livespec index (incrementally) and waits
+for it up to `livespec_wait` seconds: 120 by default, `cauce config livespec_wait 30` changes
+it, 0 never waits. In a folder that holds several repositories it does each repository, never
+the folder. Past the wait the task starts without the index: its plan says `still indexing …
+this task runs without it`, and the index keeps building for the next task. With an index, the
+worker's brief opens with how to find its way: the spec for the request (`list_specs`,
+`search`), the code it names (`get_spec_implementation`), one symbol at a time (`quick_orient`,
+`read_unit`), a whole file last; `search_similar` before it writes a helper and
+`git_diff_impact` before it finishes. A task that writes or changes an OpenSpec spec must put
+`@spec:<capability>-<requirement-name>` on the functions that implement it: the report and the
+independent check name the specs it touched that no code names (a block for a spec the change
+wrote, a warning for one that was already there). `cauce stats` compares the tokens a run
+spent, by kind, with livespec called against not called; `cauce doctor` names repositories
+whose index is missing or stale, and specs no code implements.
+
 A worker that runs out of turns is checked with `--verify` by cauce itself,
 so a large change still gets its tests run; give one whenever a command can
 tell whether the work is done.

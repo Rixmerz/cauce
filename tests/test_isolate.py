@@ -123,6 +123,7 @@ def test_tool_artifacts_are_no_work():
     assert not isolate.is_artifact("src/playwright-mcp.ts")
     assert isolate.is_artifact(".fresh-dev/dirty.json")  # a dev-server plugin's own state
     assert not isolate.is_artifact(".playwright-mcp")
+    assert isolate.is_artifact(".mcp-docs/docs.db")  # the database a worker's livespec index builds
 
 
 def test_a_kept_branch_never_commits_tool_artifacts(git_repo, tmp_path):
@@ -135,6 +136,17 @@ def test_a_kept_branch_never_commits_tool_artifacts(git_repo, tmp_path):
     shown = git(git_repo, "show", "--name-only", "cauce/task-14")
     assert "fix.py" in shown
     assert ".playwright-mcp" not in shown
+
+
+def test_an_index_a_worker_built_in_its_worktree_is_no_work_and_is_never_committed(git_repo, tmp_path):
+    ws = isolate.prepare(git_repo, 15, tmp_path / "home")
+    (ws.path / ".mcp-docs").mkdir()
+    (ws.path / ".mcp-docs" / "docs.db").write_text("index")
+    assert not isolate.has_changes(ws)
+    (ws.path / "fix.py").write_text("x = 1\n")
+    assert isolate.changed(ws) == ("fix.py",)
+    assert isolate.finish(ws, keep=True, message="m") == "cauce/task-15"
+    assert ".mcp-docs" not in git(git_repo, "show", "--name-only", "cauce/task-15")
 
 
 def test_a_commit_message_reads_as_the_change_with_the_task_in_its_trailers():

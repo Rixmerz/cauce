@@ -1528,3 +1528,14 @@ def test_tasks_workers_lists_only_work_a_worker_ran_by_project(capsys):
     assert out[0] == "hertzbench (/w/hertzbench)" and out[2] == "site (/w/site)"
     assert out[1].startswith(f"#{ran['id']}") and out[1].endswith("fix the radio  (1 attempt(s), $3.20)")
     assert len(out) == 4 and not any("never ran" in x or "(turn)" in x for x in out)
+
+
+def test_config_livespec_wait_takes_whole_seconds(capsys, monkeypatch):
+    from cauce import config
+
+    monkeypatch.delenv("CAUCE_LIVESPEC_WAIT")  # the suite sets it to 0, and the variable outranks the file
+    assert cli.main(["config", "livespec_wait", "20"]) == 0
+    assert config.livespec_wait(os.environ) == 20
+    assert cli.main(["config", "livespec_wait", "soon"]) == 1
+    assert "whole seconds" in capsys.readouterr().err
+    assert config.livespec_wait(os.environ) == 20

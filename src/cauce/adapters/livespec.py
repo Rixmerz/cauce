@@ -13,8 +13,11 @@ without a token and without an MCP call:
   implement and the tests that exercise them;
 - **reporting** — after a pass, which specs the change touched and which
   callers in other files the change did not touch;
-- **freshness** — an index older than the last commit is refreshed with
-  livespec's own headless CLI (``livespec index``) before any of the above.
+- **freshness** — an index that is missing, or older than the last commit, is built or
+  refreshed with livespec's own headless CLI (``livespec index``, incremental) before
+  the worker starts, for as long as the person's ``livespec_wait`` allows
+  (`Livespec.ensure_fresh`); never for a folder that is no repository, which is
+  indexed through each repository inside it.
 
 The worker also gets livespec's MCP server, with a hint per kind of work that
 names the calls that kind needs and the ``workspace`` every call requires.
@@ -37,12 +40,14 @@ import sys
 import time
 import tomllib
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from cauce import repo
 from cauce.adapters import ABSENT, PRESENT, UNREADABLE, Briefing, Status
+from cauce.matrix import READ_ONLY_KINDS
 from cauce.store import home
 from cauce.text import words
 
@@ -58,6 +63,7 @@ TOOLS = frozenset({
     "quick_orient", "find_symbol", "who_calls", "who_does_this_call", "analyze_impact",
     "git_diff_impact", "get_symbol_source", "get_spec_implementation", "list_specs",
     "audit_coverage", "find_orphan_tests", "find_dead_code", "search",
+    "read_unit", "search_similar", "index_project",
 })
 
 _HINTS: Mapping[str, str] = {
@@ -76,6 +82,24 @@ _HINTS: Mapping[str, str] = {
     "plan": "quick_orient, list_specs and analyze_impact on the parts the plan changes",
 }
 
+#: How every worker is told to find its way when livespec is present: the spec of the request
+#: first, the code it names next, one symbol at a time, a whole file last. A symbol read through
+#: `read_unit` costs a fraction of the file it lives in; workers that opened files to orient spent
+#: 300-400k tokens on one UI task. `_SPECS` is the first step only where the index holds specs.
+ORIENTATION = "Orient by livespec before you open files (every call takes the workspace its capability hint names):"
+_SPECS = ("1. `list_specs` (or `search`) finds the spec for this request; `get_spec_implementation` on it reaches "
+          "the code that implements it.")
+_NO_SPECS = "1. This index holds no specs: start from `search` and `find_symbol` for what the request names."
+_SYMBOLS = ("2. `quick_orient` on each symbol, then `read_unit` on the ones you will read closely: its body, what it "
+            "calls and the tests that cover it.")
+_FILES = "3. Open a whole file only when that is not enough."
+#: What a worker that writes is also told: a helper that exists is not written twice, and a change is
+#: measured before it is called done.
+_WRITING = ("Before you write a helper, `search_similar` for one that already does it. Before you finish, "
+            "`git_diff_impact` on your change.")
+#: A spec a task writes or changes is linked to its code, so the next task finds the code from the spec.
+SPEC_ID = "<capability>-<requirement-name>"
+
 #: Spec priority that makes a task critical.
 _CRITICAL_PRIORITIES = frozenset({"critical"})
 #: Callers above which a symbol is load-bearing enough to start one rung up.
@@ -87,6 +111,28 @@ _IDENT = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\b")
 _TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|spec)/|(^|/)test_[^/]*$|_test\.[a-z]+$|\.(test|spec)\.[a-z]+$")
 
 Runner = Callable[..., subprocess.CompletedProcess]
+
+#: What `ensure_fresh` found of one repository's index when its task's worker was about to start.
+FRESH, BUILT, LATE, FAILED = "fresh", "built", "late", "failed"
+#: How often a refresh another process holds is looked at while a task waits on it.
+POLL_S = 0.5
+#: Stands for a started refresh whose `Popen` handed nothing back: its lock is looked at instead.
+_STARTED = object()
+
+
+@dataclass(frozen=True)
+class Indexed:
+    """One repository's index as `ensure_fresh` left it."""
+
+    root: Path
+    outcome: str
+    detail: str = ""
+
+    def line(self) -> str:
+        """What the plan says of it; nothing for an index that was already current."""
+        if self.outcome == FRESH:
+            return ""
+        return f"livespec: {self.root.name}: {self.detail}"
 
 
 def is_test_path(path: str) -> bool:
@@ -225,12 +271,34 @@ class Livespec:
                 return path if path.is_absolute() else (root / path).resolve()
         return root / ".mcp-docs" / "docs.db"
 
+    def roots(self, repo_dir: Path) -> list[Path]:
+        """The repositories an index is about: the checkout `repo_dir` is in, else each
+        repository right inside it. A folder of repositories is never one: livespec's
+        own guidance is not to index the parent of many."""
+        top = repo.toplevel(repo_dir)
+        if top is not None:
+            return [top.resolve()]
+        try:
+            return sorted(c.resolve() for c in repo_dir.iterdir() if (c / ".git").exists())
+        except OSError:
+            return []
+
+    def indexable(self, repo_dir: Path) -> bool:
+        """Whether there is a repository to index here (`roots` finds one)."""
+        return bool(self.roots(repo_dir))
+
     def inspect(self, repo_dir: Path) -> Status:
-        root = repo.toplevel(repo_dir) or repo_dir
-        root = root.resolve()
+        top = repo.toplevel(repo_dir)
+        root = (top or repo_dir).resolve()
         version = self._version()
         db = self.db_path(root)
         if not db.is_file():
+            if top is None:
+                held = self.roots(repo_dir)
+                shown = ", ".join(r.name for r in held[:6]) + (" …" if len(held) > 6 else "")
+                detail = (f"{root} is a folder of {len(held)} repositories ({shown}): each is indexed on its own, "
+                          "never the folder" if held else f"{root} is no git repository: nothing to index")
+                return Status(self.name, ABSENT, detail, version)
             runnable = self.server() is not None
             detail = ("this repository is not indexed yet" if runnable
                       else "cannot run: no livespec, and no `uvx` to run the pinned release")
@@ -259,10 +327,10 @@ class Livespec:
 
     def _index_argv(self, repo_dir: Path) -> list[str] | None:
         server = self.server()
-        if server is None:
+        top = repo.toplevel(repo_dir)
+        if server is None or top is None:
             return None
-        root = (repo.toplevel(repo_dir) or repo_dir).resolve()
-        return [str(server["command"]), *[str(a) for a in server.get("args", [])], "index", str(root)]
+        return [str(server["command"]), *[str(a) for a in server.get("args", [])], "index", str(top.resolve())]
 
     def lock_path(self, repo_dir: Path) -> Path:
         """One lock per index file: two `livespec index` runs on the same file
@@ -335,6 +403,9 @@ class Livespec:
         """
         argv = self._index_argv(repo_dir)
         if argv is None:
+            if repo.toplevel(repo_dir) is None:
+                return (f"{repo_dir} is no git repository: livespec never indexes a folder (nor the parent of "
+                        "several repositories); index each repository")
             return "livespec cannot run here; the index stays as it is"
         with _lock(self.lock_path(repo_dir), wait_s=wait_s) as (got, waited):
             if not got:
@@ -374,26 +445,104 @@ class Livespec:
         self._remember_failure(repo_dir, None)
         return f"livespec index refreshed ({fell_back})" if fell_back else "livespec index refreshed"
 
-    def refresh_in_background(self, repo_dir: Path, log: Path) -> bool:
-        """Start an index refresh and return at once — for a hook, which must not
-        wait minutes on a large repository. It runs as `cauce index-livespec`, so
-        it holds the same lock as every other refresh; none starts while one runs."""
+    def start_refresh(self, repo_dir: Path, log: Path) -> Any | None:
+        """Start an index refresh and hand back its process at once, or None when none
+        started (livespec cannot run here, another refresh holds this index, or the process
+        could not be made). It runs as `cauce index-livespec`, so it holds the same lock as
+        every other refresh; none starts while one runs."""
         if self._index_argv(repo_dir) is None or self.indexing(repo_dir):
-            return False
+            return None
         from cauce import dispatch
 
-        root = (repo.toplevel(repo_dir) or repo_dir).resolve()
+        top = repo.toplevel(repo_dir)
+        if top is None:
+            return None
         try:
             log.parent.mkdir(parents=True, exist_ok=True)
             with log.open("a", encoding="utf-8") as out:
-                self.popen([sys.executable, "-m", "cauce", "index-livespec", str(root)], stdout=out, stderr=out,
-                           stdin=subprocess.DEVNULL, env={**dispatch.child_env(self.env), "CAUCE_HOOKS_OFF": "1"},
-                           start_new_session=True)
+                return self.popen([sys.executable, "-m", "cauce", "index-livespec", str(top.resolve())],
+                                  stdout=out, stderr=out, stdin=subprocess.DEVNULL,
+                                  env={**dispatch.child_env(self.env), "CAUCE_HOOKS_OFF": "1"},
+                                  start_new_session=True) or _STARTED
         except OSError:
-            return False
-        return True
+            return None
+
+    def refresh_in_background(self, repo_dir: Path, log: Path) -> bool:
+        """`start_refresh` for a hook, which must not wait minutes on a large repository."""
+        return self.start_refresh(repo_dir, log) is not None
+
+    def ensure_fresh(self, repo_dir: Path, wait_s: float, *, say: Callable[[str], None] | None = None,
+                     pause: Callable[[float], None] = time.sleep,
+                     clock: Callable[[], float] = time.monotonic) -> list[Indexed]:
+        """Index, or refresh, every repository `roots` finds that has no index or a stale
+        one, and wait for them up to `wait_s` seconds in all: the step that comes before the
+        worker, so it orients by specs and symbols instead of opening files. Incremental:
+        livespec re-reads only what changed. Past `wait_s` a repository is `late`: its
+        refresh is left running, never killed, and the task starts without it. A repository
+        whose last index failed at this commit is not tried again until the checkout moves."""
+        began = clock()
+        deadline = began + wait_s
+        found: list[Indexed] = []
+        running: list[tuple[Path, Any]] = []
+        for root in self.roots(repo_dir):
+            status = self.inspect(root)
+            if status.present and not status.stale:
+                found.append(Indexed(root, FRESH, status.detail))
+            elif failed := self.last_failure(root):
+                found.append(Indexed(root, FAILED, f"its last index here failed ({failed}); not tried again "
+                                                   "until the checkout moves; this task runs without it"))
+            elif self.server() is None:
+                found.append(Indexed(root, FAILED, "cannot index here: no livespec, and no `uvx` to run the "
+                                                   "pinned release; this task runs without it"))
+            else:
+                handle = self.start_refresh(root, home(self.env) / f"{self.name}-index.log")
+                if handle is not None and say is not None:
+                    say(f"cauce: livespec is indexing {root.name} before the worker starts "
+                        f"(waits up to {int(wait_s)} s)")
+                running.append((root, None if handle is _STARTED else handle))
+        for root, handle in running:
+            found.append(self._settled(root, handle, deadline, wait_s, began, pause, clock))
+        return found
+
+    def _settled(self, root: Path, handle: Any, deadline: float, wait_s: float, began: float,
+                 pause: Callable[[float], None], clock: Callable[[], float]) -> Indexed:
+        """One refresh `ensure_fresh` waited on: ended well, ended badly, or still running at the deadline."""
+        if handle is not None and hasattr(handle, "wait"):
+            try:
+                handle.wait(timeout=max(deadline - clock(), 0))
+            except subprocess.TimeoutExpired:
+                return self._late(root, wait_s)
+        else:
+            # Another process holds this index (or the fake that started none): look at its lock.
+            while self.indexing(root):
+                if clock() >= deadline:
+                    return self._late(root, wait_s)
+                pause(POLL_S)
+        status = self.inspect(root)
+        if status.present and not status.stale:
+            return Indexed(root, BUILT, f"indexed before the worker started (took {int(clock() - began)} s)")
+        failed = self.last_failure(root) or "it left no usable index"
+        return Indexed(root, FAILED, f"indexing failed ({failed}); this task runs without it")
+
+    @staticmethod
+    def _late(root: Path, wait_s: float) -> Indexed:
+        return Indexed(root, LATE, f"still indexing after the {int(wait_s)} s cauce waits; this task runs without "
+                                   "it, the index keeps building and the next task gets it")
 
     # --- before the first attempt ------------------------------------------
+
+    def orient(self, kind: str, status: Status) -> tuple[str, ...]:
+        """How the worker finds its way by this index, spec first, for its kind of work. Nothing when
+        the index cannot be read: a worker is never told to call what is not there."""
+        if not status.present:
+            return ()
+        try:
+            with _connect(Path(status.data["db"])) as conn:
+                specs = conn.execute("SELECT count(*) FROM spec WHERE project_id = ?",
+                                     (int(status.data["project"]),)).fetchone()[0]
+        except sqlite3.Error:
+            return ()
+        return orientation(kind, has_specs=bool(specs))
 
     def brief(self, text: str, repo_dir: Path, status: Status) -> Briefing:
         if not status.present:
@@ -486,6 +635,41 @@ class Livespec:
             lines.append("livespec: tests that exercise the changed code: " + ", ".join(tests[:6]))
         return tuple(lines)
 
+    def unlinked_specs(self, status: Status) -> list[tuple[str, str]]:
+        """The specs the index holds that no symbol implements, as (spec id, title): what `@spec:` comments
+        would link. Read-only; empty when the index cannot be read."""
+        if not status.present:
+            return []
+        try:
+            with _connect(Path(status.data["db"])) as conn:
+                rows = conn.execute(
+                    "SELECT sp.spec_id, sp.title FROM spec sp WHERE sp.project_id = ? AND sp.status != 'deprecated' "
+                    "AND NOT EXISTS (SELECT 1 FROM spec_symbol ss WHERE ss.spec_id = sp.id "
+                    "AND ss.relation = 'implements') ORDER BY sp.spec_id", (int(status.data["project"]),)).fetchall()
+        except sqlite3.Error:
+            return []
+        return [(r["spec_id"], r["title"]) for r in rows]
+
+    def spec_links_brief(self, repo_dir: Path) -> list[str]:
+        """What a worker that writes or changes an OpenSpec spec is told so the spec reaches its code:
+        a `@spec:<id>` comment on each function that implements it, and the directory it works in
+        indexed again, so `get_spec_implementation` lists them. A shared index (`group_db`) is not
+        indexed again from a worktree: that would add a project for a directory that is removed."""
+        root = (repo.toplevel(repo_dir) or repo_dir).resolve()
+        shared = self.db_path(root) != root / ".mcp-docs" / "docs.db"
+        lines = [f"A spec you write or change is linked to the code that implements it: put `@spec:{SPEC_ID}` in a "
+                 "comment on each function that implements it (the capability folder under `openspec/specs/`, a "
+                 "hyphen and the requirement's name in lower case with hyphens; `list_specs` shows the ids). "
+                 "cauce's check reads those comments: a spec you wrote with none is a finding that blocks, and "
+                 "one that already existed and has none is a warning."]
+        if shared:
+            lines.append("This repository's index is shared with others (`group_db`): do not index the directory "
+                         "you work in; the links are made when it is indexed after your work lands.")
+        else:
+            lines.append("Then index the directory you work in again (`index_project` with that workspace; it is "
+                         "incremental) and check with `get_spec_implementation` that each spec lists its code.")
+        return lines
+
     # --- for the worker ------------------------------------------------------
 
     def hint(self, kind: str, repo_dir: Path, workdir: Path) -> str:
@@ -495,6 +679,14 @@ class Livespec:
         if workdir.resolve() != root:
             where += f"; the index describes the base commit there, your edits are in {workdir}"
         return f"{what}; {where}."
+
+
+def orientation(kind: str, *, has_specs: bool = True) -> tuple[str, ...]:
+    """The lines that tell a worker how to find its way by the index, spec first."""
+    lines = [ORIENTATION, _SPECS if has_specs else _NO_SPECS, _SYMBOLS, _FILES]
+    if kind not in READ_ONLY_KINDS:
+        lines.append(_WRITING)
+    return tuple(lines)
 
 
 # --- queries ------------------------------------------------------------------

@@ -5,8 +5,10 @@ query: a lane paused on a task that already passed, a workflow part that lost it
 when it was resumed, an integrate step that joined fewer branches than its parts kept,
 a worker whose death nobody resumed. A rule reads the store as it is (`broken`: work
 is stuck now) or as it went over a window (`suspect`: something that should have
-happened did not). No model, no git call, no write; `cauce doctor` prints them, the
-session start names what is broken, and the scenario tests assert there is none.
+happened did not). No model, no write; `cauce doctor` prints them, the session start names
+what is broken, and the scenario tests assert there is none. Two rules read more than the store:
+the livespec index of each repository recent runs were in (opened read-only, with the last
+commit's time), since a missing or stale index is a bug nothing in the store shows.
 
 A `suspect` rule names the release that fixes its bug (`FIXED_IN`), and reads it only from
 what that release or a later one wrote (the `version` an event keeps): the records from
@@ -16,13 +18,18 @@ the history the fix is for.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
 
-from cauce import after
+from cauce import after, config
+from cauce.adapters import ABSENT, UNREADABLE
 from cauce.matrix import turns_for
+from cauce.repo import key as repo_key
 from cauce.store import Store
 
 #: What a finding says of the work: stuck now, a sign over the window, or records from
@@ -617,27 +624,91 @@ def pickups_nobody_saw(store: Store, *, since: str | None, **_) -> Iterable[Find
         yield _history("pickup-nobody-saw", before, None)
 
 
+#: How many spec ids a finding about unlinked specs names; the rest are counted.
+SPECS_SHOWN = 5
+
+
+def _checkouts(store: Store, since: str | None, livespec: Any) -> list[Path]:
+    """The repositories recent runs were in, each once: the checkout a run's folder is in, or each
+    repository inside a folder of them (`Livespec.roots`, never the folder)."""
+    found: dict[Path, None] = {}
+    for event in store.events_of_kinds(["planned"], since=since):
+        task = store.get_task(event["task_id"])
+        where = Path(task["cwd"]) if task and task.get("cwd") else None
+        if where is not None and where.is_dir():
+            found.update(dict.fromkeys(livespec.roots(where)))
+    return list(found)
+
+
+def indexes_not_ready(store: Store, *, since: str | None, livespec: Any = None, **_) -> Iterable[Finding]:
+    """A repository recent runs were in whose livespec index is missing, unreadable or older than its last
+    commit: its workers open files to find their way, at 300-400k tokens a UI task, instead of reading
+    the specs and symbols. A task indexes it before its worker starts (`livespec_wait`), so one found
+    here is one that never got that far: livespec cannot run, or its index fails."""
+    if livespec is None:
+        return
+    for root in _checkouts(store, since, livespec):
+        status = livespec.inspect(root)
+        key = repo_key(root)
+        fix = f"cauce index-livespec {root}" + ("" if livespec.server() is not None
+                                                 else " (needs livespec, or `uv` to run the pinned release)")
+        if status.state == ABSENT:
+            yield Finding("index-missing", SUSPECT, f"{root.name}: no livespec index ({status.detail})", fix,
+                          None, key)
+        elif status.state == UNREADABLE:
+            yield Finding("index-unreadable", SUSPECT, f"{root.name}: its livespec index cannot be read "
+                          f"({status.detail})", fix, None, key)
+        elif status.stale:
+            yield Finding("index-stale", SUSPECT, f"{root.name}: its livespec index is older than the last "
+                          f"commit ({status.detail})", fix, None, key)
+
+
+def specs_with_no_code(store: Store, *, since: str | None, livespec: Any = None, **_) -> Iterable[Finding]:
+    """A repository recent runs were in whose livespec index holds specs that no code implements: a worker
+    that asks livespec for a spec's code finds none, and falls back to opening files. `@spec:<id>` comments
+    on the functions that implement each, and an index again, link them."""
+    if livespec is None:
+        return
+    for root in _checkouts(store, since, livespec):
+        loose = livespec.unlinked_specs(livespec.inspect(root))
+        if loose:
+            shown = ", ".join(spec_id for spec_id, _ in loose[:SPECS_SHOWN])
+            more = f" and {len(loose) - SPECS_SHOWN} more" if len(loose) > SPECS_SHOWN else ""
+            what = f"{root.name}: {len(loose)} spec(s) in the livespec index have no code linked ({shown}{more})"
+            fix = (f"put `@spec:<id>` on the functions that implement each, then `cauce index-livespec {root}`; "
+                   "livespec's `audit_coverage` lists them")
+            yield Finding("specs-with-no-code", SUSPECT, what, fix, None, repo_key(root))
+
+
 RULES: tuple[Callable[..., Iterable[Finding]], ...] = (
     lanes_paused_on_ended, running_with_no_process, queued_with_no_dispatcher, held_behind_gone, wait_judged_on_gone,
     resumes_that_never_ran,
     parts_that_lost_their_mark, joins_short_of_their_parts, attempts_with_no_session, turns_under_the_kind,
     format_failures_that_climbed, fix_rounds_off_their_base, candidates_on_trial_at_once, revisions_judged_twice,
     trials_never_sampled, notes_proven_unbriefed, preexisting_that_was_not, problems_open_after_pass,
-    flake_fixes_checked_once, turns_under_the_wall, pickups_nobody_saw,
+    flake_fixes_checked_once, turns_under_the_wall, pickups_nobody_saw, indexes_not_ready, specs_with_no_code,
 )
 
 
+def _livespec() -> Any:
+    """The adapter the index rules read through, or None where the `livespec` setting is off."""
+    from cauce.adapters.livespec import Livespec
+
+    return Livespec() if config.enabled("livespec", os.environ) else None
+
+
 def check(store: Store, *, repo: str | None = None, days: int = WINDOW_DAYS, now: datetime | None = None,
-          alive: Callable[[int | None], bool] | None = None) -> list[Finding]:
+          alive: Callable[[int | None], bool] | None = None, livespec: Any = None) -> list[Finding]:
     """Every finding of every rule, broken first; `repo` keeps one repository's (and the
     ones no repository owns)."""
     from cauce import flow
 
     now = now or datetime.now(UTC)
     since = (now - timedelta(days=days)).isoformat() if days else None
+    livespec = livespec if livespec is not None else _livespec()
     found: list[Finding] = []
     for rule in RULES:
-        found.extend(rule(store, now=now, since=since, alive=alive or flow.alive))
+        found.extend(rule(store, now=now, since=since, alive=alive or flow.alive, livespec=livespec))
     if repo is not None:
         found = [f for f in found if f.repo in (repo, None)]
     return sorted(found, key=lambda f: ((BROKEN, SUSPECT, FIXED).index(f.severity), f.rule, f.task_id or 0))
