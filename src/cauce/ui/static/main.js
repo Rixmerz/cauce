@@ -28,6 +28,7 @@ const picker = document.getElementById("project");
 let current = "board";
 let project = null;
 let pending = null;
+let pendingSession = null;
 // The run a tab was opened for (`#run=N`): its card is marked and names the tab.
 let focusRun = null;
 
@@ -79,13 +80,15 @@ async function loadProjects() {
   if (project) picker.value = project;
 }
 
-// One piece of work in a tab of its own (`cauce ui --tabs`): `#task=N` opens that task over
-// its project's board, `#run=N&repo=<key>` that run among its project's workflows. Not
-// remembered as the person's project: a tab for one task changes nothing in the others.
+// An address that opens one thing over its project's page (`cauce ui --tabs` opens one tab
+// per session, `#session=<id>`: all of that session's work, each task opened inside the page):
+// `#task=N` opens that task over its project's board, `#run=N&repo=<key>` that run among its
+// project's workflows. Not remembered as the person's project: it changes nothing in the others.
 async function fromAddress() {
   const want = new URLSearchParams(location.hash.slice(1));
   const task = Number(want.get("task")) || null;
   const run = Number(want.get("run")) || null;
+  const session = /^[A-Za-z0-9_-]{1,128}$/.test(want.get("session") || "") ? want.get("session") : null;
   const choose = (repo) => {
     if (repo && [...picker.options].some((o) => o.value === repo)) { project = repo; picker.value = repo; }
   };
@@ -96,6 +99,14 @@ async function fromAddress() {
     document.body.classList.add("solo");
     await show("board");
     await openTask(task);
+    return true;
+  }
+  if (session) {
+    const found = await get(`/api/sessions/${encodeURIComponent(session)}`).catch(() => null);
+    if (!found) return false;
+    choose(found.session.repo);
+    await show("sessions");
+    await openSession(session, ctx());
     return true;
   }
   if (run) {
@@ -128,6 +139,11 @@ const live = follow(
     }
     const drawer = document.getElementById("drawer");
     if (!drawer.hidden && Number(drawer.dataset.task) === event.task_id) openTask(event.task_id, true);
+    // A session's page lists its work: any event may have moved it.
+    if (!drawer.hidden && drawer.dataset.session) {
+      clearTimeout(pendingSession);
+      pendingSession = setTimeout(() => openSession(drawer.dataset.session, ctx()), 1000);
+    }
   },
   (on) => document.getElementById("live").classList.toggle("on", on),
 );

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from cauce import workflows
+from cauce import plugins, workflows
 from cauce.store import Store
 
 
@@ -61,6 +63,23 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     }.items():
         monkeypatch.setenv(var, value)
     return home
+
+
+@pytest.fixture(autouse=True)
+def _no_host_neighbours(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The programs cauce adopts when they are on the PATH (`plugins.KNOWN`: `rastro`) are not
+    found because the machine happens to have them: a test that wants one puts its own on a PATH
+    it sets. Without this, `capabilities` and a plan's warnings change with what is installed
+    where the suite runs (three tests failed on a machine with `rastro` in `~/.local/bin`)."""
+    real = shutil.which
+    hidden = {n.on_path[0] for n in plugins.KNOWN if n.on_path}
+    host = {str(Path(entry)) for entry in os.environ.get("PATH", "").split(os.pathsep) if entry}
+
+    def which(cmd, *args, **kwargs):
+        found = real(cmd, *args, **kwargs)
+        return None if found and cmd in hidden and str(Path(found).parent) in host else found
+
+    monkeypatch.setattr(shutil, "which", which)
 
 
 @pytest.fixture

@@ -881,7 +881,7 @@ and refuses anything else passed with it.
 
 ### The UI
 
-`cauce ui` (or `/cauce:ui` in a session) serves a local page (`http://127.0.0.1:8790/`, `--open` opens it)
+`cauce ui` (or `/cauce:ui` in a session) serves a local page (`http://127.0.0.1:8790/`; it opens no tab by itself, `--open` opens it once)
 for someone running many tasks across many repositories. It answers, in order:
 what needs me, what is running and what it costs, and whether the router is
 choosing well. It shows one project at a time, picked at the top: never every
@@ -941,6 +941,12 @@ repository's cards at once.
 
 Work is never typed into the page: it is asked for in a session, where it has
 the session's context and its record.
+
+**One page, never a tab per task.** A session's work is all in the page: the
+Sessions screen lists the tasks it sent and opens each inside it. `cauce ui
+--open --tabs` is the opt-in for a tab of the session's own (`#session=<id>`): at most one per
+session while the board serves, and a second run for the same session says it
+has one instead of opening another.
 
 **A running UI follows updates.** A server keeps the code it started with, so
 one started before a `claude plugin update` would go on showing the old board.

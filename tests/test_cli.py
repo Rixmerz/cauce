@@ -475,8 +475,7 @@ def test_ui_command_serves_until_interrupted(monkeypatch, capsys):
         def __init__(self):
             import threading
             self.stop_event = threading.Event()
-            self.seen: set = set()
-            self.followed: list = []
+            self.claimed: list = []
 
         def serve_forever(self):
             raise KeyboardInterrupt
@@ -484,11 +483,9 @@ def test_ui_command_serves_until_interrupted(monkeypatch, capsys):
         def server_close(self):
             pass
 
-        def open_tab(self, url):
-            opened.append(url)
-
-        def follow(self, session):
-            self.followed.append(session)
+        def claim_tab(self, session):
+            self.claimed.append(session)
+            return session not in self.claimed[:-1]
 
     fake = Fake()
     monkeypatch.setattr(server, "serve", lambda port: fake)
@@ -497,15 +494,18 @@ def test_ui_command_serves_until_interrupted(monkeypatch, capsys):
     assert cli.main(["ui", "--open"]) == 0
     assert "http://127.0.0.1:4321/" in capsys.readouterr().out and opened
 
-    # --tabs: the session's work going on gets its tabs, and the server follows the session.
-    store = Store.open()
-    task = store.create_task("going", status="running", source="cauce", repo="r", session_id="s9")
-    store.close()
+    # --tabs: one tab for the session, which replaces the plain board tab, never one per task.
     opened.clear()
+    monkeypatch.setattr("webbrowser.open_new_tab", lambda url: opened.append(url))
     assert cli.main(["ui", "--open", "--tabs", "--session", "s9"]) == 0
     out = capsys.readouterr().out
-    assert opened == ["http://127.0.0.1:4321/", f"http://127.0.0.1:4321/#task={task['id']}"]
-    assert f"tab: #{task['id']} going" in out and fake.followed == ["s9"]
+    assert opened == ["http://127.0.0.1:4321/#session=s9"]
+    assert "tab: session s9" in out and fake.claimed == ["s9"]
+
+    # Without --open the session is only claimed (a handed-over server): no tab at all.
+    opened.clear()
+    assert cli.main(["ui", "--tabs", "--session", "s9"]) == 0
+    assert opened == [] and fake.claimed == ["s9", "s9"]
 
 
 def test_resume_continues_a_stopped_task_with_what_it_was_refused_granted(capsys, git_repo, monkeypatch):
@@ -689,16 +689,18 @@ def test_ui_on_a_port_this_cauce_already_serves_opens_it(monkeypatch, capsys):
     assert cli.main(["ui", "--port", "8791", "--open"]) == 0
     assert "already at http://127.0.0.1:8791/" in capsys.readouterr().out and opened
 
-    # With --tabs it opens the session's tabs itself, then asks that server to follow the session.
-    store = Store.open()
-    task = store.create_task("going", status="queued", source="queue", repo="r", session_id="s9")
-    store.close()
-    tabs, asked = [], []
+    # With --tabs it asks that server for the session's one tab, and opens it only when told it may.
+    tabs, answers = [], iter([True, False, None])
     monkeypatch.setattr("webbrowser.open_new_tab", lambda url: tabs.append(url))
-    monkeypatch.setattr(server, "follow_there", lambda port, session, seen: asked.append((session, seen)) or False)
+    monkeypatch.setattr(server, "claim_tab_there", lambda port, session: next(answers))
+    opened.clear()
     assert cli.main(["ui", "--port", "8791", "--open", "--tabs", "--session", "s9"]) == 0
-    assert tabs == [f"http://127.0.0.1:8791/#task={task['id']}"] and asked == [("s9", {f"task:{task['id']}"})]
-    assert "could not be asked" in capsys.readouterr().err
+    assert tabs == ["http://127.0.0.1:8791/#session=s9"] and opened == []
+    capsys.readouterr()
+    assert cli.main(["ui", "--port", "8791", "--open", "--tabs", "--session", "s9"]) == 0
+    assert "has its tab already" in capsys.readouterr().out and len(tabs) == 1
+    assert cli.main(["ui", "--port", "8791", "--open", "--tabs", "--session", "s9"]) == 0
+    assert "could not be asked" in capsys.readouterr().err and len(tabs) == 1
 
     def broken(port):
         raise OSError(errno.EACCES, "Permission denied")

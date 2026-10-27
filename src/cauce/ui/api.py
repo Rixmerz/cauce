@@ -9,7 +9,6 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from cauce import capacity, config, dispatch, flow, habits, phase, progress, project, stops, usage
 from cauce.matrix import LADDERS
@@ -694,22 +693,10 @@ def workflows_view(store: Store, repo_key: str, *, limit: int = 30) -> dict[str,
     return {"runs": runs, "definitions": definitions, "dir": where}
 
 
-#: What `session_tabs` counts as work going on: what a person waits to see move.
-TAB_STATUSES = ("running", "queued")
-
-
-def session_tabs(store: Store, session_id: str) -> list[dict[str, Any]]:
-    """The work a session sent that is going on, one browser tab each (`cauce ui --tabs`): its
-    active workflow runs, then its tasks queued or running outside them, oldest first. A run's
-    steps are seen in the run's tab, never in tabs of their own. Each names the page's fragment
-    that opens it (`#task=N`, `#run=N&repo=…`)."""
-    tabs = [{"key": f"run:{r['id']}", "title": f"{r['name']} run #{r['id']}",
-             "fragment": f"run={r['id']}&repo={quote(r['repo'] or '', safe='')}"}
-            for r in store.session_runs(session_id)]
-    tasks = store.list_tasks(session_id=session_id, status=TAB_STATUSES, source=("cauce", "queue"), limit=200)
-    tabs += [{"key": f"task:{t['id']}", "title": f"#{t['id']} {t['title']}", "fragment": f"task={t['id']}"}
-             for t in sorted(tasks, key=lambda t: t["id"]) if not t.get("workflow_run")]
-    return tabs
+def session_tab(session_id: str) -> dict[str, str]:
+    """The one browser tab a session gets (`cauce ui --tabs`): the page's fragment that opens the
+    session, whose page lists every piece of its work and opens each inside it (`#session=<id>`)."""
+    return {"key": f"session:{session_id}", "title": f"session {session_id[:8]}", "fragment": f"session={session_id}"}
 
 
 #: How many notes and problems the map draws before it says how many it left out.
