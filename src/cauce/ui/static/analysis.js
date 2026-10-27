@@ -36,6 +36,20 @@ const money = (v) => (v === null || v === undefined ? "—" : usd(v));
 const num = (v) => h("td", { class: "num" }, v ?? "—");
 const head = (...cols) => h("tr", {}, cols.map((c) => (Array.isArray(c) ? h("th", { class: "num" }, c[0]) : h("th", {}, c))));
 
+const tokens = (v) => (v === null || v === undefined ? "—" : v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`);
+const change = (v) => (v === null || v === undefined ? "—" : `${v > 0 ? "+" : ""}${Math.round(v * 100)}%`);
+
+function livespecUse(use, rows) {
+  const used = use && use.given
+    ? h("p", { class: "empty" }, `livespec was handed to ${use.given} attempt(s) and called in ${use.used} (${use.calls} call(s)); `
+      + `passed ${pct(use.passed_used)} when called, ${pct(use.passed_idle)} when not.`)
+    : h("div", { class: "empty" }, "No attempt was handed livespec in this period.");
+  if (!rows || !rows.length) return [used];
+  return [used, h("table", {}, head("kind", ["with: runs"], ["with: avg"], ["with: p50"], ["without: runs"], ["without: avg"], ["without: p50"], ["change"]),
+    rows.map((k) => h("tr", {}, h("td", {}, kindChip(k.kind)), num(k.with.runs), num(tokens(k.with.avg)), num(tokens(k.with.p50)),
+      num(k.without.runs), num(tokens(k.without.avg)), num(tokens(k.without.p50)), num(change(k.change)))))];
+}
+
 const PICKUP = [
   ["pickup_conflict_s", "work ahead it was judged to wait for"],
   ["pickup_limit_s", "the usage limit"],
@@ -137,6 +151,10 @@ export async function renderAnalysis(ctx) {
       r.context.map((c) => h("tr", {}, h("td", {}, c.group), num(c.runs), rate(c.pass_rate), rate(c.first_try_rate),
         num(c.attempts_avg), num(secs(c.wall_p50_s)), num(money(c.cost_per_pass_usd)))))
       : h("div", { class: "empty" }, "No run a session sent has been briefed yet."),
+    h("h2", { class: "section" }, "livespec and tokens"),
+    h("p", { class: "empty" }, "Tokens a run spent per kind (input and output, its attempts together) when its workers called livespec "
+      + "against when they did not. Observed, not a trial: the two groups differ in more than the calls."),
+    livespecUse(r.livespec_use, r.livespec_tokens),
     h("h2", { class: "section" }, "By cell"),
     r.cells.length ? h("table", {}, head("cell", ["attempts"], ["passed"], ["p50 time"], ["p50 turns"], ["p50 cost"], ["cost"], ["checks"], ["cache read"], "failures"),
       r.cells.map((c) => h("tr", {}, h("td", {}, cellChip(c.cell)), num(c.attempts), rate(c.attempts ? c.passed / c.attempts : null),

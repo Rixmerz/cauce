@@ -27,7 +27,8 @@
 - **`cauce stats` keeps which livespec calls a worker made and compares tokens.** Each attempt's
   `attempt_finished` event holds `livespec_calls` (by tool) when livespec was handed; a run's row
   has `livespec_handed`, `livespec_calls` and `tokens`; the report adds tokens per run by kind with
-  livespec called against not called (observed, not a trial).
+  livespec called against not called (observed, not a trial); the UI's Analysis shows the same
+  in a "livespec and tokens" section.
 - **`cauce doctor` flags the livespec index:** `index-missing`, `index-unreadable` and
   `index-stale` for repositories recent runs were in, and `specs-with-no-code` for specs in the
   index that no symbol implements. Suspect, never broken.
