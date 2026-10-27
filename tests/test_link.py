@@ -138,7 +138,7 @@ def test_a_session_behind_the_newest_install_is_told_to_reload(tmp_path):
     warning = cli._behind({"CLAUDE_CONFIG_DIR": str(config)})
     assert warning is not None
     assert f"runs cauce {__version__}, but 999.0.0 is installed" in warning
-    assert "/reload-plugins" in warning
+    assert "/reload-plugins --force" in warning
     assert cli._behind({"CLAUDE_CONFIG_DIR": str(tmp_path / "none")}) is None
 
 
@@ -149,6 +149,7 @@ def test_a_command_forwarded_from_an_older_plugin_says_the_session_s_skills_are_
     warning = cli._behind({"CLAUDE_CONFIG_DIR": str(tmp_path / "none")})
     assert warning.startswith(f"cauce: this session loaded cauce 0.31.0; the commands it types run {__version__}")
     assert "skills, hooks and /cauce:* text are still 0.31.0's" in warning and "/cauce:relay" in warning
+    assert "/reload-plugins --force" in warning
     monkeypatch.setattr(link, "LOADED", __version__)
     assert cli._behind({"CLAUDE_CONFIG_DIR": str(tmp_path / "none")}) is None
 
@@ -194,3 +195,40 @@ def test_an_old_launcher_execs_the_newest_once(tmp_path):
     hook = subprocess.run([str(old / "bin" / "cauce"), "hook", "Nope"], env={**env, "CAUCE_HOOKS_OFF": "1"},
                           input="{}", capture_output=True, text=True, check=False)
     assert "newest ran" not in hook.stdout
+
+
+def test_a_reload_clears_the_hint_the_launcher_on_the_path_keeps_giving(tmp_path, monkeypatch):
+    from cauce import hooks
+
+    home = tmp_path / "home"
+    env = {"CLAUDE_CONFIG_DIR": str(tmp_path / "none"), "CAUCE_HOME": str(home), "CAUCE_SESSION_ID": "s1"}
+    monkeypatch.setattr(link, "LOADED", "0.31.0")  # the PATH still holds the launcher it started with
+    assert "this session loaded cauce 0.31.0" in cli._behind(env)  # nothing says it reloaded yet
+    link.record_loaded(home, "s1", "0.31.0")  # its hooks still run the old plugin
+    assert "this session loaded cauce 0.31.0" in cli._behind(env)
+    hooks._record_loaded(home, "s1")  # /reload-plugins: its hooks now run this version
+    assert cli._behind(env) is None
+    assert "this session loaded cauce 0.31.0" in cli._behind(env | {"CAUCE_SESSION_ID": "s2"})  # per session
+
+
+def test_a_hook_run_from_an_older_install_brings_the_hint_back(tmp_path, monkeypatch):
+    from cauce import __version__
+
+    monkeypatch.setattr(link, "LOADED", "0.31.0")
+    link.record_loaded(tmp_path, "s", __version__)
+    link.record_loaded(tmp_path, "s", "0.31.0")  # a hook after a compaction ran from an old folder
+    assert link.session_loaded(tmp_path, "s") == "0.31.0"
+    env = {"CLAUDE_CONFIG_DIR": str(tmp_path / "none"), "CAUCE_HOME": str(tmp_path), "CAUCE_SESSION_ID": "s"}
+    assert "still 0.31.0's" in cli._behind(env)
+
+
+def test_the_loaded_record_keeps_only_the_newest_sessions_and_survives_junk(tmp_path):
+    path = tmp_path / "work" / link.LOADED_BY_HOOKS
+    path.parent.mkdir()
+    path.write_text("[1]")
+    assert link.session_loaded(tmp_path, "s0") is None
+    for n in range(link.LOADED_KEPT + 5):
+        link.record_loaded(tmp_path, f"s{n}", "1.0.0")
+    assert link.session_loaded(tmp_path, "s0") is None
+    assert link.session_loaded(tmp_path, f"s{link.LOADED_KEPT + 4}") == "1.0.0"
+    assert link.session_loaded(tmp_path, None) is None

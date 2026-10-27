@@ -123,6 +123,7 @@ def user_prompt_submit(event: Mapping[str, Any], store: Store) -> dict | None:
         return None
     if not session_id or _ignored(text):
         return None
+    _record_loaded(store.path.parent, str(session_id))
     cwd = event.get("cwd")
     key = repo.key(cwd) if cwd else None
     prompt_id = event.get("prompt_id")
@@ -220,6 +221,17 @@ def _older_installs(root: Path, env: Mapping[str, str]) -> str | None:
             "removing them is theirs: " + " ".join(f"rm -rf {shlex.quote(f)}" for f in key))
 
 
+def _record_loaded(root: Path, session_id: str) -> None:
+    """Keep which cauce this session's hooks run, so a `cauce run` typed in it can tell whether the
+    session has reloaded its plugins (`link.session_loaded`). Never costs the turn."""
+    try:
+        from cauce import __version__, link
+
+        link.record_loaded(root, session_id, __version__)
+    except Exception:  # the turn goes on
+        note_error(root, "loaded plugin")
+
+
 def _newer_plugin(root: Path, session_id: str, env: Mapping[str, str]) -> str | None:
     """Once per session and installed version: a session keeps the plugin it loaded, so after
     an update the commands it types run the newest cauce (`link.forward_to`) while its skills,
@@ -249,7 +261,8 @@ def _newer_plugin(root: Path, session_id: str, env: Mapping[str, str]) -> str | 
         return None
     return (f"cauce: cauce {said} is installed, and this session loaded {__version__}: the commands it types run "
             f"{said}, but its skills, hooks and /cauce:* text stay {__version__}'s until it reloads. Tell the person "
-            "once: /reload-plugins, or `/cauce:relay` then /clear, picks up the new one.")
+            "once: /reload-plugins --force (a plain one can hold the load back), or `/cauce:relay` then /clear, "
+            "picks up the new one.")
 
 
 def _route(store: Store, task_id: int, text: str, cwd: str | None, transcript: str | None) -> str | None:
@@ -600,6 +613,7 @@ def session_start(
     store.touch_session(session_id, cwd, key)
     blocks: list[str] = []
     _export(env, "CAUCE_SESSION_ID", str(session_id))
+    _record_loaded(root, str(session_id))
     reach = _reach(env)
     if reach:
         blocks.append(reach)

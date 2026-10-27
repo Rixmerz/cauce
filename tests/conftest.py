@@ -1,12 +1,33 @@
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from cauce import workflows
+from cauce import plugins, workflows
 from cauce.store import Store
+
+_which = shutil.which
+
+
+def _hide_the_machines_neighbours(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The programs of the neighbours cauce adopts (`plugins.KNOWN`, found on PATH) that this
+    machine happens to have are not there for a test: a `rastro` in the person's `~/.local/bin`
+    is a browser and a capability no test asked for. One a test puts under its own `tmp_path`
+    is found as ever."""
+    neighbours = {n.on_path[0] for n in plugins.KNOWN if n.on_path}
+    own = tmp_path.resolve()
+
+    def which(cmd, mode=os.F_OK | os.X_OK, path=None):
+        found = _which(cmd, mode, path)
+        if found and cmd in neighbours and not Path(found).resolve().is_relative_to(own):
+            return None
+        return found
+
+    monkeypatch.setattr(shutil, "which", which)
 
 
 @pytest.fixture(autouse=True)
@@ -55,6 +76,7 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(capacity, "machine",
                         lambda root=None: capacity.Machine(cpus=3, memory_mb=None, disk_mb=None, load=None))
     monkeypatch.delenv("CAUCE_MAX_PARALLEL", raising=False)
+    _hide_the_machines_neighbours(tmp_path, monkeypatch)
     for var, value in {
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
         "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),

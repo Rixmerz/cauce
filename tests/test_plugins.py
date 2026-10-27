@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 from cauce import capabilities as caps
@@ -76,6 +78,25 @@ def test_rastro_runs_without_its_saved_routines_from_a_plugin_or_from_path(tmp_p
     kept = plugins.guarded({"command": "x", "env": {"PYTHONPATH": "/mine"}}, "rastro")
     assert kept["env"]["PYTHONPATH"].endswith(os.pathsep + "/mine") and kept["args"][-1] == "x"
     assert plugins.find(plugins.KNOWN[1], {"PATH": "", "CLAUDE_CONFIG_DIR": str(tmp_path / "none")}) is None
+
+
+def _rastro_in(directory: Path) -> Path:
+    (directory / "rastro").write_text("#!/bin/sh\n")
+    (directory / "rastro").chmod(0o755)
+    return directory
+
+
+def test_a_neighbour_program_the_machine_has_is_not_there_for_a_test_but_one_the_test_makes_is(tmp_path):
+    env = {"CLAUDE_CONFIG_DIR": str(tmp_path / "none")}
+    with tempfile.TemporaryDirectory() as machine:  # outside tmp_path: what the person's own PATH holds
+        outside = _rastro_in(Path(machine))
+        assert shutil.which("rastro", path=str(outside)) is None
+        assert plugins.find(plugins.KNOWN[1], {**env, "PATH": str(outside)}) is None
+    inside = tmp_path / "bin"
+    inside.mkdir()
+    _rastro_in(inside)
+    assert shutil.which("rastro", path=str(inside)) == str(inside / "rastro")
+    assert plugins.find(plugins.KNOWN[1], {**env, "PATH": str(inside)}).source == "PATH"
 
 
 def test_a_server_entry_inline_broken_or_outside_the_plugin_is_read_or_left_out():

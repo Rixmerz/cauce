@@ -4,6 +4,25 @@
 
 ### Fixed
 
+- **The "this session loaded cauce X" hint went on after `/reload-plugins`:** it took the version
+  the session loaded from the `cauce` launcher a command was forwarded from, and a session's PATH
+  keeps the launcher it started with however many times its plugins reload, so the hint named the
+  old version even once the session's skills and hooks were the new one's. Every session's hooks
+  (SessionStart and each prompt) now keep the version they run (`work/loaded-plugin.json` in the
+  cauce home, the newest 200 sessions), Claude Code re-reads the hooks on a reload, and `cauce run`
+  reads that for its session before the launcher's: the hint shows only while the session's hooks
+  still run the old plugin, and from the first prompt after a reload it is gone. The launcher's
+  version stays the answer for a session with no hook record yet. The hint (and the once-a-session
+  note a prompt gives) now says `/reload-plugins --force`: Claude Code 2.1 holds back a plain reload
+  that would rewrite the prompt cache and prints "Run /reload-plugins --force to apply".
+
+- **The suite failed on a machine that has `rastro` on its PATH:** the tests isolate the cauce home
+  and Claude Code's config but not the PATH, so a neighbour's program the person installed was found
+  as an adopted capability (and as a browser workers do not have): `test_capabilities`, the
+  neighbours listing and a workflow's "needs a browser" warning all read it. A neighbour's program
+  found outside a test's own `tmp_path` is now not there for the test (`tests/conftest.py`); one a
+  test puts under its `tmp_path` is found as before.
+
 - **A task sent from a folder that holds several repositories showed nothing of its work:** such
   a folder is no checkout, so the task runs with no worktree, and its progress line, `cauce peek`
   and phase all diffed a worktree that was not there ("works in no worktree of its own, or git
