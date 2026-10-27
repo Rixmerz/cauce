@@ -620,6 +620,8 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
                        "same check ran again): " + "; ".join(flaky) + ". One of them failing alone says nothing "
                        "about your change: run it again before changing code for it, and name it in `summary`.")
     check = options.verify or options.run_verify
+    if kind not in READ_ONLY_KINDS and (unmeasured := _unmeasured(kind, touched_paths(text, options), registry)):
+        neighbour_notes.append(unmeasured)
     neighbour_notes += _unmet(text, registry, served=bool(options.services), verify=check, where=repo_dir)
     if check and kind not in READ_ONLY_KINDS:
         neighbour_notes += _beside_ci(repo_dir, check, options.services, ci.quiet(store, repo.key(repo_dir)))
@@ -917,7 +919,7 @@ def warnings(reasons: Sequence[str]) -> list[str]:
 
 
 #: Plan lines that read the same task after task in a repository: said once a day there.
-_REPEATED = ("CI also runs", "CI: ", "engram: ", "livespec: ", "specs: ", "tracer: ")
+_REPEATED = ("CI also runs", "CI: ", "engram: ", "layout-inspector: ", "livespec: ", "specs: ", "tracer: ")
 SAID_META = "said:"
 
 
@@ -2082,6 +2084,20 @@ def _unmet(text: str, registry: Mapping[str, caps.Capability], *, served: bool =
                      "--service 'npm run dev@4200' (cauce starts each before the work and stops it after), or "
                      "start them yourself before dispatching; a server a worker starts stops when it finishes")
     return notes
+
+
+def _unmeasured(kind: str, paths: Sequence[str], registry: Mapping[str, caps.Capability]) -> str:
+    """Said when a change to the interface will be checked with nothing that measures a rendered
+    page, and why: the `plugins` setting is off, or no such neighbour is installed. Empty when
+    the work is no UI or something that measures it is in the registry."""
+    if kind != "ui" and not any(caps.matches(path, caps.UI_FILES) for path in paths):
+        return ""
+    if any(c.measures and c.touches for c in registry.values()):
+        return ""
+    why = ("the `plugins` setting is off (`cauce config plugins on`)" if not config.enabled("plugins", os.environ)
+           else "the layout-inspector plugin is not installed and `layout-inspector-mcp` is not on PATH")
+    return (f"layout-inspector: this change touches the interface and nothing in your registry measures a rendered "
+            f"page, so the independent check judges it by reading: {why}")
 
 
 def _beside_ci(repo_dir: Path, check: str, services: Sequence[str], quieted: Collection[str] = ()) -> list[str]:

@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- **The independent check is told which tool measures each floor and anti-pattern.** 0.52.0 said
+  so, but `cauce.tracer` added one generic paragraph. Now, where `docs/tracer/` exists and the check
+  has layout-inspector, each line of `floors.md` and `anti-patterns.md` is listed beside the tool
+  that measures it (a target size: `accessibility_spatial`; overflow, clipping, truncated text,
+  overlap: `detect_issues`; breakpoints: `compare_viewports`; `element_context` for the cause), and
+  a line with no measurement behind it is said to be judged from the rendered text. Contrast,
+  focus and keyboard order are in that group: layout-inspector 0.4 measures none of them, and the
+  old paragraph claimed `accessibility_spatial` did. Lines no rule reaches are counted, never dropped.
+- **A change to the interface says why it is checked without layout-inspector.** The plan says
+  once a day per repository, when the request names UI files (or is a `ui` task) and nothing in the
+  registry measures a rendered page, whether the `plugins` setting is off or the plugin is not
+  installed. The check already got layout-inspector for any change that touches UI files, TRACER or
+  not (end to end test of both briefs); only the silence is new.
+
 ### Fixed
 
 - **A task sent from a folder that holds several repositories showed nothing of its work:** such
