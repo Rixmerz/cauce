@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -50,6 +52,15 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # cauce's own suite may run inside a cauce worker, which refuses to start work.
     monkeypatch.delenv("CAUCE_WORKER_TASK", raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    # A neighbour (rastro, layout-inspector) installed on the machine that runs the suite is found
+    # on its PATH: the suite reads that PATH as having none, so what a test sees of neighbours
+    # is what it installs. A test that wants one passes its own `env` with a PATH of its own.
+    from cauce import plugins
+
+    host_path, programs = os.environ.get("PATH"), {n.on_path[0] for n in plugins.KNOWN if n.on_path}
+    which = shutil.which
+    monkeypatch.setattr(shutil, "which", lambda cmd, mode=os.F_OK | os.X_OK, path=None: None if (
+        cmd in programs and path == host_path) else which(cmd, mode=mode, path=path))
     # The dispatcher's level starts at what the machine holds: in a test, a fixed machine
     # of three CPUs whose memory, disk and load say nothing (calm), whatever runs the suite.
     from cauce import capacity
