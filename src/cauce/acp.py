@@ -31,7 +31,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, TextIO
 
-from cauce import __version__, criteria
+from cauce import __version__, criteria, progress
+from cauce.text import clip
 
 PROTOCOL_VERSION = 1
 CANCEL_GRACE_S = 10.0  # after a cancel, how long the process has to end before its group is killed
@@ -41,6 +42,9 @@ PIPES_JOIN_S = 5.0  # a grandchild that kept a pipe open must not hold a finishe
 TASK_NUMBER = re.compile(r"#(\d+)")
 TASK_ID = re.compile(r"#?(\d+)")
 DIFF_EVERY_S = 10.0  # how often a running worker's files are read again for the editor's diffs
+PROGRESS_EVERY_S = 5.0  # how often a running task's progress (`cauce tasks`' line, its stage) is read again
+CHECK_TAIL_LINES = 20  # the lines of a failed check's output the editor shows
+STAGE_ENTRIES = tuple(progress.STAGES.values())  # cauce's stages, the plan's entries after the request's items
 
 PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS, INTERNAL_ERROR = -32700, -32600, -32601, -32602, -32603
 BUSY = -32000
@@ -68,6 +72,21 @@ class RpcError(Exception):
         self.message = message
 
 
+@dataclass(frozen=True)
+class Look:
+    """What cauce knows of a task right now, for the editor: `progress`'s account while it runs, its
+    ending once it ended. All text; empty where nothing could be read."""
+
+    line: str = ""  # `cauce tasks`' line: phase · time of the usual · files +/−, and its warnings
+    doing: str = ""  # the worker's last tool call in words
+    wrote: str = ""  # the files it wrote, by name
+    stage: str = ""  # one of `STAGE_ENTRIES`
+    warnings: tuple[str, ...] = ()
+    check: str = ""  # the end of the output of a check that failed
+    ending: str = ""  # the verdict and the next step, once it ended
+    skipped: tuple[str, ...] = ()  # stages a pass did not need
+
+
 @dataclass(eq=False)
 class Run:
     """One prompt's process. `task` is the first `#N` its stderr named. `released` is a turn a
@@ -85,7 +104,16 @@ class Run:
     closed: bool = False
     tail: deque[str] = field(default_factory=lambda: deque(maxlen=TAIL_LINES))
     diffs: list[dict[str, Any]] = field(default_factory=list)
-    plan: list[dict[str, str]] = field(default_factory=list)
+    items: list[str] = field(default_factory=list)  # the request's own items, the plan's first entries
+    planned: bool = False  # a `run` shows a plan: its items, then cauce's stages
+    passed: bool = False
+    stage: str = STAGE_ENTRIES[0]  # the last stage progress named, kept when the run ends short of a pass
+    look: Look = field(default_factory=lambda: Look())
+    title: str = ""
+    sent_title: str = ""  # what the editor was last told, so only a change is said
+    sent_content: list[dict[str, Any]] = field(default_factory=list)
+    sent_plan: list[dict[str, str]] = field(default_factory=list)
+    shown: threading.Lock = field(default_factory=threading.Lock)
 
 
 @dataclass(eq=False)
@@ -94,6 +122,13 @@ class Session:
     mcp_ignored: bool
     run: Run | None = None  # set and checked on the reader's thread, cleared with the prompt's answer
     waiting: Run | None = None  # the run a cancel released, until a prompt keeps it or its window runs out
+
+
+def step(n: int, at: int) -> str:
+    """A step of a sequence when the sequence is at step `at` (-1: not started): done before it, going at it."""
+    if n < at:
+        return "completed"
+    return "in_progress" if n == at else "pending"
 
 
 def command_argv(text: str) -> tuple[str, list[str]]:
@@ -162,13 +197,113 @@ def task_diffs(task_id: int, live: bool) -> list[dict[str, Any]]:
              "newText": f["new"] or ""} for f in (found or {}).get("files", [])]
 
 
+CHECK_FAILED = re.compile(r"claimed a pass, but (`[^`]*`[^:]*)")
+
+
+def failed_check(store: Any, task_id: int) -> str:
+    """Why cauce's check refused the last attempt, with the end of its output: what the attempt's
+    record kept as its evidence. "" when the last attempt was not turned down by the check."""
+    tried = store.attempts(task_id)
+    last = tried[-1] if tried else None
+    found = CHECK_FAILED.match(str(last["summary"] or "")) if last is not None and not last["passed"] else None
+    if found is None:
+        return ""
+    tail = "\n".join(str(last["evidence"] or "").splitlines()[-CHECK_TAIL_LINES:])
+    return f"cauce's check failed: {found.group(1)}" + (f"\nthe end of its output:\n{tail}" if tail else "")
+
+
+def verdict_text(card: Any) -> list[str]:
+    """A passing ending's verdict card (`orchestrate.verdict_card`) in a few lines for the person."""
+    if not isinstance(card, dict):
+        return []
+    check = card.get("check")
+    if isinstance(check, dict):
+        said = f"cauce ran `{check.get('command')}` and it passed"
+        if check.get("state"):
+            said += f" ({check['state']}: it fails at the base commit too, so the work stood)"
+    else:
+        said = "no check was given, so nothing ran the tests"
+    lines = [f"check: {said}"]
+    asked = [c for c in card.get("criteria") or () if isinstance(c, dict)]
+    if asked:
+        unmet = [str(c.get("id")) for c in asked if not c.get("met")]
+        lines.append(f"criteria: {len(asked) - len(unmet)} of {len(asked)} met" + (f" (not met: {', '.join(unmet)})"
+                                                                                   if unmet else ""))
+    ind = card.get("independent") or {}
+    if ind.get("ran"):
+        lines.append("independent check: " + ("passed" if ind.get("passed") else
+                                              f"{ind.get('blocking')} blocker(s) left, recorded"))
+    elif ind.get("why"):
+        lines.append(f"independent check: not run ({ind['why']})")
+    if card.get("unchecked"):
+        lines.append(f"not self-checked: {card['unchecked']}")
+    return lines
+
+
+def ending_text(task_id: int, ended: dict[str, Any]) -> str:
+    """How a task ended and what to do next, from its `finished` event: the verdict of a pass with the
+    branch and how it is merged, or the stop of any other ending with the command that goes on."""
+    from cauce import stops
+
+    status = str(ended.get("status") or "")
+    branch = ended.get("branch")
+    if status == "done":
+        head = f"cauce: task #{task_id} passed" + (f" at {ended['final_cell']}" if ended.get("final_cell") else "")
+        lines = [head + (f" after {ended['attempts']} attempts" if int(ended.get("attempts") or 1) > 1 else "") + ".",
+                 *(f"  {line}" for line in verdict_text(ended.get("verdict")))]
+        if branch:
+            lines.append(f"The work is on branch {branch}; your checkout has none of it until it is merged. Next: "
+                         f"review it (`git diff HEAD...{branch}`), then `cauce merge {task_id}` merges it, or "
+                         f"`cauce pr {task_id}` opens a draft pull request.")
+        elif ended.get("in_place"):
+            lines.append("Its changes are in your checkout itself: there is no branch to merge.")
+        return "\n".join(lines)
+    stop = stops.read(ended.get("stop"))
+    lines = [f"cauce: task #{task_id} {status}" + (f". {clip(stop.line(), 400, one_line=True)}" if stop else ".")]
+    if branch:
+        lines.append(f"Its work is kept on branch {branch} (`git diff HEAD...{branch}` shows it).")
+    if stop is not None:
+        lines.append(f"Next: {stops.what_to_do(stop)}.")
+        if command := stops.next_step(task_id, stop):
+            lines.append(f"The command that goes on: `{command}`.")
+    return "\n".join(lines)
+
+
+def task_look(task_id: int, ended: bool) -> Look:
+    """What `cauce tasks` knows of a task: while it runs, its progress line, its worker's last call, the
+    files it wrote, its stage and its warnings (`cauce.progress`); once it ended, its verdict and next
+    step. A check that turned its last attempt down comes with the end of its output. Read only; an
+    empty Look when nothing can be read."""
+    from cauce.store import Store
+
+    store = Store.open()
+    try:
+        task = store.get_task(task_id)
+        if task is None:
+            return Look()
+        check = failed_check(store, task_id)
+        if not ended:
+            now = progress.of(store, task)
+            return Look(line=progress.line(now), doing=str(now.get("doing") or ""), wrote=progress.files_line(now),
+                        stage=str(now.get("stage") or ""), warnings=tuple(progress.warnings(now)), check=check)
+        data = (store.final_event(task_id) or {}).get("data") or {}
+    finally:
+        store.close()
+    card = data.get("verdict") if isinstance(data.get("verdict"), dict) else {}
+    skipped = (*((STAGE_ENTRIES[1],) if not card.get("check") else ()),
+               *((STAGE_ENTRIES[2],) if not (card.get("independent") or {}).get("ran") else ())) if card else ()
+    return Look(check=check, ending=ending_text(task_id, data) if data else "", skipped=skipped)
+
+
 class Agent:
     def __init__(self, out: TextIO, err: TextIO, popen: Callable[..., Any], killpg: Callable[[int, int], None],
                  grace: float, diffs: Callable[[int, bool], list[dict[str, Any]]] = task_diffs,
-                 diff_every: float = DIFF_EVERY_S) -> None:
+                 diff_every: float = DIFF_EVERY_S, look: Callable[[int, bool], Look] = task_look,
+                 look_every: float = PROGRESS_EVERY_S) -> None:
         self._out, self._err = out, err
         self._popen, self._killpg, self._grace = popen, killpg, grace
         self._diffs, self._diff_every = diffs, diff_every
+        self._look, self._look_every = look, look_every
         self._write = threading.Lock()
         self._turns = threading.Lock()  # who answers a prompt, and what a cancel left waiting
         self._gone = False  # the client closed its end: nothing more can be said to it
@@ -327,15 +462,16 @@ class Agent:
                                          "content": {"type": "text", "text": kept_notice(earlier.task)}})
         self.update(session_id, {"sessionUpdate": "tool_call", "toolCallId": run.call_id,
                                  "title": f"cauce {command}", "kind": "execute", "status": "in_progress"})
-        if command == "run" and (items := criteria.items(text)):
-            # The request's own items are the plan the editor shows: a worker keeps no list of its own.
-            run.plan = [{"content": item, "priority": "medium", "status": "pending"} for item in items]
-            self.update(session_id, {"sessionUpdate": "plan", "entries": run.plan})
+        if command == "run":
+            # The request's own items are the plan the editor shows (a worker keeps no list of its own),
+            # and after them cauce's stages, so the check that follows the worker is not silence.
+            run.items, run.planned = criteria.items(text), True
+            self._plan(session_id, run)
         thread = threading.Thread(target=self._finish, args=(session_id, session, run), name=f"acp-{run.call_id}")
         self._threads.append(thread)
         thread.start()
         if command == "run":
-            threading.Thread(target=self._follow_diffs, args=(session_id, run), name=f"acp-diffs-{run.call_id}",
+            threading.Thread(target=self._follow_task, args=(session_id, run), name=f"acp-task-{run.call_id}",
                              daemon=True).start()
         return DEFERRED
 
@@ -390,12 +526,12 @@ class Agent:
             return  # a cancel ended its turn and answered it: nothing of this run is said now
         status = "completed" if code == 0 else "failed"
         self._show_end(session_id, run, status)
-        self._report(session_id, session, "".join(stdout))
+        self._report(session_id, session, "".join(stdout), run.look.ending)
         if self._claim(session, run):
             self.reply(run.request_id, {"stopReason": "end_turn"})
 
     def _show_end(self, session_id: str, run: Run, status: str) -> None:
-        final: dict[str, Any] = {"sessionUpdate": "tool_call_update", "toolCallId": run.call_id, "status": status}
+        run.passed = status == "completed"
         if run.task is not None:
             try:
                 kept = self._diffs(run.task, False)
@@ -404,14 +540,16 @@ class Agent:
                 kept = []
             if kept or run.diffs:
                 run.diffs = kept
-                final["content"] = self._content(run)
-        self.update(session_id, final)
-        if run.plan and status == "completed":
-            # A pass answered every item; anything short of one leaves them as they were.
-            self.update(session_id, {"sessionUpdate": "plan",
-                                     "entries": [{**e, "status": "completed"} for e in run.plan]})
+            if run.planned:
+                self._read_look(run, ended=True)
+        if run.title and run.look.line == "" and run.tail:
+            run.title = run.tail[-1]  # the progress line is over: the last thing cauce said stands
+        self._show(session_id, run, status)
+        self._plan(session_id, run, last=True)
 
-    def _report(self, session_id: str, session: Session, text: str) -> None:
+    def _report(self, session_id: str, session: Session, text: str, lead: str = "") -> None:
+        if lead:
+            text = lead + ("\n\n" + text if text else "")
         if session.mcp_ignored:
             session.mcp_ignored = False
             text = MCP_NOTICE + ("\n\n" + text if text else "")
@@ -420,47 +558,111 @@ class Agent:
                                      "content": {"type": "text", "text": text}})
 
     def _follow_stderr(self, session_id: str, run: Run) -> None:
-        """cauce prints its progress on stderr: each line is the tool call's title, with the last
-        lines as its content."""
+        """cauce prints its progress on stderr: each line is the tool call's title until the task's own
+        progress line (`_follow_task`) takes it over, with the last lines as its content."""
         for raw in run.proc.stderr:
             line = raw.rstrip()
             if not line or run.closed:
                 continue
             if run.task is None and (found := TASK_NUMBER.search(line)):
                 run.task = int(found.group(1))
-                if run.plan:
-                    run.plan = [{**e, "status": "in_progress"} for e in run.plan]
-                    self._say(session_id, run, {"sessionUpdate": "plan", "entries": run.plan})
+                self._plan(session_id, run)
             run.tail.append(line)
-            self._say(session_id, run, {"sessionUpdate": "tool_call_update", "toolCallId": run.call_id,
-                                        "title": line, "content": self._content(run)})
+            if not run.look.line:
+                run.title = line
+            self._show(session_id, run)
 
-    def _say(self, session_id: str, run: Run, update: dict[str, Any]) -> None:
-        """An update of the run's turn, unless a cancel ended it: the client has had its answer, and the
-        task goes on unseen. The pipes are still read, or the process would block on them."""
-        if not run.released:
-            self.update(session_id, update)
+    def _show(self, session_id: str, run: Run, status: str | None = None) -> None:
+        """The run's tool call as it stands, said only where it differs from what the editor was last
+        told, so a poll that found nothing new sends nothing. Nothing is said of a run a cancel ended: the
+        client has had its answer, and the task goes on unseen. The pipes are still read, or the process
+        would block on them."""
+        with run.shown:
+            if status is None and (run.released or run.closed):
+                return  # a cancel or the run's end got there first; the end's own update is the last word
+            update: dict[str, Any] = {"sessionUpdate": "tool_call_update", "toolCallId": run.call_id}
+            if status is not None:
+                update["status"] = status
+            content = self._content(run)
+            if run.title and run.title != run.sent_title:
+                update["title"] = run.sent_title = run.title
+            if content != run.sent_content and (content or run.sent_content):
+                update["content"] = run.sent_content = content
+            if len(update) > 2 or status is not None:
+                self.update(session_id, update)
+
+    def _plan(self, session_id: str, run: Run, *, last: bool = False) -> None:
+        """The plan: the request's items, then cauce's stages. Items are pending until the task starts,
+        in progress while it runs and completed on a pass; each stage is completed once a later one began.
+        A run short of a pass leaves them as they were."""
+        if not run.planned or run.released:
+            return
+        # Computed under the lock, and a poll that lost the race to the run's end says nothing after it.
+        at = STAGE_ENTRIES.index(run.stage) if run.task is not None and run.stage in STAGE_ENTRIES else -1
+        entries = [{"content": item, "priority": "medium",
+                    "status": "completed" if run.passed else "pending" if run.task is None else "in_progress"}
+                   for item in run.items]
+        for n, label in enumerate(STAGE_ENTRIES):
+            status = "completed" if run.passed else step(n, at)
+            skipped = run.passed and label in run.look.skipped
+            entries.append({"content": f"{label} (not run)" if skipped else label, "priority": "low",
+                            "status": status})
+        with run.shown:
+            if run.closed and not last:
+                return
+            if entries != run.sent_plan:
+                run.sent_plan = entries
+                self.update(session_id, {"sessionUpdate": "plan", "entries": entries})
 
     @staticmethod
     def _content(run: Run) -> list[dict[str, Any]]:
-        text = [{"type": "content", "content": {"type": "text", "text": "\n".join(run.tail)}}] if run.tail else []
-        return text + run.diffs
+        look = run.look
+        now = [f"now: {look.doing}"] if look.doing else []
+        now += [look.wrote] if look.wrote else []
+        now += [f"⚠ {warning}" for warning in look.warnings]
+        blocks = [{"type": "content", "content": {"type": "text", "text": text}}
+                  for text in ("\n".join(now), "\n".join(run.tail), look.check) if text]
+        return blocks + run.diffs
 
-    def _follow_diffs(self, session_id: str, run: Run) -> None:
-        """While the run's worker writes, its files as diffs beside the progress lines: read from its
-        worktree every `DIFF_EVERY_S`, sent only when they changed."""
-        while not run.exited.wait(self._diff_every):
+    def _read_look(self, run: Run, *, ended: bool = False) -> None:
+        """What cauce knows of the task now. A view: what cannot be read leaves the last look standing."""
+        if run.task is None:
+            return
+        try:
+            run.look = self._look(run.task, ended)
+        except Exception:
+            traceback.print_exc(file=self._err)
+            return
+        if run.look.stage:
+            run.stage = run.look.stage
+        if run.look.line:
+            run.title = run.look.line
+
+    def _read_diffs(self, run: Run) -> None:
+        if run.task is None:
+            return
+        try:
+            run.diffs = self._diffs(run.task, True)
+        except Exception:  # a view: what cannot be read is left out
+            traceback.print_exc(file=self._err)
+
+    def _follow_task(self, session_id: str, run: Run) -> None:
+        """While the run goes, what `cauce tasks` would say of it, read every `look_every` seconds, and its
+        worker's files as diffs, read every `diff_every`: each said only when it changed."""
+        due = {"look": 0.0, "diffs": 0.0}
+        while not run.exited.wait(min(self._look_every, self._diff_every)):
             if run.task is None or run.closed or run.released:
                 continue
-            try:
-                found = self._diffs(run.task, True)
-            except Exception:  # a view: what cannot be read is left out
-                traceback.print_exc(file=self._err)
-                continue
-            if found != run.diffs and not run.closed:
-                run.diffs = found
-                self._say(session_id, run, {"sessionUpdate": "tool_call_update", "toolCallId": run.call_id,
-                                            "content": self._content(run)})
+            now = time.monotonic()
+            if now >= due["look"]:
+                due["look"] = now + self._look_every
+                self._read_look(run)
+            if now >= due["diffs"]:
+                due["diffs"] = now + self._diff_every
+                self._read_diffs(run)
+            if not run.closed:
+                self._plan(session_id, run)
+                self._show(session_id, run)
 
     def _stop(self, cwd: str, run: Run) -> None:
         """Ask cauce to cancel the task the run named, and kill the process group when the run has not
@@ -489,7 +691,8 @@ class Agent:
 def serve(stdin: Iterable[str], stdout: TextIO, stderr: TextIO | None = None, *,
           popen: Callable[..., Any] = subprocess.Popen, killpg: Callable[[int, int], None] = os.killpg,
           grace: float = CANCEL_GRACE_S, diffs: Callable[[int, bool], list[dict[str, Any]]] = task_diffs,
-          diff_every: float = DIFF_EVERY_S) -> int:
+          diff_every: float = DIFF_EVERY_S, look: Callable[[int, bool], Look] = task_look,
+          look_every: float = PROGRESS_EVERY_S) -> int:
     """Answer the client's messages until its input ends and the running prompts finish."""
-    Agent(stdout, stderr or sys.stderr, popen, killpg, grace, diffs, diff_every).serve(stdin)
+    Agent(stdout, stderr or sys.stderr, popen, killpg, grace, diffs, diff_every, look, look_every).serve(stdin)
     return 0

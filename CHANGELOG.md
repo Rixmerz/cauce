@@ -4,6 +4,20 @@
 
 ### Added
 
+- **`cauce acp` shows a running task alive, not only its first minute:** in Zed the diffs of the
+  files the worker wrote in its first minutes were the last thing to change for minutes, while
+  `cauce tasks` showed the task running. The tool call's title is now the line `cauce tasks` says
+  (`implementing · 3m of ≈5m · 5 files +126 −2`), refreshed every `acp.PROGRESS_EVERY_S` (5 s) and
+  with its warnings (past what its kind usually takes here; no tool call for five minutes). Its
+  content says what the worker is doing now (`running npm test`, `editing a .py file`: read from
+  the tool-call signature, which holds no argument, so it names no file), the files written, the
+  stderr tail and, when cauce's check turned an attempt down, the end of its output. The plan
+  gains cauce's stages after the request's items (worker, cauce's check, independent check),
+  each pending, in progress or completed, so the check phase is no longer silence. When the task
+  ends, the answer opens with its verdict and next step (the branch and how it is merged, or why
+  it stopped and the command that goes on) before the worker's report. Updates are sent only when
+  something changed, so a quiet task sends nothing. `progress.words` and `progress.warnings` are
+  new beside `progress.line`, which says the same words as before.
 - **`/cancel N` in `cauce acp`:** stops task N from the editor (`cauce cancel N`), the one way to
   cancel a task on purpose now that stopping a turn does not. `/cancel` without a task's number is
   refused, since read as a request it would start a worker on that word.

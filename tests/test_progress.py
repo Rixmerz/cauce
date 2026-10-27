@@ -85,6 +85,138 @@ def test_the_line_says_time_against_the_usual_and_past_it():
                                    "here (10m)")
 
 
+def test_a_call_is_said_in_words_from_its_signature_alone():
+    assert progress.words("bash:npm-test") == "running npm test"
+    assert progress.words("bash:unknown") == "running a command"
+    assert progress.words("edit:py") == "editing a .py file"
+    assert progress.words("write:noext") == "writing a file"
+    assert progress.words("read:ts") == "reading a .ts file"
+    assert progress.words("mcp:livespec.who_calls") == "calling livespec.who_calls"
+    assert progress.words("grep") == "searching the code"
+    assert progress.words("") == ""
+
+
+def test_progress_names_what_the_worker_is_doing_and_its_warnings(store):
+    from .test_checking import log
+
+    task = _running(store)
+    assert "doing" not in progress.of(store, task)  # no call yet: nothing to say
+    log([(task["id"], 1, "read:py"), (task["id"], 1, "bash:npm-test")])
+    assert progress.of(store, task)["doing"] == "running npm test"
+    late = {"elapsed_s": 900, "quiet_s": progress.IDLE_S + 60,
+            "estimate": {"p50_s": 420, "p90_s": 600, "samples": 5, "by": "its kind"}}
+    assert progress.warnings(late) == ["past 9 in 10 of its kind here (10m)",
+                                       "no tool call for 6m (a long command, or stuck)"]
+    assert progress.warnings({"elapsed_s": 60, "quiet_s": 30}) == []
+    # `cauce tasks` says the same words: its line ends with them.
+    assert progress.line({"stage": "worker", **late}).endswith(" · ".join(progress.warnings(late)))
+
+
+def test_a_task_look_reads_its_progress_while_it_runs_and_the_check_that_refused_it(store):
+    from cauce import acp
+
+    from .test_checking import log
+
+    task = _running(store)
+    log([(task["id"], 1, "bash:npm-test")])
+    assert acp.task_look(999, False) == acp.Look()  # no such task: nothing to say
+    assert acp.task_look(task["id"], False).check == ""
+    store.add_attempt(task["id"], cell="sonnet/high", max_turns=30, passed=0, failure="code_bug",
+                      summary="claimed a pass, but `npm test` exited 1: it works",
+                      evidence="\n".join(f"line {n}" for n in range(30)))
+    look = acp.task_look(task["id"], False)
+    assert look.stage == "worker"
+    assert look.doing == "running npm test"
+    assert "checking" in look.line
+    assert look.check.startswith("cauce's check failed: `npm test` exited 1\nthe end of its output:\nline 10\n")
+    assert look.check.endswith("line 29")
+    assert len(look.check.splitlines()) - 2 == acp.CHECK_TAIL_LINES
+    # An attempt the check did not turn down says nothing of a check.
+    store.add_attempt(task["id"], cell="opus/high", max_turns=30, passed=1, summary="done", evidence="ok")
+    assert acp.task_look(task["id"], False).check == ""
+
+
+def _ended(store, status, **data):
+    task = _running(store)
+    store.add_event(task["id"], "finished", status=status, **data)
+    store.update_task(task["id"], status=status)
+    return task["id"]
+
+
+def test_a_pass_ends_with_its_verdict_and_how_the_branch_is_merged(store):
+    from cauce import acp
+
+    card = {"criteria": [{"id": "S1", "met": True, "evidence": "x"}, {"id": "S2", "met": False, "evidence": "y"}],
+            "check": {"command": "npm test", "passed": True},
+            "independent": {"ran": False, "why": "its risk (passive) does not call for one"}, "attempts": 2}
+    one = _ended(store, "done", final_cell="sonnet/high", branch="cauce/task-7", attempts=2, verdict=card)
+    look = acp.task_look(one, True)
+    assert look.ending.splitlines() == [
+        f"cauce: task #{one} passed at sonnet/high after 2 attempts.",
+        "  check: cauce ran `npm test` and it passed",
+        "  criteria: 1 of 2 met (not met: S2)",
+        "  independent check: not run (its risk (passive) does not call for one)",
+        "The work is on branch cauce/task-7; your checkout has none of it until it is merged. Next: review it "
+        f"(`git diff HEAD...cauce/task-7`), then `cauce merge {one}` merges it, or `cauce pr {one}` opens a draft "
+        "pull request."]
+    assert look.skipped == (acp.STAGE_ENTRIES[2],)
+    assert (look.line, look.doing) == ("", "")
+    bare = _ended(store, "done", verdict={"criteria": [], "check": None, "independent": {"ran": True, "passed": True}})
+    ended = acp.task_look(bare, True)
+    assert "  check: no check was given, so nothing ran the tests" in ended.ending
+    assert ended.skipped == (acp.STAGE_ENTRIES[1],)
+    in_place = _ended(store, "done", in_place=[{"repo": "api", "files": 1}])
+    assert "there is no branch to merge" in acp.task_look(in_place, True).ending
+
+
+def test_a_stop_ends_with_why_and_the_command_that_goes_on(store):
+    from cauce import acp
+
+    stop = {"cause": "review", "by": "cauce", "reason": "the independent check kept finding problems"}
+    task = _ended(store, "blocked", branch="cauce/task-9", stop=stop)
+    ending = acp.task_look(task, True).ending
+    assert ending.splitlines()[0].startswith(f"cauce: task #{task} blocked. stopped by")
+    assert "Its work is kept on branch cauce/task-9 (`git diff HEAD...cauce/task-9` shows it)." in ending
+    assert f"The command that goes on: `cauce resume {task}`." in ending
+    assert acp.task_look(_ended(store, "failed"), True).ending.endswith("failed.")
+
+
+def test_the_editor_sees_a_real_task_run_and_end_through_the_agent(store):
+    """`cauce acp` with nothing faked but the process: the tool call's title is the line `cauce tasks` says,
+    the stages move with the task's `stage` events, and the ending leads the answer."""
+    from cauce import acp
+
+    from .test_acp import Client, Spawner, said, statuses
+    from .test_checking import log
+
+    task = _running(store)
+    n = task["id"]
+    log([(n, 1, "bash:npm-test")])
+    spawner = Spawner(stderr=[f"cauce: #{n} attempt 1 at sonnet/high"], hold=True)
+    c = Client(spawner, look=acp.task_look, look_every=0.01)
+    try:
+        session = c.new_session()
+        request = c.prompt(session, "add a logout button")
+        live = c.out.wait_for(lambda m: "now: running npm test" in str(said(m).get("content")))
+        assert said(live)["title"].startswith("checking · ")
+        store.add_event(n, "stage", seq=1, stage="check")
+        c.out.wait_for(lambda m: statuses(m) == ["completed", "in_progress", "pending"])
+        store.add_event(n, "finished", status="done", final_cell="sonnet/high", branch=f"cauce/task-{n}",
+                        verdict={"criteria": [], "check": {"command": "npm test", "passed": True},
+                                 "independent": {"ran": True, "passed": True}})
+        store.update_task(n, status="done")
+        spawner.procs[0].release()
+        c.answer(request)
+        text = c.updates(session)[-1]["content"]["text"]
+        assert text.startswith(f"cauce: task #{n} passed at sonnet/high.\n  check: cauce ran `npm test`")
+        assert f"`cauce merge {n}`" in text
+        assert [e["status"] for e in [u for u in c.updates(session) if u["sessionUpdate"] == "plan"][-1]["entries"]] \
+            == ["completed"] * 3
+    finally:
+        spawner.procs[0].release()
+        c.close()
+
+
 def test_queueing_says_how_long_tasks_like_it_took(git_repo, store, capsys, monkeypatch):
     from cauce import repo
 

@@ -89,7 +89,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `bin/cauce` | the launcher every hook and command goes through |
 | `src/cauce/interpreter.py` | which Python runs cauce; imported before the version check, so it must run on any python3 |
 | `src/cauce/link.py` | `cauce link`: a shim on a terminal's PATH that survives plugin updates; `forward_to`, which sends a typed command from an old install to the newest (never a hook, never a checkout) |
-| `src/cauce/acp.py` | `cauce acp`: cauce as an Agent Client Protocol agent over stdio (Zed's `agent_servers`): JSON-RPC lines, one session per `session/new` and its folder, each prompt a `cauce run` (or `cauce tasks`/`stats` for `/tasks`/`/stats`) in its own process group, its stderr progress as one tool call, its report as the answer, a cancel ending the turn at once and the task after `CANCEL_WINDOW_S` unless a prompt follows (`cauce cancel N` then a kill; `/cancel N` is the explicit one), `session/load` refused with what to do, the request's items as its `plan` and the worker's files as `diff` content; spawning injectable; stdlib |
+| `src/cauce/acp.py` | `cauce acp`: cauce as an Agent Client Protocol agent over stdio (Zed's `agent_servers`): JSON-RPC lines, one session per `session/new` and its folder, each prompt a `cauce run` (or `cauce tasks`/`stats` for `/tasks`/`/stats`) in its own process group, its stderr progress as one tool call, its report as the answer, a cancel ending the turn at once and the task after `CANCEL_WINDOW_S` unless a prompt follows (`cauce cancel N` then a kill; `/cancel N` is the explicit one), `session/load` refused with what to do, the request's items and cauce's stages as its `plan`, `cauce tasks`' line as the tool call's title, the worker's last call, a failed check's output and the worker's files as content, the verdict and next step as the answer's lead; spawning, diffs and look injectable; stdlib |
 
 ## Verify before reporting done
 
@@ -1040,9 +1040,15 @@ yields the default kind, not a guess.
   (or a closed input) runs `cauce cancel N` and kills the process group only if the run outlasts
   `acp.CANCEL_GRACE_S`. `/cancel N` is the explicit stop; a bare `/cancel` is refused, never run as a request.
   `session/load` is answered with an error that says to open a new thread (`loadSession` stays false).
-  The editor gets the request's items as `plan` entries (completed only on a pass) and the worker's files
-  as `diff` content, read from its worktree every `acp.DIFF_EVERY_S` and from its kept branch once it
-  ends; reading them never fails a prompt.
+  The editor gets the request's items as `plan` entries (completed only on a pass), followed by cauce's
+  stages (`progress.STAGES`: worker, check, independent check), each completed once a later one began,
+  and the worker's files as `diff` content, read from its worktree every `acp.DIFF_EVERY_S` and from its
+  kept branch once it ends. The tool call's title is `progress.line`, its content the worker's last call
+  in words (`progress.words`, from the signature alone: a signature holds no argument, so it cannot name
+  the file), the files written, `progress.warnings`, the stderr tail and the end of a failed check's
+  output (`acp.failed_check`), all read every `acp.PROGRESS_EVERY_S` (`acp.task_look`, read only) and said
+  only when they differ from what the editor was last told, never as a flood; its ending leads the
+  answer with the verdict and next step (`acp.ending_text`). Reading any of it never fails a prompt.
 - The mod adds a way in, never a power. Every tool runs `bin/cauce`. `resume`
   runs with `--unattended`, which refuses what only a person may clear, and
   no model input ever reaches `--allow`, `--allow-approval` or `--keep`: only
