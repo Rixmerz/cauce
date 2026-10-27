@@ -555,3 +555,184 @@ def test_the_ending_says_how_many_runs_a_flake_fix_passed():
     lines = hooks.verdict_lines({"criteria": [], "check": {"command": "npm test", "passed": True, "runs": 3},
                                  "independent": {"ran": False, "why": "x"}, "attempts": 1})
     assert any("passed, run by cauce in its worktree 3 times, every run" in line for line in lines)
+
+
+# --- every launch shape ------------------------------------------------------------------
+
+LEGACY = "echo 'FAIL legacy/old.test.js'; exit 1"
+
+
+def _folder_of_two_repos(tmp_path):
+    """The shape of a request that edits two repositories: sent from the folder that holds them."""
+    folder = tmp_path / "capacitacion"
+    for name in ("api", "web"):
+        (folder / name).mkdir(parents=True)
+        git(folder / name, "init", "-q", "-b", "main")
+        (folder / name / "README.md").write_text(f"{name}\n")
+        git(folder / name, "add", "-A")
+        git(folder / name, "commit", "-q", "-m", "init")
+    return folder
+
+
+def test_a_check_failing_at_the_base_passes_in_a_checkout_run_with_no_worktree(git_repo, store):
+    report = run("add the export button", git_repo, store, Options(verify=LEGACY, isolate=False), registry={},
+                 launcher=Script(ok(), write="f.py"), classifier=kind("implement"))
+    assert report.status == "done"
+    assert report.cells == ["sonnet/medium"]
+    assert store.last_event(report.task_id, "check_preexisting")["data"]["base"] == git(git_repo, "rev-parse", "HEAD")
+
+
+def test_a_check_failing_at_the_base_passes_in_a_folder_inside_a_checkout_with_no_worktree(git_repo, store):
+    # The check runs where the request was sent from: the base's copy of that folder, not the checkout's root.
+    (git_repo / "front").mkdir()
+    (git_repo / "front" / "keep.txt").write_text("x\n")
+    git(git_repo, "add", "-A")
+    git(git_repo, "commit", "-q", "-m", "front")
+    check = "test -f keep.txt && echo 'FAIL legacy/old.test.js'; exit 1"
+    report = run("add the export button", git_repo / "front", store, Options(verify=check, isolate=False),
+                 registry={}, launcher=Script(ok(), write="f.py"), classifier=kind("implement"))
+    assert report.status == "done"
+    assert report.cells == ["sonnet/medium"]
+    assert store.last_event(report.task_id, "check_preexisting") is not None
+
+
+def test_a_check_failing_at_the_base_passes_in_a_folder_of_several_repositories(tmp_path, store):
+    folder = _folder_of_two_repos(tmp_path)
+    # The failing test is in web, as in the task that charged it to the work three times.
+    check = f"cd web && {LEGACY}"
+    report = run("edit both", folder, store, Options(verify=check), registry={},
+                 launcher=_writes(folder / "web" / "app.ts"),
+                 classifier=kind("implement"))
+    assert report.status == "done"
+    assert report.cells == ["sonnet/medium"]
+    kept = store.last_event(report.task_id, "check_preexisting")["data"]
+    assert kept["failures"] == ["FAIL legacy/old.test.js"]
+    assert "api@" in kept["base"]
+    assert "web@" in kept["base"]
+    assert f"`{check}` fails at the base too, with the same 1 failure:" in report.text()
+    found = hooks._found_before(store, store.get_task(report.task_id))
+    assert "cauce workflow run bugfix" in found[1]
+    assert f"--after task:{report.task_id}" in found[1]
+    # The base's copies of the repositories are gone with the check.
+    assert not list((orchestrate.home() / "worktrees").glob("base-*"))
+
+
+def test_a_new_failure_in_a_folder_of_several_repositories_is_still_the_work_s(tmp_path, store):
+    folder = _folder_of_two_repos(tmp_path)
+    check = "cd web && echo 'FAIL legacy/old.test.js'; [ -f app.ts ] && echo 'FAIL src/app.test.ts'; exit 1"
+    report = run("edit both", folder, store, Options(verify=check, max_attempts=1), registry={},
+                 launcher=_writes(folder / "web" / "app.ts"), classifier=kind("implement"))
+    first = _first(store, report)
+    assert first["failure"] == "code_bug"
+    assert "1 failing line(s) are new with this work, focus on them:\n  - FAIL src/app.test.ts" in first["evidence"]
+    assert store.last_event(report.task_id, "check_preexisting") is None
+
+
+def _writes(path):
+    """A launcher whose worker writes `path` (a file in a checkout the run has no worktree of) and passes."""
+    def launcher(spec):
+        path.write_text("x\n")
+        return ok()
+    return launcher
+
+
+# --- what the worker says of the base ----------------------------------------------------
+
+def _claim(summary="Built it. `npm test` fails on legacy/old.test.js, which already fails at the base.", **kw):
+    return WorkerResult(False, orchestrate.Failure.CODE_BUG, summary, evidence="only the legacy test is red",
+                        cost_usd=0.1, **kw)
+
+
+def test_a_worker_s_report_that_the_failure_was_at_the_base_is_checked_against_the_base_run(git_repo, store):
+    report = run("add the export button", git_repo, store, Options(verify=LEGACY), registry={},
+                 launcher=Script(_claim(), write="f.py"), classifier=kind("implement"))
+    assert report.status == "done"
+    assert len(store.attempts(report.task_id)) == 1
+    assert "cauce's own run at the base shows the same failures" in store.attempts(report.task_id)[0]["summary"]
+    assert store.last_event(report.task_id, "check_preexisting") is not None
+    found = hooks._found_before(store, store.get_task(report.task_id))
+    assert "cauce workflow run bugfix" in found[1]
+
+
+def test_a_claim_about_the_base_that_the_comparison_refutes_stays_the_work_s_failure(git_repo, store):
+    check = "echo 'FAIL legacy/old.test.js'; [ -f f.py ] && echo 'FAIL src/f.test.js'; exit 1"
+    report = run("add the export button", git_repo, store, Options(verify=check, max_attempts=1), registry={},
+                 launcher=Script(_claim(), write="f.py"), classifier=kind("implement"))
+    first = _first(store, report)
+    assert report.status != "done"
+    assert first["failure"] == "code_bug"
+    assert "what the worker said of the base, checked by cauce" in first["evidence"]
+    assert "1 failing line(s) are new with this work, focus on them:\n  - FAIL src/f.test.js" in first["evidence"]
+    assert store.last_event(report.task_id, "check_preexisting") is None
+
+
+def test_a_claim_about_the_base_does_not_pass_work_whose_own_criteria_are_not_met(git_repo, store):
+    unmet = _claim(criteria=({"id": "S1", "met": False, "evidence": "not built"},))
+    report = run("add the export button", git_repo, store, Options(verify=LEGACY, max_attempts=1), registry={},
+                 launcher=Script(unmet, write="f.py"), classifier=kind("implement"))
+    assert report.status != "done"
+
+
+def test_a_report_that_says_nothing_of_the_base_is_not_rechecked(git_repo, store):
+    plain = WorkerResult(False, orchestrate.Failure.CODE_BUG, "I could not make it work", cost_usd=0.1)
+    assert not orchestrate._claims_base(plain)
+    marked = WorkerResult(False, orchestrate.Failure.CODE_BUG, "x", cost_usd=0.1,
+                          findings=({"where": "a.js:1", "what": "w", "cause": "pre-existing"},))
+    assert orchestrate._claims_base(marked)
+    counter = git_repo.parent / "runs.txt"
+    check = f"echo x >> {counter}; echo 'FAIL legacy/old.test.js'; exit 1"
+    run("add the export button", git_repo, store, Options(verify=check, max_attempts=1), registry={},
+        launcher=Script(plain, write="f.py"), classifier=kind("implement"))
+    assert not counter.exists()
+
+
+def test_a_claim_about_the_base_is_checked_in_a_folder_of_several_repositories_too(tmp_path, store):
+    folder = _folder_of_two_repos(tmp_path)
+
+    def worker(spec):
+        (folder / "web" / "app.ts").write_text("x\n")
+        return _claim(changed_paths=("web/app.ts",))
+
+    report = run("edit both", folder, store, Options(verify=f"cd web && {LEGACY}"), registry={}, launcher=worker,
+                 classifier=kind("implement"))
+    assert report.status == "done"
+    assert len(store.attempts(report.task_id)) == 1
+
+
+def test_a_folder_s_base_is_each_repository_at_its_commit_laid_out_as_the_folder_is(tmp_path):
+    folder = _folder_of_two_repos(tmp_path)
+    (folder / "web" / "later.txt").write_text("after the base\n")
+    git(folder / "web", "add", "-A")
+    git(folder / "web", "commit", "-q", "-m", "later")
+    places = orchestrate._base_places(folder)
+    assert [name for name, _ in places] == ["api", "web"]
+    assert orchestrate._base_places(folder / "web") == ()
+    older = (("api", places[0][1]), ("web", git(folder / "web", "rev-parse", "HEAD~1")))
+    with isolate.at_bases(folder, older, tmp_path / "home") as scratch:
+        assert (scratch / "api" / "README.md").read_text() == "api\n"
+        assert not (scratch / "web" / "later.txt").exists()
+        assert (scratch / "web" / "README.md").exists()
+    assert not scratch.exists()
+    assert git(folder / "web", "worktree", "list").count("\n") == 0
+    assert isolate.base_label(isolate.places_label(older)).startswith("api@")
+    assert isolate.base_label("0123456789abcdef") == "0123456789ab"
+    with pytest.raises(isolate.IsolationError), isolate.at_bases(folder, (("api", "f" * 40),), tmp_path / "home"):
+        pass
+    assert not list((tmp_path / "home" / "worktrees").glob("base-*"))
+
+
+def test_an_answer_with_no_single_result_block_never_passes_on_what_it_says_of_the_base(git_repo, store):
+    shapeless = WorkerResult(False, orchestrate.Failure.INCONCLUSIVE, "it already fails at the base", cost_usd=0.1,
+                             shape="its answer did not hold exactly one result block", changed_paths=("f.py",))
+    counter = git_repo.parent / "runs.txt"
+    check = f"echo x >> {counter}; echo 'FAIL legacy/old.test.js'; exit 1"
+    assert orchestrate._weigh_base_claim(shapeless, check, git_repo, None, None) is shapeless
+    assert not counter.exists()
+
+
+def test_the_ending_names_each_repository_s_base_of_a_folder_whole():
+    base = isolate.places_label((("api", "a" * 40), ("web", "b" * 40)))
+    lines = hooks.verdict_lines({"criteria": [], "check": {"command": "cd web && npm test", "state": "failing at base",
+                                                           "base": base, "failures": 1},
+                                 "independent": {"ran": False, "why": "x"}, "attempts": 1})
+    assert f"it fails at the base api@{'a' * 12}, web@{'b' * 12} too" in lines[0]

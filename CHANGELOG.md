@@ -4,6 +4,23 @@
 
 ### Fixed
 
+- **A check that already failed at the base was charged to the work in a folder of several
+  repositories:** 0.34.0 promised that a check failing at the base fails no work, but the
+  comparison needs the commit the work started from, and a folder that holds two repositories
+  has none, so the run had no comparison at all. One failing test the request never touched
+  cost three attempts (sonnet/medium, sonnet/high, opus/high) and a `replan`. The base of such a
+  run is now each repository inside the folder at its own commit, laid out as the folder is
+  (`cd web && npm test` reads the same paths), and the check runs there; the work ends as passed
+  with the failure it shares with the base, and the ending offers the `bugfix --after`. A run
+  sent from a folder inside a checkout runs the base's check in that folder's copy, not at the
+  checkout's root. What the folder holds outside those repositories is not copied to the base.
+- **A worker's word that the failure was already there is checked, not dropped:** a report that did
+  not pass (`code_bug`, `test_bug`, `inconclusive`, `environment`) and says its check's failure was
+  there before its work (a finding marked `pre-existing`, or words like "already fails at the base")
+  makes cauce run the check and compare it with the base. Every failing line at the base too, and
+  every criterion met: the work passes. Otherwise the report stands, with the comparison added for
+  the next attempt (the lines that are new). Tests cover a single checkout, a checkout with no
+  worktree, a folder inside a checkout and a folder of several repositories.
 - **A task sent from a folder that holds several repositories showed nothing of its work:** such
   a folder is no checkout, so the task runs with no worktree, and its progress line, `cauce peek`
   and phase all diffed a worktree that was not there ("works in no worktree of its own, or git
@@ -24,6 +41,10 @@
   branch per repository to merge; one worktree per repository is a larger change (a branch, a
   commit and a merge for each). The lines of a file the person had already modified before the
   attempt include what they wrote.
+- **The suite no longer reads the machine's PATH for neighbours:** a machine with `rastro` on its
+  PATH made three tests fail (`test_capabilities`, the neighbours' sources and the browser
+  warning of a workflow run), since the neighbour was found there and not absent. A test now finds
+  a program on PATH only when it put it under its own `tmp_path` (`tests/conftest.py`).
 
 ## [0.55.0] - 2026-10-27
 

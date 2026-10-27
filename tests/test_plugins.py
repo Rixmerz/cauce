@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 from cauce import capabilities as caps
@@ -76,6 +78,17 @@ def test_rastro_runs_without_its_saved_routines_from_a_plugin_or_from_path(tmp_p
     kept = plugins.guarded({"command": "x", "env": {"PYTHONPATH": "/mine"}}, "rastro")
     assert kept["env"]["PYTHONPATH"].endswith(os.pathsep + "/mine") and kept["args"][-1] == "x"
     assert plugins.find(plugins.KNOWN[1], {"PATH": "", "CLAUDE_CONFIG_DIR": str(tmp_path / "none")}) is None
+
+
+def test_a_program_on_the_machine_s_path_is_no_neighbour_in_the_suite(monkeypatch):
+    # The machine running the suite may have `rastro` installed: a test never sees it.
+    with tempfile.TemporaryDirectory() as machine:
+        program = Path(machine) / "rastro"
+        program.write_text("#!/bin/sh\n")
+        program.chmod(0o755)
+        monkeypatch.setenv("PATH", machine)
+        assert shutil.which("rastro") is not None
+        assert plugins.installed() == {}
 
 
 def test_a_server_entry_inline_broken_or_outside_the_plugin_is_read_or_left_out():

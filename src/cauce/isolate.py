@@ -381,16 +381,16 @@ def race_lane(ws: Workspace, root: Path) -> Workspace:
 
 
 @contextlib.contextmanager
-def at_base(repo_dir: Path, base: str, root: Path) -> Iterator[Path]:
-    """A temporary detached worktree of `repo_dir` at `base`, with the checkout's ignored
-    dependency folders linked in as a task's are (one whose lockfile differs at `base` is
-    left out, `Workspace.stale`): where cauce runs a check on the commit a task started
+def at_base(repo_dir: Path, base: str, root: Path, at: Path | None = None) -> Iterator[Path]:
+    """A temporary detached worktree of `repo_dir` at `base` (made at `at` when given), with the
+    checkout's ignored dependency folders linked in as a task's are (one whose lockfile differs at
+    `base` is left out, `Workspace.stale`): where cauce runs a check on the commit a task started
     from. Removed when the block ends, whatever happened in it."""
     top = Path(_git(repo_dir, "rev-parse", "--show-toplevel"))
     commit = _git(top, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}", check=False)
     if not commit:
         raise IsolationError(f"the base commit {base[:12]} is not in {top}")
-    path = root / "worktrees" / f"base-{commit[:12]}-{os.getpid()}-{time.monotonic_ns()}"
+    path = at or root / "worktrees" / f"base-{commit[:12]}-{os.getpid()}-{time.monotonic_ns()}"
     path.parent.mkdir(parents=True, exist_ok=True)
     _git(top, "worktree", "add", "--detach", str(path), commit)
     ws = Workspace(top, path, "", commit)
@@ -406,6 +406,33 @@ def at_base(repo_dir: Path, base: str, root: Path) -> Iterator[Path]:
         _git(top, "worktree", "remove", "--force", str(path), check=False)
         shutil.rmtree(path, ignore_errors=True)
         _git(top, "worktree", "prune", check=False)
+
+
+@contextlib.contextmanager
+def at_bases(folder: Path, places: Sequence[tuple[str, str]], root: Path) -> Iterator[Path]:
+    """`at_base` for a folder that is no checkout but holds some: a temporary folder with, at each
+    `name`, a detached worktree of the repository `folder/name` at its commit (`places`), laid out as
+    `folder` is so a check that names them (`cd web && npm test`) reads the same paths. What is in
+    `folder` outside those repositories is not copied. Everything is removed when the block ends."""
+    scratch = root / "worktrees" / f"base-{os.getpid()}-{time.monotonic_ns()}"
+    try:
+        with contextlib.ExitStack() as stack:
+            for name, commit in places:
+                stack.enter_context(at_base(folder / name, commit, root, at=scratch / name))
+            yield scratch
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def places_label(places: Sequence[tuple[str, str]]) -> str:
+    """The commits of a folder's repositories as one line (`api@0123456789ab, web@…`): what stands
+    for the base of a run that started in a folder that is no checkout."""
+    return ", ".join(f"{name}@{commit[:12]}" for name, commit in places)
+
+
+def base_label(base: str) -> str:
+    """A base as the reports name it: a commit cut to twelve characters, or the line `places_label` made."""
+    return base if "@" in base else base[:12]
 
 
 def adopt(src: Workspace, dst: Workspace) -> tuple[str, ...]:
