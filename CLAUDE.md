@@ -88,6 +88,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `bin/cauce` | the launcher every hook and command goes through |
 | `src/cauce/interpreter.py` | which Python runs cauce; imported before the version check, so it must run on any python3 |
 | `src/cauce/link.py` | `cauce link`: a shim on a terminal's PATH that survives plugin updates; `forward_to`, which sends a typed command from an old install to the newest (never a hook, never a checkout) |
+| `src/cauce/acp.py` | `cauce acp`: cauce as an Agent Client Protocol agent over stdio (Zed's `agent_servers`): JSON-RPC lines, one session per `session/new` and its folder, each prompt a `cauce run` (or `cauce tasks`/`stats` for `/tasks`/`/stats`) in its own process group, its stderr progress as one tool call, its report as the answer, a cancel as `cauce cancel N` then a kill; spawning injectable; stdlib |
 
 ## Verify before reporting done
 
@@ -604,6 +605,12 @@ yields the default kind, not a guess.
   far the specs are behind (said once a day), and an ending whose change wrote no spec, where they are
   `specs.BEHIND_COMMITS` or more code commits behind, offers the docs task that catches them up. Offered,
   never started: the orchestrator decides.
+- A repository is spec-first only on the person's word (`cauce specs first on`, kept in the store's meta, never in a
+  repository): there a build (`specs.FIRST_KINDS`) is told to write the spec before the code, and a pass whose
+  change touches code (`specs.coded`) and nothing under `openspec/` is held back (`spec_owed`): the first time it
+  goes back to the same cell, in its own session, told to write the spec (`specs.FIRST_PROMPT`, as a reshape); the
+  second it stands as work with one point, a `decision` for the orchestrator, kept on its branch. Never a climb: a
+  stronger model writes no spec a weaker one would not.
 - The TRACER method of a repository (`docs/tracer/`) is data in a writing brief and requirements in the
   independent check's (`cauce.tracer`), never instructions of cauce's own: a flow reaches a brief only when
   every word of its file name is in the request, and the method's files are carried up to
@@ -1000,6 +1007,12 @@ yields the default kind, not a guess.
   next step waits on that model call. Filing notes never fails a run,
   and a GET in the UI never reviews them. Tests run with `CAUCE_NOTES=off`; a
   test that wants notes turns them on and passes a fake `ask`.
+- The ACP agent (`cauce acp`, `cauce.acp`) is a way in, never a power, like the mod: each prompt is a
+  `cauce run` in the session's folder with no `--allow`, `--allow-approval` or `--keep`, so a stop that
+  needs a rule or an approval is the person's as anywhere, and the `mcpServers` a client sends are never
+  handed to a worker (the registry is the person's cauce home only; the first answer says so). stdout
+  carries protocol messages alone; a cancel runs `cauce cancel N` and kills the process group only if the
+  run outlasts `acp.CANCEL_GRACE_S`.
 - The mod adds a way in, never a power. Every tool runs `bin/cauce`. `resume`
   runs with `--unattended`, which refuses what only a person may clear, and
   no model input ever reaches `--allow`, `--allow-approval` or `--keep`: only

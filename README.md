@@ -142,6 +142,13 @@ them up (livespec's `propose_specs_from_codebase` drafts them; `openspec
 validate --strict` checks them). Nothing is started. The `specs` setting turns
 it off.
 
+`cauce specs` says how far they are behind. `cauce specs first on` makes a
+repository spec-first: a build there is told to write the spec before the
+code, and a pass that changed code and no spec is not accepted. It goes back
+to the same worker once to write it; a second time the work is kept on its
+branch and the orchestrator decides. `cauce specs first off` undoes it. It is
+kept in your cauce home, never in the repository.
+
 ### The TRACER method
 
 A repository that follows [TRACER](https://github.com/Rixmerz/tracer)
@@ -693,6 +700,28 @@ everything above works without it.
   continues it with exactly the rule cauce suggests (*Allow & resume*,
   *Approve & resume*, *Resume*, *Always allow here*). The press is yours; the
   model has no such button.
+
+### Use cauce from Zed
+
+An editor that speaks the Agent Client Protocol can use cauce as its agent.
+`cauce acp` serves ACP over stdio. In Zed's `settings.json`, with the `cauce`
+on PATH that `cauce link` puts there:
+
+```json
+{
+  "agent_servers": {
+    "cauce": { "command": "cauce", "args": ["acp"] }
+  }
+}
+```
+
+Each prompt is one `cauce run` in the project's folder: its progress (the lines
+cauce prints on stderr) shows as one tool call, and its report is the answer.
+`/tasks` and `/stats` run `cauce tasks` and `cauce stats`. Cancelling a prompt
+runs `cauce cancel` on its task, and stops the process if it has not ended ten
+seconds later. It is a way in, never a power: no rule or approval is passed, so
+a stop that needs one waits for you as ever, and the MCP servers the editor
+lists are ignored (a worker gets only those of your own cauce registry).
 
 ### Workflows
 

@@ -934,6 +934,8 @@ def verdict_lines(verdict: Mapping | None) -> list[str]:
     if ind.get("ran"):
         lines.append("  independent check: " + ("passed" if ind.get("passed") else
                                                  f"{ind.get('blocking')} blocker(s) left, recorded"))
+    elif ind.get("late"):
+        lines.append(f"  independent check: {ind['why']}")
     elif ind.get("why"):
         lines.append(f"  independent check: not run ({ind['why']})")
     if verdict.get("unchecked"):

@@ -696,6 +696,31 @@ def cmd_ci(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_specs(args: argparse.Namespace) -> int:
+    """How far a repository's OpenSpec specs are behind its code, and whether it is spec-first:
+    a build that writes no spec there goes back to its worker once, then to the orchestrator."""
+    from cauce import specs
+
+    where = Path(args.repo or os.getcwd()).resolve()
+    key = repo.key(where)
+    store = Store.open()
+    try:
+        if args.specs_command == "first" and args.state is not None:
+            specs.set_first(store, key, args.state == "on")
+        first = specs.first(store, key)
+    finally:
+        store.close()
+    found = specs.drift(where)
+    if found is None:
+        print(f"no `{specs.OPENSPEC}/` here: nothing to keep up" + (" (spec-first has no effect without one)"
+                                                                   if first else ""))
+        return 0
+    print(f"specs: {found.text()}" + (" — behind" if found.behind else ""))
+    print("spec-first: " + ("on (a build that writes no spec is not accepted)" if first
+                            else "off (`cauce specs first on` makes builds here owe their spec)"))
+    return 0
+
+
 def cmd_pr(args: argparse.Namespace) -> int:
     """A draft pull request for the branch a task kept, its verdict as the description; on
     the person's word, since it pushes. `--dry-run` prints the description and pushes nothing."""
@@ -2224,6 +2249,16 @@ def _ui_port_taken(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_acp(args: argparse.Namespace) -> int:
+    from cauce import acp
+
+    # stdout is the protocol's alone: whatever prints there by accident goes to stderr.
+    protocol, sys.stdout = sys.stdout, sys.stderr
+    sys.stdin.reconfigure(encoding="utf-8")
+    protocol.reconfigure(encoding="utf-8")
+    return acp.serve(sys.stdin, protocol)
+
+
 def cmd_link(args: argparse.Namespace) -> int:
     from cauce import link
 
@@ -2805,6 +2840,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--remove", action="store_true", help="take it away again")
     p.set_defaults(func=cmd_link)
 
+    p = sub.add_parser("acp", help="cauce as an Agent Client Protocol agent over stdio, for an editor "
+                                   "(Zed's `agent_servers`): each prompt is one `cauce run`")
+    p.set_defaults(func=cmd_acp)
+
     cp = sub.add_parser("compaction", help="when a session should compact and what /compact keeps: the mod "
                                            "takes a decision once (`next`)")
     csub = cp.add_subparsers(dest="compaction_command", required=True)
@@ -2868,6 +2907,14 @@ def build_parser() -> argparse.ArgumentParser:
         q = ci_sub.add_parser(name, help=what)
         q.add_argument("jobs", nargs="+", help="a job's name, or file/name")
     p.set_defaults(func=cmd_ci)
+
+    p = sub.add_parser("specs", help="how far this repository's OpenSpec specs are behind its code; "
+                                     "`first on` makes every build here owe its spec")
+    p.add_argument("--repo", help="the checkout (default: here)")
+    specs_sub = p.add_subparsers(dest="specs_command")
+    q = specs_sub.add_parser("first", help="spec-first here: on, off, or with neither, whether it is")
+    q.add_argument("state", nargs="?", choices=("on", "off"))
+    p.set_defaults(func=cmd_specs)
 
     p = sub.add_parser("pr", help="push the branch a task kept and open a draft pull request with its verdict, on "
                        "your word (needs gh)")
