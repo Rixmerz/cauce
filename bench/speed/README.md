@@ -10,6 +10,7 @@ python bench/speed/plan.py run opus/high,opus/xhigh,opus/max 2 3 && python bench
 python bench/speed/handoff.py run self,cauce 4 4 && python bench/speed/handoff.py report
 python bench/speed/dispatch.py current,named2 3 && python bench/speed/dispatch.py report
 python bench/speed/build.py run sonnet/high,sonnet/high+batch 4 4      # a `+batch` arm asks for parallel calls
+python bench/speed/versus.py run cauce,opus/low,opus/medium 3 3 [--hard] && python bench/speed/versus.py report
 ```
 
 ## Where the time went (this machine's store, before 0.45)
@@ -241,3 +242,30 @@ task's plan (`cProfile` on `orchestrate.plan`: 8.9 of 9.7 s). The rules claimed 
 requests in this store and the model 12 (the rest predate the field), so it costs about one task
 in ten a few seconds. The rules are deliberately not a keyword list for every request
 (`classify.py`), so this is left as it is.
+
+## M: cauce against one plain Claude Code session (`versus.py`)
+
+The same request, repository and hidden tests for every arm. `cauce` is `cauce run … --verify 'make
+test'` with a cauce home of its own (no history); the others are one `claude -p` at that cell
+with the request as its whole prompt. Three runs per arm, four for the smoke rows.
+
+| Build | Arm | Right | Wall p50 | Cost p50 |
+|---|---|---|---|---|
+| medium | cauce 0.49 | 4/4 | 89 s | $0.20 |
+| medium | cauce 0.50 | 3/3 | 91 s | $0.19 |
+| medium | opus/low | 4/4 | 87 s | $0.44 |
+| medium | opus/medium | 3/3 | 98 s | $0.52 |
+| harder | cauce 0.49 | 3/3 | 468 s | $1.43 |
+| harder | cauce 0.50 | 3/3 | 213 s | $0.54 |
+| harder | opus/low | 3/3 | 86 s | $0.59 |
+| harder | opus/medium | 3/3 | 213 s | $1.29 |
+
+Every arm was right every time. On the medium build cauce was as fast as one Opus session at low
+effort and cost half as much. On the harder build cauce 0.49 started at sonnet/xhigh, one rung up
+for a request classified high, and took five times as long. From 0.50 a writing kind classified
+high starts at its ladder's first cell, as `build.py` showed it passing there as often.
+
+The rest of cauce's 213 s, read from one run's events: its plan 6 s, the worker 105 s, the
+independent verifier 50 s (the change touched a pricing checkout: a high risk), and filing notes
+7 s after the ending, which a foreground `cauce run` still waits for. The verifier is the one
+cauce gives that one session does not; the rest is the cell's own pace.

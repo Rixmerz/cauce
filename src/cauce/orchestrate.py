@@ -414,16 +414,20 @@ def choose_start(
     complexity: str,
     repo_landings: Sequence[str],
     global_landings: Sequence[str],
+    *,
+    writes: bool = False,
 ) -> tuple[Cell, list[str]]:
     """The cell the first attempt runs at, and why.
 
     History only ever *raises* the start. A kind that always climbs two rungs up
     in this repository starts there and skips two failed attempts; a kind that
     passes where it starts (a landing of "", `Store.landings`) is no reason to
-    start higher, wherever it started.
+    start higher, wherever it started. A high complexity raises a reading kind's
+    start one rung, never a writing kind's: a build classified high passed as often
+    at its ladder's first cell, five times sooner (`bench/speed/versus.py`).
     """
     index, reasons = 0, []
-    if complexity == "high" and len(ladder) > 1:
+    if complexity == "high" and len(ladder) > 1 and not writes:
         index = 1
         reasons.append("classified as high complexity: one rung up")
     samples, where = (repo_landings, "this repository") if len(repo_landings) >= MIN_REPO_SAMPLES else (
@@ -546,6 +550,7 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
                 # below were never shown to fail; a reading kind's is its answer, kept as before.
                 store.landings(kind, repo=key, climbs=kind not in READ_ONLY_KINDS) if key else [],
                 store.landings(kind, climbs=kind not in READ_ONLY_KINDS),
+                writes=kind not in READ_ONLY_KINDS,
             )
         if raise_rungs:
             raised = min(_index_of(ladder, start) + raise_rungs, len(ladder) - 1)

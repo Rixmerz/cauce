@@ -388,7 +388,9 @@ yields the default kind, not a guess.
 - A move explains itself: `Decision.because` is the evidence chain (what the
   attempt ended with, the rule, where it goes) and `skipped` the rungs passed
   over. A new branch in `decide` gives both; the `moved` event keeps them.
-- History may raise where a task starts, never lower it below its ladder, and only on
+- A high complexity raises a reading kind's start one rung, never a writing kind's: a build
+  classified high passed as often at its ladder's first cell, in less than half the time
+  (`bench/speed/versus.py`). History may raise where a task starts, never lower it below its ladder, and only on
   climbs: a writing task that passed where it started is no evidence a lower cell fails
   (`Store.landings`, `""`), or a start history raised keeps every later task as high; a
   reading kind's pass is its answer, so its landings count where they passed. So may it

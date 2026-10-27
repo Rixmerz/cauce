@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-10-27
+
+### Changed
+
+- **A writing task classified as high complexity starts at its ladder's first cell.** It started a
+  rung up. `bench/speed/versus.py` ran cauce against a single Claude Code session on the same build
+  and hidden tests. On the harder build, classified high, cauce started at sonnet/xhigh and took
+  468 s at the median, against 86 s for one Opus session at low effort; every arm was right every
+  time. Starting at sonnet/high, its ladder's first cell, cauce took 213 s and $0.54 against $1.43,
+  as right. A reading kind still starts a rung up for a high complexity, and history still raises a
+  writing kind's start where its tasks had to climb. On the medium build cauce took 91 s against 87 s
+  for the single session, at half its cost.
+
+### Added
+
+- **`bench/speed/versus.py`**: cauce end to end against one plain `claude -p` session at a cell
+  given, on the same build, judged by hidden tests.
+
 ### Added
 
 - **`bench/review` measures cauce's independent verifier at medium effort.** It was 30 to 40%

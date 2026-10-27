@@ -36,6 +36,8 @@ sys.path.insert(0, str(HERE))
 
 import build  # noqa: E402
 
+from cauce import __version__  # noqa: E402
+
 OUT = HERE / "results-versus.jsonl"
 TOOLS = ("Bash(make:*)", "Bash(python3:*)", "Bash(git:*)", "Read", "Edit", "Write", "Glob", "Grep")
 
@@ -88,7 +90,8 @@ def one(arm: str, variant: str) -> dict:
         got = {"error": "timed out"}
     wall = time.monotonic() - began
     visible = subprocess.run(["make", "test"], cwd=where, capture_output=True, text=True, timeout=600).returncode == 0
-    row = {"arm": arm, "variant": variant, "wall_s": round(wall, 1), "visible": visible,
+    row = {"arm": f"cauce {__version__}" if arm == "cauce" else arm, "variant": variant, "wall_s": round(wall, 1),
+           "visible": visible,
            "hidden": build.hidden(where, variant), "of": 10 if variant == "hard" else 7, **got}
     shutil.rmtree(where.parent, ignore_errors=True)
     return row
@@ -99,6 +102,8 @@ def main(argv: list[str]) -> None:
     argv = [a for a in argv if a != "--hard"]
     if argv[0] == "report":
         rows = [json.loads(x) for x in OUT.read_text().splitlines() if x.strip()]
+        for r in rows:
+            r["arm"] = "cauce 0.49.0" if r["arm"] == "cauce" else r["arm"]  # rows from before versions were kept
         print(f"{'build':<7}{'arm':<14}{'n':>3}{'right':>8}{'hidden':>9}{'wall p50':>10}{'mean':>7}{'$ p50':>8}"
               f"{'$ mean':>8}")
         for key in sorted({(r["variant"], r["arm"]) for r in rows}):
