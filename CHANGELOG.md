@@ -43,8 +43,9 @@
   attempt include what they wrote.
 - **The suite no longer reads the machine's PATH for neighbours:** a machine with `rastro` on its
   PATH made three tests fail (`test_capabilities`, the neighbours' sources and the browser
-  warning of a workflow run), since the neighbour was found there and not absent. A test now finds
-  a program on PATH only when it put it under its own `tmp_path` (`tests/conftest.py`).
+  warning of a workflow run), since the neighbour was found there and not absent. A neighbour's
+  program is no longer found in a folder of the machine's own PATH; a test that wants one puts it
+  on a PATH it sets (`tests/conftest.py`).
 
 ## [0.55.0] - 2026-10-27
 

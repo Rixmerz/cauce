@@ -1,26 +1,14 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
-from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from cauce import plugins, workflows
 from cauce.store import Store
-
-
-def _which_under(root: Path) -> Callable[..., str | None]:
-    """`shutil.which` that only finds what lives under `root`, whatever else the machine has on PATH."""
-    top = root.resolve()
-
-    def which(cmd: str, path: str | None = None) -> str | None:
-        found = shutil.which(cmd, path=path)
-        return found if found and Path(found).resolve().is_relative_to(top) else None
-
-    return which
 
 
 @pytest.fixture(autouse=True)
@@ -62,10 +50,6 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # cauce's own suite may run inside a cauce worker, which refuses to start work.
     monkeypatch.delenv("CAUCE_WORKER_TASK", raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
-    # A neighbour found "on PATH" is read from the machine running the suite: one that has `rastro`
-    # installed saw it in every test that lists capabilities. Only a program a test put under its own
-    # `tmp_path` is found there.
-    monkeypatch.setattr(plugins, "shutil", SimpleNamespace(which=_which_under(tmp_path)))
     # The dispatcher's level starts at what the machine holds: in a test, a fixed machine
     # of three CPUs whose memory, disk and load say nothing (calm), whatever runs the suite.
     from cauce import capacity
@@ -79,6 +63,23 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     }.items():
         monkeypatch.setenv(var, value)
     return home
+
+
+@pytest.fixture(autouse=True)
+def _no_host_neighbours(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The programs cauce adopts when they are on the PATH (`plugins.KNOWN`: `rastro`) are not
+    found because the machine happens to have them: a test that wants one puts its own on a PATH
+    it sets. Without this, `capabilities` and a plan's warnings change with what is installed
+    where the suite runs (three tests failed on a machine with `rastro` in `~/.local/bin`)."""
+    real = shutil.which
+    hidden = {n.on_path[0] for n in plugins.KNOWN if n.on_path}
+    host = {str(Path(entry)) for entry in os.environ.get("PATH", "").split(os.pathsep) if entry}
+
+    def which(cmd, *args, **kwargs):
+        found = real(cmd, *args, **kwargs)
+        return None if found and cmd in hidden and str(Path(found).parent) in host else found
+
+    monkeypatch.setattr(shutil, "which", which)
 
 
 @pytest.fixture
