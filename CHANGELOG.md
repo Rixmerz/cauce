@@ -25,7 +25,9 @@
   told to put `@spec:<capability>-<requirement-name>` on the functions that implement it and
   to index again (not from a shared `group_db` index). The report, the independent check's
   brief and a workflow's review step name the specs a change touched that no code names: a
-  spec the change wrote is a blocker, one that was already there a warning.
+  spec the change wrote is a blocker, one that was already there a warning. A spec written with
+  no such comment raises the change's risk to high, so the independent check that blocks runs
+  even for a docs task or a medium change made by a strong cell; a warning raises nothing.
 - **`cauce stats` keeps which livespec calls a worker made and compares tokens.** Each attempt's
   `attempt_finished` event holds `livespec_calls` (by tool) when livespec was handed; a run's row
   has `livespec_handed`, `livespec_calls` and `tokens`; the report adds tokens per run by kind with

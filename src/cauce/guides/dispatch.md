@@ -90,7 +90,8 @@ worker's brief opens with how to find its way: the spec for the request (`list_s
 `git_diff_impact` before it finishes. A task that writes or changes an OpenSpec spec must put
 `@spec:<capability>-<requirement-name>` on the functions that implement it: the report and the
 independent check name the specs it touched that no code names (a block for a spec the change
-wrote, a warning for one that was already there). `cauce stats` compares the tokens a run
+wrote, which also raises its risk to high so that check runs; a warning for one that was already
+there). `cauce stats` compares the tokens a run
 spent, by kind, with livespec called against not called; `cauce doctor` names repositories
 whose index is missing or stale, and specs no code implements.
 

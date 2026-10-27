@@ -11,10 +11,11 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 #: The folder OpenSpec keeps a repository's specs and proposed changes in.
 OPENSPEC = "openspec"
@@ -42,6 +43,11 @@ LINK_PREFIX = "spec link: "
 _REQUIREMENT = re.compile(r"^###\s+Requirement:\s*(?P<name>.+?)\s*$")
 _DELTA = re.compile(r"^##\s+(?P<verb>ADDED|MODIFIED|REMOVED|RENAMED)\s+Requirements\s*$", re.IGNORECASE)
 _HEADING = re.compile(r"^#{1,3}\s")
+#: The id `export_openspec` writes under a requirement's heading; livespec prefers it to the one the heading derives.
+_ID_MARKER = re.compile(r"^<!--\s*livespec:id=(?P<id>[^\s>]+)\s*-->$", re.IGNORECASE)
+#: Letters NFKD leaves whole, which livespec folds to ASCII by hand.
+_FOLDED = str.maketrans({"ß": "ss", "æ": "ae", "ø": "o", "œ": "oe", "đ": "d", "ð": "d", "ł": "l", "þ": "th",
+                         "\u0131": "i"})
 #: An `@spec:<id>` (or `@spec=<id>`) comment, as livespec reads it; several ids may follow one.
 _ANNOTATION = re.compile(r"@spec\s*[:=]\s*(?P<rest>[^\n\r@]*)")
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
@@ -55,6 +61,8 @@ class Requirement:
     path: str
     #: Written by the change (absent from the spec file before it), else already there.
     new: bool
+    #: The id livespec derived before it folded accents, when that is another: it still answers to it in `@spec:`.
+    legacy: str = ""
 
 
 @dataclass(frozen=True)
@@ -182,10 +190,15 @@ def ending_lines(task: Mapping, changed: Sequence[str], found: Mapping | None, *
             f"`cauce queue add --kind docs --after {after} {shlex.quote(ask(behind))}`"]
 
 
-def slug(text: str) -> str:
-    """A name as livespec reads it into a spec id: lower case, runs of anything but letters and
-    digits as one hyphen, no hyphen at the edges."""
-    return re.sub(r"[^a-z0-9]+", "-", text.strip().lower()).strip("-") or "requirement"
+def slug(text: str, *, folded: bool = True) -> str:
+    """A name as livespec reads it into a spec id: accents folded to ASCII, lower case, runs of anything
+    but letters and digits as one hyphen, no hyphen at the edges. `folded=False` is the slug as it was before
+    livespec folded accents (`validación` -> `validaci-n`): the ids old `@spec:` comments still carry."""
+    text = text.strip().lower()
+    if folded:
+        text = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+        text = text.translate(_FOLDED)
+    return re.sub(r"[^a-z0-9]+", "-", text).strip("-") or "requirement"
 
 
 def _spec_file(path: str) -> bool:
@@ -193,29 +206,47 @@ def _spec_file(path: str) -> bool:
     return parts[0] == OPENSPEC and parts[-1] == "spec.md" and len(parts) >= 3
 
 
-def _requirements(path: str, text: str) -> list[tuple[str, int, int, bool]]:
-    """The requirements a spec file holds as (id, first line, last line, in a delta's ADDED section or
-    canonical), those a change removes or renames left out. The id is the capability's folder and the
-    requirement's name, as livespec derives it."""
-    capability = slug(path.split("/")[-2])
-    found: list[tuple[str, int, int, bool]] = []
+class _Found(NamedTuple):
+    spec_id: str
+    first: int
+    last: int
+    #: In a delta's ADDED section, or in a canonical spec.
+    added: bool
+    legacy: str
+
+
+def _requirements(path: str, text: str) -> list[_Found]:
+    """The requirements a spec file holds, those a change removes or renames left out. The id is the one
+    livespec gives: the capability's folder and the requirement's name, or the `livespec:id` marker under
+    the heading when there is one."""
+    capability = path.split("/")[-2]
+    found: list[_Found] = []
     delta: str | None = None
-    open_at: tuple[str, int, bool] | None = None
+    open_at: _Found | None = None
+    leading = False
     lines = text.splitlines()
     for number, line in enumerate(lines, 1):
         heading = _REQUIREMENT.match(line)
         if heading or _HEADING.match(line):
             if open_at is not None:
-                found.append((open_at[0], open_at[1], number - 1, open_at[2]))
+                found.append(open_at._replace(last=number - 1))
                 open_at = None
             if (section := _DELTA.match(line)) is not None:
                 delta = section["verb"].upper()
             elif line.startswith("## "):
                 delta = None
-        if heading and delta not in ("REMOVED", "RENAMED"):
-            open_at = (f"{capability}-{slug(heading['name'])}", number, delta in (None, "ADDED"))
+            if heading and delta not in ("REMOVED", "RENAMED"):
+                spec_id = f"{slug(capability)}-{slug(heading['name'])}"
+                old = f"{slug(capability, folded=False)}-{slug(heading['name'], folded=False)}"
+                open_at = _Found(spec_id, number, 0, delta in (None, "ADDED"), old if old != spec_id else "")
+                leading = True
+        elif open_at is not None and leading and line.strip():
+            # The marker counts only before the requirement's prose, as livespec reads it.
+            leading = False
+            if (marker := _ID_MARKER.match(line.strip())) is not None:
+                open_at = open_at._replace(spec_id=marker["id"], legacy="")
     if open_at is not None:
-        found.append((open_at[0], open_at[1], len(lines), open_at[2]))
+        found.append(open_at._replace(last=len(lines)))
     return found
 
 
@@ -250,12 +281,12 @@ def requirements_touched(workdir: Path, base: str | None, changed: Sequence[str]
             continue
         now = (workdir / path).read_text(encoding="utf-8", errors="replace")
         before = _git_text(workdir, "show", f"{ref}:{path}")
-        old_ids = {r[0] for r in _requirements(path, before)} if before is not None else set()
+        old_ids = {r.spec_id for r in _requirements(path, before)} if before is not None else set()
         touched_lines = _changed_lines(workdir, ref, path, now) if before is not None else None
-        for spec_id, first, last, added in _requirements(path, now):
-            if touched_lines is not None and touched_lines.isdisjoint(range(first, last + 1)):
+        for r in _requirements(path, now):
+            if touched_lines is not None and touched_lines.isdisjoint(range(r.first, r.last + 1)):
                 continue
-            out.append(Requirement(spec_id, path, added and spec_id not in old_ids))
+            out.append(Requirement(r.spec_id, path, r.added and r.spec_id not in old_ids, r.legacy))
     return out
 
 
@@ -276,14 +307,15 @@ def unlinked(workdir: Path, base: str | None, changed: Sequence[str]) -> list[Re
     if not found:
         return []
     carried = annotated(workdir)
-    return [r for r in found if r.spec_id not in carried]
+    return [r for r in found if not carried & {r.spec_id.lower(), r.legacy}]
 
 
 #: What a check of a change that writes or changes specs is told, so it verifies what the worker was asked to
 #: do (`Livespec.spec_links_brief`): the code that implements a spec names it, and the code index reads that.
 LINK_CHECK = ("The change writes or changes OpenSpec specs, and the code that implements a spec carries an "
-              "`@spec:<id>` comment (the id is `<capability>-<requirement-name>`; the project's code index links "
-              "spec and code by it). Check that each spec the change touched has one on the functions that "
+              "`@spec:<id>` comment (the id is `<capability>-<requirement-name>` with accents folded, or the id of a "
+              "`<!-- livespec:id=… -->` marker under the heading; the project's code index links spec and code by "
+              "it). Check that each spec the change touched has one on the functions that "
               "implement it: a spec the change wrote with none is a finding that blocks, with `git grep -n "
               "'@spec:<id>'` showing none as its proof; a spec that already existed with none is a finding whose "
               "cause is `pre-existing`: a warning, never a blocker.")
