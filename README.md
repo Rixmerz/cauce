@@ -734,11 +734,17 @@ cauce prints on stderr) shows as one tool call, and its report is the answer.
 The request's listed items are the agent's plan, completed when the task passes,
 and the files its worker writes show as diffs: from its worktree while it runs,
 from the branch it kept once it ends.
-`/tasks` and `/stats` run `cauce tasks` and `cauce stats`. Cancelling a prompt
-runs `cauce cancel` on its task, and stops the process if it has not ended ten
-seconds later. It is a way in, never a power: no rule or approval is passed, so
-a stop that needs one waits for you as ever, and the MCP servers the editor
-lists are ignored (a worker gets only those of your own cauce registry).
+`/tasks` and `/stats` run `cauce tasks` and `cauce stats`, and `/cancel 7` runs
+`cauce cancel 7`. Stopping a turn ends it at once, but not the task it started:
+an editor sends the same cancel before a new request in the same thread, so a
+prompt that follows within a few seconds leaves the task running (it stays in
+`/tasks` and on the board) and starts a task of its own. A stop nothing follows
+runs `cauce cancel` on the task, and stops the process if it has not ended ten
+seconds later. A saved thread cannot be restored, since cauce keeps none: the
+editor is told to open a new thread. It is a way in, never a power: no rule or
+approval is passed, so a stop that needs one waits for you as ever, and the MCP
+servers the editor lists are ignored (a worker gets only those of your own cauce
+registry).
 
 ### Workflows
 

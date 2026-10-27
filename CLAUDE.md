@@ -89,7 +89,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `bin/cauce` | the launcher every hook and command goes through |
 | `src/cauce/interpreter.py` | which Python runs cauce; imported before the version check, so it must run on any python3 |
 | `src/cauce/link.py` | `cauce link`: a shim on a terminal's PATH that survives plugin updates; `forward_to`, which sends a typed command from an old install to the newest (never a hook, never a checkout) |
-| `src/cauce/acp.py` | `cauce acp`: cauce as an Agent Client Protocol agent over stdio (Zed's `agent_servers`): JSON-RPC lines, one session per `session/new` and its folder, each prompt a `cauce run` (or `cauce tasks`/`stats` for `/tasks`/`/stats`) in its own process group, its stderr progress as one tool call, its report as the answer, a cancel as `cauce cancel N` then a kill, the request's items as its `plan` and the worker's files as `diff` content; spawning injectable; stdlib |
+| `src/cauce/acp.py` | `cauce acp`: cauce as an Agent Client Protocol agent over stdio (Zed's `agent_servers`): JSON-RPC lines, one session per `session/new` and its folder, each prompt a `cauce run` (or `cauce tasks`/`stats` for `/tasks`/`/stats`) in its own process group, its stderr progress as one tool call, its report as the answer, a cancel ending the turn at once and the task after `CANCEL_WINDOW_S` unless a prompt follows (`cauce cancel N` then a kill; `/cancel N` is the explicit one), `session/load` refused with what to do, the request's items as its `plan` and the worker's files as `diff` content; spawning injectable; stdlib |
 
 ## Verify before reporting done
 
@@ -1033,10 +1033,16 @@ yields the default kind, not a guess.
   `cauce run` in the session's folder with no `--allow`, `--allow-approval` or `--keep`, so a stop that
   needs a rule or an approval is the person's as anywhere, and the `mcpServers` a client sends are never
   handed to a worker (the registry is the person's cauce home only; the first answer says so). stdout
-  carries protocol messages alone; a cancel runs `cauce cancel N` and kills the process group only if the
-  run outlasts `acp.CANCEL_GRACE_S`. The editor gets the request's items as `plan` entries (completed only
-  on a pass) and the worker's files as `diff` content, read from its worktree every `acp.DIFF_EVERY_S`
-  and from its kept branch once it ends; reading them never fails a prompt.
+  carries protocol messages alone. A `session/cancel` ends the turn (answers its prompt `cancelled`, says
+  nothing more of its run) and never the task by itself: an editor sends it before the next prompt of a
+  thread and waits for its answer, so the task runs on, in `/tasks` and on the board, while a prompt may still
+  follow within `acp.CANCEL_WINDOW_S`; one that follows keeps it and starts its own task, one that does not
+  (or a closed input) runs `cauce cancel N` and kills the process group only if the run outlasts
+  `acp.CANCEL_GRACE_S`. `/cancel N` is the explicit stop; a bare `/cancel` is refused, never run as a request.
+  `session/load` is answered with an error that says to open a new thread (`loadSession` stays false).
+  The editor gets the request's items as `plan` entries (completed only on a pass) and the worker's files
+  as `diff` content, read from its worktree every `acp.DIFF_EVERY_S` and from its kept branch once it
+  ends; reading them never fails a prompt.
 - The mod adds a way in, never a power. Every tool runs `bin/cauce`. `resume`
   runs with `--unattended`, which refuses what only a person may clear, and
   no model input ever reaches `--allow`, `--allow-approval` or `--keep`: only
