@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-10-27
+
 ### Added
 
 - **livespec is a step before the worker, not a tool it may ignore.** A task now builds or

@@ -1181,6 +1181,9 @@ See [`src/cauce/skills/README.md`](src/cauce/skills/README.md) and
 
 ### Checks that do not trust the worker
 
+- **The repository's own check, with room to finish.** `--verify` runs the
+  command your CI runs, and gets 30 minutes: a full suite on a machine busy
+  with many workers measured 19 minutes, and a cut check reads as a failure.
 - **Criteria.** A request that lists items is checked item by item: `S1..Sn`,
   the person's own words, in every brief. A pass answers each one.
 - **Findings.** Reviews report records: where, what, how it is known
