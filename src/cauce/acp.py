@@ -27,13 +27,14 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, TextIO
 
-from cauce import __version__
+from cauce import __version__, criteria
 
 PROTOCOL_VERSION = 1
 CANCEL_GRACE_S = 10.0  # after a cancel, how long the process has to end before its group is killed
 TAIL_LINES = 40  # the stderr lines a tool call's content shows
 PIPES_JOIN_S = 5.0  # a grandchild that kept a pipe open must not hold a finished prompt back
 TASK_NUMBER = re.compile(r"#(\d+)")
+DIFF_EVERY_S = 10.0  # how often a running worker's files are read again for the editor's diffs
 
 PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS, INTERNAL_ERROR = -32700, -32600, -32601, -32602, -32603
 BUSY = -32000
@@ -66,6 +67,9 @@ class Run:
     cancelled: bool = False
     exited: threading.Event = field(default_factory=threading.Event)
     closed: bool = False
+    tail: deque[str] = field(default_factory=lambda: deque(maxlen=TAIL_LINES))
+    diffs: list[dict[str, Any]] = field(default_factory=list)
+    plan: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass(eq=False)
@@ -88,11 +92,42 @@ def prompt_text(blocks: list[Any]) -> str:
     return "\n".join(lines)
 
 
+def task_diffs(task_id: int, live: bool) -> list[dict[str, Any]]:
+    """A task's files as ACP `diff` content, before and after, at their path in its checkout: while it
+    runs, its worktree as it is now; once it ended, the branch it kept. Read only; [] when nothing
+    can be read."""
+    from pathlib import Path
+
+    from cauce import progress
+    from cauce.store import Store
+
+    store = Store.open()
+    try:
+        task = store.get_task(task_id)
+        started = store.last_event(task_id, "attempt_started")
+        ended = None if live else store.final_event(task_id)
+    finally:
+        store.close()
+    if task is None or not task.get("cwd"):
+        return []
+    if live:
+        found = progress.texts(progress.worktree(task_id), ((started or {}).get("data") or {}).get("base"))
+    else:
+        data = (ended or {}).get("data") or {}
+        if not data.get("branch"):
+            return []
+        found = progress.texts(Path(task["cwd"]), data.get("base"), data["branch"])
+    return [{"type": "diff", "path": str(Path(task["cwd"]) / f["path"]), "oldText": f["old"],
+             "newText": f["new"] or ""} for f in (found or {}).get("files", [])]
+
+
 class Agent:
     def __init__(self, out: TextIO, err: TextIO, popen: Callable[..., Any], killpg: Callable[[int, int], None],
-                 grace: float) -> None:
+                 grace: float, diffs: Callable[[int, bool], list[dict[str, Any]]] = task_diffs,
+                 diff_every: float = DIFF_EVERY_S) -> None:
         self._out, self._err = out, err
         self._popen, self._killpg, self._grace = popen, killpg, grace
+        self._diffs, self._diff_every = diffs, diff_every
         self._write = threading.Lock()
         self._gone = False  # the client closed its end: nothing more can be said to it
         self._sessions: dict[str, Session] = {}
@@ -232,10 +267,17 @@ class Agent:
         session.run = run
         self.update(session_id, {"sessionUpdate": "tool_call", "toolCallId": run.call_id,
                                  "title": f"cauce {command}", "kind": "execute", "status": "in_progress"})
+        if command == "run" and (items := criteria.items(text)):
+            # The request's own items are the plan the editor shows: a worker keeps no list of its own.
+            run.plan = [{"content": item, "priority": "medium", "status": "pending"} for item in items]
+            self.update(session_id, {"sessionUpdate": "plan", "entries": run.plan})
         thread = threading.Thread(target=self._finish, args=(session_id, session, run, request_id),
                                   name=f"acp-{run.call_id}")
         self._threads.append(thread)
         thread.start()
+        if command == "run":
+            threading.Thread(target=self._follow_diffs, args=(session_id, run), name=f"acp-diffs-{run.call_id}",
+                             daemon=True).start()
         return DEFERRED
 
     def _cancel(self, params: dict[str, Any], request_id: Any) -> None:
@@ -263,7 +305,21 @@ class Agent:
             reader.join(PIPES_JOIN_S)
         run.closed = True
         status = "completed" if code == 0 and not run.cancelled else "failed"
-        self.update(session_id, {"sessionUpdate": "tool_call_update", "toolCallId": run.call_id, "status": status})
+        final: dict[str, Any] = {"sessionUpdate": "tool_call_update", "toolCallId": run.call_id, "status": status}
+        if run.task is not None:
+            try:
+                kept = self._diffs(run.task, False)
+            except Exception:  # a view: what cannot be read is left out, never the answer
+                traceback.print_exc(file=self._err)
+                kept = []
+            if kept or run.diffs:
+                run.diffs = kept
+                final["content"] = self._content(run)
+        self.update(session_id, final)
+        if run.plan and status == "completed":
+            # A pass answered every item; anything short of one leaves them as they were.
+            self.update(session_id, {"sessionUpdate": "plan",
+                                     "entries": [{**e, "status": "completed"} for e in run.plan]})
         text = "".join(stdout)
         if session.mcp_ignored:
             session.mcp_ignored = False
@@ -277,17 +333,39 @@ class Agent:
     def _follow_stderr(self, session_id: str, run: Run) -> None:
         """cauce prints its progress on stderr: each line is the tool call's title, with the last
         lines as its content."""
-        tail: deque[str] = deque(maxlen=TAIL_LINES)
         for raw in run.proc.stderr:
             line = raw.rstrip()
             if not line or run.closed:
                 continue
             if run.task is None and (found := TASK_NUMBER.search(line)):
                 run.task = int(found.group(1))
-            tail.append(line)
-            self.update(session_id, {
-                "sessionUpdate": "tool_call_update", "toolCallId": run.call_id, "title": line,
-                "content": [{"type": "content", "content": {"type": "text", "text": "\n".join(tail)}}]})
+                if run.plan:
+                    run.plan = [{**e, "status": "in_progress"} for e in run.plan]
+                    self.update(session_id, {"sessionUpdate": "plan", "entries": run.plan})
+            run.tail.append(line)
+            self.update(session_id, {"sessionUpdate": "tool_call_update", "toolCallId": run.call_id, "title": line,
+                                     "content": self._content(run)})
+
+    @staticmethod
+    def _content(run: Run) -> list[dict[str, Any]]:
+        text = [{"type": "content", "content": {"type": "text", "text": "\n".join(run.tail)}}] if run.tail else []
+        return text + run.diffs
+
+    def _follow_diffs(self, session_id: str, run: Run) -> None:
+        """While the run's worker writes, its files as diffs beside the progress lines: read from its
+        worktree every `DIFF_EVERY_S`, sent only when they changed."""
+        while not run.exited.wait(self._diff_every):
+            if run.task is None or run.closed:
+                continue
+            try:
+                found = self._diffs(run.task, True)
+            except Exception:  # a view: what cannot be read is left out
+                traceback.print_exc(file=self._err)
+                continue
+            if found != run.diffs and not run.closed:
+                run.diffs = found
+                self.update(session_id, {"sessionUpdate": "tool_call_update", "toolCallId": run.call_id,
+                                         "content": self._content(run)})
 
     def _stop(self, cwd: str, run: Run) -> None:
         """Ask cauce to cancel the task the run named, and kill the process group when the run has not
@@ -315,7 +393,8 @@ class Agent:
 
 def serve(stdin: Iterable[str], stdout: TextIO, stderr: TextIO | None = None, *,
           popen: Callable[..., Any] = subprocess.Popen, killpg: Callable[[int, int], None] = os.killpg,
-          grace: float = CANCEL_GRACE_S) -> int:
+          grace: float = CANCEL_GRACE_S, diffs: Callable[[int, bool], list[dict[str, Any]]] = task_diffs,
+          diff_every: float = DIFF_EVERY_S) -> int:
     """Answer the client's messages until its input ends and the running prompts finish."""
-    Agent(stdout, stderr or sys.stderr, popen, killpg, grace).serve(stdin)
+    Agent(stdout, stderr or sys.stderr, popen, killpg, grace, diffs, diff_every).serve(stdin)
     return 0

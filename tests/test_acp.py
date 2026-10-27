@@ -112,6 +112,7 @@ class Client:
         self.out, self.err = Sink(), io.StringIO()
         self._lines: queue.Queue[str | None] = queue.Queue()
         serve_args.setdefault("grace", 30.0)
+        serve_args.setdefault("diffs", lambda task, live: [])
         self.thread = threading.Thread(
             target=acp.serve, args=(iter(self._lines.get, None), self.out, self.err),
             kwargs={"popen": self.spawner, "killpg": self.spawner.killpg, **serve_args})
@@ -227,6 +228,39 @@ def test_a_prompt_is_one_cauce_run_shown_as_a_tool_call_and_answered_with_its_re
     ]
     # The answer to the prompt comes after everything it showed.
     assert c.out.messages()[-1] == reply
+
+
+def test_the_request_s_items_are_the_plan_and_its_files_are_diffs(client):
+    """The editor sees the request's items as the plan (in progress once the task started, completed
+    on a pass) and the worker's files as diffs: its worktree while it runs, the kept branch after."""
+    asked: list[tuple[int, bool]] = []
+    live = {"type": "diff", "path": "/work/app/a.py", "oldText": None, "newText": "x = 1\n"}
+    kept = {"type": "diff", "path": "/work/app/a.py", "oldText": None, "newText": "x = 2\n"}
+
+    def diffs(task: int, running: bool) -> list[dict[str, Any]]:
+        asked.append((task, running))
+        return [live] if running else [kept]
+
+    spawner = Spawner(stderr=[TASK_LINE], stdout="the report\n", hold=True)
+    c = client(spawner, diffs=diffs, diff_every=0.01)
+    session = c.new_session()
+    request = c.prompt(session, "Add two things:\n- a sub function\n- a mul function")
+    c.out.wait_for(lambda m: m.get("params", {}).get("update", {}).get("content", [None])[-1] == live)
+    spawner.procs[0].release()
+    c.answer(request)
+    plans = [u["entries"] for u in c.updates(session) if u["sessionUpdate"] == "plan"]
+    assert [[e["status"] for e in p] for p in plans] == [["pending"] * 2, ["in_progress"] * 2, ["completed"] * 2]
+    assert [e["content"] for e in plans[0]] == ["a sub function", "a mul function"]
+    final = next(u for u in c.updates(session) if u.get("status") == "completed")
+    assert final["content"][-1] == kept and (7, True) in asked and (7, False) in asked
+
+
+def test_a_run_short_of_a_pass_leaves_its_plan_unfinished(client):
+    c = client(Spawner(stderr=[TASK_LINE], code=1))
+    session = c.new_session()
+    c.answer(c.prompt(session, "Do:\n- one\n- two"))
+    plans = [u["entries"] for u in c.updates(session) if u["sessionUpdate"] == "plan"]
+    assert plans[-1][0]["status"] == "in_progress"
 
 
 def test_a_tool_call_shows_the_last_forty_stderr_lines(client):

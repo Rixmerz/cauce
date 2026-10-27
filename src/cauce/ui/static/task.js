@@ -98,6 +98,10 @@ function liveSection(live) {
     h("div", { class: "row" }, live.phase ? h("span", { class: `chip phase p-${live.phase}` }, live.phase)
       : h("span", { class: "meta" }, "no tool call yet in this attempt")),
     live.progress_line ? h("div", { class: "row meta" }, live.progress_line) : null,
+    live.files_line ? h("div", { class: "row meta" }, live.files_line) : null,
+    (live.progress?.criteria || []).length ? h("div", {},
+      h("div", { class: "meta" }, "what it was asked (answered when it ends):"),
+      h("ol", { class: "asked" }, live.progress.criteria.map((c) => h("li", {}, `${c.id} ${c.text}`)))) : null,
     calls.length ? h("ol", { class: "calls" }, calls.map((c) => h("li", { class: c.ok ? "" : "failed-call" },
       h("span", { class: "meta" }, clock(c.ts)), " ", h("code", {}, c.sig), " ",
       h("span", { class: "meta" }, c.kind), c.ok ? null : h("span", { class: "badge t-bad" }, "✕ failed")))) : null);
@@ -262,6 +266,12 @@ export async function openTask(id, quiet = false) {
         h("button", { onclick: close, "aria-label": "close" }, "✕"))),
     stopSection(d.stop),
     t.status === "running" ? liveSection(d) : null,
+    t.status === "running" ? h("div", { class: "section" }, h("h2", {}, "What it wrote so far"),
+      h("div", {}, h("button", { onclick: async (e) => {
+        const box = e.target.parentElement.nextElementSibling;
+        const found = await get(`/api/tasks/${t.id}/diff`);
+        box.replaceChildren(found.diff ? diffView(found.diff, found.cut) : h("div", { class: "empty" }, found.why));
+      } }, "Show its diff now")), h("div", { class: "diff-box" })) : null,
     h("div", { class: "section" }, h("h2", {}, "Task"), h("div", { class: "text" }, t.body)),
     t.parallel_reason ? h("div", { class: "section" }, h("h2", {}, "Dispatch"),
       h("div", {}, t.waits ? `${t.waits[0].toUpperCase()}${t.waits.slice(1)}` : t.parallel
