@@ -295,7 +295,10 @@ yields the default kind, not a guess.
   that ran and failed (not a timeout, not `cannot_run`, not load or offline)
   runs again at the task's base in a temporary detached worktree
   (`isolate.at_base`, dependencies linked as a task's, stale ones left out,
-  always removed), its result kept in the store's meta for a day per
+  always removed), run in the copy of the folder the task was sent from; a run
+  in a folder of several repositories has each of them at its own commit,
+  laid out as the folder is (`isolate.at_bases`), whatever the launch shape
+  (worktree, `--no-isolate`, no checkout). Its result is kept in the store's meta for a day per
   repository, base and command, never in a GET. Failures are compared, never
   exit codes (`launch.check_failures`): the pass stands only when the work's
   failing lines are a non-empty subset of the base's (`launch.preexisting`; a
@@ -307,7 +310,13 @@ yields the default kind, not a guess.
   that stopped on a point (`spec_bug`, `architecture_bug`) whose work stands
   only because the check's failures were all at the base, that names the check
   or one of those failures, and that leaves no criterion unmet passes
-  (`orchestrate._only_the_base`); any other point stays a `decision`.
+  (`orchestrate._only_the_base`); any other point stays a `decision`. A report
+  that did not pass and says its check's failure was there before its work
+  (a `pre-existing` finding, or its words) is checked, never taken or dropped
+  (`orchestrate._weigh_base_claim`): cauce runs the check and compares it with
+  the base; it passes only on that comparison with every criterion met, else
+  the report stands with the comparison added. An answer with no single result
+  block is never weighed.
 - A check whose exit is a pipeline filter's without `pipefail`, or that always
   exits 0, is said in the plan (`ci.weak`): a warning, never a refusal. So is one
   that runs a tool a project script runs with more (`ng test` against `npm test`'s
