@@ -8,6 +8,7 @@ line that would bring them up to date. It starts nothing and writes nothing.
 """
 from __future__ import annotations
 
+import re
 import shlex
 import subprocess
 from collections.abc import Mapping, Sequence
@@ -33,6 +34,27 @@ FIRST_PROMPT = ("This repository is spec-first, and your work changed its code b
                 "work so far is in this directory and stands: do not redo it. Write or update the OpenSpec spec of "
                 "the behaviour you built (a change under `openspec/changes/<name>/`, or the spec under "
                 "`openspec/specs/` it reaches), check it, and answer again in the result contract you were given.")
+
+
+#: What every line `link_lines` writes begins with: the independent check's brief and the ending tell them apart by it.
+LINK_PREFIX = "spec link: "
+#: A requirement of an OpenSpec spec file, and the section of a change's delta it sits under.
+_REQUIREMENT = re.compile(r"^###\s+Requirement:\s*(?P<name>.+?)\s*$")
+_DELTA = re.compile(r"^##\s+(?P<verb>ADDED|MODIFIED|REMOVED|RENAMED)\s+Requirements\s*$", re.IGNORECASE)
+_HEADING = re.compile(r"^#{1,3}\s")
+#: An `@spec:<id>` (or `@spec=<id>`) comment, as livespec reads it; several ids may follow one.
+_ANNOTATION = re.compile(r"@spec\s*[:=]\s*(?P<rest>[^\n\r@]*)")
+_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
+
+
+@dataclass(frozen=True)
+class Requirement:
+    """A requirement a change wrote or changed in a spec file, under the id livespec gives it."""
+
+    spec_id: str
+    path: str
+    #: Written by the change (absent from the spec file before it), else already there.
+    new: bool
 
 
 @dataclass(frozen=True)
@@ -158,3 +180,134 @@ def ending_lines(task: Mapping, changed: Sequence[str], found: Mapping | None, *
     return [f"  its change touches no spec, and {behind.text()}: the specs no longer describe the code. "
             f"To catch them up (yours to decide, nothing was started): "
             f"`cauce queue add --kind docs --after {after} {shlex.quote(ask(behind))}`"]
+
+
+def slug(text: str) -> str:
+    """A name as livespec reads it into a spec id: lower case, runs of anything but letters and
+    digits as one hyphen, no hyphen at the edges."""
+    return re.sub(r"[^a-z0-9]+", "-", text.strip().lower()).strip("-") or "requirement"
+
+
+def _spec_file(path: str) -> bool:
+    parts = path.split("/")
+    return parts[0] == OPENSPEC and parts[-1] == "spec.md" and len(parts) >= 3
+
+
+def _requirements(path: str, text: str) -> list[tuple[str, int, int, bool]]:
+    """The requirements a spec file holds as (id, first line, last line, in a delta's ADDED section or
+    canonical), those a change removes or renames left out. The id is the capability's folder and the
+    requirement's name, as livespec derives it."""
+    capability = slug(path.split("/")[-2])
+    found: list[tuple[str, int, int, bool]] = []
+    delta: str | None = None
+    open_at: tuple[str, int, bool] | None = None
+    lines = text.splitlines()
+    for number, line in enumerate(lines, 1):
+        heading = _REQUIREMENT.match(line)
+        if heading or _HEADING.match(line):
+            if open_at is not None:
+                found.append((open_at[0], open_at[1], number - 1, open_at[2]))
+                open_at = None
+            if (section := _DELTA.match(line)) is not None:
+                delta = section["verb"].upper()
+            elif line.startswith("## "):
+                delta = None
+        if heading and delta not in ("REMOVED", "RENAMED"):
+            open_at = (f"{capability}-{slug(heading['name'])}", number, delta in (None, "ADDED"))
+    if open_at is not None:
+        found.append((open_at[0], open_at[1], len(lines), open_at[2]))
+    return found
+
+
+def _git_text(workdir: Path, *args: str) -> str | None:
+    try:
+        done = subprocess.run(["git", *args], cwd=workdir, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def _changed_lines(workdir: Path, ref: str, path: str, now: str) -> set[int]:
+    """The lines of `path` a change added or rewrote, as they are now. A blank line is no change to
+    a requirement: one added after the last of them belongs to what is written next."""
+    kept = now.splitlines()
+    lines: set[int] = set()
+    for row in (_git_text(workdir, "diff", "-U0", ref, "--", path) or "").splitlines():
+        if (hunk := _HUNK.match(row)) is not None:
+            start, count = int(hunk["start"]), int(hunk["count"] or 1)
+            lines.update(n for n in range(start, start + count) if n <= len(kept) and kept[n - 1].strip())
+    return lines
+
+
+def requirements_touched(workdir: Path, base: str | None, changed: Sequence[str]) -> list[Requirement]:
+    """The requirements of the spec files a change wrote or changed, against `base` (HEAD when the
+    change is uncommitted): the ones whose lines it touched. `new` is a requirement the change wrote;
+    one a delta MODIFIES, or a canonical spec already had, is not."""
+    ref = base or "HEAD"
+    out: list[Requirement] = []
+    for path in changed:
+        if not _spec_file(path) or not (workdir / path).is_file():
+            continue
+        now = (workdir / path).read_text(encoding="utf-8", errors="replace")
+        before = _git_text(workdir, "show", f"{ref}:{path}")
+        old_ids = {r[0] for r in _requirements(path, before)} if before is not None else set()
+        touched_lines = _changed_lines(workdir, ref, path, now) if before is not None else None
+        for spec_id, first, last, added in _requirements(path, now):
+            if touched_lines is not None and touched_lines.isdisjoint(range(first, last + 1)):
+                continue
+            out.append(Requirement(spec_id, path, added and spec_id not in old_ids))
+    return out
+
+
+def annotated(workdir: Path) -> set[str]:
+    """The spec ids any code of the work directory carries in an `@spec:` comment: tracked and new
+    files alike, never the specs themselves nor a document."""
+    shown = _git_text(workdir, "grep", "--untracked", "-I", "-h", "-e", "@spec", "--", ".",
+                      f":(exclude){OPENSPEC}", ":(exclude)*.md") or ""
+    return {token.lower() for match in _ANNOTATION.finditer(shown)
+            for token in re.findall(r"[A-Za-z0-9][\w-]*", match["rest"])}
+
+
+def unlinked(workdir: Path, base: str | None, changed: Sequence[str]) -> list[Requirement]:
+    """The requirements a change wrote or changed that no code names in an `@spec:` comment."""
+    if not any(_spec_file(p) for p in changed):
+        return []
+    found = requirements_touched(workdir, base, changed)
+    if not found:
+        return []
+    carried = annotated(workdir)
+    return [r for r in found if r.spec_id not in carried]
+
+
+#: What a check of a change that writes or changes specs is told, so it verifies what the worker was asked to
+#: do (`Livespec.spec_links_brief`): the code that implements a spec names it, and the code index reads that.
+LINK_CHECK = ("The change writes or changes OpenSpec specs, and the code that implements a spec carries an "
+              "`@spec:<id>` comment (the id is `<capability>-<requirement-name>`; the project's code index links "
+              "spec and code by it). Check that each spec the change touched has one on the functions that "
+              "implement it: a spec the change wrote with none is a finding that blocks, with `git grep -n "
+              "'@spec:<id>'` showing none as its proof; a spec that already existed with none is a finding whose "
+              "cause is `pre-existing`: a warning, never a blocker.")
+
+
+def links_expected(repo_dir: Path | str | None, env: Mapping[str, str]) -> bool:
+    """Whether workers here were told to link the specs they write to their code: a repository that keeps
+    OpenSpec specs and has a livespec index, with the `specs` and `livespec` settings on. Read from the
+    files and the settings, never a call to livespec."""
+    from cauce import config, repo
+    from cauce.adapters.livespec import Livespec
+
+    top = repo.toplevel(Path(repo_dir)) if repo_dir else None
+    return (top is not None and (top / OPENSPEC).is_dir() and Livespec.db_path(top).is_file()
+            and config.enabled("specs", env) and config.enabled("livespec", env))
+
+
+def link_lines(found: Sequence[Requirement]) -> list[str]:
+    """What a change owes the code index, as lines for the ending and the independent check: a spec it
+    wrote with no `@spec:` comment on any code blocks, and one that was already there is a warning."""
+    lines = []
+    for r in found:
+        did, outcome = (("wrote", "blocks, the functions that implement it need the comment") if r.new
+                        else ("changed", "a warning, not a blocker: the spec was already there"))
+        lines.append(f"{LINK_PREFIX}the change {did} `{r.spec_id}` ({r.path}) and no code carries "
+                     f"`@spec:{r.spec_id}`: {outcome}")
+    return lines

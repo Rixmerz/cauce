@@ -22,6 +22,8 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # it on with a fake: a real `uvx livespec index` in a unit test is minutes
     # of network and indexing nobody asked for.
     monkeypatch.setenv("CAUCE_LIVESPEC", "off")
+    # And a task never waits on an index before its worker: a test that wants the wait sets it.
+    monkeypatch.setenv("CAUCE_LIVESPEC_WAIT", "0")
     # The same for the two settings that would call a model or start a process:
     # a test that wants them turns them on with a fake.
     monkeypatch.setenv("CAUCE_PARALLEL", "off")
@@ -50,6 +52,13 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # cauce's own suite may run inside a cauce worker, which refuses to start work.
     monkeypatch.delenv("CAUCE_WORKER_TASK", raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
+    # A neighbour the person put on PATH (rastro in ~/.local/bin) is theirs, as their plugin cache is:
+    # read through the real environment it is on no PATH. A test that wants one passes its own env.
+    from cauce import plugins
+
+    on_disk = plugins.find
+    monkeypatch.setattr(plugins, "find", lambda neighbour, env: on_disk(
+        neighbour, {**env, "PATH": ""} if env is os.environ else env))
     # The dispatcher's level starts at what the machine holds: in a test, a fixed machine
     # of three CPUs whose memory, disk and load say nothing (calm), whatever runs the suite.
     from cauce import capacity

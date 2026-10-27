@@ -39,7 +39,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `specs`, `tracer`, `habit_review`, `habit_auto`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `specs`, `tracer`, `habit_review`, `habit_auto`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number; `livespec_wait`, seconds, 0 never waits), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets, and the jobs a person quieted per repository |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -89,7 +89,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `bin/cauce` | the launcher every hook and command goes through |
 | `src/cauce/interpreter.py` | which Python runs cauce; imported before the version check, so it must run on any python3 |
 | `src/cauce/link.py` | `cauce link`: a shim on a terminal's PATH that survives plugin updates; `forward_to`, which sends a typed command from an old install to the newest (never a hook, never a checkout) |
-| `src/cauce/acp.py` | `cauce acp`: cauce as an Agent Client Protocol agent over stdio (Zed's `agent_servers`): JSON-RPC lines, one session per `session/new` and its folder, each prompt a `cauce run` (or `cauce tasks`/`stats` for `/tasks`/`/stats`) in its own process group, its stderr progress as one tool call, its report as the answer, a cancel as `cauce cancel N` then a kill, the request's items as its `plan` and the worker's files as `diff` content; spawning injectable; stdlib |
+| `src/cauce/acp.py` | `cauce acp`: cauce as an Agent Client Protocol agent over stdio (Zed's `agent_servers`): JSON-RPC lines, one session per `session/new` and its folder, each prompt a `cauce run` (or `cauce tasks`/`stats` for `/tasks`/`/stats`) in its own process group, its stderr progress as one tool call, its report as the answer, a cancel ending the turn at once and the task after `CANCEL_WINDOW_S` unless a prompt follows (`cauce cancel N` then a kill; `/cancel N` is the explicit one), `session/load` refused with what to do, the request's items as its `plan` and the worker's files as `diff` content; spawning injectable; stdlib |
 
 ## Verify before reporting done
 
@@ -642,6 +642,23 @@ yields the default kind, not a guess.
   the independent check's brief as where to probe, data, never findings (`orchestrate._impact`); whether
   workers handed livespec call it is counted from the tool-call log (`Store.capability_use`), observed, never
   a trial.
+- livespec is a step before the worker, never only a tool it may ignore: a plan whose repository has no
+  index or a stale one builds it (`Livespec.ensure_fresh`, incremental) and waits up to `livespec_wait`
+  seconds (`config.livespec_wait`, 120; 0 keeps the background refresh), each repository of a folder on
+  its own and never the folder (`Livespec.roots`; `_index_argv` refuses a folder that is no checkout).
+  Past the wait the refresh is left running, never killed, and the task starts without the index (or on
+  the stale one a repository already has, as it is) and says which; repositories sharing a `group_db`
+  are indexed one after another under its one lock; a refresh that failed at this commit is not tried
+  again until the checkout moves. With an
+  index the brief opens with `Livespec.orient` (spec, code, symbol, file; writers also `search_similar`
+  and `git_diff_impact`) before the code map. Where it has one and the repository keeps `openspec/`, a
+  writing worker is told to put `@spec:<capability>-<requirement-name>` on the code that implements a
+  spec it writes (`spec_links_brief`), and what the change touched that no code names is a line of the
+  report and of the independent check's brief (`specs.unlinked`, `LINK_PREFIX`): a spec the change
+  wrote blocks, one that was already there is a warning, data and never a verdict of cauce's own. Each
+  attempt keeps the livespec calls its worker made (`attempt_finished.livespec_calls`), and `cauce
+  stats` compares tokens per kind with livespec called against not called: observed, never a trial.
+  Tests run with `CAUCE_LIVESPEC_WAIT=0`.
 - An adopted neighbour is read, never written: the livespec index is opened
   `mode=ro`, and the index is built only through livespec's own CLI. Absent
   and unreadable are different states and neither stops a run. The one
@@ -1033,10 +1050,16 @@ yields the default kind, not a guess.
   `cauce run` in the session's folder with no `--allow`, `--allow-approval` or `--keep`, so a stop that
   needs a rule or an approval is the person's as anywhere, and the `mcpServers` a client sends are never
   handed to a worker (the registry is the person's cauce home only; the first answer says so). stdout
-  carries protocol messages alone; a cancel runs `cauce cancel N` and kills the process group only if the
-  run outlasts `acp.CANCEL_GRACE_S`. The editor gets the request's items as `plan` entries (completed only
-  on a pass) and the worker's files as `diff` content, read from its worktree every `acp.DIFF_EVERY_S`
-  and from its kept branch once it ends; reading them never fails a prompt.
+  carries protocol messages alone. A `session/cancel` ends the turn (answers its prompt `cancelled`, says
+  nothing more of its run) and never the task by itself: an editor sends it before the next prompt of a
+  thread and waits for its answer, so the task runs on, in `/tasks` and on the board, while a prompt may still
+  follow within `acp.CANCEL_WINDOW_S`; one that follows keeps it and starts its own task, one that does not
+  (or a closed input) runs `cauce cancel N` and kills the process group only if the run outlasts
+  `acp.CANCEL_GRACE_S`. `/cancel N` is the explicit stop; a bare `/cancel` is refused, never run as a request.
+  `session/load` is answered with an error that says to open a new thread (`loadSession` stays false).
+  The editor gets the request's items as `plan` entries (completed only on a pass) and the worker's files
+  as `diff` content, read from its worktree every `acp.DIFF_EVERY_S` and from its kept branch once it
+  ends; reading them never fails a prompt.
 - The mod adds a way in, never a power. Every tool runs `bin/cauce`. `resume`
   runs with `--unattended`, which refuses what only a person may clear, and
   no model input ever reaches `--allow`, `--allow-approval` or `--keep`: only

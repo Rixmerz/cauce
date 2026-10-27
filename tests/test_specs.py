@@ -139,3 +139,198 @@ def test_the_worker_asked_again_is_told_to_write_the_spec_not_to_reformat(git_re
     unread = Attempt(Cell("sonnet", "medium"), 30, False, None, "built it", shape="two result blocks")
     assert _reshape_prompt([held]) == specs.FIRST_PROMPT and _reshape_prompt([unread]) == launch.RESHAPE_PROMPT
     assert continuation_note(held).startswith("Why your last answer was held back: spec-first")
+
+
+# --- spec-code links -------------------------------------------------------------
+
+LOGIN_SPEC = """# login
+
+## Purpose
+Who may sign in.
+
+## Requirements
+### Requirement: Valid credentials
+The system SHALL sign a user in with valid credentials.
+
+#### Scenario: ok
+- **WHEN** the password is right
+- **THEN** the user is signed in
+
+### Requirement: Lockout after failures
+The system SHALL lock an account after five failures.
+"""
+
+
+def _spec_repo(repo):
+    (repo / "openspec" / "specs" / "login").mkdir(parents=True)
+    (repo / "openspec" / "specs" / "login" / "spec.md").write_text(LOGIN_SPEC)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "specs")
+    return git(repo, "rev-parse", "HEAD")
+
+
+def test_a_spec_id_is_the_capability_and_the_requirement_name_as_livespec_derives_it():
+    assert specs.slug("Valid credentials!") == "valid-credentials"
+    assert specs.slug("  Retry (3x) -- then stop ") == "retry-3x-then-stop"
+    assert specs.slug("???") == "requirement"
+    found = specs._requirements("openspec/specs/Login Flow/spec.md", LOGIN_SPEC)
+    assert [(i, new) for i, _, _, new in found] == [("login-flow-valid-credentials", True),
+                                                    ("login-flow-lockout-after-failures", True)]
+
+
+def test_only_the_requirements_a_change_touched_are_its_own_and_new_ones_are_told_from_old(git_repo):
+    base = _spec_repo(git_repo)
+    spec = git_repo / "openspec" / "specs" / "login" / "spec.md"
+    spec.write_text(LOGIN_SPEC.replace("with valid credentials.", "with valid credentials and a session.")
+                    + "\n### Requirement: Password reset\nThe system SHALL mail a reset link.\n")
+    found = specs.requirements_touched(git_repo, base, ["openspec/specs/login/spec.md"])
+    assert [(r.spec_id, r.new) for r in found] == [("login-valid-credentials", False), ("login-password-reset", True)]
+    # Nothing under openspec/specs/ changed: no requirement is the change's.
+    assert specs.requirements_touched(git_repo, base, ["app.py"]) == []
+
+
+def test_a_delta_adds_modifies_and_removes_and_only_what_it_adds_is_new(git_repo):
+    base = _spec_repo(git_repo)
+    delta = git_repo / "openspec" / "changes" / "add-2fa" / "specs" / "login"
+    delta.mkdir(parents=True)
+    (delta / "spec.md").write_text(
+        "## ADDED Requirements\n### Requirement: Two factor\nThe system SHALL ask for a code.\n\n"
+        "## MODIFIED Requirements\n### Requirement: Valid credentials\nThe system SHALL also check a code.\n\n"
+        "## REMOVED Requirements\n### Requirement: Lockout after failures\n")
+    found = specs.requirements_touched(git_repo, base, ["openspec/changes/add-2fa/specs/login/spec.md"])
+    assert [(r.spec_id, r.new) for r in found] == [("login-two-factor", True), ("login-valid-credentials", False)]
+
+
+def test_a_spec_with_a_spec_comment_on_code_is_linked_and_one_without_is_not(git_repo):
+    base = _spec_repo(git_repo)
+    spec = git_repo / "openspec" / "specs" / "login" / "spec.md"
+    spec.write_text(LOGIN_SPEC.replace("a user in", "a person in")
+                    + "\n### Requirement: Password reset\nThe system SHALL mail a reset link.\n")
+    changed = ["openspec/specs/login/spec.md"]
+    assert [r.spec_id for r in specs.unlinked(git_repo, base, changed)] == ["login-valid-credentials",
+                                                                            "login-password-reset"]
+    # A comment in a new, untracked file counts; so does one of several ids, in any case.
+    (git_repo / "auth.py").write_text("# @spec: Login-Password-Reset, login-valid-credentials\ndef reset(): ...\n")
+    assert specs.annotated(git_repo) >= {"login-password-reset", "login-valid-credentials"}
+    assert specs.unlinked(git_repo, base, changed) == []
+    # Neither the spec itself nor a document is code: a mention there links nothing.
+    (git_repo / "auth.py").unlink()
+    (git_repo / "README.md").write_text("see @spec:login-password-reset\n")
+    spec.write_text(spec.read_text() + "\n<!-- @spec:login-valid-credentials -->\n")
+    assert [r.spec_id for r in specs.unlinked(git_repo, base, changed)] == ["login-valid-credentials",
+                                                                            "login-password-reset"]
+
+
+def test_a_change_that_touches_no_spec_owes_no_links(git_repo):
+    base = _spec_repo(git_repo)
+    (git_repo / "app.py").write_text("print('changed')\n")
+    assert specs.unlinked(git_repo, base, ["app.py"]) == []
+
+
+def test_a_spec_written_without_links_blocks_and_an_old_one_is_a_warning():
+    new = specs.Requirement("login-password-reset", "openspec/specs/login/spec.md", True)
+    old = specs.Requirement("login-valid-credentials", "openspec/specs/login/spec.md", False)
+    first, second = specs.link_lines([new, old])
+    assert first.startswith(specs.LINK_PREFIX) and "wrote `login-password-reset`" in first
+    assert "`@spec:login-password-reset`" in first and "blocks" in first and "warning" not in first
+    assert "changed `login-valid-credentials`" in second and "a warning, not a blocker" in second
+    assert specs.link_lines([]) == []
+
+
+class _Writes:
+    """A launcher whose worker writes `files` (path -> text) and whose verifier passes, recording both."""
+
+    def __init__(self, files):
+        from .test_checking import check, passing
+
+        self.files, self.seen, self._check, self._passing = files, [], check("pass"), passing()
+
+    def __call__(self, spec):
+        self.seen.append(spec)
+        if "Check this change" in spec.prompt:
+            return self._check
+        for path, text in self.files.items():
+            (spec.target_dir / path).parent.mkdir(parents=True, exist_ok=True)
+            (spec.target_dir / path).write_text(text)
+        return self._passing
+
+    @property
+    def verifier_prompts(self):
+        return [s.prompt for s in self.seen if "Check this change" in s.prompt]
+
+
+NEW_REQUIREMENT = LOGIN_SPEC + "\n### Requirement: Password reset\nThe system SHALL mail a reset link.\n"
+
+
+def _link_run(git_repo, store, tmp_path, monkeypatch, files, *, indexed=True):
+    from .livespec_fixture import build
+    from .test_orchestrate import _livespec
+
+    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    if not (git_repo / "openspec").exists():
+        _spec_repo(git_repo)
+    if indexed:
+        build(git_repo)
+    else:
+        (git_repo / ".mcp-docs" / "docs.db").unlink(missing_ok=True)
+    writes = _Writes(files)
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=writes, classifier=kind("implement"),
+                 adapters=[_livespec(tmp_path)] if indexed else [])
+    return report, writes
+
+
+def _links_said(report):
+    return [line for line in report.impact if line.startswith(specs.LINK_PREFIX)]
+
+
+def test_a_spec_the_worker_wrote_with_no_comment_is_said_and_told_to_the_independent_check(
+        git_repo, store, tmp_path, monkeypatch):
+    # Code with no test beside it is high risk, so the independent check runs.
+    report, writes = _link_run(git_repo, store, tmp_path, monkeypatch,
+                               {"openspec/specs/login/spec.md": NEW_REQUIREMENT, "reset.py": "def mail(): ...\n"})
+    assert report.status == "done"
+    said = _links_said(report)
+    assert len(said) == 1 and "wrote `login-password-reset`" in said[0] and "blocks" in said[0]
+    prompt, = writes.verifier_prompts
+    assert "`@spec:<id>` comment" in prompt and "cauce found these without the comment:" in prompt
+    assert "- the change wrote `login-password-reset`" in prompt and specs.LINK_PREFIX not in prompt
+    assert "a warning, never a blocker" in prompt
+
+
+def test_a_spec_whose_functions_carry_the_comment_is_no_finding(git_repo, store, tmp_path, monkeypatch):
+    report, writes = _link_run(git_repo, store, tmp_path, monkeypatch, {
+        "openspec/specs/login/spec.md": NEW_REQUIREMENT,
+        "auth.py": "# @spec:login-password-reset\ndef mail_reset_link(): ...\n"})
+    assert report.status == "done" and _links_said(report) == []
+    assert writes.verifier_prompts
+    assert all("cauce found these without the comment" not in p for p in writes.verifier_prompts)
+
+
+def test_a_spec_that_was_already_there_is_a_warning_and_a_repository_with_no_index_is_not_asked(
+        git_repo, store, tmp_path, monkeypatch):
+    edited = LOGIN_SPEC.replace("a user in", "a person in")
+    report, _ = _link_run(git_repo, store, tmp_path, monkeypatch,
+                          {"openspec/specs/login/spec.md": edited, "login.py": "def sign_in(): ...\n"})
+    said = _links_said(report)
+    assert len(said) == 1 and "changed `login-valid-credentials`" in said[0] and "a warning, not a blocker" in said[0]
+    # Workers there were never told to link (no livespec index): nothing is checked against what they were not asked.
+    bare, writes = _link_run(git_repo, store, tmp_path, monkeypatch,
+                             {"openspec/specs/login/spec.md": NEW_REQUIREMENT, "reset.py": "def mail(): ...\n"},
+                             indexed=False)
+    assert _links_said(bare) == []
+    assert writes.verifier_prompts
+    assert all("cauce found these without the comment" not in p for p in writes.verifier_prompts)
+
+
+def test_links_are_expected_only_where_specs_and_a_livespec_index_are_both_there(
+        git_repo, tmp_path, monkeypatch):
+    from .livespec_fixture import build
+
+    _spec_repo(git_repo)
+    assert not specs.links_expected(git_repo, {})  # no livespec index yet
+    build(git_repo)
+    assert specs.links_expected(git_repo, {})
+    assert not specs.links_expected(git_repo, {"CAUCE_SPECS": "off"})
+    assert not specs.links_expected(git_repo, {"CAUCE_LIVESPEC": "off"})
+    assert not specs.links_expected(tmp_path / "nowhere", {})
+    assert not specs.links_expected(None, {})

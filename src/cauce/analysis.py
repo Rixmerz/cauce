@@ -45,8 +45,8 @@ COMPACTIONS_SHOWN = 10
 #: The columns of a run, as `cauce stats --runs` writes them.
 RUN_COLUMNS = ("task", "repo", "kind", "source", "workflow", "step", "status", "stop", "start_cell", "final_cell",
                "started_at", "ended_at", "wall_s", *PHASES[:-1], "attempts", "first_try", "verified",
-               "verifier_blocked", "cost_usd", "turns", "input_tokens", "output_tokens", "session_context",
-               "session_chars", "brief_chars", "title")
+               "verifier_blocked", "cost_usd", "turns", "input_tokens", "output_tokens", "tokens",
+               "livespec_handed", "livespec_calls", "session_context", "session_chars", "brief_chars", "title")
 
 
 def _when(stamp: str | None) -> datetime | None:
@@ -99,6 +99,8 @@ def runs(tasks: Sequence[Mapping[str, Any]], events: Sequence[Mapping[str, Any]]
                 # or was cut off): the time from its start to the end is lost, not "other".
                 current["_open_attempt"] = event["ts"]
                 current["_open_turns"] = data.get("max_turns")
+                if "livespec" in (data.get("capabilities") or ()):
+                    current["livespec_handed"] = True
                 if current["brief_chars"] is None:
                     current["brief_chars"] = data.get("brief_chars")
                     if (since := _number(data.get("since_start_s"))) is not None:
@@ -134,7 +136,8 @@ def _start(task: Mapping[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
         "lost_s": None, "unnoticed_s": None, "_open_attempt": None, "_open_turns": None,
         "attempts": 0, "first_try": None, "verified": 0, "verifier_blocked": 0, "moves": [], "cells": [],
         "cost_usd": 0.0, "turns": 0, "input_tokens": 0, "output_tokens": 0, "refused": 0,
-        "cache_read_tokens": 0, "measured_input_tokens": 0, "verifier_cost_usd": 0.0,
+        "cache_read_tokens": 0, "measured_input_tokens": 0, "verifier_cost_usd": 0.0, "tokens": 0,
+        "livespec_handed": False, "livespec_calls": 0, "livespec_tools": {},
         "session_context": None, "session_chars": 0, "brief_chars": None,
         "_worker_s": 0.0, "_check_s": 0.0, "_verifier_s": 0.0, "_timed": False, "_check_usd": 0.0,
     }
@@ -149,6 +152,10 @@ def _attempt(run: dict[str, Any], data: Mapping[str, Any]) -> None:
     run["turns"] += int(data.get("turns") or 0)
     run["input_tokens"] += int(data.get("input_tokens") or 0)
     run["output_tokens"] += int(data.get("output_tokens") or 0)
+    run["tokens"] = run["input_tokens"] + run["output_tokens"]
+    for tool, n in (data.get("livespec_calls") or {}).items():
+        run["livespec_tools"][tool] = run["livespec_tools"].get(tool, 0) + int(n)
+    run["livespec_calls"] = sum(run["livespec_tools"].values())
     if "cache_read_tokens" in data:  # recorded since 0.18: older attempts say nothing of the cache
         run["cache_read_tokens"] += int(data.get("cache_read_tokens") or 0)
         run["measured_input_tokens"] += int(data.get("input_tokens") or 0)
@@ -226,6 +233,27 @@ def capability_use(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
     return {"given": len(rows), "used": len(used), "calls": sum(r["calls"] for r in rows),
             "passed_used": rate(used), "passed_idle": rate(idle)}
+
+
+def livespec_tokens(found: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Per kind, the tokens a run spent (input and output, its attempts together) when its workers called
+    livespec, against when they did not: runs, mean and median of each, and how far the mean moved. A run
+    that spent none is left out. Observed, not a trial: the two groups differ in more than the calls."""
+    rows = []
+    for kind in sorted({r["kind"] for r in found if r.get("kind")}):
+        spent = [r for r in found if r.get("kind") == kind and r.get("tokens")]
+        arms = {"with": [r["tokens"] for r in spent if r.get("livespec_calls")],
+                "without": [r["tokens"] for r in spent if not r.get("livespec_calls")]}
+        if not spent:
+            continue
+        row: dict[str, Any] = {"kind": kind}
+        for arm, values in arms.items():
+            row[arm] = {"runs": len(values), "avg": round(sum(values) / len(values)) if values else None,
+                        "p50": pct(values, 0.5)}
+        both = row["with"]["avg"] is not None and row["without"]["avg"]
+        row["change"] = round((row["with"]["avg"] - row["without"]["avg"]) / row["without"]["avg"], 3) if both else None
+        rows.append(row)
+    return rows
 
 
 def phases(found: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -480,6 +508,8 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "role_revisions": revisions.overview(store, repo),
         # Whether workers handed livespec used it, and how their attempts went: observed, not a trial.
         "livespec_use": capability_use(store.capability_use("livespec", since=since, repo=repo)),
+        # The tokens a run spent per kind, with livespec called against without (observed, not a trial).
+        "livespec_tokens": livespec_tokens(found),
         # Whether racing a first try paid, per repository and kind (`cauce.racing`): its own window.
         "races": racing.table(store, repo),
         # What each blind review of a two-review ledger added that no other saw (`workflows.reviewer_yield`).
@@ -572,6 +602,18 @@ def _rate(value: float | None) -> str:
     return "—" if value is None else f"{value * 100:.0f}%"
 
 
+def _tokens(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value / 1000:.0f}k" if value >= 1000 else f"{value:.0f}"
+
+
+def _tokens_line(row: Mapping[str, Any]) -> str:
+    arms = "  ".join(f"{arm} {row[arm]['runs']} run(s) avg {_tokens(row[arm]['avg'])} p50 {_tokens(row[arm]['p50'])}"
+                     for arm in ("with", "without"))
+    return f"  {row['kind']:<16} {arms}" + (f"  ({row['change']:+.0%})" if row["change"] is not None else "")
+
+
 def _usd(value: float | None) -> str:
     return "—" if value is None else f"${value:.2f}"
 
@@ -610,6 +652,10 @@ def text(report: Mapping[str, Any]) -> str:
             lines.append(f"livespec: handed to {use['given']} attempt(s), called in {use['used']} ({use['calls']} "
                          f"call(s)); passed {_rate(use['passed_used'])} when called, {_rate(use['passed_idle'])} "
                          "when not (observed, not a trial)")
+            lines.append("")
+        if rows := report.get("livespec_tokens"):
+            lines.append("tokens per run by kind, livespec called against not called (observed, not a trial):")
+            lines += [_tokens_line(r) for r in rows]
             lines.append("")
         lines.append("by kind:")
         for row in report["by_kind"]:

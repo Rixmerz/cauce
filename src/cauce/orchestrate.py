@@ -502,9 +502,43 @@ def adopted(options: Options, adapters: Sequence[Adapter] | None) -> list[Adapte
     return default_adapters(os.environ, livespec=options.livespec)
 
 
+def _bring_current(adapter: Adapter, status: Status, repo_dir: Path, options: Options,
+                   say: Callable[[str], None] | None) -> tuple[Status, list[str]]:
+    """An adopted neighbour's index made current before the worker starts: built or refreshed and
+    waited for up to the person's `livespec_wait`, so the worker orients by it; started in the
+    background when that is 0 or the neighbour has no way to wait. The status afterwards, and what
+    the plan says. Past the wait the task starts without the index, said, and the index keeps building."""
+    missing = (status.state == ABSENT and getattr(adapter, "indexes", True)
+               and getattr(adapter, "indexable", lambda _d: True)(repo_dir) and adapter.server() is not None)
+    if not (missing or status.stale):
+        return status, []
+    what = "index" if missing else "refresh"
+    meanwhile = "this task runs without it" if missing else "this task uses the index as it is"
+    failed = getattr(adapter, "last_failure", lambda _d: None)(repo_dir)
+    if failed:
+        # Said once: a failure every plan repeats until the checkout moves is noise.
+        if options.dry_run or not getattr(adapter, "failure_said", lambda _d: False)(repo_dir):
+            return status, [f"{adapter.name}: its last index here failed ({clip(failed, 160)}); not "
+                            f"tried again until the checkout moves; {meanwhile}"]
+        return status, []
+    if adapter.server() is None:
+        return status, [f"{adapter.name}: cannot {what} here; {meanwhile}"]
+    wait_s = config.livespec_wait(os.environ)
+    ensure = getattr(adapter, "ensure_fresh", None) if wait_s > 0 else None
+    if options.dry_run:
+        where = f"before the worker starts (waits up to {wait_s} s)" if ensure else "in the background"
+        return status, [f"{adapter.name}: would {what} {where}"]
+    if ensure is not None:
+        done = ensure(repo_dir, wait_s, say=say)
+        return adapter.inspect(repo_dir), [line for found in done if (line := found.line())]
+    if adapter.refresh_in_background(repo_dir, home() / f"{adapter.name}-index.log"):
+        return status, [f"{adapter.name}: {what}ing in the background; {meanwhile}"]
+    return status, [f"{adapter.name}: already {what}ing in the background; {meanwhile}"]
+
+
 def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Mapping[str, caps.Capability],
          *, classifier: Callable[[str], Classification] | None = None,
-         adapters: Sequence[Adapter] | None = None) -> Plan:
+         adapters: Sequence[Adapter] | None = None, say: Callable[[str], None] | None = None) -> Plan:
     catalog = roles.load()
     team, members, team_notes = _team(options, repo.key(repo_dir), catalog)
     covered = roles.kinds_of(members)
@@ -524,34 +558,14 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     # The symbols the request reaches, when an index could say: None when none could.
     reached: int | None = None
     for adapter in adopted(options, adapters):
-        status = adapter.inspect(repo_dir)
-        runnable_absent = status.state == ABSENT and getattr(adapter, "indexes", True) and \
-            adapter.server() is not None
-        if runnable_absent or status.stale:
-            # In the background, never before the task: a large repository takes
-            # minutes to index, and a run that is silent for minutes, with no task
-            # yet to show, reads as one that never started. This task uses the
-            # index as it is; the next one gets the fresh one.
-            what = "index" if runnable_absent else "refresh"
-            meanwhile = "this task runs without it" if runnable_absent else "this task uses the index as it is"
-            failed = getattr(adapter, "last_failure", lambda _d: None)(repo_dir)
-            if failed:
-                # Said once: a failure every plan repeats until the checkout moves is noise.
-                if options.dry_run or not getattr(adapter, "failure_said", lambda _d: False)(repo_dir):
-                    neighbour_notes.append(f"{adapter.name}: its last index here failed ({clip(failed, 160)}); not "
-                                           f"tried again until the checkout moves; {meanwhile}")
-            elif adapter.server() is None:
-                neighbour_notes.append(f"{adapter.name}: cannot {what} here; {meanwhile}")
-            elif options.dry_run:
-                neighbour_notes.append(f"{adapter.name}: would {what} in the background")
-            elif adapter.refresh_in_background(repo_dir, home() / f"{adapter.name}-index.log"):
-                neighbour_notes.append(f"{adapter.name}: {what}ing in the background; {meanwhile}")
-            else:
-                neighbour_notes.append(f"{adapter.name}: already {what}ing in the background; {meanwhile}")
+        status, index_notes = _bring_current(adapter, adapter.inspect(repo_dir), repo_dir, options, say)
+        neighbour_notes += index_notes
         statuses.append(status)
         if not status.present:
             continue
         active.append((adapter, status))
+        # How to find its way by this neighbour's index comes before the map the index drew.
+        context += getattr(adapter, "orient", lambda _kind, _status: ())(kind, status)
         briefing = adapter.brief(text, repo_dir, status)
         context += briefing.lines
         raise_rungs = max(raise_rungs, briefing.raise_rungs)
@@ -685,6 +699,9 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
             drifted := specs_mod.drift(repo_dir, options.base or "HEAD")):
         first = kind in specs_mod.FIRST_KINDS and specs_mod.first(store, key)
         context += specs_mod.brief_lines(drifted, first=first)
+        for adapter, _ in active:
+            # Where the index can read them, a spec the work writes is linked to its code (`@spec:` comments).
+            context += getattr(adapter, "spec_links_brief", lambda _dir: [])(repo_dir)
         if first:
             neighbour_notes.append("spec-first: this repository accepts no build without its spec; a pass that "
                                    "writes none goes back to its worker once, then to the orchestrator")
@@ -1030,7 +1047,8 @@ def run(
     registry = registry if registry is not None else caps.load_all(home() / "capabilities.json")
     launcher = launcher or launch.run
     repo_dir = repo_dir.resolve()
-    the_plan = plan(text, repo_dir, store, options, registry, classifier=classifier, adapters=adapters)
+    the_plan = plan(text, repo_dir, store, options, registry, classifier=classifier, adapters=adapters,
+                    say=progress)
     plan_s = time.monotonic() - clock
     if options.dry_run:
         return Report(None, "dry run", the_plan)
@@ -1532,7 +1550,7 @@ def run(
                 risk_mod.of_change(the_plan.risk, so_far if (workspace or base_commit) else None)
                 if so_far and risk_mod.needs_verifier(the_plan.risk, cheap=_cheap(cell)) and late:
                     deferred = {"cell": cell, "spec": spec, "changed": so_far, "nth": nth,
-                                "impact": _impact(the_plan, so_far, repo_dir),
+                                "impact": _impact(the_plan, so_far, repo_dir, workdir=workdir, base=base_commit),
                                 "rules": [n for n in the_plan.notes if n.get("kind") == notes.CONSTRAINT]}
                     store.add_event(task["id"], "verifier_deferred", seq=nth, risk=the_plan.risk.tier)
                     say(f"cauce: #{task['id']} attempt {nth} passed; risk {the_plan.risk.tier}: its independent "
@@ -1546,7 +1564,7 @@ def run(
                         say=say, outgrew=outgrew, registry=registry,
                         rules=[n for n in the_plan.notes if n.get("kind") == notes.CONSTRAINT],
                         rows=_fixing(options), ahead=_tolerating(ahead, report.check_output),
-                        impact=_impact(the_plan, so_far, repo_dir))
+                        impact=_impact(the_plan, so_far, repo_dir, workdir=workdir, base=base_commit))
                     ahead = None
             if ahead is not None:
                 # cauce's check failed (or the change needs no check now): what ran beside it is dropped.
@@ -1589,6 +1607,9 @@ def run(
                             continued=bool(spec.resume_session) and not result.fresh,
                             **({"fresh": result.fresh} if result.fresh else {}),
                             changed=list(result.changed_paths)[:50],
+                            # Whether it used the code index it was handed, and which calls (`cauce stats`).
+                            **({"livespec_calls": used} if (used := _livespec_calls(
+                                store, task["id"], nth, selection.names)) is not None else {}),
                             wall_s=round(worker_s, 2), duration_s=round(result.duration_s, 2),
                             check_s=round(check_s, 2), verifier_s=round(verifier_s, 2),
                             input_tokens=result.input_tokens, output_tokens=result.output_tokens,
@@ -1636,6 +1657,10 @@ def run(
                         report.learned = (*report.learned, *result.constraints)
                 for adapter, status in the_plan.active:
                     report.impact += adapter.assess(result.changed_paths, repo_dir, status)
+                # What git says the work changed, as the independent check is given it: a result's own
+                # list is the worker's launch's and may hold less.
+                wrote = list(isolate.changed(workspace)) if workspace else sorted({*changed, *result.changed_paths})
+                report.impact += _links(the_plan, wrote, workdir, base_commit)
                 if len(attempts) > 1 or store.task_has_failed_fix(task["id"]):
                     # A pass after failures, in this run or an earlier one (a resume that started
                     # fresh passes on its first attempt here): the problem they opened is solved.
@@ -2557,10 +2582,14 @@ def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, change
     where = (f"The change is in {workdir}: `git diff {base}` shows it against the base commit {base}, the state "
              "before it." if base else f"The change is in {workdir}, uncommitted: `git diff` shows it.")
     parts.append(f"{where} Files it changed: {shown}.")
-    if impact:
+    links = [line.removeprefix(specs_mod.LINK_PREFIX) for line in impact if line.startswith(specs_mod.LINK_PREFIX)]
+    if reach := [line for line in impact if not line.startswith(specs_mod.LINK_PREFIX)]:
         # What the code index (livespec) says the change reaches beyond its own files: where to probe.
         parts.append("What the project's code index says this change reaches (data, not findings: probe what "
-                     "matters):\n" + "\n".join(f"- {line}" for line in impact))
+                     "matters):\n" + "\n".join(f"- {line}" for line in reach))
+    if links:
+        parts.append(specs_mod.LINK_CHECK + "\ncauce found these without the comment:\n"
+                     + "\n".join(f"- {line}" for line in links))
     if known:
         parts.append("The previous check found these; say for each whether it is fixed, and report any new "
                      "problem apart:\n" + findings_mod.text(known))
@@ -2717,16 +2746,42 @@ def _late_check(store: Store, task_id: int, *, text: str, kind: str, risk: risk_
         attempt=deferred["nth"], account=clip(findings_mod.text(blockers), 2000)))
 
 
-def _impact(plan: Plan, changed: Sequence[str], repo_dir: Path) -> list[str]:
+def _impact(plan: Plan, changed: Sequence[str], repo_dir: Path, *, workdir: Path | None = None,
+            base: str | None = None) -> list[str]:
     """What the adopted neighbours' indexes say a change reaches (livespec: the specs it touches,
-    the callers outside it), for the independent check to probe. Never fails a run."""
+    the callers outside it), for the independent check to probe, and the specs it wrote or changed
+    that no code names in an `@spec:` comment, where workers were told to (`_links`). Never fails a run."""
     lines: list[str] = []
     for adapter, status in plan.active:
         try:
             lines += [x for x in adapter.assess(changed, repo_dir, status) if " could not " not in x]
         except Exception:  # noqa: S112 - an index that cannot say is no reason to skip the check
             continue
-    return lines
+    return lines + _links(plan, changed, workdir, base)
+
+
+def _livespec_calls(store: Store, task_id: int, nth: int, handed: Sequence[str]) -> dict[str, int] | None:
+    """The livespec tools an attempt's worker called, by name and count: {} when it was handed livespec and
+    called nothing, None when it was not handed it. The hooks' log is read into the store first, since a
+    worker's calls are there only once it is. Never fails a run."""
+    if "livespec" not in handed:
+        return None
+    with contextlib.suppress(OSError):
+        habits.load_events(store)
+    return store.tool_counts(task_id, nth, "mcp__livespec__")
+
+
+def _links(plan: Plan, changed: Sequence[str], workdir: Path | None, base: str | None) -> list[str]:
+    """The specs a change wrote or changed with no `@spec:` comment on any code, as lines: a check
+    of what the brief required (`spec_links_brief`), so only where a worker was told to. A spec
+    written with none blocks; one that was there before is a warning. Never fails a run."""
+    if workdir is None or not config.enabled("specs", os.environ) or not any(
+            hasattr(adapter, "spec_links_brief") for adapter, _ in plan.active):
+        return []
+    try:
+        return specs_mod.link_lines(specs_mod.unlinked(workdir, base, changed))
+    except (OSError, ValueError):
+        return []
 
 
 def _fixing(options: Options) -> list[str]:
@@ -2753,7 +2808,7 @@ def _ahead(result: launch.WorkerResult, *, options: Options, verifying: bool,
                            changed=so_far, risk=plan.risk, ledger=ledger, registry=registry,
                            rules=[n for n in plan.notes if n.get("kind") == notes.CONSTRAINT],
                            rows=_fixing(options), running=options.verify,
-                           impact=_impact(plan, so_far, workspace.repo_dir))
+                           impact=_impact(plan, so_far, workspace.repo_dir, workdir=workdir, base=base))
     return Ahead(launcher, check, so_far, options.verify)
 
 

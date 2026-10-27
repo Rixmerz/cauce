@@ -22,6 +22,10 @@ from cauce.store import home
 DEFAULTS: dict[str, Any] = {
     # livespec is part of the base: on unless someone turns it off.
     "livespec": True,
+    # How long a task waits, before its worker starts, for livespec to index or refresh the
+    # repository it runs in (`livespec.Livespec.ensure_fresh`); past it the task starts without
+    # the index and says so, and the index keeps building. Seconds; 0 never waits.
+    "livespec_wait": 120,
     # Haiku decides whether a queued task can start beside the ones running in
     # its repository. Off: one task at a time per repository.
     "parallel": True,
@@ -180,13 +184,34 @@ def max_parallel(env: Mapping[str, str]) -> int | None:
     return None if picked == "auto" else int(picked)
 
 
+def seconds_word(raw: Any) -> int | None:
+    """`raw` as `livespec_wait` takes it: whole seconds from 0, as text or a number; None otherwise."""
+    value = str(raw).strip() if isinstance(raw, str | int) and not isinstance(raw, bool) else ""
+    return int(value) if value.isdigit() else None
+
+
+def livespec_wait(env: Mapping[str, str]) -> int:
+    """Seconds a task waits for livespec's index before its worker starts: the
+    `CAUCE_LIVESPEC_WAIT` variable, else the file, else the default. A value it does not
+    take reads as unset."""
+    for raw in (env.get("CAUCE_LIVESPEC_WAIT"), load(env).get("livespec_wait")):
+        if (seconds := seconds_word(raw)) is not None:
+            return seconds
+    return int(DEFAULTS["livespec_wait"])
+
+
 def sync_plugin_options(env: Mapping[str, str]) -> None:
     """Copy `CLAUDE_PLUGIN_OPTION_<KEY>` values into the file, for the commands
     that never see them."""
     updates: dict[str, Any] = {}
     for key in DEFAULTS:
         raw = env.get(f"CLAUDE_PLUGIN_OPTION_{key.upper()}")
-        value = ceiling_word(raw) if key == "max_parallel" else word(key, raw) if key in CHOICES else _bool(raw)
+        if key == "max_parallel":
+            value = ceiling_word(raw)
+        elif key == "livespec_wait":
+            value = seconds_word(raw)
+        else:
+            value = word(key, raw) if key in CHOICES else _bool(raw)
         if value is not None:
             updates[key] = value
     if updates and any(load(env).get(k) != v for k, v in updates.items()):
