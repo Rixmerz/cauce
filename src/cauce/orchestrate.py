@@ -73,6 +73,7 @@ from cauce import risk as risk_mod
 from cauce import services as services_mod
 from cauce import specs as specs_mod
 from cauce import surfaces as surfaces_mod
+from cauce import tracer as tracer_mod
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify, narrow
 from cauce.escalate import (
@@ -650,6 +651,12 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
             context += notes.constraint_lines(kept_rules)
             neighbour_notes.append(f"constraints: {len(kept_rules)} this project keeps")
             known = [*known, *kept_rules]
+    # A repository that follows TRACER (`docs/tracer/`): its writing workers read the method first.
+    if kind not in READ_ONLY_KINDS and config.enabled("tracer", os.environ) and (
+            method := tracer_mod.brief_lines(repo_dir, text)):
+        context += method
+        neighbour_notes.append(f"tracer: this repository follows TRACER; its audience, floors, anti-patterns "
+                               f"and {len(tracer_mod.flows_for(repo_dir, text))} named flow(s) go in the brief")
     # A repository that keeps OpenSpec specs: its writing workers keep the ones they reach.
     if kind not in READ_ONLY_KINDS and config.enabled("specs", os.environ) and (
             drifted := specs_mod.drift(repo_dir, options.base or "HEAD")):
@@ -885,7 +892,7 @@ def warnings(reasons: Sequence[str]) -> list[str]:
 
 
 #: Plan lines that read the same task after task in a repository: said once a day there.
-_REPEATED = ("CI also runs", "CI: ", "engram: ", "livespec: ", "specs: ")
+_REPEATED = ("CI also runs", "CI: ", "engram: ", "livespec: ", "specs: ", "tracer: ")
 SAID_META = "said:"
 
 
@@ -1698,6 +1705,11 @@ def run(
         size = _realized(store, task["id"], report, workspace, time.monotonic() - clock)
         drifted = specs_mod.drift(workspace.repo_dir if workspace else repo_dir) \
             if status == "done" and writes and report.changed and config.enabled("specs", os.environ) else None
+        if drifted is not None:
+            # The report a `cauce run` prints is its ending: it offers the catch-up as the hooks' ending does.
+            report.impact += [line.strip() for line in specs_mod.ending_lines(
+                task, report.changed, drifted.data(),
+                after=f"run:{task['workflow_run']}" if task.get("workflow_run") else f"task:{task['id']}")]
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
                         tip=_tip(workspace, report.branch), base=workspace.base if workspace else None,
@@ -2448,7 +2460,7 @@ def kept_evidence(text: str, room: int = 4000) -> str:
 def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, changed: Sequence[str],
                    known: Sequence[Mapping[str, str]] = (), why: Sequence[str] = (),
                    rules: Sequence[Mapping[str, Any]] = (), rows: Sequence[str] = (), running: str = "",
-                   impact: Sequence[str] = ()) -> str:
+                   impact: Sequence[str] = (), method: Sequence[str] = ()) -> str:
     """What the verifier is given: the request in its words, the change, why it is checked
     (the risk's reasons, in the router's words) and the constraints the project keeps —
     never the worker's account."""
@@ -2475,6 +2487,8 @@ def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, change
     if lines := notes.constraint_lines(rules):
         parts.append("\n".join(lines) + "\nA change that breaks one that applies to it is a finding, shown with "
                      "the case that breaks it.")
+    if method and kind not in READ_ONLY_KINDS:
+        parts += method
     if rows:
         # A fix of ledger rows: its answers per row decide the re-check after it (`workflows._ledger`).
         parts.append(f"The request is a fix of the ledger rows {', '.join(rows)}. Answer every one in `verdicts`, "
@@ -2768,7 +2782,9 @@ def _check_spec(*, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec, wo
     fixing = tuple(rows)
     check = dataclasses.replace(
         spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values()), risk.reasons,
-                                    rules=rules, rows=fixing, running=running, impact=impact),
+                                    rules=rules, rows=fixing, running=running, impact=impact,
+                                    method=tracer_mod.verifier_lines(workdir, text, tuple(measuring))
+                                    if config.enabled("tracer", os.environ) else ()),
         verdicts=fixing, verdict_words=ledger_mod.WORDS["recheck"] if fixing else (),
         cell=vcell, max_turns=min(spec.max_turns, VERIFIER_TURNS),
         # Its own session, never the worker's: it reads the request and the diff, not the work's account.

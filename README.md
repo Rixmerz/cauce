@@ -118,7 +118,8 @@ index takes part in every step, at no token cost:
 | before routing | a task whose code implements a critical spec, or whose symbol is called from everywhere, starts one rung up; a review of such code is reviewed as critical |
 | before the worker starts | a code map at the top of its prompt: the symbols the request is about, where they are, how many callers, the specs they implement, the tests that exercise them |
 | during the work | the worker gets livespec's tools, with a hint for its kind of work and the `workspace` every call needs |
-| after a pass | the specs the change touched, and the files outside the change that call what it changed |
+| after a pass | the specs the change touched, and the files outside the change that call what it changed, in the report and in the independent check's brief, as where to probe |
+| in `cauce stats` | how many attempts handed livespec called it, and how those attempts went (observed, not a trial) |
 | between sessions | an index missing or older than the last commit is (re)built in the background when a session starts in an enrolled project |
 
 cauce reads the index (`.mcp-docs/docs.db`) directly with `sqlite3`, read-only,
@@ -129,6 +130,29 @@ otherwise, and the pinned release through `uvx` as the last resort.
 Switch it off from the plugin settings (`livespec`), with `cauce config
 livespec off`, `CAUCE_LIVESPEC=off`, or `--no-livespec` for one task.
 `cauce neighbours` shows what cauce sees.
+
+### Specs that keep up with the code
+
+A repository with an OpenSpec folder (`openspec/`) is told so on every writing
+task: its worker updates the spec a change of behaviour reaches, in the same
+work. The plan says how far the specs are behind (days and code commits since
+`openspec/` last changed), and an ending whose change touched no spec, where
+they are five or more code commits behind, offers the docs task that catches
+them up (livespec's `propose_specs_from_codebase` drafts them; `openspec
+validate --strict` checks them). Nothing is started. The `specs` setting turns
+it off.
+
+### The TRACER method
+
+A repository that follows [TRACER](https://github.com/Rixmerz/tracer)
+(`docs/tracer/`) gets it carried into the work: a writing worker reads the
+audience profiles, identity, component floors, anti-pattern catalogue and the
+critical flows its request names before any code, and the independent check
+holds the change to those flows' CORRECT lines and the catalogue, judged as the
+audience would. `cauce workflow run tracer-slice "<slice>"` builds one slice
+test-first and verifies it blind, with the review chain after it. TRACER's
+phases that need the person (contract, empathy round, scope filter) stay in the
+session, with its own plugin. The `tracer` setting turns it off.
 
 ### engram, for teams that already use it
 
@@ -716,7 +740,9 @@ Definitions are JSON files:
   session → joined → the same review chain; one part is `feature`), `bugfix` (reproduce and fix in one worker,
   then the same review chain), `review-fix`, `dual-review` and `panel` (four
   blind reviews, each through its own lens: correctness, security,
-  performance, tests; then the same refute → fix → recheck). The ledger steps
+  performance, tests; then the same refute → fix → recheck), `tracer-slice`
+  (one TRACER slice built test-first, verified blind against its flows'
+  CORRECT lines, floors and anti-patterns, then the same chain). The ledger steps
   are skipped when the review found nothing, so a clean change costs two
   workers, and a join that merges cleanly costs none.
 

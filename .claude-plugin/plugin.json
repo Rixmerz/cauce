@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.51.0",
+  "version": "0.52.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -121,6 +121,12 @@
       "type": "boolean",
       "title": "Keep a repository's OpenSpec specs alive",
       "description": "In a repository with an openspec/ folder, a writing worker is told that a change in behaviour updates the spec that describes it in the same work, and how far the specs are behind the code. An ending whose change touched no spec, where the specs are five or more code commits behind, says so and offers the task that brings them up to date; nothing is started. Off: specs are only read.",
+      "default": true
+    },
+    "tracer": {
+      "type": "boolean",
+      "title": "Carry the TRACER method into the work",
+      "description": "In a repository with a docs/tracer/ folder, a writing worker reads its audience profiles, identity, component floors, anti-pattern catalogue and the critical flows its request names before any code, and the independent check holds the change to those flows' CORRECT lines and the catalogue. Off: the folder is a folder like any other.",
       "default": true
     },
     "role_trials": {

@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-10-27
+
+### Added
+
+- **Specs that keep up with the code** (`cauce.specs`, the `specs` setting, on by default). cauce
+  read a repository's OpenSpec specs and never said they were falling behind; a repository could
+  build for weeks with none of it specified. Now, where `openspec/` exists:
+  - a writing worker is told a change of behaviour updates the spec that describes it in the same
+    work, or proposes one under `openspec/changes/`, and how far the specs are behind;
+  - the plan says it, days and code commits since `openspec/` last changed, once a day;
+  - an ending whose change touched no spec, where the specs are five or more code commits behind,
+    offers the docs task that catches them up, in the report `cauce run` prints and in the
+    session's ending. Nothing is started. In a real run the worker, told so, still added a
+    behaviour without a spec: the instruction alone does not keep specs alive, and the offer is
+    what catches it.
+- **The TRACER method carried into the work** (`cauce.tracer`, the `tracer` setting). In a
+  repository with `docs/tracer/`, a writing worker reads the audience profiles, identity,
+  component floors, anti-pattern catalogue and the critical flows its request names before any
+  code, and the independent check holds the change to those flows' CORRECT lines and the
+  catalogue. A flow is named only by a strict match of its file name's words. When the check has
+  layout-inspector (it measures, so it comes with a change that touches the interface), it is told
+  which of its tools measures each floor and anti-pattern, and a measurement is the finding's proof.
+- **`tracer-slice`**, a bundled workflow: one slice checked ready and built test-first, verified
+  blind as its audience would, then refute, fix (an escaped expectation also extends the flow,
+  floors or catalogue) and recheck.
+
+### Changed
+
+- **The independent check is told what livespec says the change reaches**: the specs it touches
+  and the callers outside it, as where to probe. Before, only the report a person reads had them.
+- **`cauce stats` says whether workers use livespec**: how many attempts handed it called it, and
+  how those attempts went, observed, never a trial.
+
 ## [0.51.0] - 2026-10-27
 
 ### Changed

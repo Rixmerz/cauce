@@ -47,6 +47,7 @@ def test_a_writing_worker_is_told_to_keep_the_specs_and_the_ending_offers_to_cat
     finished = store.final_event(report.task_id)["data"]
     assert finished["specs"]["code_commits"] >= specs.BEHIND_COMMITS
     # The session that sent it hears it with its ending, and the command that would catch them up.
+    assert any("touches no spec" in line for line in report.impact)  # what `cauce run` prints
     text, _ = hooks.endings(store, "s1")
     assert "touches no spec" in text and f"--after task:{report.task_id}" in text and "Change no code." in text
 
