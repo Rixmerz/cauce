@@ -1,10 +1,11 @@
 """What a running task shows of itself: time against its kind's usual, stage, what it wrote, a quiet worker."""
 from __future__ import annotations
 
+import shutil
 import subprocess
 from datetime import datetime
 
-from cauce import progress
+from cauce import isolate, progress
 from cauce.cli import main
 from cauce.config import home
 
@@ -147,3 +148,87 @@ def test_texts_give_each_file_before_and_after_live_and_kept(git_repo, store):
     assert acp.task_diffs(task["id"], False)[0]["newText"].startswith("def logout")
     assert progress.of(store, {**task, "body": "Add:\n- a logout button\n- its test"})["criteria"][1] == {
         "id": "S2", "text": "its test"}
+
+
+def _folder_of_two_repositories(tmp_path):
+    folder = tmp_path / "folder"
+    out = []
+    for name in ("api", "web"):
+        repo_dir = folder / name
+        repo_dir.mkdir(parents=True)
+        git(repo_dir, "init", "-q", "-b", "main")
+        (repo_dir / "app.py").write_text("print('hi')\n")
+        git(repo_dir, "add", "-A")
+        git(repo_dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
+        out.append(repo_dir)
+    return folder, *out
+
+
+def test_a_task_in_a_folder_of_repositories_is_read_in_each_of_them(tmp_path, store, capsys):
+    """No worktree can be made in a folder that is no checkout: progress, peek and the phase read each
+    repository against the commit it was at when the attempt started."""
+    from cauce.ui import api as ui
+
+    from .test_checking import log
+
+    folder, api, web = _folder_of_two_repositories(tmp_path)
+    (web / "mine.txt").write_text("the person's, uncommitted\n")  # already there: not the worker's
+    task = _running(store)
+    places = isolate.stand(folder, [api, web])
+    store.add_event(task["id"], "attempt_started", seq=1, places=places)
+    assert [p["name"] for p in places] == ["api", "web"]
+    assert [p["head"] for p in places] == [git(api, "rev-parse", "HEAD"), git(web, "rev-parse", "HEAD")]
+    assert progress.changes(task["id"], None, places=places) == {"files": 0, "added": 0, "removed": 0, "paths": []}
+    assert isolate.changed_so_far(home(), folder, task["id"], {"places": places}) == ()
+
+    (api / "app.py").write_text("print('hi')\nprint('there')\n")  # tracked, modified
+    (api / "__pycache__").mkdir()
+    (api / "__pycache__" / "x.pyc").write_text("junk\n")  # a tool's artifact is no change
+    (web / "page.ts").write_text("a\nb\nc\n")  # new
+    (web / "mine.txt").write_text("the person's, uncommitted\n")  # touched by no one
+    (web / "done.ts").write_text("z\n")
+    git(web, "add", "done.ts")
+    git(web, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "worker committed")
+    log([(task["id"], 1, "bash:cat")])
+
+    assert progress.changes(task["id"], None, places=places) == {
+        "files": 3, "added": 5, "removed": 0, "paths": ["api/app.py", "web/done.ts", "web/page.ts"]}
+    assert isolate.changed_so_far(home(), folder, task["id"], {"places": places}) \
+        == ("api/app.py", "web/done.ts", "web/page.ts")
+    now = progress.of(store, store.get_task(task["id"]))
+    assert now["changes"]["files"] == 3
+    assert now["phase"] == "implementing"  # a shell wrote: no write call
+    assert progress.files_line(now) == "wrote api/app.py, web/done.ts, web/page.ts"
+
+    found = progress.peek(task["id"], None, places=places)
+    assert "# api" in found["diff"]
+    assert "# web" in found["diff"]
+    assert "mine.txt" not in found["diff"]
+    assert "+print('there')" in found["diff"]
+    assert "+++ b/web/page.ts" in found["diff"]
+    assert not found["cut"]
+    assert [p["head"] for p in found["places"]] == [p["head"] for p in places]
+
+    assert main(["peek", str(task["id"])]) == 0
+    assert "+++ b/api/app.py" in capsys.readouterr().out
+    assert main(["peek", str(task["id"]), "--stat"]) == 0
+    assert "3 files +5 −0" in capsys.readouterr().out
+    assert "+++ b/web/page.ts" in ui.task_diff(store, task["id"])["diff"]
+    # a task that recorded no places and has no worktree still says there is nothing to read
+    bare = _running(store)
+    assert progress.changes(bare["id"], None) is None
+    assert progress.peek(bare["id"], None) is None
+
+
+def test_a_checkout_git_cannot_read_says_nothing_rather_than_less(tmp_path, store, capsys):
+    folder, api, web = _folder_of_two_repositories(tmp_path)
+    task = _running(store)
+    places = isolate.stand(folder, [api, web])
+    store.add_event(task["id"], "attempt_started", seq=2, places=places)
+    (api / "app.py").write_text("changed\n")
+    shutil.rmtree(web)  # the checkout is gone: git cannot say
+    assert progress.changes(task["id"], None, places=places) is None
+    assert progress.peek(task["id"], None, places=places) is None
+    assert isolate.changed_so_far(home(), folder, task["id"], {"places": places}) is None
+    assert main(["peek", str(task["id"]), "--stat"]) == 1
+    assert "no worktree of its own, or git cannot say" in capsys.readouterr().err

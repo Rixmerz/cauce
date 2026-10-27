@@ -1002,8 +1002,9 @@ def cmd_peek(args: argparse.Namespace) -> int:
             return 1
         started = store.last_event(args.id, "attempt_started")
         base = ((started or {}).get("data") or {}).get("base")
+        places = ((started or {}).get("data") or {}).get("places")
         if args.stat:
-            written = progress.changes(args.id, base)
+            written = progress.changes(args.id, base, places=places)
             if written is None:
                 print(f"#{args.id} works in no worktree of its own, or git cannot say", file=sys.stderr)
                 return 1
@@ -1011,7 +1012,7 @@ def cmd_peek(args: argparse.Namespace) -> int:
             if names := progress.files_line({"changes": written}):
                 print(names)
             return 0
-        found = progress.peek(args.id, base)
+        found = progress.peek(args.id, base, places=places)
     finally:
         store.close()
     if found is None:
@@ -1019,8 +1020,9 @@ def cmd_peek(args: argparse.Namespace) -> int:
         return 1
     print(found["diff"] or "nothing written yet", end="" if found["diff"] else "\n")
     if found["cut"]:
-        print(f"… cut at {progress.PEEK_BYTES} bytes; the whole of it: "
-              f"git -C {found['worktree']} diff {base or 'HEAD'}")
+        whole = "; ".join(f"git -C {p['path']} diff {p['head']}" for p in found["places"]) if "places" in found \
+            else f"git -C {found['worktree']} diff {base or 'HEAD'}"
+        print(f"… cut at {progress.PEEK_BYTES} bytes; the whole of it: {whole}")
     return 0
 
 

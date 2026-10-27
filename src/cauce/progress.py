@@ -73,13 +73,48 @@ def _artifact(path: str) -> bool:
     return any(part in isolate.ARTIFACT_DIRS for part in Path(path).parts)
 
 
-def changes(task_id: int, base: str | None, root: Path | None = None) -> dict[str, Any] | None:
+def _new_lines(path: Path) -> int:
+    try:
+        with path.open("rb") as fh:
+            return fh.read(NEW_FILE_BYTES).count(b"\n")
+    except OSError:
+        return 0
+
+
+def _changes_in(places: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """The same count for a task that runs with no worktree: each checkout it may change, read
+    against how it stood when the attempt started (`isolate.stand`). The lines of a file that was
+    already modified there before the attempt include what the person had written."""
+    files, added, removed = set(), 0, 0
+    for place in places:
+        top = Path(place["path"])
+        moved = isolate.moved_in_place(place)
+        numstat = _git(top, "diff", "--numstat", place["head"], "--")
+        if moved is None or numstat is None:
+            return None
+        seen = set()
+        for line in numstat.splitlines():
+            parts = line.split("\t")
+            if len(parts) == 3 and parts[2] in moved:
+                seen.add(parts[2])
+                added += int(parts[0]) if parts[0].isdigit() else 0
+                removed += int(parts[1]) if parts[1].isdigit() else 0
+        for name in [m for m in moved if m not in seen][:NEW_FILES]:
+            added += _new_lines(top / name)
+        files.update(isolate.named(place, m) for m in moved if not _artifact(m))
+    return {"files": len(files), "added": added, "removed": removed, "paths": sorted(files)}
+
+
+def changes(task_id: int, base: str | None, root: Path | None = None,
+            places: Sequence[Mapping[str, Any]] | None = None) -> dict[str, Any] | None:
     """What a task's worker has written in its worktree so far, against the commit it started on:
-    the files and the lines added and removed, new files counted whole. None when it works in no
-    worktree, or git cannot say."""
+    the files and the lines added and removed, new files counted whole. A task with no worktree
+    (a run in the checkout, or in a folder of several) is read in each checkout its attempt
+    recorded in `places`, its files named from the folder. None when it has neither, or git
+    cannot say."""
     path = worktree(task_id, root)
     if not path.is_dir():
-        return None
+        return _changes_in(places) if places else None
     numstat = _git(path, "diff", "--numstat", base or "HEAD", "--")
     untracked = _git(path, "ls-files", "--others", "--exclude-standard")
     if numstat is None or untracked is None:
@@ -93,11 +128,7 @@ def changes(task_id: int, base: str | None, root: Path | None = None) -> dict[st
             removed += int(parts[1]) if parts[1].isdigit() else 0
     new = [p for p in untracked.splitlines() if p and not _artifact(p)]
     for name in new[:NEW_FILES]:
-        try:
-            with (path / name).open("rb") as fh:
-                added += fh.read(NEW_FILE_BYTES).count(b"\n")
-        except OSError:
-            continue
+        added += _new_lines(path / name)
     files.update(new)
     return {"files": len(files), "added": added, "removed": removed, "paths": sorted(files)}
 
@@ -110,13 +141,46 @@ def worktree(task_id: int, root: Path | None = None) -> Path:
 PEEK_BYTES = 200_000
 
 
-def peek(task_id: int, base: str | None, root: Path | None = None) -> dict[str, Any] | None:
+def _peek_in(places: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """`peek` of a task with no worktree: what changed in each checkout since its attempt started
+    (`isolate.stand`), one after the other, each file under its checkout's name."""
+    text, shown = [], []
+    for place in places:
+        top = Path(place["path"])
+        moved = isolate.moved_in_place(place)
+        if moved is None:
+            return None
+        if not moved:
+            continue
+        prefix = f"{place['name']}/" if place.get("name") else ""
+        flags = [f"--src-prefix=a/{prefix}", f"--dst-prefix=b/{prefix}"]
+        tracked = _git(top, "diff", "--stat", "--patch", "--no-color", *flags, place["head"], "--", *moved)
+        untracked = _git(top, "ls-files", "--others", "--exclude-standard")
+        if tracked is None or untracked is None:
+            return None
+        text.append(f"# {place['name'] or top}\n{tracked}")
+        new = set(untracked.splitlines())
+        shown.append({"path": str(top), "head": place["head"]})
+        for name in [m for m in moved if m in new and not _artifact(m)][:NEW_FILES]:
+            try:
+                done = subprocess.run(["git", "diff", "--no-index", "--no-color", *flags, "--", "/dev/null", name],
+                                      cwd=top, capture_output=True, text=True, timeout=10, errors="replace")
+            except (OSError, subprocess.SubprocessError):
+                continue
+            text.append(done.stdout)
+    raw = "".join(text)
+    return {"diff": raw[:PEEK_BYTES], "cut": len(raw) > PEEK_BYTES, "places": shown}
+
+
+def peek(task_id: int, base: str | None, root: Path | None = None,
+         places: Sequence[Mapping[str, Any]] | None = None) -> dict[str, Any] | None:
     """A running worker's diff so far: its worktree against the commit it started on, new files
-    whole, a tool's artifacts left out. Read only (no index, no stash): None when it works in no
-    worktree, or git cannot say."""
+    whole, a tool's artifacts left out; a task with no worktree, each checkout in `places`
+    against how it stood when its attempt started. Read only (no index, no stash): None when it
+    has neither, or git cannot say."""
     path = worktree(task_id, root)
     if not path.is_dir():
-        return None
+        return _peek_in(places) if places else None
     tracked = _git(path, "diff", "--stat", "--patch", "--no-color", base or "HEAD", "--")
     untracked = _git(path, "ls-files", "--others", "--exclude-standard")
     if tracked is None or untracked is None:
@@ -191,6 +255,7 @@ def of(store: Any, task: Mapping[str, Any], *, now: float | None = None, root: P
         out["elapsed_s"] = round(now - began)
     started = store.last_event(task_id, "attempt_started")
     seq = (started["data"] or {}).get("seq") if started else None
+    begun = (started or {}).get("data") or {}
     stage = store.last_event(task_id, "stage")
     out["stage"] = STAGES.get(str((stage["data"] or {}).get("stage")), "worker") \
         if stage and started and stage["id"] > started["id"] else "worker"
@@ -205,7 +270,7 @@ def of(store: Any, task: Mapping[str, Any], *, now: float | None = None, root: P
         out["estimate"] = expected
     if items := asked(task):
         out["criteria"] = items
-    if (written := changes(task_id, ((started or {}).get("data") or {}).get("base"), root)) is not None:
+    if (written := changes(task_id, begun.get("base"), root, begun.get("places"))) is not None:
         out["changes"] = written
         # A worker that writes through its shell (`cat >`, `sed -i`) makes no write call.
         if written["files"] and out.get("phase") == "exploring":

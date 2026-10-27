@@ -600,6 +600,59 @@ def test_the_repositorys_check_can_settle_what_a_refused_worker_could_not(git_re
     assert "these changes are in your checkout (the run had no worktree), unverified" in report.text()
 
 
+def test_a_run_in_a_folder_of_several_repositories_is_read_in_each_while_it_runs(tmp_path, store):
+    """A request that edits two repositories is sent from the folder that holds them: no worktree can be
+    made there, so what the worker writes is read in each repository against how it stood at the start,
+    while it runs and at the end, and the ending says which repositories it changed in place."""
+    from cauce import progress
+    from cauce.store import home
+
+    from .conftest import git
+    from .test_checking import log
+
+    folder = tmp_path / "capacitacion"
+    api, web = folder / "api", folder / "web"
+    for repo_dir in (api, web):
+        repo_dir.mkdir(parents=True)
+        git(repo_dir, "init", "-q", "-b", "main")
+        (repo_dir / "README.md").write_text("hi\n")
+        git(repo_dir, "add", "-A")
+        git(repo_dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
+    (web / "mine.txt").write_text("the person's own, not committed\n")
+    midway: dict = {}
+
+    def launcher(spec):
+        task = store.list_tasks(status=["running"])[0]
+        (api / "routes.js").write_text("a\nb\n")
+        (web / "app.ts").write_text("x\n")
+        log([(task["id"], 1, "read:app")])
+        midway["progress"] = progress.of(store, task)
+        midway["peek"] = progress.peek(task["id"], None, places=store.last_event(
+            task["id"], "attempt_started")["data"]["places"])
+        return WorkerResult(True, None, "done", evidence="1 passed", changed_paths=("api/routes.js", "web/app.ts"))
+
+    report = run("edit both", folder, store, Options(), registry={}, launcher=launcher,
+                 classifier=kind("implement"))
+    assert report.status == "done"
+    assert not report.isolated
+    assert not (home() / "worktrees" / f"task-{report.task_id}").exists()
+    # the attempt kept where each repository stood; the person's own file is no change of the worker's
+    started = store.last_event(report.task_id, "attempt_started")["data"]
+    assert [(p["name"], bool(p["head"])) for p in started["places"]] == [("api", True), ("web", True)]
+    assert midway["progress"]["changes"] == {"files": 2, "added": 3, "removed": 0,
+                                             "paths": ["api/routes.js", "web/app.ts"]}
+    assert midway["progress"]["phase"] == "implementing"  # the log's last call was a read
+    assert "+a" in midway["peek"]["diff"]
+    assert "b/api/routes.js" in midway["peek"]["diff"]
+    assert "b/web/app.ts" in midway["peek"]["diff"]
+    assert "mine.txt" not in midway["peek"]["diff"]
+    # and the ending says plainly which repositories it changed, in place
+    assert report.in_place == ["api", "web"]
+    assert "in your checkouts, repository by repository: api (1 file), web (1 file); the run had no worktree" \
+        in report.text()
+    assert store.final_event(report.task_id)["data"]["in_place"] == ["api", "web"]
+
+
 def test_work_that_failed_is_dropped_and_the_report_says_so(git_repo, store):
     script = Script(bad(Failure.SPEC_BUG, "no such API"), write="half.py")
     report = run("do it", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))

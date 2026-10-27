@@ -836,8 +836,12 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
             branch = data.get("branch")
             commit = f" (commit {str(data['commit'])[:12]})" if data.get("commit") else ""
             # In the checkout only when the run had no worktree; an older ending did not say.
+            in_place = data.get("in_place")
             where = (f"; its work is on branch {branch}{commit}, merged only on the person's word"
-                     if branch else "; its changes are in the checkout (the run had no worktree)"
+                     if branch else f"; its changes are in your checkouts of {', '.join(in_place)}, none of them in a "
+                     "worktree (the run started in a folder that holds several repositories)"
+                     if changed and not data.get("isolated") and in_place
+                     else "; its changes are in the checkout (the run had no worktree)"
                      if changed and not data.get("isolated") else "; no branch kept its changes"
                      if changed else "; it changed nothing")
             lines.append(f"  passed at {data.get('final_cell') or t['final_cell']}{where}")

@@ -342,6 +342,16 @@ def _died(store: Store, task_id: int) -> None:
                     stop=stops.Stop("died", "no sign of life").data())
 
 
+def test_an_ending_with_no_worktree_names_the_repositories_it_changed_in_place(store: Store):
+    t = store.create_task("edit both repos", status="running", source="cauce", session_id="s")
+    store.update_task(t["id"], status="done", final_cell="sonnet/medium")
+    store.add_event(t["id"], "finished", status="done", final_cell="sonnet/medium", isolated=False,
+                    changed=["api/routes.js", "web/app.ts"], changed_n=2, in_place=["api", "web"])
+    notice = hooks.endings(store, "s", claim="stop")[0]
+    assert "its changes are in your checkouts of api, web, none of them in a worktree" in notice
+    assert "changed: api/routes.js, web/app.ts" in notice
+
+
 def test_a_resumed_task_is_told_with_its_last_ending_never_an_earlier_one(store: Store):
     # Task died twice, then a resume ran to a pass: the notice is the pass's.
     t = store.create_task("add the portal", status="interrupted", source="cauce", session_id="s")
