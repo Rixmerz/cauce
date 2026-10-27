@@ -18,7 +18,10 @@
 ### Added
 
 - **`bench/speed/versus.py`**: cauce end to end against one plain `claude -p` session at a cell
-  given, on the same build, judged by hidden tests.
+  given, on the same build, judged by hidden tests, with the lines each kept. Pulled apart, cauce's
+  own machinery was about 5 s of the harder build; its independent verifier (a pricing change, high
+  risk) was the rest of the gap to one Opus session at low effort. A guidelines CLAUDE.md
+  (`andrej-karpathy-skills`) kept diffs 4 to 15% smaller and made no arm but opus/low faster.
 
 ### Added
 

@@ -269,3 +269,42 @@ The rest of cauce's 213 s, read from one run's events: its plan 6 s, the worker 
 independent verifier 50 s (the change touched a pricing checkout: a high risk), and filing notes
 7 s after the ending, which a foreground `cauce run` still waits for. The verifier is the one
 cauce gives that one session does not; the rest is the cell's own pace.
+
+## N: where cauce's time goes against one session, and a guidelines CLAUDE.md (`versus.py`)
+
+Pulling cauce apart on the harder build (three runs each, every one right):
+
+| Arm | Wall p50 | Cost p50 |
+|---|---|---|
+| one session, opus/low | 86 s | $0.59 |
+| cauce, start pinned at opus/low, no independent verifier | 91 s | $0.48 |
+| cauce, its own start (sonnet/high), no independent verifier | 108 s | $0.27 |
+| cauce as it runs | 213 s | $0.54 |
+
+cauce's own machinery (plan, worktree, check, report) is about 5 s. The cell is about 17 s, at half
+the cost. The independent verifier is the rest: the change touches a pricing checkout, a high
+risk. Over 53 checks in this store it found blockers in 16, so it stays. A faster cell for it
+was measured in `bench/review` (`effort.py`): sonnet/medium caught 20 and opus/low 18 of the 42
+bugs sonnet/high's 27 cover, and opus/medium caught 36 in 81 s at three times the cost.
+
+`andrej-karpathy-skills`' CLAUDE.md (think first, simplicity, surgical changes, verifiable goals),
+committed in the copy, against the same sessions and cauce. All 33 runs were right; lines are what
+the work added, at the median:
+
+| Build | Arm | Wall p50 | Cost p50 | Lines added | Of them, tests |
+|---|---|---|---|---|---|
+| medium | opus/low | 84 s | $0.44 | 181 | 61 |
+| medium | opus/low + guidelines | 75 s | $0.43 | 153 | 54 |
+| medium | sonnet/high | 78 s | $0.27 | 261 | 125 |
+| medium | sonnet/high + guidelines | 101 s | $0.34 | 253 | 144 |
+| medium | cauce | 85 s | $0.20 | 226 | 104 |
+| medium | cauce + guidelines | 99 s | $0.19 | 198 | 78 |
+| harder | opus/low | 119 s | $0.82 | 341 | 164 |
+| harder | opus/low + guidelines | 95 s | $0.69 | 310 | 139 |
+| harder | sonnet/high | 152 s | $0.54 | 430 | 231 |
+| harder | sonnet/high + guidelines | 156 s | $0.57 | 379 | 195 |
+| harder | cauce | 192 s | $0.48 | 371 | 185 |
+| harder | cauce + guidelines | 196 s | $0.49 | 357 | 166 |
+
+The guidelines kept diffs 4 to 15% smaller, most of it in tests, and made opus/low faster; they
+made sonnet and cauce no faster. Three runs a cell is noisy: nothing here was built from it.

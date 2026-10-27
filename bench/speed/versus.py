@@ -107,14 +107,14 @@ def diffstat(where: Path) -> dict:
 
 def one(arm: str, variant: str) -> dict:
     where = build.repository(variant)
-    if arm.startswith("karpathy:"):
+    if arm.startswith("karpathy:") or arm.endswith("+karpathy"):
         shutil.copy(KARPATHY / "CLAUDE.md", where / "CLAUDE.md")
         subprocess.run(["git", "add", "CLAUDE.md"], cwd=where, check=True)
         subprocess.run(["git", "-c", "user.email=b@b", "-c", "user.name=b", "commit", "--amend", "-qm", "init"],
                        cwd=where, check=True)
     began = time.monotonic()
     try:
-        got = (cauce(where, ask(variant), arm) if arm.startswith("cauce")
+        got = (cauce(where, ask(variant), arm.removesuffix("+karpathy")) if arm.startswith("cauce")
                else plain(arm.removeprefix("karpathy:"), where, ask(variant)))
     except subprocess.TimeoutExpired:
         got = {"error": "timed out"}
