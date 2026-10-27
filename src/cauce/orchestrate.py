@@ -71,6 +71,7 @@ from cauce import notes as notes_mod
 from cauce import points as points_mod
 from cauce import risk as risk_mod
 from cauce import services as services_mod
+from cauce import specs as specs_mod
 from cauce import surfaces as surfaces_mod
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
 from cauce.classify import Classification, classify, narrow
@@ -649,6 +650,12 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
             context += notes.constraint_lines(kept_rules)
             neighbour_notes.append(f"constraints: {len(kept_rules)} this project keeps")
             known = [*known, *kept_rules]
+    # A repository that keeps OpenSpec specs: its writing workers keep the ones they reach.
+    if kind not in READ_ONLY_KINDS and config.enabled("specs", os.environ) and (
+            drifted := specs_mod.drift(repo_dir, options.base or "HEAD")):
+        context += specs_mod.brief_lines(drifted)
+        if drifted.behind:
+            neighbour_notes.append(f"specs: {drifted.text()}; the worker is told to keep the ones it reaches")
     selected = _with_role(caps.select(registry, kind, workdir=repo_dir, paths=touched_paths(text, options),
                                       reading=kind in READ_ONLY_KINDS), role, registry, repo_dir)
     names = tuple(dict.fromkeys([*selected.names, *(a.name for a, _ in active)]))
@@ -878,7 +885,7 @@ def warnings(reasons: Sequence[str]) -> list[str]:
 
 
 #: Plan lines that read the same task after task in a repository: said once a day there.
-_REPEATED = ("CI also runs", "CI: ", "engram: ", "livespec: ")
+_REPEATED = ("CI also runs", "CI: ", "engram: ", "livespec: ", "specs: ")
 SAID_META = "said:"
 
 
@@ -1687,11 +1694,14 @@ def run(
             # A security problem the worker named is an alert of its own, never only a note among others.
             report.alerts = notes.security_alerts(report.learned, attempts[-1].findings if attempts else ())
         size = _realized(store, task["id"], report, workspace, time.monotonic() - clock)
+        drifted = specs_mod.drift(workspace.repo_dir if workspace else repo_dir) \
+            if status == "done" and writes and report.changed and config.enabled("specs", os.environ) else None
         store.add_event(task["id"], "finished", status=status, final_cell=report.final_cell,
                         cost_usd=round(report.cost_usd, 4), branch=report.branch, impact=report.impact,
                         tip=_tip(workspace, report.branch), base=workspace.base if workspace else None,
                         commit=report.commit, checked=report.checked, isolated=report.isolated,
                         alerts=report.alerts,
+                        **({"specs": drifted.data()} if drifted else {}),
                         changed=report.changed[:CHANGED_KEPT], changed_n=len(report.changed),
                         stop=report.stop.data() if report.stop else None,
                         risk=the_plan.risk.data(), points=the_plan.points.points, realized=size.points,

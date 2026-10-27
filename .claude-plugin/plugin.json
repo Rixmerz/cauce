@@ -117,6 +117,12 @@
       "description": "A task that is no workflow step, answers no review rows and that no queued work waits on ends as soon as cauce's own check passes; its independent verifier then reads the branch it kept. A blocker it shows reopens the task (stopped for review, its work kept), and the session hears of it as a new ending. Off: the ending waits for the verifier, and its blockers earn a correction in the same run.",
       "default": true
     },
+    "specs": {
+      "type": "boolean",
+      "title": "Keep a repository's OpenSpec specs alive",
+      "description": "In a repository with an openspec/ folder, a writing worker is told that a change in behaviour updates the spec that describes it in the same work, and how far the specs are behind the code. An ending whose change touched no spec, where the specs are five or more code commits behind, says so and offers the task that brings them up to date; nothing is started. Off: specs are only read.",
+      "default": true
+    },
     "role_trials": {
       "type": "boolean",
       "title": "Improve each role's lessons by trial",
