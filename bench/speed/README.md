@@ -13,6 +13,78 @@ python bench/speed/build.py run sonnet/high,sonnet/high+batch 4 4      # a `+bat
 python bench/speed/versus.py run cauce,opus/low,opus/medium 3 3 [--hard] && python bench/speed/versus.py report
 ```
 
+## Summary: what was measured, built, left alone, and never measured
+
+Every row below is a real run judged by hidden tests or by cauce's own records; each links to its
+section. Three to four runs a cell is noisy: a difference under about 20% is not read as one.
+
+**Built, because a measurement showed it:**
+
+| Change | Release | Evidence |
+|---|---|---|
+| cauce's check runs beside the independent verifier | 0.45 | A: −42% on the median, the check not slowed |
+| features start at sonnet/high (was sonnet/xhigh) | 0.45 | B: as right, 3 to 4 times sooner |
+| a plan starts at opus/high (was opus/xhigh) | 0.45 | C: the same parts in half the time |
+| the worker does not run the full check before it reports | 0.47 | E: 131 s against 216 s, as right |
+| the dispatcher's wait names a collision | 0.47 | F: independent pairs started 42/42 (was 29/42), colliding ones held |
+| a start rises only on climbs | 0.48 | G: history had pinned writing kinds a rung or two high |
+| the mod hears an ending within about 2 s | 0.48 | H: 9 s p50 and 16 s p90 before |
+| notes are filed after the ending | 0.49 | J: 5.3 s p50 off every step |
+| a writing kind classified high starts at its ladder's first cell | 0.50 | M: 213 s against 468 s, as right |
+| the session passes the kind it read (`--kind`) | 0.50 | L, O: skips a 6 s classifier call |
+| the verifier runs after the ending (`late_verifier`), `cauce run` exits with it | 0.51 | N, R |
+| Opus at low effort is no cheap cell | 0.51 | Q: two of three medium builds climbed for nothing |
+| a plan classified high is not raised to opus/xhigh | 0.51 | C, and plans in real use: 47% first-try at opus/xhigh, p50 10 min |
+
+**Measured and not built, and why:**
+
+| Idea | Why not |
+|---|---|
+| the verifier at sonnet/medium or opus/low | K, Q: 20 and 18 of 42 bugs where high catches 27 |
+| the verifier at opus/medium | Q: 36 of 42, but 81 s and three times the cost; a candidate, not proven on more changes |
+| a turn cap on the verifier | Q: no faster, no fewer bugs missed |
+| asking workers for parallel tool calls (`+batch`) | I: slower on both builds |
+| starting held work before its predecessor's verifier ends | D: nothing in the templates waits on a verified step |
+| starting a review before the build's check ends | D: one review in four thrown away, to save about 65 s of a 15 to 40 minute build |
+| Opus for the classifier or the dispatcher | O: one more right in 72, at 20 to 37 times the cost, no faster |
+| splitting a build whose halves read each other | P: slower, and the merged tests failed |
+| a guidelines CLAUDE.md (`andrej-karpathy-skills`) in cauce's workers | N: diffs 4 to 15% smaller, no arm but opus/low faster |
+| skipping cauce's check after the worker ran it | the overlap hides it wherever a verifier runs; about 4% elsewhere |
+| splitting a review with no parts by folder | `bench/review/areas.py`: slower and dearer |
+
+**Do not change without a new measurement:**
+- *The verifier's cell (the work's model at high effort).* Every cheaper cell measured missed a
+  third of the bugs; it found blockers in 16 of 53 checks here.
+- *Writing kinds' starts.* Raising them for complexity or for passes where they started made
+  builds 2 to 5 times slower and no more right (B, G, M).
+- *The rule that a dispatcher's wait names a collision.* Its old caution held every
+  independent pair back (F).
+- *Haiku as the delegator.* Measured against Opus and Sonnet (O).
+- *Racing a start that rarely passes its first try.* It judges itself in each repository
+  (`cauce.racing`); a fixed answer here would undo that.
+
+**Never measured:**
+- throughput of several tasks at once across separate repositories, and the capacity level's
+  rises and halvings under a real rate limit;
+- the late verifier's false alarms and the reopenings it causes in real use, and how often a
+  session merges a branch before its late check has spoken;
+- the verifier at sonnet/xhigh, or opus/medium on more than one change;
+- a build in a real product repository with a browser check (every build here is a small Python
+  engine with `make test`);
+- builds on a cell other than sonnet/high and opus at low effort in `versus.py` for a whole
+  feature-parallel run (plan, parts, integrate, review);
+- why `review-critical` and `test` pass under half their runs in real use (see below);
+- whether a plan's parts at sonnet/high build as well as opus/high's (C).
+
+**What a month of real use says** (one person's store over 30 days and several releases, 569 runs, 478 tasks):
+the worker is 19% of the timed time and the verifier 3%; 52% is pickup (queued work waiting
+for a dispatcher) and 23% `unnoticed` (a worker that died with nobody's session open to sweep it;
+its longest runs, 60 to 80 hours, span weekends). `cauce stats` splits the pickup by cause; the board shows
+the same from 0.51. The orchestrating session's own turns cost more than every worker together
+($2,195 against $1,227 at API rates). By kind, `feature` passes first 41% of the time and costs
+$9.16 per pass, `plan` 47% and $7.88, `review-critical` 25%, `test` 46%. The biggest lever left
+is outside the worker: the time work waits before it starts and after it dies.
+
 ## Where the time went (this machine's store, before 0.45)
 
 | Step | Minutes in all | What weighs |
