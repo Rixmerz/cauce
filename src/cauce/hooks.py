@@ -874,6 +874,8 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
         if changed:
             shown = ", ".join(changed[:5]) + (f" and {total - 5} more" if total > 5 else "")
             lines.append(f"  changed so far: {shown}")
+        if not decided:
+            lines += _failed_check(store, t)
         if stop:
             whose = "ask the person for it here" if stops.waits_on(store, t) == "person" else "yours to decide"
             lines.append(f"  next ({whose}): {stop['todo']}" + (f": {stop['next']}" if stop["next"] else ""))
@@ -893,6 +895,23 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
 
 #: This many endings at once are told in short: each pass in one line.
 ENDINGS_GROUPED = 4
+#: How much of a failed check's own output an ending shows (`cauce show N` has all that was kept).
+CHECK_TAIL_SHOWN = 1500
+
+
+def _failed_check(store: Store, task: Mapping) -> list[str]:
+    """What cauce's check said on the last attempt of a task that ended short of a pass: the
+    failing tests and the last lines of its output, so nobody re-runs the whole check by hand
+    to learn which test failed. Only an attempt of the run that just ended: an earlier run's
+    is not why this one stopped."""
+    last = store.last_event(task["id"], "attempt_finished")
+    planned = store.last_event(task["id"], "planned")
+    tail = str(((last or {}).get("data") or {}).get("check_tail") or "").strip()
+    if not tail or (planned and planned["id"] > last["id"]):
+        return []
+    return ["  the check's own output on its last attempt (`cauce show "
+            f"{task['id']}` has it under the attempt):", *(f"    {line}".rstrip() for line in
+                                                           clip(tail, CHECK_TAIL_SHOWN).splitlines())]
 
 
 def verdict_summary(verdict: Mapping | None) -> str:

@@ -115,6 +115,9 @@ class Attempt:
     changed: tuple[str, ...] = ()
     #: The output that failed it, for the next attempt's brief.
     evidence: str = ""
+    #: What cauce's own check said when it failed on it (`launch.check_tail`): shown first in the
+    #: next brief, since a red check is the actual failure the next worker starts from.
+    check_tail: str = ""
     #: The launch broke, not the work (see `WorkerResult.transient`).
     transient: bool = False
     #: The problems it reported, as records: two cells that place the same ones agree.

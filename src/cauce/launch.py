@@ -48,6 +48,7 @@ from cauce import ledger as ledger_mod
 from cauce.escalate import REPLAN, Failure
 from cauce.isolate import is_artifact
 from cauce.matrix import Cell
+from cauce.notes import _PRIVATE, _SECRET
 from cauce.text import clip
 
 RESULT_FENCE = "cauce-result"
@@ -429,6 +430,9 @@ class WorkerResult:
     shape: str = ""
     #: Refused writes to files the attempt changed anyway, per git: no block.
     overcome: tuple[str, ...] = ()
+    #: What cauce's own check said when it failed on this attempt (`check_tail`): the failing
+    #: tests by name and the last lines of its output; "" when the check passed or never ran.
+    check_tail: str = ""
     #: The launch broke (a timeout, no JSON, an errored session), not the work:
     #: the one failure a retry can help.
     transient: bool = False
@@ -886,6 +890,55 @@ def check_failures(output: str, roots: Sequence[str | Path] = ()) -> frozenset[s
         if len(found) >= FAILURES_KEPT:
             break
     return frozenset(clip(" ".join(f.split()), FAILURE_CHARS) for f in found)
+
+
+#: What an attempt keeps of its check's own output (`check_tail`): the failing lines, the last
+#: lines, and cauce's comparison with the base. About this many characters in all.
+CHECK_TAIL_CHARS = 3500
+_TAIL_LINES_CHARS, _TAIL_FAILING, _TAIL_FAILING_CHARS, _TAIL_NOTE_CHARS = 1400, 8, 140, 600
+
+
+def check_tail(output: str, roots: Sequence[str | Path] = (), note: str = "") -> str:
+    """What a failed check said, for whoever reads the attempt next: the failing tests and
+    files by name, then the last lines of the output (where a runner prints its assertions),
+    then `note` (cauce's own comparison with the base). Colour codes and progress redraws
+    are dropped, the directories the check ran in (`roots`) are taken off the paths, secrets
+    are masked and `<private>` text left out, as a note is. The failing names come first
+    only when the tail cannot hold the whole output. Empty when the check said nothing."""
+    text = _ANSI.sub("", output or "")
+    for root in sorted({str(r).rstrip("/") for r in roots if str(r).strip("/")}, key=len, reverse=True):
+        text = text.replace(root + "/", "").replace(root, ".")
+    text = _SECRET.sub("[secret]", _PRIVATE.sub(" ", text))
+    lines: list[str] = []
+    for raw in text.replace("\r\n", "\n").split("\n"):  # not splitlines(): it splits on "\r" too
+        line = raw.rsplit("\r", 1)[-1].rstrip()  # a progress bar redrawn in place: its last state
+        if line or (lines and lines[-1]):
+            lines.append(line)
+    while lines and not lines[-1]:
+        lines.pop()
+    if not lines:
+        return ""
+    kept: list[str] = []
+    room = _TAIL_LINES_CHARS
+    for line in reversed(lines):
+        if len(line) + 1 > room:
+            if not kept:  # the last line alone is longer than the tail: its end, clipped
+                kept.append(clip(line, room - 1))
+            break
+        kept.append(line)
+        room -= len(line) + 1
+    kept.reverse()
+    parts: list[str] = []
+    cut = len(kept) < len(lines)
+    if cut and (failing := sorted(check_failures("\n".join(lines)))):
+        more = len(failing) - _TAIL_FAILING
+        parts.append(f"failing ({len(failing)}):\n" + "\n".join(
+            f"  {clip(f, _TAIL_FAILING_CHARS, one_line=True)}" for f in failing[:_TAIL_FAILING])
+            + (f"\n  and {more} more" if more > 0 else ""))
+    parts.append(("last lines of the output:\n…\n" if cut else "") + "\n".join(kept))
+    if note.strip():
+        parts.append(clip(_SECRET.sub("[secret]", note.strip()), _TAIL_NOTE_CHARS))
+    return "\n\n".join(parts)
 
 
 def preexisting(work: frozenset[str], base: frozenset[str] | None, *, must_fix: bool = False) -> bool:

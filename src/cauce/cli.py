@@ -384,11 +384,12 @@ def cmd_resume(args: argparse.Namespace) -> int:
                                          "asked" if args.start else "approval" if waiting else "last") + (
             f"; its surfaces now take {', '.join(args.surface)} too" if args.surface else "")
         denied, granted = store.denials(args.id), store.allowances(args.id)
+        tails = store.check_tails(args.id)
         history = [Attempt(Cell.parse(a["cell"]), int(a["max_turns"] or 0), bool(a["passed"]),
                            _failure_of(a["failure"]), a["summary"] or "", tuple(denied.get(a["seq"], ())),
                            allow=tuple(granted.get(a["seq"], ())),
                            changed=tuple(json.loads(a["changed_paths"] or "[]")),
-                           evidence=(a["evidence"] or "")[-1500:])
+                           evidence=(a["evidence"] or "")[-1500:], check_tail=tails.get(a["seq"], ""))
                    for a in attempts]
         # A task the independent check stopped resumes with what it found: its first
         # check says for each whether it is fixed, instead of starting blind.
@@ -1061,6 +1062,7 @@ def cmd_show(args: argparse.Namespace) -> int:
         checks: dict[int, list[dict]] = {}
         for e in store.events_of(args.id, "verified"):
             checks.setdefault(e["data"].get("seq"), []).append(e["data"])
+        tails = store.check_tails(args.id)
         for a in store.attempts(args.id):
             verdict = "pass" if a["passed"] else (a["failure"] or "fail")
             model = f" [{a['served_model']}]" if a.get("served_model") else ""
@@ -1070,6 +1072,10 @@ def cmd_show(args: argparse.Namespace) -> int:
                 print(f"    {clip(a['summary'], 300)}")
             if refused.get(a["seq"]):
                 print(f"    refused: {', '.join(refused[a['seq']])}")
+            if not a["passed"] and tails.get(a["seq"]):
+                print("    the check's own output:")
+                for line in tails[a["seq"]].splitlines():
+                    print(f"      {line}".rstrip())
             for check in checks.get(a["seq"], ()):
                 for line in _check_lines(check):
                     print(f"    {line}")

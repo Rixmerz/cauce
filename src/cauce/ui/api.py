@@ -268,7 +268,9 @@ def task_detail(store: Store, task_id: int) -> dict[str, Any] | None:
         return None
     attempts = store.attempts(task_id)
     refused = store.denials(task_id)
+    tails = store.check_tails(task_id)
     for a, climb in zip(attempts, climbs_of(store, task_id, attempts), strict=True):
+        a["check_tail"] = tails.get(a["seq"], "")
         a["changed_paths"] = json.loads(a["changed_paths"] or "[]")
         a["capabilities"] = json.loads(a["capabilities"] or "[]")
         a["denied"] = refused.get(a["seq"], [])

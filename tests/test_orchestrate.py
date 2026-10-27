@@ -786,7 +786,7 @@ def test_a_worker_that_ran_out_of_turns_is_checked_by_cauce_and_a_red_check_reac
     assert first["failure"] == "turns_exhausted" and "2 tests failed" in first["evidence"]
     assert f"cauce ran `{check}`, which exited 1" in first["summary"]
     assert specs[1].max_turns == 2 * turns_for("refactor") and report.status == "done"
-    assert "The output that failed the last attempt, last lines:" in specs[1].prompt
+    assert "What cauce's own check said when it failed the last attempt" in specs[1].prompt
     assert "2 tests failed" in specs[1].prompt
 
 

@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- **A failed check's own output is kept and shown:** when a claimed pass failed cauce's check,
+  `cauce show N` gave one line (`claimed a pass, but <cmd> exited 1: <the worker's summary>`) and
+  the orchestrator re-ran the whole check by hand to learn which test failed. Each attempt now
+  keeps what the check said (`check_tail` on its `attempt_finished` event): the failing tests and
+  files by name, then the last lines of the output, where runners print their assertions, then
+  cauce's comparison with the base. Colour codes and progress redraws are dropped, the work's
+  directories are taken off the paths, and secrets are masked and `<private>` text left out as in
+  notes. About 3500 characters at most per attempt. `cauce show N` prints it under the attempt,
+  the task page shows it open beside the evidence (and in the attempt comparison), the ending of a
+  task that stopped short of a pass shows its last attempt's (clipped; `cauce show` has all), and
+  the next attempt's brief, a continued session's note and a resume start from it instead of the
+  last 1500 characters of the raw output. Attempts recorded before this keep showing their
+  evidence as they did. No schema change: the tail lives on the event.
 - **A task sent from a folder that holds several repositories showed nothing of its work:** such
   a folder is no checkout, so the task runs with no worktree, and its progress line, `cauce peek`
   and phase all diffed a worktree that was not there ("works in no worktree of its own, or git

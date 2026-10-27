@@ -79,6 +79,7 @@ function attempt(a) {
     a.summary ? h("div", {}, a.summary) : null,
     a.denied.length ? h("div", { class: "refused" }, `refused: ${a.denied.join(", ")}`) : null,
     climb(a.climb, a.move),
+    !a.passed && a.check_tail?.trim() ? h("details", { open: true }, h("summary", {}, "check output"), h("pre", {}, a.check_tail)) : null,
     !a.passed && a.evidence?.trim() ? h("details", {}, h("summary", {}, "evidence"), h("pre", {}, a.evidence)) : null,
     a.changed_paths.length ? h("div", { class: "meta" }, `changed: ${a.changed_paths.join(", ")}`) : null,
     a.capabilities.length ? h("div", { class: "meta" }, `capabilities: ${a.capabilities.join(", ")}`) : null);
@@ -149,6 +150,7 @@ function compareColumn(a) {
       row("changed", a.changed_paths.length ? h("ul", {}, a.changed_paths.map((p) => h("li", {}, h("code", {}, p))))
         : "nothing"),
       row("summary", a.summary ? h("div", { class: "text" }, a.summary) : "—"),
+      row("check output", a.check_tail?.trim() ? h("pre", {}, a.check_tail) : "—"),
       row("check evidence", a.evidence?.trim() ? h("pre", {}, a.evidence) : "—")));
 }
 
