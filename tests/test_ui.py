@@ -224,6 +224,11 @@ def test_pages_and_reads(ui):
         assert res.status == 200, path
         if path.startswith("/api/"):
             json.loads(data)
+    # The analysis screen reads both livespec measures the report carries.
+    report = json.loads(call(ui, "GET", "/api/analysis")[1])
+    screen = call(ui, "GET", "/static/analysis.js")[1].decode()
+    for key in ("livespec_use", "livespec_tokens"):
+        assert key in report and f"r.{key}" in screen
     # One project at a time: there is no board of every repository.
     for path in ("/api/board", "/api/sessions"):
         res, data = call(ui, "GET", path)
