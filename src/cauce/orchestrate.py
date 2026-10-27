@@ -124,7 +124,9 @@ MIN_GLOBAL_SAMPLES = 5
 #: How many recent tasks of a kind here that outgrew their turns raise where the next one's start,
 #: and how many recent tasks are looked at.
 MIN_TURN_SAMPLES, TURN_HISTORY = 2, 10
-VERIFY_TIMEOUT_S = 900
+#: How long a task's check may run. A full suite on a loaded machine (many workers at once)
+#: measured 19:25 on 2026-10-27, past the old 900 s, and every cut was read as a failure.
+VERIFY_TIMEOUT_S = 1800
 #: How many changed paths a task's `finished` event lists; `changed_n` counts them all.
 CHANGED_KEPT = 500
 

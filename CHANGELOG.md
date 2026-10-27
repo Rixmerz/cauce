@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- **A task's check gets 30 minutes, not 15:** on a loaded machine (about 24 suites at once) the
+  full suite took 19:25, and `VERIFY_TIMEOUT_S = 900` cut it every time after the worker's own
+  pass, so eight finished tasks read as failed and climbed the ladder for nothing. The limit is now
+  1800 s.
 - **A request's backticks no longer reach the shell, and a bad task id is one line, not a
   traceback:** a dispatch whose text sat in a double-quoted argument had its backticks run by the
   shell (it ran `cauce merge N` and `cauce guide dispatch`) and the task started with those words
