@@ -18,9 +18,6 @@
   `Capability:` lines and its first heading, two words or more, all in the request), and by a
   capability named in `docs/tracer/capabilities.md` (its headings, list entries and table rows) whose
   words all lie in the flow's name or title. A title of one word, or a generic one, names nothing.
-- **The suite failed on a machine with rastro installed:** a neighbour's program on the person's
-  `PATH` was found as an installed capability by the tests. The test fixture now leaves the
-  neighbours' programs off `PATH`; a test that wants one builds its own.
 - **A task sent from a folder that holds several repositories showed nothing of its work:** such
   a folder is no checkout, so the task runs with no worktree, and its progress line, `cauce peek`
   and phase all diffed a worktree that was not there ("works in no worktree of its own, or git

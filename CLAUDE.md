@@ -635,7 +635,10 @@ yields the default kind, not a guess.
   stronger model writes no spec a weaker one would not.
 - The TRACER method of a repository (`docs/tracer/`) is data in a writing brief and requirements in the
   independent check's (`cauce.tracer`), never instructions of cauce's own: a flow reaches a brief only when
-  every word of its file name is in the request, and the method's files are carried up to
+  the request holds every word of its file name, of a title of its own of two words or more, or of a
+  capability of `capabilities.md` the flow belongs to; its CORRECT lines are read as the template writes
+  them (the success path's items with the lines under them, the failure table's CORRECT column found by its
+  header, never the header row), and the method's files are carried up to
   `tracer.BRIEF_CHARS`, the rest said by count. Its phases that need the person (contract, empathy, scope)
   stay in the session; `tracer-slice` is the bundled workflow for one slice.
 - What livespec's index says a change reaches (`adapter.assess`: specs touched, callers outside it) goes in
