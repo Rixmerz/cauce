@@ -2224,6 +2224,16 @@ def _ui_port_taken(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_acp(args: argparse.Namespace) -> int:
+    from cauce import acp
+
+    # stdout is the protocol's alone: whatever prints there by accident goes to stderr.
+    protocol, sys.stdout = sys.stdout, sys.stderr
+    sys.stdin.reconfigure(encoding="utf-8")
+    protocol.reconfigure(encoding="utf-8")
+    return acp.serve(sys.stdin, protocol)
+
+
 def cmd_link(args: argparse.Namespace) -> int:
     from cauce import link
 
@@ -2804,6 +2814,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dir", help="where to write it (default ~/.local/bin)")
     p.add_argument("--remove", action="store_true", help="take it away again")
     p.set_defaults(func=cmd_link)
+
+    p = sub.add_parser("acp", help="cauce as an Agent Client Protocol agent over stdio, for an editor "
+                                   "(Zed's `agent_servers`): each prompt is one `cauce run`")
+    p.set_defaults(func=cmd_acp)
 
     cp = sub.add_parser("compaction", help="when a session should compact and what /compact keeps: the mod "
                                            "takes a decision once (`next`)")
