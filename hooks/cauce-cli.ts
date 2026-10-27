@@ -23,14 +23,19 @@ const MARK = { needs: '🟠', deciding: '🟣', running: '🔵', queued: '⚪', 
  * person in its conversation: nothing waits on the person here), what runs and
  * what is queued, in words; nothing when the board is empty. With `mine`, the
  * waits this session sent come first, and the rest of the project's apart. */
+/** How many running tasks the status line tells one by one; more are counted. */
+export const SHOWN_RUNNING = 2
+
 export function statusLine(
   c: { needs_you: number; orchestrator?: number; mine?: number; running: number; queued: number } | undefined,
-  running: { phase?: string | null }[] = [],
+  running: { id?: number; phase?: string | null; progress_line?: string | null }[] = [],
 ): string | undefined {
   if (!c || !(c.needs_you || c.orchestrator || c.running || c.queued)) return undefined
-  // What the running work is doing now: exploring, implementing, checking.
+  // What the running work is doing now: each task's progress when few run, else their phases.
+  const told = running.length <= SHOWN_RUNNING && running.every(r => r.id !== undefined && r.progress_line)
   const phases = [...new Set(running.map(r => r.phase).filter((p): p is string => !!p))]
-  const doing = phases.length ? ` (${phases.join(', ')})` : ''
+  const doing = told ? ` (${running.map(r => `#${r.id} ${r.progress_line}`).join('; ')})`
+    : phases.length ? ` (${phases.join(', ')})` : ''
   const waiting = c.needs_you + (c.orchestrator ?? 0)
   const mine = c.mine === undefined ? waiting : Math.min(c.mine, waiting)
   const rest = waiting - mine

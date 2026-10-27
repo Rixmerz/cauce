@@ -22,6 +22,9 @@ export type CauceCard = {
   phase?: string | null
   /** Why a running task is slow (longer than 9 in 10 of its kind's passes here), when it is. */
   slow?: string | null
+  /** A running task's progress in one line: stage or phase, time against its kind's usual here,
+   * what it wrote so far, a worker gone quiet (`cauce.progress`). */
+  progress_line?: string | null
   /** Who clears a card that waits: the person, or the orchestrating session. */
   waits_on?: 'person' | 'orchestrator'
 }

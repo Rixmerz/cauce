@@ -97,6 +97,7 @@ function liveSection(live) {
     h("h2", {}, `Now · attempt ${live.attempt_now ?? "?"}`),
     h("div", { class: "row" }, live.phase ? h("span", { class: `chip phase p-${live.phase}` }, live.phase)
       : h("span", { class: "meta" }, "no tool call yet in this attempt")),
+    live.progress_line ? h("div", { class: "row meta" }, live.progress_line) : null,
     calls.length ? h("ol", { class: "calls" }, calls.map((c) => h("li", { class: c.ok ? "" : "failed-call" },
       h("span", { class: "meta" }, clock(c.ts)), " ", h("code", {}, c.sig), " ",
       h("span", { class: "meta" }, c.kind), c.ok ? null : h("span", { class: "badge t-bad" }, "✕ failed")))) : null);

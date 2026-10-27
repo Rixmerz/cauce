@@ -488,6 +488,7 @@ export const register: Register = (on, options) => {
     }
     for (const card of found.running) {
       lines.push(`running: #${card.id} ${card.title}${card.current_cell ? ` (${card.current_cell})` : ''}`)
+      if (card.progress_line) lines.push(`  now: ${card.progress_line}`)
       if (card.slow) lines.push(`  slow: ${card.slow}`)
     }
     for (const lane of found.queued) {

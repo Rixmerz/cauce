@@ -33,6 +33,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/evolution.py` | the evolution history: a snapshot a day per repository and kind, the report (`cauce evolution`, the UI's Evolution), and `settle`, which the hooks and the dispatcher run after work ends |
 | `src/cauce/surfaces.py` | where a task may write (`--surface`, a step's `surfaces`): checked after each attempt, and whether two tasks can never touch the same file |
 | `src/cauce/phase.py` | what a running worker is doing (exploring, implementing, checking), read from the tail of the tool-call log |
+| `src/cauce/progress.py` | how far a running task got: time against its kind's usual here, its stage (worker, cauce's check, the independent check), what its worker wrote so far (its worktree's git), a worker gone quiet; read only, no model |
 | `src/cauce/roles_internal/` | roles cauce runs itself and no team holds: the independent `verifier`, and the `surveyor` that investigates for `/cauce:init` |
 | `skills/init/` | the plugin's one skill (`/cauce:init`): scope and an estimate of its cost agreed with the person, `cauce investigate` digs, and from the reports one team for every flow, one workflow per flow, and the memory of what was solved, through cauce's own commands only |
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
@@ -505,6 +506,14 @@ yields the default kind, not a guess.
   they recorded. A running task past `flow.SLOW_MIN_S` and its kind's p90 wall time in its
   repository (`flow.slow`, over `SLOW_SAMPLES` passes) is said slow on the board, in `cauce
   tasks` and in the mod's `tasks` tool; said, never stopped.
+- A running task shows how far it got (`cauce.progress`), read and never written: its time against the
+  median and the 90th percentile of its kind's passes here (of its size when `progress.ESTIMATE_SAMPLES` of
+  them are, never a guess with fewer), its stage from the `stage` events the run writes as its worker hands
+  over to cauce's check and the independent check, what its worktree holds against its base (files, lines
+  added and removed, a tool's artifacts left out), and a worker with no tool call for `progress.IDLE_S`
+  said quiet ("a long command, or stuck"), never stopped. The status line tells each of up to
+  `SHOWN_RUNNING` tasks so, and the board, the task page, `cauce tasks` and the mod's `tasks` tool too;
+  queueing says how long tasks like it took here.
 - A resume's plan says what it resumes after, the cell it starts at and why, and when that
   is below the highest cell the task ran (`cli.resume_line`); `cauce show` lists every run of
   a task that ran more than once, so a fail resumed to a pass reads as both.

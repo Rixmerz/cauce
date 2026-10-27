@@ -1426,6 +1426,10 @@ def run(
             if baseline is not None and not (raced is not None and raced.checked):
                 baseline.found = None
             ahead = None
+            if (result.passed and options.verify and not (raced is not None and raced.checked)) or (
+                    _settles(result, options.verify) and result.changed_paths):
+                # Where the attempt is now, for whoever watches it (`cauce.progress`): its worker is done.
+                store.add_event(task["id"], "stage", seq=nth, stage="check")
             if result.passed and options.verify and not (raced is not None and raced.checked):
                 ahead = None if late else _ahead(
                     result, options=options, verifying=verifying, workspace=workspace, cell=cell, plan=the_plan,
@@ -1502,6 +1506,7 @@ def run(
                     say(f"cauce: #{task['id']} attempt {nth} passed; risk {the_plan.risk.tier}: its independent "
                         "check runs after its ending")
                 elif so_far and risk_mod.needs_verifier(the_plan.risk, cheap=_cheap(cell)):
+                    store.add_event(task["id"], "stage", seq=nth, stage="verifier")
                     result, review_stop, ledger, corrections, open_blockers = _independent_check(
                         result, text=text, kind=the_plan.kind, cell=cell, spec=spec, workdir=workdir,
                         base=base_commit, changed=so_far, risk=the_plan.risk, ledger=ledger,

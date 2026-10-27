@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-10-27
+
+### Added
+
+- **Delegated work shows how far it got** (`cauce.progress`). Until now, sending work to a
+  worker left a person with a count until it ended. A running task now says:
+  - **Where it is:** its worker's phase, or cauce's check or the independent check once the
+    worker is done. These stages come from new `stage` events the run writes.
+  - **How long against the usual:** its elapsed time against the median and the 90th percentile
+    of its kind's passes in the repository, of its size when three or more were. With fewer
+    passes there is no guess. Past the 90th percentile, it says so.
+  - **What its worker wrote so far:** files, and lines added and removed, read from its
+    worktree against its base. A tool's artifacts are left out.
+  - **A worker gone quiet:** no tool call for five minutes, said as "a long command, or stuck".
+    Nothing is stopped.
+
+  The status line tells each of up to two running tasks this way
+  (`🔵 1 running (#389 implementing · 4m of ≈7m · 3 files +120 −8)`). So do the board, the
+  task page, `cauce tasks` and the mod's `tasks` tool. Queueing a task says how long tasks like
+  it took here. In a real run, `cauce tasks` showed a worker go from nothing written to three
+  files and 63 lines in 16 seconds, then pass.
+
 ## [0.53.0] - 2026-10-27
 
 ### Added
