@@ -701,6 +701,28 @@ everything above works without it.
   *Approve & resume*, *Resume*, *Always allow here*). The press is yours; the
   model has no such button.
 
+### Use cauce from Zed
+
+An editor that speaks the Agent Client Protocol can use cauce as its agent.
+`cauce acp` serves ACP over stdio. In Zed's `settings.json`, with the `cauce`
+on PATH that `cauce link` puts there:
+
+```json
+{
+  "agent_servers": {
+    "cauce": { "command": "cauce", "args": ["acp"] }
+  }
+}
+```
+
+Each prompt is one `cauce run` in the project's folder: its progress (the lines
+cauce prints on stderr) shows as one tool call, and its report is the answer.
+`/tasks` and `/stats` run `cauce tasks` and `cauce stats`. Cancelling a prompt
+runs `cauce cancel` on its task, and stops the process if it has not ended ten
+seconds later. It is a way in, never a power: no rule or approval is passed, so
+a stop that needs one waits for you as ever, and the MCP servers the editor
+lists are ignored (a worker gets only those of your own cauce registry).
+
 ### Workflows
 
 Some work is a chain of tasks that must not share one context: a change, a
