@@ -68,7 +68,8 @@ def test_a_writing_worker_reads_the_method_and_the_check_holds_the_change_to_its
     assert "CORRECT lines of the flows this request names" in verifier
     assert "real name with a thumbnail" in verifier and "storage key or UUID" in verifier
     assert "first thing to do" in verifier  # a failure path's CORRECT cell
-    assert "WORKS (system behaviour)" not in verifier and "400" not in verifier
+    assert "WORKS (system behaviour)" not in verifier  # the table's header row is no criterion
+    assert "400" not in verifier
     planned = store.last_event(report.task_id, "planned")["data"]
     assert any(r.startswith("tracer: ") for r in planned["reasons"])
 
