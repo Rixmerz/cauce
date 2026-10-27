@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from cauce import ci, doctor, hooks, isolate, launch, orchestrate
+from cauce import ci, doctor, hooks, isolate, launch, orchestrate, stops
 from cauce.launch import WorkerResult, check_failures
 from cauce.orchestrate import Options, run
 from cauce.store import Store
@@ -338,13 +338,25 @@ def test_a_check_whose_failures_cannot_be_read_is_the_work_s_failure(git_repo, s
     assert first["failure"] == "code_bug" and "could not read which tests or files failed" in first["evidence"]
 
 
-def test_a_base_that_cannot_run_the_check_leaves_the_failure_the_work_s(git_repo, store):
+def test_a_base_that_cannot_run_the_check_blocks_the_task_as_unknown_never_as_the_work_s_failure(git_repo, store):
     # The tool the check needs exists only in the work: at the base the shell does not find it.
     check = "if [ -f f.py ]; then echo 'FAIL src/f.test.js'; exit 1; else exit 127; fi"
-    report = run("add the export button", git_repo, store, Options(verify=check, max_attempts=1), registry={},
-                 launcher=Script(ok(), write="f.py"), classifier=kind("implement"))
+    launcher = Script(ok(), ok(), ok(), write="f.py")
+    report = run("add the export button", git_repo, store, Options(verify=check), registry={},
+                 launcher=launcher, classifier=kind("implement"))
+    # One attempt: nothing says the work caused it, so no second cell is paid to fix it.
+    assert report.status == "blocked"
+    assert len(launcher.specs) == 1
     first = _first(store, report)
-    assert first["failure"] == "code_bug" and "the same check could not tell (exit 127" in first["evidence"]
+    assert first["failure"] == "environment"
+    assert "the same check could not tell (exit 127" in first["evidence"]
+    stop = report.stop
+    assert stop.cause == "base_unknown"
+    assert stop.reason.startswith("base unknown")
+    assert "FAIL src/f.test.js" in stop.reason
+    assert stops.next_step(report.task_id, stop) == f"cauce resume {report.task_id}"
+    assert f"cauce resume {report.task_id}" in report.text()
+    assert store.last_event(report.task_id, "check_preexisting") is None
 
 
 def test_a_fix_must_make_at_least_one_of_the_failures_go_away(git_repo, store):
@@ -555,3 +567,167 @@ def test_the_ending_says_how_many_runs_a_flake_fix_passed():
     lines = hooks.verdict_lines({"criteria": [], "check": {"command": "npm test", "passed": True, "runs": 3},
                                  "independent": {"ran": False, "why": "x"}, "attempts": 1})
     assert any("passed, run by cauce in its worktree 3 times, every run" in line for line in lines)
+
+
+# --- the base's run is sized from the check's own duration ------------------------------------
+
+def test_the_base_run_gets_at_least_the_time_the_work_s_own_run_took_plus_a_margin():
+    assert orchestrate.base_timeout_s(0) == orchestrate.VERIFY_TIMEOUT_S
+    took = 14 * 60
+    sized = orchestrate.base_timeout_s(took)
+    assert sized >= took + orchestrate.BASE_TIMEOUT_MARGIN_S
+    assert sized > orchestrate.VERIFY_TIMEOUT_S
+
+
+def test_the_work_s_check_run_is_timed_for_the_base_that_follows(tmp_path, store):
+    baseline = _flake_baseline(store, tmp_path, runs=1)
+    assert baseline.check_s == 0
+    orchestrate._steady_check("sleep 0.2; echo '1 passed'", tmp_path, baseline)
+    assert baseline.check_s >= 0.2
+
+
+def test_the_base_run_is_given_the_time_sized_from_the_work_s_run(git_repo, store, tmp_path, monkeypatch):
+    given = []
+
+    def fake(command, workdir, timeout=None):
+        given.append(timeout)
+        return 0, "1 passed"
+
+    monkeypatch.setattr(orchestrate, "_run_check", fake)
+    baseline = orchestrate.Baseline(store, 1, git_repo, git(git_repo, "rev-parse", "HEAD"), tmp_path / "home")
+    baseline.check_s = 840.0
+    baseline.at_base("pytest")
+    assert given == [orchestrate.base_timeout_s(840.0)]
+    assert given[0] > 840.0
+
+
+def test_a_base_run_slower_than_the_work_s_still_tells_what_failed_there(git_repo, store, monkeypatch):
+    # The base took longer than the fixed limit the work's own run fits in: it used to time out,
+    # and the failure was read as the work's.
+    monkeypatch.setattr(orchestrate, "VERIFY_TIMEOUT_S", 0.8)
+    check = "if [ -f f.py ]; then sleep 0.2; else sleep 1.6; fi; echo 'FAIL legacy/old.test.js'; exit 1"
+    report = run("add the export button", git_repo, store, Options(verify=check, max_attempts=1), registry={},
+                 launcher=Script(ok(), write="f.py"), classifier=kind("implement"))
+    assert report.status == "done"
+    assert store.last_event(report.task_id, "check_preexisting")["data"]["failures"] == ["FAIL legacy/old.test.js"]
+
+
+def test_a_base_run_that_timed_out_is_not_kept_for_the_next_try(git_repo, store, tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrate, "VERIFY_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(orchestrate, "BASE_TIMEOUT_FACTOR", 1)
+    monkeypatch.setattr(orchestrate, "BASE_TIMEOUT_MARGIN_S", 0)
+    counter = tmp_path / "runs.txt"
+    check = f"echo x >> {counter}; if [ $(wc -l < {counter}) -le 1 ]; then sleep 1.5; fi; " \
+            "echo 'FAIL old.test.js'; exit 1"
+    baseline = orchestrate.Baseline(store, 1, git_repo, git(git_repo, "rev-parse", "HEAD"), tmp_path / "home")
+    assert baseline.at_base(check)["cannot"] == "it timed out"
+    again = baseline.at_base(check)
+    assert not again["cannot"]
+    assert again["failures"] == ["FAIL old.test.js"]
+    assert counter.read_text().count("x") == 2
+
+
+# --- a base that cannot tell: the last known base result, else blocked ------------------------
+
+#: At the base the shell does not find the tool, unless `BASE_TELLS` is set: the base's run is
+#: told apart from the work's.
+UNSURE = "if [ -f f.py ] || [ -n \"$BASE_TELLS\" ]; then echo 'FAIL legacy/old.test.js'; {more}exit 1; " \
+         "else exit 127; fi"
+
+
+def _move_the_base(repo) -> str:
+    (repo / "later.txt").write_text("a later commit\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "later")
+    return git(repo, "rev-parse", "HEAD")
+
+
+def test_a_base_that_cannot_tell_is_read_against_the_last_known_base_result(git_repo, store, monkeypatch):
+    check = UNSURE.format(more="")
+    monkeypatch.setenv("BASE_TELLS", "1")
+    first = run("add the export button", git_repo, store, Options(verify=check), registry={},
+                launcher=Script(ok(), write="f.py"), classifier=kind("implement"))
+    assert first.status == "done"
+    known_at = git(git_repo, "rev-parse", "HEAD")
+    monkeypatch.delenv("BASE_TELLS")
+    _move_the_base(git_repo)
+    launcher = Script(ok(), ok(), write="f.py")
+    second = run("add the import button", git_repo, store, Options(verify=check), registry={},
+                 launcher=launcher, classifier=kind("implement"))
+    # Every failing test is one the last known base result has: they were there before the work.
+    assert second.status == "done"
+    assert len(launcher.specs) == 1
+    kept = store.last_event(second.task_id, "check_preexisting")["data"]
+    assert kept["known_at"] == known_at
+    assert kept["failures"] == ["FAIL legacy/old.test.js"]
+    assert f"last known base result at {known_at[:12]}" in second.text()
+
+
+def test_a_failing_test_the_last_known_base_result_lacks_leaves_the_base_unknown(git_repo, store, monkeypatch):
+    check = UNSURE.format(more="[ -f f.py ] && echo 'FAIL src/new.test.js'; ")
+    monkeypatch.setenv("BASE_TELLS", "1")
+    run("add the export button", git_repo, store, Options(verify=check, max_attempts=1), registry={},
+        launcher=Script(ok(), write="f.py"), classifier=kind("implement"))
+    monkeypatch.delenv("BASE_TELLS")
+    _move_the_base(git_repo)
+    launcher = Script(ok(), ok(), write="f.py")
+    second = run("add the import button", git_repo, store, Options(verify=check), registry={},
+                 launcher=launcher, classifier=kind("implement"))
+    assert second.status == "blocked"
+    assert len(launcher.specs) == 1
+    assert second.stop.cause == "base_unknown"
+    assert "FAIL src/new.test.js" in second.stop.reason
+    assert "not in the last known base result" in second.stop.reason
+
+
+def test_a_fix_whose_failures_all_stand_in_the_last_known_base_result_is_not_told_apart(git_repo, store,
+                                                                                         monkeypatch):
+    check = UNSURE.format(more="")
+    monkeypatch.setenv("BASE_TELLS", "1")
+    run("fix the export button", git_repo, store, Options(verify=check, max_attempts=1), registry={},
+        launcher=Script(ok(), write="f.py"), classifier=kind("debug-repro"))
+    monkeypatch.delenv("BASE_TELLS")
+    _move_the_base(git_repo)
+    launcher = Script(ok(), ok(), write="f.py")
+    second = run("fix the import button", git_repo, store, Options(verify=check), registry={},
+                 launcher=launcher, classifier=kind("debug-repro"))
+    # Every failure is in the last known result, but a fix has to make one go away: unknown, not a pass.
+    assert second.status == "blocked"
+    assert second.stop.cause == "base_unknown"
+    assert "this task's job is to make a failure go away" in second.stop.reason
+    assert store.last_event(second.task_id, "check_preexisting") is None
+
+
+def test_a_last_known_base_result_that_cannot_be_read_is_none(git_repo, store, tmp_path):
+    baseline = orchestrate.Baseline(store, 1, git_repo, git(git_repo, "rev-parse", "HEAD"), tmp_path / "home")
+    assert baseline.known("npm test") is None
+    store.set_meta(baseline._known_key("npm test"), "not json at all")
+    assert baseline.known("npm test") is None
+    store.set_meta(baseline._known_key("npm test"), json.dumps({"failures": ["FAIL a.test.js"]}))
+    assert baseline.known("npm test") is None  # no commit says where it was seen
+
+
+def test_the_worker_s_own_account_is_compared_with_the_failing_tests_when_the_base_is_unknown(git_repo, store):
+    check = UNSURE.format(more="")
+    said = WorkerResult(True, None, "done; legacy/old.test.js fails whatever I change", evidence="1 passed",
+                        cost_usd=0.1)
+    report = run("add the export button", git_repo, store, Options(verify=check), registry={},
+                 launcher=Script(said, write="f.py"), classifier=kind("implement"))
+    assert report.status == "blocked"
+    assert "its own account names 1 of the 1" in report.stop.reason
+
+
+# --- the same failing tests, twice -----------------------------------------------------------
+
+def test_the_same_failing_tests_after_a_climb_stop_the_run_instead_of_climbing_again(git_repo, store):
+    # The base passes: every failure is the work's, and two cells could not make it go away.
+    check = "if [ -f f.py ]; then echo 'FAIL src/f.test.js'; exit 1; fi"
+    launcher = Script(*(ok(f"try {n}") for n in range(6)), write="f.py")
+    report = run("add the export button", git_repo, store, Options(verify=check), registry={}, launcher=launcher,
+                 classifier=kind("implement"))
+    assert len(launcher.specs) == 2
+    assert report.status == "blocked"
+    assert report.stop.cause == "same_failures"
+    assert "FAIL src/f.test.js" in report.stop.reason
+    assert stops.next_step(report.task_id, report.stop) == f"cauce resume {report.task_id}"
+    assert f"cauce resume {report.task_id}" in report.text()

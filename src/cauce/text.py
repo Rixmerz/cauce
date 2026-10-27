@@ -4,6 +4,7 @@ from __future__ import annotations
 import difflib
 import re
 import unicodedata
+from collections.abc import Iterable
 
 _WORD_RE = re.compile(r"[\w#.-]+", re.UNICODE)
 
@@ -38,6 +39,14 @@ def words(text: str, *, keep_stopwords: bool = False) -> list[str]:
 
 def title_of(text: str, limit: int = 120) -> str:
     return clip(text, limit, one_line=True)
+
+
+def few(items: Iterable[str], most: int = 3, width: int = 160) -> str:
+    """The first `most` of `items` in order, each clipped to `width` and joined with "; ", and
+    the rest said by count: a list a line carries never drops what it leaves out without saying."""
+    listed = [clip(x, width, one_line=True) for x in items]
+    more = len(listed) - most
+    return "; ".join(listed[:most]) + (f"; and {more} more" if more > 0 else "")
 
 
 #: A sentence end: its mark, then a space (or the text's end).

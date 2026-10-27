@@ -37,7 +37,7 @@ from enum import StrEnum
 
 from cauce import findings as findings_mod
 from cauce.matrix import EFFORT_PURPOSE, MODELS, Cell
-from cauce.text import reads_alike
+from cauce.text import few, reads_alike
 
 
 class Failure(StrEnum):
@@ -123,6 +123,10 @@ class Attempt:
     network: str = ""
     #: The check's tests timed out on a loaded machine (see `WorkerResult.load`).
     load: str = ""
+    #: The failing lines of cauce's check that turned it down (see `WorkerResult.failing`).
+    failing: frozenset[str] = frozenset()
+    #: Why that failure could not be told from the base's (see `WorkerResult.base_unknown`).
+    base_unknown: str = ""
     #: The API turned its session away (`usage`: the account's own limit), and the seconds
     #: until it said to try again, or until that limit resets (see `WorkerResult.limited`).
     limited: str = ""
@@ -154,6 +158,8 @@ class Decision:
     reshape: bool = False
     #: It outgrew its turns as several pieces: split, not given more (`cauce split`).
     split: bool = False
+    #: It stopped because two cells left the same failing tests: a third would repeat them.
+    stuck: bool = False
 
     @property
     def continues(self) -> bool:
@@ -272,6 +278,42 @@ def _arrives(target: Cell) -> str:
     return f"next: {target.label}{purpose}"
 
 
+def _unknown_base(last: Attempt, seen: str) -> Decision | None:
+    """A claimed pass cauce's check turned down, whose failure the same check at the base could
+    not be compared with (it timed out or could not run there): nothing shows the work caused it.
+    Not charged to the work and not climbed: the task stops, its work kept, for a resume."""
+    if last.failure is not Failure.ENVIRONMENT or not last.base_unknown:
+        return None
+    return Decision(
+        Move.BLOCKED, reason=f"base unknown: {last.base_unknown}; its work is kept: resume it, and the base's run "
+                             "is tried again",
+        because=(seen, "cauce's check failed and the same check at the base could not say what fails there: "
+                       "nothing shows the work caused it, so it is not charged to the work",
+                 "no stronger cell is a better judge of a base that did not answer: a climb re-runs the whole check "
+                 "for the same unknown",
+                 "its work stays on its branch; a resume compares again"))
+
+
+def _same_failing(attempts: Sequence[Attempt], seen: str) -> Decision | None:
+    """The last attempt left exactly the failing tests an earlier one left, on another try: the
+    climb between them changed nothing that fails, and a second one would repeat it."""
+    last = attempts[-1]
+    if not last.failing or (last.failure or Failure.INCONCLUSIVE) not in EFFORT_AXIS:
+        return None
+    earlier = next((a for a in attempts[:-1] if not a.passed and not waited(a) and a.failing == last.failing), None)
+    if earlier is None:
+        return None
+    return Decision(
+        Move.BLOCKED, stuck=True,
+        reason=f"the check failed the same {len(last.failing)} failing test(s) on {earlier.cell.label} and "
+               f"{last.cell.label} ({few(sorted(last.failing))}); a third cell would repeat them: its work is "
+               "kept, resume it once someone has looked at them",
+        because=(seen, f"{earlier.cell.label} and {last.cell.label} left exactly the same failing tests",
+                 "the climb between them was already tried on these tests: a second climb would repeat it, and "
+                 "each one re-runs the whole check",
+                 "its work stays on its branch"))
+
+
 def decide(
     ladder: Sequence[Cell],
     attempts: Sequence[Attempt],
@@ -321,6 +363,9 @@ def decide(
                                  "a refusal is a setting: a retry, or a stronger model, gets the same refusal",
                                  *([f"the rules that let it through, one per program: {', '.join(last.allow)}"]
                                    if last.allow else [])))
+
+    if (unknown := _unknown_base(last, seen)) is not None:
+        return unknown
 
     if failure is Failure.ENVIRONMENT and last.network:
         # The network dropped under the work: no fault of the work, the cell or the
@@ -449,6 +494,8 @@ def decide(
                         because=(seen, f"attempts {pair[0]} ({first.cell.label}) and {pair[1]} "
                                        f"({second.cell.label}) of a task that only reads reported the same "
                                        "findings: the answer is confirmed, and climbing would repeat it"))
+    if (stuck := _same_failing(attempts, seen)) is not None:
+        return stuck
     if pair or failure is Failure.APPROACH:
         if failure is Failure.APPROACH:
             why = "the approach was wrong"

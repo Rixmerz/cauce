@@ -340,3 +340,43 @@ def test_several_pieces_that_outgrow_their_turns_are_split_not_given_more():
     assert "8 points" in " ".join(d.because)
     # one piece outgrowing its turns is room: more turns, as before
     assert decide(IMPLEMENT, out).move is Move.MORE_TURNS
+
+
+def failing(cell: str, *ids: str, summary: str = "the check still fails") -> Attempt:
+    """An attempt whose claimed pass cauce's check turned down, naming the tests that failed it."""
+    return Attempt(Cell.parse(cell), 30, False, Failure.CODE_BUG, summary, failing=frozenset(ids))
+
+
+def test_the_same_failing_tests_on_two_cells_never_earn_a_second_climb():
+    first = failing("sonnet/medium", "FAIL a.test.js", "FAIL b.test.js")
+    assert decide(IMPLEMENT, [first]).move is Move.MORE_EFFORT  # the first climb is earned
+    again = failing("sonnet/high", "FAIL b.test.js", "FAIL a.test.js", summary="the check fails differently worded")
+    d = decide(IMPLEMENT, [first, again])
+    assert d.move is Move.BLOCKED
+    assert not d.continues
+    assert d.stuck
+    assert "2 failing test(s)" in d.reason
+    assert "sonnet/medium" in d.reason
+    assert "sonnet/high" in d.reason
+    assert "repeat" in " ".join(d.because)
+    # Not the same tests, or none read from the output: climbs as before.
+    assert decide(IMPLEMENT, [first, failing("sonnet/high", "FAIL a.test.js")]).continues
+    assert decide(IMPLEMENT, [fail("sonnet/medium", Failure.CODE_BUG, "x"),
+                              fail("sonnet/high", Failure.CODE_BUG, "y")]).continues
+    # A try the network dropped under says nothing about them, and does not hide them.
+    assert decide(IMPLEMENT, [first, dropped("sonnet/high"), again]).move is Move.BLOCKED
+    # Nor does a task that only reads: two cells agreeing is its answer.
+    alike = failing("sonnet/high", "FAIL b.test.js", "FAIL a.test.js")
+    assert decide(IMPLEMENT, [first, alike], reading=True).move is Move.CONVERGED
+
+
+def test_a_check_that_could_not_be_compared_with_its_base_blocks_without_a_climb():
+    unknown = Attempt(Cell.parse("sonnet/medium"), 30, False, Failure.ENVIRONMENT, "claimed a pass, but the check "
+                      "failed", changed=("f.py",), base_unknown="the base run timed out; 3 failing test(s)")
+    d = decide(IMPLEMENT, [unknown])
+    assert d.move is Move.BLOCKED
+    assert not d.continues
+    assert d.reason.startswith("base unknown")
+    assert "the base run timed out" in d.reason
+    assert "resume" in d.reason
+    assert "no stronger cell" in " ".join(d.because)
