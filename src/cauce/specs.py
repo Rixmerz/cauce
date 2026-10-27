@@ -13,11 +13,26 @@ import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 #: The folder OpenSpec keeps a repository's specs and proposed changes in.
 OPENSPEC = "openspec"
 #: Code commits since the specs last changed from which they are said to be behind.
 BEHIND_COMMITS = 5
+#: The repositories a person made spec-first (`cauce specs first on`), kept per repository key in
+#: the store's meta: the person's cauce home, never a repository, which cannot make its own workers
+#: answer to a rule by committing a file.
+FIRST_META = "specs_first:"
+#: The kinds that build behaviour, and so owe its spec where a repository is spec-first. A fix
+#: restores what a spec already says; a refactor, a test or a document changes no behaviour.
+FIRST_KINDS = frozenset({"feature", "implement"})
+#: What a pass that wrote no spec is held back by, the first time (`WorkerResult.shape`).
+FIRST_SHAPE = "spec-first"
+#: What the same worker is told when it goes on in its own session to write the spec.
+FIRST_PROMPT = ("This repository is spec-first, and your work changed its code but wrote no spec; why is below. Your "
+                "work so far is in this directory and stands: do not redo it. Write or update the OpenSpec spec of "
+                "the behaviour you built (a change under `openspec/changes/<name>/`, or the spec under "
+                "`openspec/specs/` it reaches), check it, and answer again in the result contract you were given.")
 
 
 @dataclass(frozen=True)
@@ -76,12 +91,46 @@ def touched(changed: Sequence[str]) -> bool:
     return any(p == OPENSPEC or p.startswith(OPENSPEC + "/") for p in changed)
 
 
-def brief_lines(found: Drift) -> list[str]:
+def coded(changed: Sequence[str]) -> list[str]:
+    """The files of a change that may hold behaviour: not a spec, not a document."""
+    return [p for p in changed if not (p == OPENSPEC or p.startswith(OPENSPEC + "/") or p.startswith("docs/")
+                                       or p.lower().endswith((".md", ".mdx", ".rst", ".txt")))]
+
+
+def first(store: Any, key: str | None) -> bool:
+    """Whether the person made this repository spec-first."""
+    return bool(key) and store.meta(FIRST_META + str(key)) == "on"
+
+
+def set_first(store: Any, key: str | None, on: bool) -> None:
+    store.set_meta(FIRST_META + str(key), "on" if on else "off")
+
+
+def owed(kind: str, changed: Sequence[str]) -> list[str]:
+    """In a spec-first repository, the files of a build's change that owe a spec it did not write:
+    empty when the change wrote one, or holds no code, or is no build."""
+    if kind not in FIRST_KINDS or touched(changed):
+        return []
+    return coded(changed)
+
+
+def first_shape(paths: Sequence[str]) -> str:
+    """Why a pass that owes a spec is held back, in the words its worker is given."""
+    shown = ", ".join(paths[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
+    return (f"{FIRST_SHAPE}: the change touches code ({shown}) and no file under `{OPENSPEC}/`; this repository "
+            "accepts no change of behaviour without its spec")
+
+
+def brief_lines(found: Drift, *, first: bool = False) -> list[str]:
     """What a writing worker is told: the repository keeps its behaviour in specs, and a change of
     behaviour updates them in the same work. Data, as every brief line about the repository."""
     lines = [f"This repository keeps its behaviour in OpenSpec specs (`{found.folder}/`). A change in "
              f"behaviour updates the spec that describes it in the same work, or proposes one under "
              f"`{found.folder}/changes/`; a behaviour with no spec gets one."]
+    if first:
+        lines.append(f"This repository is spec-first: write the spec of the behaviour before its code, and keep "
+                     f"them together. Work that builds behaviour and writes nothing under `{found.folder}/` is "
+                     "not accepted, whatever its check says.")
     if found.behind:
         lines.append(f"Its specs are behind the code: {found.text()}. Do not rewrite the ones your change "
                      "does not reach; say in your result which behaviour you saw without a spec.")

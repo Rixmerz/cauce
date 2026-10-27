@@ -660,7 +660,11 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     # A repository that keeps OpenSpec specs: its writing workers keep the ones they reach.
     if kind not in READ_ONLY_KINDS and config.enabled("specs", os.environ) and (
             drifted := specs_mod.drift(repo_dir, options.base or "HEAD")):
-        context += specs_mod.brief_lines(drifted)
+        first = kind in specs_mod.FIRST_KINDS and specs_mod.first(store, key)
+        context += specs_mod.brief_lines(drifted, first=first)
+        if first:
+            neighbour_notes.append("spec-first: this repository accepts no build without its spec; a pass that "
+                                   "writes none goes back to its worker once, then to the orchestrator")
         if drifted.behind:
             neighbour_notes.append(f"specs: {drifted.text()}; the worker is told to keep the ones it reaches")
     selected = _with_role(caps.select(registry, kind, workdir=repo_dir, paths=touched_paths(text, options),
@@ -1080,6 +1084,9 @@ def run(
     # attempt, resumable, instead of leaving it `running` under a process that is about to exit.
     no_worktree: str | None = None
     writes = the_plan.kind not in READ_ONLY_KINDS
+    # A build in a repository the person made spec-first owes its spec (`cauce.specs`).
+    spec_first = (writes and the_plan.kind in specs_mod.FIRST_KINDS and config.enabled("specs", os.environ)
+                  and (repo_dir / specs_mod.OPENSPEC).is_dir() and specs_mod.first(store, key))
     declared_read_only = declares_read_only(the_plan.kind, task.get("body") or task.get("title") or "")
     if not options.verify and options.run_verify and writes and not declared_read_only:
         # A workflow step with no kind of its own was classified into one that writes:
@@ -1359,7 +1366,7 @@ def run(
                 # the trunk's record. Its brief follows.
                 resume_prompt=(trunks.note(branch, role=role_text, capabilities=hints, workdir=workdir,
                                            base=workspace.base if workspace else None) if branch
-                               else launch.DEEPER_PROMPT if fork else launch.RESHAPE_PROMPT
+                               else launch.DEEPER_PROMPT if fork else _reshape_prompt([*history, *attempts])
                                if decision is not None and decision.reshape else launch.CONTINUE_PROMPT),
                 resume_note=prompt if branch else continuation_note([*history, *attempts][-1]) if resume else "",
             )
@@ -1465,6 +1472,21 @@ def run(
                     evidence=f"Surfaces: {', '.join(options.surfaces)}. Changed outside them: {', '.join(strayed)}")
                 store.add_event(task["id"], "outside_surfaces", seq=nth, paths=strayed[:50],
                                 surfaces=list(options.surfaces), undone=workspace is not None)
+            if result.passed and spec_first and (owed := specs_mod.owed(the_plan.kind, sorted(
+                    {*changed, *(isolate.changed(workspace) if workspace else result.changed_paths)}))):
+                # A spec-first repository takes no build without its spec: the first such pass goes
+                # back to the same worker, in its own session, to write it; a second stands as work
+                # with one point for the orchestrator, kept on its branch.
+                again = any(a.shape.startswith(specs_mod.FIRST_SHAPE) for a in attempts)
+                why = specs_mod.first_shape(owed)
+                result = dataclasses.replace(
+                    result, passed=False, verdict="",
+                    failure=Failure.SPEC_BUG if again else Failure.INCONCLUSIVE,
+                    shape="" if again else why,
+                    summary=f"{why}{' again' if again else ''}: {result.summary}")
+                if again:
+                    stands = "cauce" if options.verify else "worker"
+                store.add_event(task["id"], "spec_owed", seq=nth, paths=owed[:50], again=again)
             review_stop = None
             open_blockers: tuple[dict[str, str], ...] = ()
             mark = time.monotonic()
@@ -2929,10 +2951,19 @@ def brief(
     return "\n\n".join(parts)
 
 
+def _reshape_prompt(attempts: Sequence[Attempt]) -> str:
+    """What a worker asked again on its own cell is told: write the spec its build owes, or answer
+    in the form it was given."""
+    return specs_mod.FIRST_PROMPT if attempts and attempts[-1].shape.startswith(specs_mod.FIRST_SHAPE) \
+        else launch.RESHAPE_PROMPT
+
+
 def continuation_note(last: Attempt) -> str:
     """What a continued session is told failed its attempt, which its context does not
     hold: the independent check's blockers in a correction round (its work passed its
     own check), else the output that failed it."""
+    if last.shape.startswith(specs_mod.FIRST_SHAPE):
+        return f"Why your last answer was held back: {last.shape}."
     if last.shape:
         return f"Why your last answer could not be read: {last.shape}."
     if last.blockers:

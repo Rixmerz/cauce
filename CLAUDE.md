@@ -604,6 +604,12 @@ yields the default kind, not a guess.
   far the specs are behind (said once a day), and an ending whose change wrote no spec, where they are
   `specs.BEHIND_COMMITS` or more code commits behind, offers the docs task that catches them up. Offered,
   never started: the orchestrator decides.
+- A repository is spec-first only on the person's word (`cauce specs first on`, kept in the store's meta, never in a
+  repository): there a build (`specs.FIRST_KINDS`) is told to write the spec before the code, and a pass whose
+  change touches code (`specs.coded`) and nothing under `openspec/` is held back (`spec_owed`): the first time it
+  goes back to the same cell, in its own session, told to write the spec (`specs.FIRST_PROMPT`, as a reshape); the
+  second it stands as work with one point, a `decision` for the orchestrator, kept on its branch. Never a climb: a
+  stronger model writes no spec a weaker one would not.
 - The TRACER method of a repository (`docs/tracer/`) is data in a writing brief and requirements in the
   independent check's (`cauce.tracer`), never instructions of cauce's own: a flow reaches a brief only when
   every word of its file name is in the request, and the method's files are carried up to

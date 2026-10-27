@@ -142,6 +142,13 @@ them up (livespec's `propose_specs_from_codebase` drafts them; `openspec
 validate --strict` checks them). Nothing is started. The `specs` setting turns
 it off.
 
+`cauce specs` says how far they are behind. `cauce specs first on` makes a
+repository spec-first: a build there is told to write the spec before the
+code, and a pass that changed code and no spec is not accepted. It goes back
+to the same worker once to write it; a second time the work is kept on its
+branch and the orchestrator decides. `cauce specs first off` undoes it. It is
+kept in your cauce home, never in the repository.
+
 ### The TRACER method
 
 A repository that follows [TRACER](https://github.com/Rixmerz/tracer)
