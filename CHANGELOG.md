@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-10-27
+
+### Added
+
+- **Spec-first repositories** (`cauce specs first on`, kept in the cauce home, never in the
+  repository). A build (`feature`, `implement`) there is told to write the spec of the behaviour
+  before its code. A pass whose change touches code and nothing under `openspec/` is held back
+  (`spec_owed`). The first time, it goes back to the same cell, in its own session, told to write
+  the spec. The second time, it stands as work with one point for the orchestrator to decide,
+  kept on its branch. It never climbs: a stronger model writes no spec a weaker one would not.
+  `cauce specs` says how far the specs are behind and whether the rule is on. In a real run on a
+  spec-first repository, the worker wrote the spec on its first try.
+- **`cauce acp`**: cauce as an Agent Client Protocol agent over stdio, so Zed (`agent_servers`)
+  and other ACP editors use it as their agent.
+  - Each prompt is one `cauce run` in the project's folder. Its progress shows as a tool call
+    and its report is the answer.
+  - `/tasks` and `/stats` read the board.
+  - A cancel asks cauce to cancel the task, then stops its process group.
+  - A way in, never a power: no `--allow`, `--allow-approval` or `--keep`. A client's
+    `mcpServers` never reach a worker.
+
+### Fixed
+
+- A pass whose independent check was deferred until after its ending (`late_verifier`) said
+  that its risk called for no check. Its verdict now says the check runs after the ending and
+  that a blocker it shows reopens the task.
+
 ## [0.52.0] - 2026-10-27
 
 ### Added
