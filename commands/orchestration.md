@@ -44,9 +44,15 @@ that run in rounds), `notes` (and compacting), `memory`, `relay`.
 3. **Dispatch** with Bash, from the repository the work is in:
 
    ```bash
-   cauce run "<the task, written so a stranger could do it>" \
-       --verify "<the command the repository's CI runs: npm test, not ng test>"
+   cauce run - --verify "<the command the repository's CI runs: npm test, not ng test>" <<'EOF'
+   <the task, written so a stranger could do it>
+   EOF
    ```
+
+   The task goes in on stdin (`-`) through a **quoted** heredoc (`<<'EOF'`),
+   never as a double-quoted argument: the shell runs backticks and `$(…)` in
+   one before cauce sees it, and the task starts with that text missing. The
+   same for `cauce queue add -`.
 
    `--verify` is the repository's own check, the same command its CI runs
    (`npm test`, `npm run lint`), never the tool behind it: a runner called

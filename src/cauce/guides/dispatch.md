@@ -3,9 +3,19 @@
 **Dispatch** with Bash, from the repository the work is in:
 
 ```bash
-cauce run "<the task, written so a stranger could do it>" \
-    --verify "<the repo's own check, if one exists: tests, lint, build>"
+cauce run - --verify "<the repo's own check, if one exists: tests, lint, build>" <<'EOF'
+<the task, written so a stranger could do it>
+EOF
 ```
+
+**Send the task on stdin through a quoted heredoc** (`-` as the text, `<<'EOF'`),
+never inside double quotes. In a double-quoted argument the shell runs every
+backtick and `$(…)` before cauce sees the request: a task that quoted
+`` `cauce merge N` `` ran it, and started with those words missing. A quoted
+heredoc passes the text as it is (`cauce run - < request.md` reads a file the
+same way); an empty stdin is refused (exit 2). `cauce queue add -` takes it
+the same way. Where a task id is wanted, a word that is not `N` or `#N` is
+refused in one line (`cauce merge`, `cauce pr`), never a traceback.
 
 `cauce` is on the Bash tool's PATH while the plugin is enabled (it ships in
 the plugin's `bin/`). Its full path is `${CLAUDE_PLUGIN_ROOT}/bin/cauce`:
@@ -71,7 +81,7 @@ A worker that runs out of turns is checked with `--verify` by cauce itself,
 so a large change still gets its tests run; give one whenever a command can
 tell whether the work is done.
 
-For work that can wait, queue it instead — `cauce queue add "<task>"`. A
+For work that can wait, queue it instead — `cauce queue add - <<'EOF'` … `EOF`. A
 worker picks it up at once, in its own process that outlives this session;
 its output says so. Work that needs another task's result first is queued
 with `--after <task>`: it starts when that task passes, on the branch it

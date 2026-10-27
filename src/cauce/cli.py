@@ -6,6 +6,7 @@ import contextlib
 import errno
 import json
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -102,6 +103,31 @@ def _text(value: str) -> str:
     return sys.stdin.read() if value == "-" else value
 
 
+def _request_from_stdin(args: argparse.Namespace) -> bool:
+    """Reads the request of `cauce run -` / `cauce queue add -` once, into `args.text`; False,
+    said, when stdin held nothing. A quoted heredoc is the way to send text with backticks or `$(…)`
+    in it: inside a double-quoted argument the shell runs them before cauce sees the request."""
+    if args.text != "-":
+        return True
+    args.text = sys.stdin.read()
+    if args.text.strip():
+        return True
+    print("cauce: the request read from stdin is empty; send it as `cauce run - <<'EOF'` … `EOF` "
+          "(a quoted heredoc keeps backticks and $(…) as text)", file=sys.stderr)
+    return False
+
+
+def _task_numbers(command: str, words: list[str]) -> list[int] | None:
+    """The task numbers (`N` or `#N`) a command was given; None, said in one line, when a word is
+    none: a placeholder (`N`) or text the shell cut out of a request is no task."""
+    numbers = [str(word).strip().removeprefix("#") for word in words]
+    bad = [str(word) for word, number in zip(words, numbers, strict=True) if not re.fullmatch(r"\d+", number, re.ASCII)]
+    if bad:
+        print(f"cauce {command}: {', '.join(repr(w) for w in bad)} is not a task number (N or #N)", file=sys.stderr)
+        return None
+    return [int(number) for number in numbers]
+
+
 def _repo_key(args: argparse.Namespace) -> str | None:
     if getattr(args, "all", False):
         return None
@@ -162,8 +188,8 @@ def _split_first(args: argparse.Namespace, text: str) -> int | None:
 
 def cmd_run(args: argparse.Namespace) -> int:
     _warn_behind()
-    if args.text == "-":
-        args.text = sys.stdin.read()  # read once: the split check and the run read the same text
+    if not _request_from_stdin(args):  # read once: the split check and the run read the same text
+        return 2
     if (split := _split_first(args, args.text)) is not None:
         return split
     if args.role:
@@ -587,7 +613,7 @@ def _dismiss_words(words: list[str]) -> tuple[list[int], str]:
     ids: list[int] = []
     for i, word in enumerate(words):
         number = word.strip().lstrip("#").rstrip(",")
-        if not number.isdigit():
+        if not re.fullmatch(r"\d+", number, re.ASCII):
             return ids, " ".join(words[i:]).strip()
         ids.append(int(number))
     return ids, ""
@@ -613,7 +639,9 @@ def cmd_merge(args: argparse.Namespace) -> int:
     in an order that puts the ones that touch no other first, the check after each."""
     from cauce import isolate, merging
 
-    ids = [int(str(n).lstrip("#")) for n in args.ids]
+    ids = _task_numbers("merge", args.ids)
+    if ids is None:
+        return 2
     store = Store.open()
     try:
         tasks = {n: store.get_task(n) for n in ids}
@@ -732,7 +760,10 @@ def cmd_pr(args: argparse.Namespace) -> int:
 
     from cauce import isolate, merging
 
-    task_id = int(str(args.id).lstrip("#"))
+    numbers = _task_numbers("pr", [args.id])
+    if numbers is None:
+        return 2
+    task_id = numbers[0]
     store = Store.open()
     try:
         task = store.get_task(task_id)
@@ -771,10 +802,11 @@ def cmd_split(args: argparse.Namespace) -> int:
     from cauce import split
 
     target = args.target.lstrip("#")
+    is_number = re.fullmatch(r"\d+", target, re.ASCII) is not None  # `²` is a digit to isdigit, and int() refuses it
     store = Store.open()
     try:
-        task = store.get_task(int(target)) if target.isdigit() else None
-        if target.isdigit() and task is None:
+        task = store.get_task(int(target)) if is_number else None
+        if is_number and task is None:
             print(f"no task #{target}", file=sys.stderr)
             return 1
         if task is not None:
@@ -1510,8 +1542,8 @@ def cmd_queue(args: argparse.Namespace) -> int:
     store = Store.open()
     try:
         if args.queue_command == "add":
-            if args.text == "-":
-                args.text = sys.stdin.read()
+            if not _request_from_stdin(args):
+                return 2
             if (split := _split_first(args, args.text)) is not None:
                 return split
             where = Path(args.repo or os.getcwd()).resolve()

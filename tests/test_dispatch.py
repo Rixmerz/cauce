@@ -502,6 +502,45 @@ def test_the_endings_command_resumes_a_mechanical_stop_before_it_could_wake(stor
     assert stops.Stop("turns", "r").status == "replan"
 
 
+def _age_resumes(store: Store, task_id: int) -> None:
+    """Make the resumes already started old enough that `recover` no longer reads them as starting."""
+    store._conn.execute("UPDATE events SET ts = '2000-01-01T00:00:00+00:00' WHERE task_id = ? "
+                        "AND kind = 'auto_resumed'", (task_id,))
+
+
+def test_two_recovers_at_once_start_one_resume_and_a_resume_that_never_took_hold_is_tried_again(
+        store: Store, tmp_path, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from cauce import stops
+
+    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    started: list[list[str]] = []
+    task = store.create_task("build the export", status="blocked", source="cauce", cwd=str(tmp_path))
+    reset = datetime.now(UTC) - timedelta(hours=1)  # a limit (it allows more than one resume) already over
+    stops.record(store, task["id"], stops.Stop("limit", "the account's usage limit stopped it",
+                                               extra={"resets_at": reset.isoformat(timespec="seconds")}))
+
+    def popen(argv, **kw):
+        started.append(argv)
+
+    # The dispatcher's loop, a waiter and a turn's end all call `recover`; the first resume has not
+    # flipped its task to running yet, so the others see the same stop and must not start a second worker.
+    assert dispatch.recover(store, tmp_path, os.environ, popen=popen) == [task["id"]]
+    assert dispatch.recover(store, tmp_path, os.environ, popen=popen) == []
+    assert len(started) == 1
+    assert len(store.events_of(task["id"], "auto_resumed")) == 1
+    # One that never took hold (no process came up) is tried again once the window has passed.
+    _age_resumes(store, task["id"])
+    assert dispatch.recover(store, tmp_path, os.environ, popen=popen) == [task["id"]]
+    assert len(started) == 2
+    # One that took hold and met the limit again is resumed at once: its new ending came after it.
+    stops.record(store, task["id"], stops.Stop("limit", "the account's usage limit stopped it",
+                                               extra={"resets_at": reset.isoformat(timespec="seconds")}))
+    assert dispatch.recover(store, tmp_path, os.environ, popen=popen) == [task["id"]]
+    assert len(started) == 3
+
+
 def test_a_usage_limit_is_resumed_after_its_reset_and_a_waiter_wakes_it_then(store: Store, tmp_path, monkeypatch):
     import time as clock
     from datetime import UTC, datetime, timedelta
@@ -524,6 +563,7 @@ def test_a_usage_limit_is_resumed_after_its_reset_and_a_waiter_wakes_it_then(sto
     for _ in range(dispatch.LIMIT_RESUMES):
         assert dispatch.recover(store, tmp_path, os.environ, popen=lambda argv, **kw: started.append(argv),
                                 now=after) == [task["id"]]
+        _age_resumes(store, task["id"])  # the resume took hold, met the limit again and ended after the window
     assert dispatch.recover(store, tmp_path, os.environ, popen=pytest.fail, now=after) == []
     # One that named no reset is tried an hour after it stopped.
     unknown = store.create_task("y", status="blocked", source="cauce", cwd=str(tmp_path))

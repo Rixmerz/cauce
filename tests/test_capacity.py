@@ -239,6 +239,7 @@ def test_max_parallel_is_auto_or_a_ceiling_set_by_cli_or_plugin_option(capsys):
     assert config.max_parallel(env) is None and config.DEFAULTS["max_parallel"] == "auto"
     assert cli.main(["config", "max_parallel", "4"]) == 0 and config.max_parallel(env) == 4
     assert cli.main(["config", "max_parallel", "0"]) == 1
+    assert config.ceiling_word("²") is None and config.ceiling_word("\u0663") is None
     assert "auto or a whole number from 1" in capsys.readouterr().err
     assert cli.main(["config", "max_parallel", "auto"]) == 0 and config.max_parallel(env) is None
     config.sync_plugin_options({**env, "CLAUDE_PLUGIN_OPTION_MAX_PARALLEL": "6"})

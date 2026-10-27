@@ -321,7 +321,8 @@ def test_work_in_another_repository_waits_and_starts_on_its_own_base_reading_the
 
 def test_after_takes_a_task_or_a_run_by_name(git_repo, store, capsys):
     assert after.ref("5") == {"task": 5} and after.ref("task:5") == {"task": 5} and after.ref("run:5") == {"run": 5}
-    for bad_ref in ("run:x", "step:5", ""):
+    # non-ASCII digits are no task number (`²` passes isdigit, and int() refuses it)
+    for bad_ref in ("run:x", "step:5", "", "²", "task:\u0663"):
         with pytest.raises(ValueError, match="--after takes"):
             after.ref(bad_ref)
     with pytest.raises(SystemExit):
