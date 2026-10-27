@@ -1793,6 +1793,10 @@ def verdict_card(store: Store, task_id: int, report: Report, options: Options, v
     if verified is not None:
         data = verified["data"] or {}
         independent = {"ran": True, "passed": bool(data.get("passed")), "blocking": int(data.get("blocking") or 0)}
+    elif store.last_event(task_id, "verifier_deferred") is not None:
+        # The late check (`late_verifier`): it runs after this ending, on the kept branch.
+        independent = {"ran": False, "late": True,
+                       "why": "it runs after this ending; a blocker it shows reopens the task as review"}
     elif options.reviewed_next:
         independent = {"ran": False, "why": "a blind review step of this workflow reads the change next"}
     elif not verifying:

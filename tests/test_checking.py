@@ -1122,6 +1122,9 @@ def test_a_late_check_runs_after_the_ending_and_a_blocker_reopens_the_task(git_r
     assert "verifier_deferred" in kinds
     first_end, late_check = kinds.index("finished"), kinds.index("verified")
     assert first_end < late_check
+    # Its first ending's verdict says the check comes after it, never that the risk called for none.
+    card = store.events(task_id=report.task_id)[first_end]["data"]["verdict"]["independent"]
+    assert card["late"] and "after this ending" in card["why"]
     verified = store.last_event(report.task_id, "verified")["data"]
     assert verified["late"] and verified["blocking"] == 1
     # The blocker reopens it as a review, with an ending of its own, its work on its branch.
