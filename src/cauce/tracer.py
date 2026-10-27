@@ -187,9 +187,19 @@ def _continues(line: str, indent: int, bullet: bool) -> bool:
     return here > indent or (not bullet and here == indent and bool(_ITEM.match(line)))
 
 
+def _go_on(entries: list[str], line: str) -> None:
+    """A line under a CORRECT head: an item is a line of its own, any other line the one above wrapped."""
+    item = _ITEM.match(line)
+    if item:
+        entries.append(line[item.end():].strip())
+    elif entries[-1]:
+        entries[-1] += " " + line.strip()
+    else:
+        entries.append(line.strip())
+
+
 def _bullet_correct(lines: list[str]) -> list[str]:
-    """Each `CORRECT:` criterion with what goes on under it: an item under it is a line of its own,
-    any other line is the same line wrapped."""
+    """Each `CORRECT:` criterion with what goes on under it."""
     out, i = [], 0
     while i < len(lines):
         head = _CORRECT_HEAD.match(lines[i])
@@ -198,11 +208,7 @@ def _bullet_correct(lines: list[str]) -> list[str]:
             continue
         entries = [lines[i - 1][head.end():].strip(" *")]
         while i < len(lines) and _continues(lines[i], len(head.group(1)), bool(head.group(2))):
-            item = _ITEM.match(lines[i])
-            if item or not entries[-1]:
-                entries.append(lines[i][item.end():].strip() if item else lines[i].strip())
-            else:
-                entries[-1] += " " + lines[i].strip()
+            _go_on(entries, lines[i])
             i += 1
         out += [e for e in entries if e]
     return out
