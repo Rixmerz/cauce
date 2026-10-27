@@ -32,7 +32,7 @@ section. Three to four runs a cell is noisy: a difference under about 20% is not
 | notes are filed after the ending | 0.49 | J: 5.3 s p50 off every step |
 | a writing kind classified high starts at its ladder's first cell | 0.50 | M: 213 s against 468 s, as right |
 | the session passes the kind it read (`--kind`) | 0.50 | L, O: skips a 6 s classifier call |
-| the verifier runs after the ending (`late_verifier`), `cauce run` exits with it | 0.51 | N, R |
+| the verifier runs after the ending (`late_verifier`), `cauce run` exits with it | 0.51 | R: the harder build in 122 s against 203 to 213 s |
 | Opus at low effort is no cheap cell | 0.51 | Q: two of three medium builds climbed for nothing |
 | a plan classified high is not raised to opus/xhigh | 0.51 | C, and plans in real use: 47% first-try at opus/xhigh, p50 10 min |
 
@@ -446,3 +446,24 @@ The verifier's own cell on `bench/review`'s large change (42 planted bugs, `effo
 A turn cap saved nothing. The faster cells missed a third of what high catches. In this store
 the verifier found blockers in 16 of 53 checks, at 19 turns p50 and 33 p90: it stays where it is,
 and moves off the critical path instead (R).
+
+## R: the independent check after the ending (`versus.py`, 0.51)
+
+From 0.51 a pass that cauce's own check settled ends at once, and the verifier reads the kept
+branch after it (`late_verifier`). The wall time below ends when `cauce run` exits; the late check
+is waited for apart. Three runs per build, every one right on the hidden tests:
+
+| Build | cauce 0.50 | cauce 0.51 | Late check after the ending | Cost p50 |
+|---|---|---|---|---|
+| harder | 203 to 213 s | 122 s (114 to 136) | 66 to 108 s | $0.47 |
+| medium | 88 to 91 s | 82 s (78 to 88) | none: no verifier needed | $0.18 |
+
+On the harder build one late check in three found a blocker in work the hidden tests passed and
+reopened it as `review`: a false alarm, answered by a resume that gives the worker the blocker.
+Before 0.51 the same blocker earned a correction round before the ending, which costs the same
+worker time but held every run's ending for it. Whether reopenings like this are rare or common
+in real use was not measured (see the summary's "never measured").
+
+The first measurement of this lost every late check: the detached work was a `fork` of the run,
+whose SQLite connection does not survive one, and the child's writes vanished when it closed. It
+is a fresh process now; the bench caught what the unit tests, which run it in-process, could not.
