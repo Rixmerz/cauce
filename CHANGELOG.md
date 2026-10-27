@@ -2,6 +2,63 @@
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-10-27
+
+### Changed
+
+- **The independent check runs after the ending (`late_verifier`, on by default).** A pass that
+  cauce's own check settled ends at once; the verifier reads the branch it kept afterwards, in a
+  temporary worktree at its tip, and its cost is the task's. A blocker it shows reopens the task as
+  `review`, its work kept, and its session hears of it as a new ending; a check that cannot decide
+  leaves the pass. It still runs before the ending with no check of cauce's, for a workflow step, a
+  fix of ledger rows, and work something queued `--after` waits on: what those release could not be
+  taken back. On `bench/speed/versus.py`'s harder build the verifier was 50 s of cauce's 213 s.
+  On the harder build cauce now ends in 122 s at the median (114 to 136 s) against 203 to 213 s,
+  every run right on the hidden tests, and the late check spoke 66 to 108 s after the ending. In one
+  of three it reopened work the hidden tests passed: a false alarm a resume answers. The medium
+  build, which needs no verifier, took 82 s at the median against 88 to 91 s.
+- **`cauce run` exits with the ending.** Filing what the worker learned (about 7 s) and the late
+  check run in a fresh detached process with its own store, for `cauce run` and the runs the
+  dispatcher starts. Never a fork: a forked child's SQLite writes were lost when it closed.
+- **A plan classified high starts at opus/high, its ladder's first cell.** It started at opus/xhigh.
+  `bench/speed/plan.py` drew the same parts at opus/high in half the time, and in real use plans at
+  opus/xhigh passed their first try 47% of the time at a 10-minute median.
+- **The board's median wait in the queue reads the pickup and spawn** where a run measured them
+  apart (it showed "—"), and the board says what the pickup waited on, as `cauce stats` does.
+- **Opus at low effort is no cheap cell.** A medium-risk change it made no longer calls the
+  verifier by that alone: it passed every hidden test of `versus.py`'s builds on its own, and
+  checked as cheap, two of three medium builds climbed to opus/high for nothing (209 s against
+  87 s).
+
+### Added
+
+- **`bench/speed/README.md` opens with a summary**: what was measured and its numbers, what was
+  built, what was measured and not built and why, what not to change and why, and what was never
+  measured.
+- `versus.py` waits for a late check and keeps it apart from the foreground wall time
+  (`late_s`, `late_passed`).
+
+## [0.50.0] - 2026-10-27
+
+### Changed
+
+- **A writing task classified as high complexity starts at its ladder's first cell.** It started a
+  rung up. `bench/speed/versus.py` ran cauce against a single Claude Code session on the same build
+  and hidden tests. On the harder build, classified high, cauce started at sonnet/xhigh and took
+  468 s at the median, against 86 s for one Opus session at low effort; every arm was right every
+  time. Starting at sonnet/high, its ladder's first cell, cauce took 213 s and $0.54 against $1.43,
+  as right. A reading kind still starts a rung up for a high complexity, and history still raises a
+  writing kind's start where its tasks had to climb. On the medium build cauce took 91 s against 87 s
+  for the single session, at half its cost.
+
+### Added
+
+- **`bench/speed/versus.py`**: cauce end to end against one plain `claude -p` session at a cell
+  given, on the same build, judged by hidden tests, with the lines each kept. Pulled apart, cauce's
+  own machinery was about 5 s of the harder build; its independent verifier (a pricing change, high
+  risk) was the rest of the gap to one Opus session at low effort. A guidelines CLAUDE.md
+  (`andrej-karpathy-skills`) kept diffs 4 to 15% smaller and made no arm but opus/low faster.
+
 ### Added
 
 - **`bench/review` measures cauce's independent verifier at medium effort.** It was 30 to 40%

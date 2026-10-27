@@ -36,7 +36,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `trunk`, `overlap`, `habit_review`, `habit_auto`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `habit_review`, `habit_auto`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets, and the jobs a person quieted per repository |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -146,7 +146,9 @@ The coverage floor lives in one place, `[tool.coverage.report] fail_under` in
 the next `SessionStart` reports. Failing open is not failing silently.
 
 **Verdicts fail closed.** A worker with no result block, two blocks, or a pass
-without evidence is `inconclusive`, never a pass. Changed files come from git,
+without evidence is `inconclusive`, never a pass. A pass the independent check
+reads late (`late_verifier`) is a pass on cauce's own check until that check shows a blocker; then
+it is reopened as `review`, never left standing. Changed files come from git,
 never from the worker, and every report prints them beside the worker's
 summary — the work directory's checkout and every checkout nested in it. `--verify` overrides a claimed pass; it is the only thing that can
 pass an attempt whose worker was refused its own check. Refusals come from the
@@ -372,7 +374,20 @@ yields the default kind, not a guess.
   on and is told the check is running and not to run it itself. A check that fails stops it, its
   verdict dropped as one that never ran and its cost kept (`verifier_dropped`); a change the check
   itself did not write since it started is read again. Its `verified` event says `beside_check`.
-  Tests run with `CAUCE_VERIFIER=off` and `CAUCE_OVERLAP=off`.
+  A cheap cell is Haiku or a model below Opus at low effort (`orchestrate._cheap`): Opus at low
+  effort passed every hidden test of `bench/speed/versus.py` on its own, and checked as cheap its
+  medium changes climbed to opus/high for nothing.
+  The check may run after the ending (`late_verifier`, on by default): a pass that cauce's own check
+  settled ends at once (`verifier_deferred`), and the verifier reads its kept branch afterwards in a
+  temporary worktree at its tip (`orchestrate._late_check`, a `verified` event with `late`, its cost
+  the task's). A blocker it shows reopens the task as `review` with a `stops.Stop` and a new ending
+  its session hears of; one that cannot decide leaves the pass. Never late for a workflow step, a
+  fix of ledger rows, or work something queued `--after` waits on (`orchestrate._awaited`): what
+  those release could not be taken back. `cauce run` and the resumes the dispatcher starts do what
+  follows an ending (notes, the late check) in a fresh detached process with its own store
+  (`Options.detach_after`, `orchestrate._after_ending`), so the command exits with the ending: never
+  a fork, since a forked child's SQLite writes were lost when it closed.
+  Tests run with `CAUCE_VERIFIER=off`, `CAUCE_OVERLAP=off` and `CAUCE_LATE_VERIFIER=off`.
 - A task that stops on a point (`spec`, `decision`) because its surfaces kept it from the
   cause (it changed a path outside them, or its worker says so and names one,
   `orchestrate._widen`) keeps those paths on its stop (`widen`), and its next step is
@@ -388,7 +403,9 @@ yields the default kind, not a guess.
 - A move explains itself: `Decision.because` is the evidence chain (what the
   attempt ended with, the rule, where it goes) and `skipped` the rungs passed
   over. A new branch in `decide` gives both; the `moved` event keeps them.
-- History may raise where a task starts, never lower it below its ladder, and only on
+- A high complexity raises a reading kind's start one rung, never a writing kind's: a build
+  classified high passed as often at its ladder's first cell, in less than half the time
+  (`bench/speed/versus.py`). History may raise where a task starts, never lower it below its ladder, and only on
   climbs: a writing task that passed where it started is no evidence a lower cell fails
   (`Store.landings`, `""`), or a start history raised keeps every later task as high; a
   reading kind's pass is its answer, so its landings count where they passed. So may it

@@ -18,6 +18,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import pickle
 import re
 import shlex
 import socket
@@ -25,6 +26,7 @@ import sqlite3
 import statistics
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Collection, Mapping, Sequence
@@ -65,6 +67,7 @@ from cauce import capabilities as caps
 from cauce import criteria as criteria_mod
 from cauce import findings as findings_mod
 from cauce import ledger as ledger_mod
+from cauce import notes as notes_mod
 from cauce import points as points_mod
 from cauce import risk as risk_mod
 from cauce import services as services_mod
@@ -186,6 +189,10 @@ class Options:
     reviewed_next: bool = False
     #: The session's word that the task is one piece (`--whole`): out of turns, it gets more.
     whole: bool = False
+    #: What follows a run's ending (filing what it learned, the late independent check) goes on
+    #: in a child process, so the command that started it returns at its ending (`cauce run`,
+    #: `run-queued`). Off, it runs in this process before `run` returns (tests, the bench).
+    detach_after: bool = False
     #: A resume's account of where it starts and why (`cli.resume_line`), said in its plan.
     resume_why: str = ""
     #: The loop this task is a round's step of (`cauce.loops`): its tools that act are
@@ -303,6 +310,8 @@ class Report:
     #: What the passing worker learned, and where each fact was filed in the notes.
     learned: tuple[str, ...] = ()
     noted: list[dict] = field(default_factory=list)
+    #: Its independent check runs after this ending (`late_verifier`): a blocker it shows reopens it.
+    late_check: bool = False
     #: Rules the passing worker says a failing check of this task showed (`notes.CONSTRAINT`).
     constraints: tuple[str, ...] = ()
     #: A passing plan's parts and the contract they keep, for the workflow step that fans out over it.
@@ -373,6 +382,9 @@ class Report:
         elif self.branch and self.status == "done":
             lines.append(f"branch {self.branch}{at} — review it, then merge it; your checkout has none of it until "
                          f"then; {self.checked_text()}")
+            if self.late_check:
+                lines.append("its independent check runs now, after this ending: a problem it shows reopens the task "
+                             "and reaches this session as a new ending")
         elif self.branch:
             then = ("decide the open point, then merge it" if self.stop is not None and self.stop.cause == "decision"
                     else f"or `cauce resume {self.task_id}` once the block is cleared")
@@ -409,21 +421,32 @@ class Report:
         return "\n".join(lines)
 
 
+#: Reading kinds a high complexity does not raise: their first rung is measured as enough.
+UNRAISED_KINDS = frozenset({"plan"})
+
+
 def choose_start(
     ladder: Sequence[Cell],
     complexity: str,
     repo_landings: Sequence[str],
     global_landings: Sequence[str],
+    *,
+    writes: bool = False,
+    kind: str | None = None,
 ) -> tuple[Cell, list[str]]:
     """The cell the first attempt runs at, and why.
 
     History only ever *raises* the start. A kind that always climbs two rungs up
     in this repository starts there and skips two failed attempts; a kind that
     passes where it starts (a landing of "", `Store.landings`) is no reason to
-    start higher, wherever it started.
+    start higher, wherever it started. A high complexity raises a reading kind's
+    start one rung, never a writing kind's: a build classified high passed as often
+    at its ladder's first cell, five times sooner (`bench/speed/versus.py`). Nor a plan's
+    (`UNRAISED_KINDS`): opus/high drew the same parts as opus/xhigh and opus/max, in half
+    the time of xhigh (`bench/speed/plan.py`).
     """
     index, reasons = 0, []
-    if complexity == "high" and len(ladder) > 1:
+    if complexity == "high" and len(ladder) > 1 and not writes and kind not in UNRAISED_KINDS:
         index = 1
         reasons.append("classified as high complexity: one rung up")
     samples, where = (repo_landings, "this repository") if len(repo_landings) >= MIN_REPO_SAMPLES else (
@@ -546,6 +569,7 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
                 # below were never shown to fail; a reading kind's is its answer, kept as before.
                 store.landings(kind, repo=key, climbs=kind not in READ_ONLY_KINDS) if key else [],
                 store.landings(kind, climbs=kind not in READ_ONLY_KINDS),
+                writes=kind not in READ_ONLY_KINDS, kind=kind,
             )
         if raise_rungs:
             raised = min(_index_of(ladder, start) + raise_rungs, len(ladder) - 1)
@@ -1164,6 +1188,14 @@ def run(
     if writes and options.reviewed_next and config.enabled("verifier", os.environ):
         the_plan.reasons.append("no independent check of its own: the blind review step that follows reads "
                                 "this change as the verifier would")
+    # The independent check after the ending (`late_verifier`): the run ends on cauce's own
+    # check and the verifier reads the kept branch afterwards. Only with a check of cauce's to end
+    # on, and never for a workflow step, a fix that answers ledger rows, or work something waits
+    # on: a step or held work it released could not be taken back.
+    late = verifying and bool(options.verify) and config.enabled("late_verifier", os.environ) \
+        and not task.get("workflow_run") \
+        and not _fixing(options) and not options.ledger and not _awaited(store, task["id"])
+    deferred: dict[str, Any] | None = None
     ledger: dict[str, Mapping[str, str]] = {findings_mod.key(f): f for f in known_findings}
     corrections = 0
     # A workflow step that decides ledger rows: a pass answers each, and its answers decide the run.
@@ -1374,9 +1406,10 @@ def run(
                 baseline.found = None
             ahead = None
             if result.passed and options.verify and not (raced is not None and raced.checked):
-                ahead = _ahead(result, options=options, verifying=verifying, workspace=workspace, cell=cell,
-                               plan=the_plan, text=text, spec=spec, workdir=workdir, base=base_commit,
-                               ledger=ledger, launcher=launcher, registry=registry)
+                ahead = None if late else _ahead(
+                    result, options=options, verifying=verifying, workspace=workspace, cell=cell, plan=the_plan,
+                    text=text, spec=spec, workdir=workdir, base=base_commit, ledger=ledger, launcher=launcher,
+                    registry=registry)
                 result = _verified(result, options.verify, workdir, baseline)
             elif _settles(result, options.verify) and (
                     isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
@@ -1425,7 +1458,13 @@ def run(
             if result.passed and verifying:
                 so_far = list(isolate.changed(workspace)) if workspace else sorted({*changed, *result.changed_paths})
                 risk_mod.of_change(the_plan.risk, so_far if (workspace or base_commit) else None)
-                if so_far and risk_mod.needs_verifier(the_plan.risk, cheap=_cheap(cell)):
+                if so_far and risk_mod.needs_verifier(the_plan.risk, cheap=_cheap(cell)) and late:
+                    deferred = {"cell": cell, "spec": spec, "changed": so_far, "nth": nth,
+                                "rules": [n for n in the_plan.notes if n.get("kind") == notes.CONSTRAINT]}
+                    store.add_event(task["id"], "verifier_deferred", seq=nth, risk=the_plan.risk.tier)
+                    say(f"cauce: #{task['id']} attempt {nth} passed; risk {the_plan.risk.tier}: its independent "
+                        "check runs after its ending")
+                elif so_far and risk_mod.needs_verifier(the_plan.risk, cheap=_cheap(cell)):
                     result, review_stop, ledger, corrections, open_blockers = _independent_check(
                         result, text=text, kind=the_plan.kind, cell=cell, spec=spec, workdir=workdir,
                         base=base_commit, changed=so_far, risk=the_plan.risk, ledger=ledger,
@@ -1674,27 +1713,23 @@ def run(
         except Exception as exc:
             store.add_event(task["id"], "workflow_error", error=str(exc)[:300])
             say(f"cauce: #{task['id']} could not start the work that waits on it: {exc}")
-        # What it learned is filed after its ending and the next step are out (a model call, about
-        # 5 s at the median): no session and no step waits on it. Timed apart.
-        mark, filing = time.monotonic(), False
-        if status == "done" and report.learned and options.keep_learned and config.enabled(
-                "notes", os.environ, options.notes):
-            filing = True
-            _note(store, task, key, report, the_plan, workspace.repo_dir if workspace else repo_dir,
-                  isolate.head(workspace.repo_dir, report.branch) if workspace and report.branch else None,
-                  notes_ask)
-        if status == "done" and report.constraints and key and options.keep_learned and config.enabled(
-                "notes", os.environ, options.notes):
-            kept = notes.file_constraints(store, key, report.constraints, author="worker",
-                                          source=f"task #{task['id']}", task_id=task["id"])
-            if kept:
-                report.noted = [*report.noted, *kept]
-                store.add_event(task["id"], "noted", notes=kept, constraints=True)
-        if status == "done" and report.learned and options.keep_learned and config.enabled(
-                "engram_write", os.environ):
-            _to_engram(store, task, report, the_plan, workspace.repo_dir if workspace else repo_dir)
-        if filing:
-            store.add_event(task["id"], "notes_filed", notes_s=round(time.monotonic() - mark, 2))
+        # What follows the ending, after its ending and the next step are out: filing what it
+        # learned (a model call, about 5 s at the median) and the late independent check. No
+        # session and no step waits on either; with `detach_after` the command does not either.
+        late_check = deferred if status == "done" and deferred is not None and report.branch and report.commit \
+            else None
+        if late_check is not None:
+            report.late_check = True
+
+        checkout = workspace.repo_dir if workspace else repo_dir
+        filing = status == "done" and options.keep_learned and config.enabled("notes", os.environ, options.notes)
+        _after_ending(store, detach=options.detach_after, task=task, key=key, report=report, plan=the_plan,
+                      checkout=checkout, commit=isolate.head(workspace.repo_dir, report.branch)
+                      if workspace and report.branch and filing and report.learned else None,
+                      notes=filing, engram=status == "done" and options.keep_learned
+                      and config.enabled("engram_write", os.environ),
+                      notes_ask=notes_ask, late_check=late_check, text=text, base=base_commit,
+                      launcher=launcher, registry=registry, say=say)
     return report
 
 
@@ -2364,8 +2399,10 @@ def _head(repo_dir: Path) -> str | None:
 
 
 def _cheap(cell: Cell) -> bool:
-    """A cell whose pass a medium-risk change does not take on its own word."""
-    return cell.model == "haiku" or cell.effort == "low"
+    """A cell whose pass a medium-risk change does not take on its own word: Haiku, or a model below
+    Opus at low effort. Opus at low effort passed every hidden test of `bench/speed/versus.py`'s builds
+    on its own, and checked as cheap its medium changes climbed to opus/high for nothing."""
+    return cell.model == "haiku" or (cell.effort == "low" and cell.model != "opus")
 
 
 def verify_cell(cell: Cell) -> Cell:
@@ -2442,6 +2479,130 @@ def _tolerating(ahead: Ahead | None, wrote: Sequence[str]) -> Ahead | None:
     if ahead is not None:
         ahead.tolerated = tuple(wrote)
     return ahead
+
+
+def _awaited(store: Store, task_id: int) -> bool:
+    """Whether queued work waits on this task (`--after`): what its pass releases could not be held
+    back by a blocker found after it."""
+    return any(after.hold(t) == {"task": task_id} for t in store.queued_everywhere())
+
+
+def _follow_ending(store: Store, *, task: dict, key: str | None, report: Report, plan: Plan, checkout: Path,
+                   commit: str | None, notes: bool, engram: bool, notes_ask: notes_mod.Ask | None,
+                   late_check: Mapping[str, Any] | None, text: str, base: str | None, launcher: Launcher,
+                   registry: Mapping[str, caps.Capability] | None, say: Callable[[str], None]) -> None:
+    """What follows a run's ending: filing what its worker learned (a model call, about 5 s at the
+    median, timed apart by a `notes_filed` event), giving it to engram, and the late independent
+    check. No session and no step waits on any of it."""
+    mark = time.monotonic()
+    if notes and report.learned:
+        _note(store, task, key, report, plan, checkout, commit, notes_ask)
+    if notes and report.constraints and key:
+        kept = notes_mod.file_constraints(store, key, report.constraints, author="worker",
+                                          source=f"task #{task['id']}", task_id=task["id"])
+        if kept:
+            report.noted = [*report.noted, *kept]
+            store.add_event(task["id"], "noted", notes=kept, constraints=True)
+    if engram and report.learned:
+        _to_engram(store, task, report, plan, checkout)
+    if notes and report.learned:
+        store.add_event(task["id"], "notes_filed", notes_s=round(time.monotonic() - mark, 2))
+    if late_check is not None and report.commit:
+        _late_check(store, task["id"], text=text, kind=plan.kind, risk=plan.risk, repo_dir=checkout, base=base,
+                    commit=report.commit, deferred=late_check, launcher=launcher, registry=registry, say=say)
+
+
+#: Starts the detached process (a test passes its own).
+_spawn = subprocess.Popen
+
+
+def _quiet(_: str) -> None:
+    """What a detached process says: nothing, its output is closed."""
+
+
+def _after_ending(store: Store, *, detach: bool, **work: Any) -> None:
+    """Run `_follow_ending`: in a fresh process when `detach` (the command that started the run
+    returns at once), else here. Fresh, never a fork: a SQLite connection does not survive one,
+    and a forked child's writes were lost when it closed. Its arguments go in a file in the cauce
+    home that the process reads and removes; work that cannot be written so runs here."""
+    if detach:
+        name = ""
+        try:
+            spool = home() / "work"
+            spool.mkdir(parents=True, exist_ok=True)
+            fd, name = tempfile.mkstemp(prefix="after-", suffix=".pickle", dir=spool)
+            with os.fdopen(fd, "wb") as fh:
+                pickle.dump({**work, "say": _quiet}, fh)
+            source = str(Path(__file__).resolve().parents[1])
+            code = (f"import sys; sys.path.insert(0, {source!r}); "
+                    f"from cauce.orchestrate import _detached; _detached({name!r})")
+            _spawn([sys.executable, "-c", code], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, start_new_session=True, env=dict(os.environ))
+            return
+        except Exception:  # what cannot be detached runs here, as before
+            with contextlib.suppress(Exception):
+                os.unlink(name)
+    _follow_ending(store, **work)
+
+
+def _detached(path: str) -> None:
+    """The detached process `_after_ending` starts: read its work, remove the file, run it on a
+    store of its own. An error is kept where the next SessionStart reports it."""
+    try:
+        with open(path, "rb") as fh:
+            work = pickle.load(fh)  # noqa: S301 - written by this cauce, in the person's own cauce home
+        os.unlink(path)
+        store = Store.open()
+        try:
+            _follow_ending(store, **work)
+        finally:
+            store.close()
+    except BaseException:
+        with contextlib.suppress(Exception):
+            from cauce import hooks
+            hooks.note_error(home(), "after-ending")
+
+
+def _late_check(store: Store, task_id: int, *, text: str, kind: str, risk: risk_mod.Risk, repo_dir: Path,
+                base: str | None, commit: str, deferred: Mapping[str, Any], launcher: Launcher,
+                registry: Mapping[str, caps.Capability] | None, say: Callable[[str], None]) -> None:
+    """The independent check of a pass that ended on cauce's own check (`late_verifier`): read on the
+    branch it kept, in a temporary worktree at its tip. A blocker shown reopens the task as `review`,
+    its work kept on its branch, and its session hears of it as a new ending; `cauce resume` gives
+    its first check those blockers. A check that cannot decide leaves the pass standing."""
+    try:
+        with isolate.at_base(repo_dir, commit, home()) as where:
+            spec = dataclasses.replace(deferred["spec"], launch_dir=where, workdir=None)
+            check, vcell = _check_spec(text=text, kind=kind, cell=deferred["cell"], spec=spec, workdir=where,
+                                       base=base, changed=deferred["changed"], risk=risk, ledger={},
+                                       registry=registry, rules=deferred["rules"], rows=())
+            mark = time.monotonic()
+            verdict = launcher(check)
+            wall_s = time.monotonic() - mark
+    except BaseException as exc:  # a detached check that stops on a signal still says so
+        store.add_event(task_id, "verified", seq=deferred["nth"], late=True, passed=None,
+                        summary=f"the late independent check could not run: {exc!r}"[:500])
+        if not isinstance(exc, Exception):
+            raise
+        return
+    shown = findings_mod.read({"findings": list(verdict.findings)})
+    blockers = findings_mod.blocking(shown)
+    if not verdict.passed and not blockers and verdict.verdict == "fail":
+        blockers = [{"where": "", "what": verdict.summary or "the check failed without a finding",
+                     "evidence_class": "inferential", "cause": "unknown", "proof": ""}]
+    store.add_event(task_id, "verified", seq=deferred["nth"], late=True, cell=vcell.label, risk=risk.data(),
+                    verdict=verdict.verdict, passed=not blockers and verdict.passed, findings=list(shown)[:20],
+                    blocking=len(blockers), blockers=list(blockers)[:20], cost_usd=verdict.cost_usd,
+                    summary=verdict.summary[:500], round=0, wall_s=round(wall_s, 2),
+                    duration_s=round(verdict.duration_s, 2), turns=verdict.turns)
+    task = store.get_task(task_id) or {}
+    store.update_task(task_id, cost_usd=(task.get("cost_usd") or 0) + verdict.cost_usd)
+    if not blockers or task.get("status") != "done":
+        return
+    say(f"cauce: #{task_id} its late independent check found {len(blockers)} problem(s): it is open again")
+    stops.record(store, task_id, stops.Stop(
+        "review", f"its independent check, run after it ended, found {len(blockers)} problem(s) in the change",
+        attempt=deferred["nth"], account=clip(findings_mod.text(blockers), 2000)))
 
 
 def _fixing(options: Options) -> list[str]:

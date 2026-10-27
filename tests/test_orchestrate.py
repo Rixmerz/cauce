@@ -50,6 +50,13 @@ def kind(name: str, complexity: str = "medium"):
 def test_choose_start_rises_with_complexity_and_history_never_falls():
     assert choose_start(IMPLEMENT, "medium", [], [])[0] == Cell("sonnet", "medium")
     assert choose_start(IMPLEMENT, "high", [], [])[0] == Cell("sonnet", "high")
+    # A writing kind classified high starts where its ladder starts: only climbs raise it.
+    assert choose_start(IMPLEMENT, "high", [], [], writes=True)[0] == Cell("sonnet", "medium")
+    assert choose_start(IMPLEMENT, "high", ["opus/high"] * 3, [], writes=True)[0] == Cell("opus", "high")
+    # Nor a plan: its first rung drew the same parts in half the time (`bench/speed/plan.py`).
+    assert choose_start(LADDERS["plan"], "high", [], [], kind="plan")[0] == Cell("opus", "high")
+    assert choose_start(LADDERS["review-critical"], "high", [], [], kind="review-critical")[0] \
+        == LADDERS["review-critical"][1]
     start, reasons = choose_start(IMPLEMENT, "medium", ["sonnet/xhigh", "sonnet/xhigh", "opus/high"], [])
     assert start == Cell("sonnet", "xhigh") and "this repository" in reasons[-1]
     start, reasons = choose_start(IMPLEMENT, "medium", ["sonnet/xhigh"], ["opus/high"] * 5)

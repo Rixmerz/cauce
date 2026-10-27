@@ -93,7 +93,10 @@ def world(tmp_path: Path, git_repo: Path, _isolated_home: Path):
 
 
 def _task(status: tuple[str, ...]):
-    return lambda store: next(iter(store.list_tasks(status=list(status), limit=5)), None)
+    """A task in one of `status` whose ending is on record: the status is set a moment before its
+    `finished` event (`Store.final_event`), and a scenario that reads the ending must not run between."""
+    return lambda store: next((t for t in store.list_tasks(status=list(status), limit=5)
+                               if t["status"] in ("queued", "running") or store.final_event(t["id"]) is not None), None)
 
 
 def test_a_worker_killed_mid_attempt_is_resumed_by_the_dispatcher_and_the_lane_goes_on(world):

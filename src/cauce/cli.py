@@ -192,6 +192,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         add_dirs=tuple(str(Path(d).expanduser().resolve()) for d in args.add_dir or ()),
         services=tuple(args.service or ()),
         whole=bool(getattr(args, "whole", False)),
+        # What follows the ending (notes, the late independent check) goes on in a child: the command
+        # returns at its ending.
+        detach_after=True,
     )
     if (args.after is not None or getattr(args, "detach", False)) and not args.dry_run:
         return _queue_after(args, options)
@@ -349,6 +352,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         if args.detach:
             return _detach(args)
         options = flow.queued_options(task, orchestrate.Options(use_model_classifier=not args.no_model))
+        options.detach_after = True
         options.kind = options.kind or task["kind"]
         options.allow_tools = tuple(dict.fromkeys([*options.allow_tools, *(args.allow or ())]))
         options.verify = args.verify or options.verify
@@ -1999,6 +2003,7 @@ def cmd_run_queued(args: argparse.Namespace) -> int:
             print(f"#{args.id} is not a task the dispatcher claimed", file=sys.stderr)
             return 1
         options = flow.queued_options(task, orchestrate.Options(use_model_classifier=not args.no_model))
+        options.detach_after = True
         report = orchestrate.run(task["body"], Path(task["cwd"]), store, options, task_id=task["id"])
     finally:
         signal.signal(signal.SIGTERM, previous)

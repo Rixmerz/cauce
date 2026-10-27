@@ -10,7 +10,80 @@ python bench/speed/plan.py run opus/high,opus/xhigh,opus/max 2 3 && python bench
 python bench/speed/handoff.py run self,cauce 4 4 && python bench/speed/handoff.py report
 python bench/speed/dispatch.py current,named2 3 && python bench/speed/dispatch.py report
 python bench/speed/build.py run sonnet/high,sonnet/high+batch 4 4      # a `+batch` arm asks for parallel calls
+python bench/speed/versus.py run cauce,opus/low,opus/medium 3 3 [--hard] && python bench/speed/versus.py report
 ```
+
+## Summary: what was measured, built, left alone, and never measured
+
+Every row below is a real run judged by hidden tests or by cauce's own records; each links to its
+section. Three to four runs a cell is noisy: a difference under about 20% is not read as one.
+
+**Built, because a measurement showed it:**
+
+| Change | Release | Evidence |
+|---|---|---|
+| cauce's check runs beside the independent verifier | 0.45 | A: −42% on the median, the check not slowed |
+| features start at sonnet/high (was sonnet/xhigh) | 0.45 | B: as right, 3 to 4 times sooner |
+| a plan starts at opus/high (was opus/xhigh) | 0.45 | C: the same parts in half the time |
+| the worker does not run the full check before it reports | 0.47 | E: 131 s against 216 s, as right |
+| the dispatcher's wait names a collision | 0.47 | F: independent pairs started 42/42 (was 29/42), colliding ones held |
+| a start rises only on climbs | 0.48 | G: history had pinned writing kinds a rung or two high |
+| the mod hears an ending within about 2 s | 0.48 | H: 9 s p50 and 16 s p90 before |
+| notes are filed after the ending | 0.49 | J: 5.3 s p50 off every step |
+| a writing kind classified high starts at its ladder's first cell | 0.50 | M: 213 s against 468 s, as right |
+| the session passes the kind it read (`--kind`) | 0.50 | L, O: skips a 6 s classifier call |
+| the verifier runs after the ending (`late_verifier`), `cauce run` exits with it | 0.51 | R: the harder build in 122 s against 203 to 213 s |
+| Opus at low effort is no cheap cell | 0.51 | Q: two of three medium builds climbed for nothing |
+| a plan classified high is not raised to opus/xhigh | 0.51 | C, and plans in real use: 47% first-try at opus/xhigh, p50 10 min |
+
+**Measured and not built, and why:**
+
+| Idea | Why not |
+|---|---|
+| the verifier at sonnet/medium or opus/low | K, Q: 20 and 18 of 42 bugs where high catches 27 |
+| the verifier at opus/medium | Q: 36 of 42, but 81 s and three times the cost; a candidate, not proven on more changes |
+| a turn cap on the verifier | Q: no faster, no fewer bugs missed |
+| asking workers for parallel tool calls (`+batch`) | I: slower on both builds |
+| starting held work before its predecessor's verifier ends | D: nothing in the templates waits on a verified step |
+| starting a review before the build's check ends | D: one review in four thrown away, to save about 65 s of a 15 to 40 minute build |
+| Opus for the classifier or the dispatcher | O: one more right in 72, at 20 to 37 times the cost, no faster |
+| splitting a build whose halves read each other | P: slower, and the merged tests failed |
+| a guidelines CLAUDE.md (`andrej-karpathy-skills`) in cauce's workers | N: diffs 4 to 15% smaller, no arm but opus/low faster |
+| skipping cauce's check after the worker ran it | the overlap hides it wherever a verifier runs; about 4% elsewhere |
+| splitting a review with no parts by folder | `bench/review/areas.py`: slower and dearer |
+
+**Do not change without a new measurement:**
+- *The verifier's cell (the work's model at high effort).* Every cheaper cell measured missed a
+  third of the bugs; it found blockers in 16 of 53 checks here.
+- *Writing kinds' starts.* Raising them for complexity or for passes where they started made
+  builds 2 to 5 times slower and no more right (B, G, M).
+- *The rule that a dispatcher's wait names a collision.* Its old caution held every
+  independent pair back (F).
+- *Haiku as the delegator.* Measured against Opus and Sonnet (O).
+- *Racing a start that rarely passes its first try.* It judges itself in each repository
+  (`cauce.racing`); a fixed answer here would undo that.
+
+**Never measured:**
+- throughput of several tasks at once across separate repositories, and the capacity level's
+  rises and halvings under a real rate limit;
+- the late verifier's false alarms and the reopenings it causes in real use, and how often a
+  session merges a branch before its late check has spoken;
+- the verifier at sonnet/xhigh, or opus/medium on more than one change;
+- a build in a real product repository with a browser check (every build here is a small Python
+  engine with `make test`);
+- builds on a cell other than sonnet/high and opus at low effort in `versus.py` for a whole
+  feature-parallel run (plan, parts, integrate, review);
+- why `review-critical` and `test` pass under half their runs in real use (see below);
+- whether a plan's parts at sonnet/high build as well as opus/high's (C).
+
+**What a month of real use says** (one person's store over 30 days and several releases, 569 runs, 478 tasks):
+the worker is 19% of the timed time and the verifier 3%; 52% is pickup (queued work waiting
+for a dispatcher) and 23% `unnoticed` (a worker that died with nobody's session open to sweep it;
+its longest runs, 60 to 80 hours, span weekends). `cauce stats` splits the pickup by cause; the board shows
+the same from 0.51. The orchestrating session's own turns cost more than every worker together
+($2,195 against $1,227 at API rates). By kind, `feature` passes first 41% of the time and costs
+$9.16 per pass, `plan` 47% and $7.88, `review-critical` 25%, `test` 46%. The biggest lever left
+is outside the worker: the time work waits before it starts and after it dies.
 
 ## Where the time went (this machine's store, before 0.45)
 
@@ -241,3 +314,156 @@ task's plan (`cProfile` on `orchestrate.plan`: 8.9 of 9.7 s). The rules claimed 
 requests in this store and the model 12 (the rest predate the field), so it costs about one task
 in ten a few seconds. The rules are deliberately not a keyword list for every request
 (`classify.py`), so this is left as it is.
+
+## M: cauce against one plain Claude Code session (`versus.py`)
+
+The same request, repository and hidden tests for every arm. `cauce` is `cauce run … --verify 'make
+test'` with a cauce home of its own (no history); the others are one `claude -p` at that cell
+with the request as its whole prompt. Three runs per arm, four for the smoke rows.
+
+| Build | Arm | Right | Wall p50 | Cost p50 |
+|---|---|---|---|---|
+| medium | cauce 0.49 | 4/4 | 89 s | $0.20 |
+| medium | cauce 0.50 | 3/3 | 91 s | $0.19 |
+| medium | opus/low | 4/4 | 87 s | $0.44 |
+| medium | opus/medium | 3/3 | 98 s | $0.52 |
+| harder | cauce 0.49 | 3/3 | 468 s | $1.43 |
+| harder | cauce 0.50 | 3/3 | 213 s | $0.54 |
+| harder | opus/low | 3/3 | 86 s | $0.59 |
+| harder | opus/medium | 3/3 | 213 s | $1.29 |
+
+Every arm was right every time. On the medium build cauce was as fast as one Opus session at low
+effort and cost half as much. On the harder build cauce 0.49 started at sonnet/xhigh, one rung up
+for a request classified high, and took five times as long. From 0.50 a writing kind classified
+high starts at its ladder's first cell, as `build.py` showed it passing there as often.
+
+The rest of cauce's 213 s, read from one run's events: its plan 6 s, the worker 105 s, the
+independent verifier 50 s (the change touched a pricing checkout: a high risk), and filing notes
+7 s after the ending, which a foreground `cauce run` still waits for. The verifier is the one
+cauce gives that one session does not; the rest is the cell's own pace.
+
+## N: where cauce's time goes against one session, and a guidelines CLAUDE.md (`versus.py`)
+
+Pulling cauce apart on the harder build (three runs each, every one right):
+
+| Arm | Wall p50 | Cost p50 |
+|---|---|---|
+| one session, opus/low | 86 s | $0.59 |
+| cauce, start pinned at opus/low, no independent verifier | 91 s | $0.48 |
+| cauce, its own start (sonnet/high), no independent verifier | 108 s | $0.27 |
+| cauce as it runs | 213 s | $0.54 |
+
+cauce's own machinery (plan, worktree, check, report) is about 5 s. The cell is about 17 s, at half
+the cost. The independent verifier is the rest: the change touches a pricing checkout, a high
+risk. Over 53 checks in this store it found blockers in 16, so it stays. A faster cell for it
+was measured in `bench/review` (`effort.py`): sonnet/medium caught 20 and opus/low 18 of the 42
+bugs sonnet/high's 27 cover, and opus/medium caught 36 in 81 s at three times the cost.
+
+`andrej-karpathy-skills`' CLAUDE.md (think first, simplicity, surgical changes, verifiable goals),
+committed in the copy, against the same sessions and cauce. All 33 runs were right; lines are what
+the work added, at the median:
+
+| Build | Arm | Wall p50 | Cost p50 | Lines added | Of them, tests |
+|---|---|---|---|---|---|
+| medium | opus/low | 84 s | $0.44 | 181 | 61 |
+| medium | opus/low + guidelines | 75 s | $0.43 | 153 | 54 |
+| medium | sonnet/high | 78 s | $0.27 | 261 | 125 |
+| medium | sonnet/high + guidelines | 101 s | $0.34 | 253 | 144 |
+| medium | cauce | 85 s | $0.20 | 226 | 104 |
+| medium | cauce + guidelines | 99 s | $0.19 | 198 | 78 |
+| harder | opus/low | 119 s | $0.82 | 341 | 164 |
+| harder | opus/low + guidelines | 95 s | $0.69 | 310 | 139 |
+| harder | sonnet/high | 152 s | $0.54 | 430 | 231 |
+| harder | sonnet/high + guidelines | 156 s | $0.57 | 379 | 195 |
+| harder | cauce | 192 s | $0.48 | 371 | 185 |
+| harder | cauce + guidelines | 196 s | $0.49 | 357 | 166 |
+
+The guidelines kept diffs 4 to 15% smaller, most of it in tests, and made opus/low faster; they
+made sonnet and cauce no faster. Three runs a cell is noisy: nothing here was built from it.
+
+## O: which model makes cauce's own small decisions (`delegate.py`)
+
+The classifier and the dispatcher are Haiku calls. The same prompts and schemas, with only the
+model changed, two runs each: the classifier on 36 requests labelled with the kinds that fit
+them (the rules skipped, so this is the model's part alone), the dispatcher on `dispatch.py`'s 42
+pairs.
+
+| Decision | Model | Right | Wall p50 | Cost against Haiku |
+|---|---|---|---|---|
+| classify | haiku/low | 71/72 | about 6 s | 1× |
+| classify | sonnet/low | 70/72 | about 6 s | |
+| classify | opus/low | 72/72 | about 6 s | 20× |
+| dispatch | haiku/low | 84/84 | | 1× |
+| dispatch | opus/low | 84/84 | | 37× |
+
+Opus was right once more in 72 at twenty times the cost and no faster: both stay on Haiku. The
+classifier runs only for a request no rule claims, about one in ten here, and the session that
+sends work already read the request: from 0.50 the orchestration guide and the mod's `queue`
+tool tell it to pass `--kind`, which skips the call. Whether an intermediary pays when the
+session itself is the same model as the worker is answered by M and N: a session at opus/low on
+its own took 86 to 96 s on the harder build; cauce pinned to that cell with no verifier took
+91 s. The intermediary costs about 5 s; what it adds is the check, the worktree and the record.
+
+## P: one build as two tasks side by side (`versus.py`, `cauce-split`)
+
+The medium build as the two tasks a session would send at once (the pricing rules; the receipt
+and the export), each with its kind, merged after. Three runs:
+
+| Arm | Right | Wall p50 | Merge conflict |
+|---|---|---|---|
+| cauce, one task | 3/3 | 88 s | |
+| cauce-split, two tasks | 7/7 hidden tests | 113 s | none |
+
+Slower, and the repository's own tests failed after the merge, though each branch passed alone
+and the hidden tests passed (why was not dug into: the receipt's half reads the discounts the
+other half adds). Splitting a build whose halves read each other's change is not worth it; `route.split_first` already asks for a
+split only for builds of several independent pieces.
+
+## Q: a start at Opus low effort, with the verifier (`versus.py`, `cauce@opus/low`)
+
+| Build | Arm | Wall p50 |
+|---|---|---|
+| medium | opus/low, one session | 87 s |
+| medium | cauce pinned at opus/low, with the verifier | 209 s |
+| harder | cauce pinned at opus/low, no verifier | 91 s |
+| harder | cauce pinned at opus/low, with the verifier | 259 s |
+
+Opus at low effort counted as a cheap cell, so a medium-risk change it made called the verifier,
+and two of the three medium builds climbed to opus/high on what it said, though every arm at
+opus/low passed every hidden test on its own. From 0.51 a cheap cell is Haiku or a model below
+Opus at low effort.
+
+The verifier's own cell on `bench/review`'s large change (42 planted bugs, `effort.py`):
+
+| Verifier cell | Caught | Wall p50 |
+|---|---|---|
+| sonnet/high (as it runs) | 27/42 | 51 s |
+| sonnet/high, 20 turns | 30/42 | 67 s |
+| sonnet/medium | 20/42 | 36 s |
+| opus/low | 18/42 | 36 s |
+| opus/medium | 36/42 | 81 s, $0.45 |
+
+A turn cap saved nothing. The faster cells missed a third of what high catches. In this store
+the verifier found blockers in 16 of 53 checks, at 19 turns p50 and 33 p90: it stays where it is,
+and moves off the critical path instead (R).
+
+## R: the independent check after the ending (`versus.py`, 0.51)
+
+From 0.51 a pass that cauce's own check settled ends at once, and the verifier reads the kept
+branch after it (`late_verifier`). The wall time below ends when `cauce run` exits; the late check
+is waited for apart. Three runs per build, every one right on the hidden tests:
+
+| Build | cauce 0.50 | cauce 0.51 | Late check after the ending | Cost p50 |
+|---|---|---|---|---|
+| harder | 203 to 213 s | 122 s (114 to 136) | 66 to 108 s | $0.47 |
+| medium | 88 to 91 s | 82 s (78 to 88) | none: no verifier needed | $0.18 |
+
+On the harder build one late check in three found a blocker in work the hidden tests passed and
+reopened it as `review`: a false alarm, answered by a resume that gives the worker the blocker.
+Before 0.51 the same blocker earned a correction round before the ending, which costs the same
+worker time but held every run's ending for it. Whether reopenings like this are rare or common
+in real use was not measured (see the summary's "never measured").
+
+The first measurement of this lost every late check: the detached work was a `fork` of the run,
+whose SQLite connection does not survive one, and the child's writes vanished when it closed. It
+is a fresh process now; the bench caught what the unit tests, which run it in-process, could not.

@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import subprocess
+import sys
 
 import pytest
 
@@ -1099,3 +1102,103 @@ def test_a_check_that_fails_drops_what_ran_beside_it_and_keeps_its_cost(git_repo
     assert len(dropped) == 1 and dropped[0]["data"]["cost_usd"] == pytest.approx(0.05)
     assert [e["data"]["seq"] for e in store.events_of(report.task_id, "verified")] == [2]
     assert store.attempts(report.task_id)[0]["cost_usd"] == pytest.approx(0.15)
+
+
+# --- the late independent check -------------------------------------------------------
+
+
+@pytest.fixture
+def late(monkeypatch, verifier_on):
+    monkeypatch.setenv("CAUCE_LATE_VERIFIER", "on")
+
+
+def test_a_late_check_runs_after_the_ending_and_a_blocker_reopens_the_task(git_repo, store, late):
+    script = Script(passing(), check("fail", [BUG]), write="app.py")
+    report = run("fix the cart total", git_repo, store, Options(verify="true"), registry={}, launcher=script,
+                 classifier=kind("implement"))
+    # The run ended as a pass before its check ran, and said the check comes after it.
+    assert report.status == "done" and report.late_check and "runs now, after this ending" in report.text()
+    kinds = [e["kind"] for e in store.events(task_id=report.task_id)]
+    assert "verifier_deferred" in kinds
+    first_end, late_check = kinds.index("finished"), kinds.index("verified")
+    assert first_end < late_check
+    verified = store.last_event(report.task_id, "verified")["data"]
+    assert verified["late"] and verified["blocking"] == 1
+    # The blocker reopens it as a review, with an ending of its own, its work on its branch.
+    assert kinds.count("finished") == 2 and kinds.index("finished", late_check) > late_check
+    finished = store.last_event(report.task_id, "finished")["data"]
+    assert finished["stop"]["cause"] == "review"
+    assert store.get_task(report.task_id)["status"] != "done"
+    assert isolate.branch_for(report.task_id) in subprocess.run(
+        ["git", "branch"], cwd=git_repo, capture_output=True, text=True).stdout
+    # Its cost is the task's.
+    assert store.get_task(report.task_id)["cost_usd"] == pytest.approx(0.15)
+
+
+def test_a_late_check_that_passes_leaves_the_pass(git_repo, store, late):
+    script = Script(passing(), check("pass"), write="app.py")
+    report = run("fix the cart total", git_repo, store, Options(verify="true"), registry={}, launcher=script,
+                 classifier=kind("implement"))
+    assert report.status == "done" and store.get_task(report.task_id)["status"] == "done"
+    assert store.last_event(report.task_id, "verified")["data"]["passed"]
+    assert [e["kind"] for e in store.events(task_id=report.task_id)].count("finished") == 1
+
+
+def test_work_something_waits_on_is_checked_before_its_ending(git_repo, store, late):
+    script = Script(passing(), check("fail", [BUG]), passing("fixed"), check("pass"), write="app.py")
+    task = store.create_task("fix the cart total", status="queued", source="cauce")
+    store.create_task("then ship it", status="queued", source="cauce",
+                      options=json.dumps({"after": {"task": task["id"]}}))
+    assert orchestrate._awaited(store, task["id"])
+    report = run("fix the cart total", git_repo, store, Options(verify="true"), registry={}, launcher=script,
+                 classifier=kind("implement"), task_id=task["id"])
+    assert report.status == "done" and not report.late_check
+    assert not store.events_of(report.task_id, "verifier_deferred")
+    assert [e["data"]["blocking"] for e in store.events_of(report.task_id, "verified")] == [1, 0]
+
+
+def test_a_fix_of_ledger_rows_is_never_checked_late(git_repo, store, late):
+    script = Script(passing(), check("pass"), write="app.py")
+    report = run("fix the cart total", git_repo, store, Options(verify="true", ledger={"role": "fix", "ids": ["F1"]}),
+                 registry={}, launcher=script, classifier=kind("implement"))
+    assert not report.late_check and not store.events_of(report.task_id, "verifier_deferred")
+
+
+def test_a_pass_with_no_check_of_cauce_s_is_never_checked_late(git_repo, store, late):
+    script = Script(passing(), check("pass"), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert not report.late_check and not store.events_of(report.task_id, "verifier_deferred")
+    assert store.last_event(report.task_id, "verified")["data"]["passed"]
+
+
+def test_opus_at_low_effort_is_no_cheap_cell_and_a_model_below_it_is():
+    assert not orchestrate._cheap(Cell("opus", "low"))
+    assert orchestrate._cheap(Cell("sonnet", "low")) and orchestrate._cheap(Cell("haiku", "medium"))
+    assert not orchestrate._cheap(Cell("sonnet", "medium"))
+
+
+def test_what_follows_an_ending_detached_goes_to_a_fresh_process_through_a_file(git_repo, store, late,
+                                                                                  monkeypatch):
+    started = []
+    monkeypatch.setattr(orchestrate, "_spawn", lambda argv, **kw: started.append((argv, kw)))
+    script = Script(passing(), check("fail", [BUG]), write="app.py")
+    report = run("fix the cart total", git_repo, store, Options(verify="true", detach_after=True), registry={},
+                 launcher=script, classifier=kind("implement"))
+    # The run ended without its check: a fresh process, never a fork, does it from a file.
+    assert report.status == "done" and report.late_check
+    assert not store.events_of(report.task_id, "verified")
+    (argv, kw), = started
+    assert kw["start_new_session"] and argv[0] == sys.executable and "_detached(" in argv[-1]
+    spool = re.search(r"_detached\('([^']+)'\)", argv[-1]).group(1)
+    orchestrate._detached(spool)
+    assert not os.path.exists(spool)
+    verified = store.last_event(report.task_id, "verified")["data"]
+    assert verified["late"] and verified["blocking"] == 1
+    assert store.final_event(report.task_id)["data"]["stop"]["cause"] == "review"
+
+
+def test_a_detached_process_that_fails_keeps_its_error(store, tmp_path):
+    spool = tmp_path / "after-x.pickle"
+    spool.write_bytes(b"not a pickle")
+    orchestrate._detached(str(spool))
+    assert "after-ending" in (home() / "hook-errors.log").read_text()

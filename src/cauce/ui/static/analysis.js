@@ -36,6 +36,22 @@ const money = (v) => (v === null || v === undefined ? "—" : usd(v));
 const num = (v) => h("td", { class: "num" }, v ?? "—");
 const head = (...cols) => h("tr", {}, cols.map((c) => (Array.isArray(c) ? h("th", { class: "num" }, c[0]) : h("th", {}, c))));
 
+const PICKUP = [
+  ["pickup_conflict_s", "work ahead it was judged to wait for"],
+  ["pickup_limit_s", "the usage limit"],
+  ["pickup_ceiling_s", "your ceiling of workers (chosen)"],
+  ["pickup_level_s", "the machine's level"],
+];
+
+function pickupLine(told) {
+  const seconds = (told && told.seconds) || {};
+  const parts = PICKUP.filter(([key]) => seconds[key]).map(([key, words]) =>
+    `${words} ${secs(seconds[key])} (${pct(told.share[key])})`);
+  if (!parts.length) return null;
+  if (told.unknown_s) parts.push(`not told ${secs(told.unknown_s)}`);
+  return h("p", { class: "empty" }, `The pickup waited on: ${parts.join(" · ")}.`);
+}
+
 function phaseBar(phases) {
   const total = Object.values(phases.seconds).reduce((a, b) => a + b, 0);
   if (!phases.runs || !total) return h("div", { class: "empty" }, "No run has its phases timed yet: runs record them from this version on.");
@@ -111,6 +127,7 @@ export async function renderAnalysis(ctx) {
       h("div", { class: "stat" }, h("b", {}, secs(s.queued_p50_s)), h("span", {}, "median wait in the queue"))),
     h("h2", { class: "section" }, "Where the time went"),
     phaseBar(r.phases),
+    pickupLine(r.pickup),
     h("h2", { class: "section" }, "By kind"),
     summaryTable(r.by_kind, "kind", "kind", kindChip),
     h("h2", { class: "section" }, "The session's thread in the brief"),

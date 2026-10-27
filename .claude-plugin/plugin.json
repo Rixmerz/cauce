@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.49.0",
+  "version": "0.51.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -109,6 +109,12 @@
       "type": "boolean",
       "title": "Run the independent check beside cauce's check",
       "description": "When a writing attempt passes and its change needs the independent verifier, the verifier starts at once, beside cauce's own check of the work, instead of after it: both read the same change, the verifier is told the check is running and not to run it itself, and a check that fails stops it (its cost is kept). Never for a task that starts services. Off: the verifier waits for the check.",
+      "default": true
+    },
+    "late_verifier": {
+      "type": "boolean",
+      "title": "Run the independent check after the ending",
+      "description": "A task that is no workflow step, answers no review rows and that no queued work waits on ends as soon as cauce's own check passes; its independent verifier then reads the branch it kept. A blocker it shows reopens the task (stopped for review, its work kept), and the session hears of it as a new ending. Off: the ending waits for the verifier, and its blockers earn a correction in the same run.",
       "default": true
     },
     "role_trials": {
