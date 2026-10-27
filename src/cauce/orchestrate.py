@@ -1515,7 +1515,7 @@ def run(
             worker_cost = result.cost_usd
             if result.passed and verifying:
                 so_far = list(isolate.changed(workspace)) if workspace else sorted({*changed, *result.changed_paths})
-                risk_mod.of_change(the_plan.risk, so_far if (workspace or base_commit) else None)
+                _risk_of_change(the_plan, so_far if (workspace or base_commit) else None, workdir, base_commit)
                 if so_far and risk_mod.needs_verifier(the_plan.risk, cheap=_cheap(cell)) and late:
                     deferred = {"cell": cell, "spec": spec, "changed": so_far, "nth": nth,
                                 "impact": _impact(the_plan, so_far, repo_dir, workdir=workdir, base=base_commit),
@@ -2722,17 +2722,30 @@ def _livespec_calls(store: Store, task_id: int, nth: int, handed: Sequence[str])
     return store.tool_counts(task_id, nth, "mcp__livespec__")
 
 
-def _links(plan: Plan, changed: Sequence[str], workdir: Path | None, base: str | None) -> list[str]:
-    """The specs a change wrote or changed with no `@spec:` comment on any code, as lines: a check
-    of what the brief required (`spec_links_brief`), so only where a worker was told to. A spec
-    written with none blocks; one that was there before is a warning. Never fails a run."""
+def _unlinked(plan: Plan, changed: Sequence[str], workdir: Path | None,
+              base: str | None) -> list[specs_mod.Requirement]:
+    """The specs a change wrote or changed with no `@spec:` comment on any code: a check of what the
+    brief required (`spec_links_brief`), so only where a worker was told to. Never fails a run."""
     if workdir is None or not config.enabled("specs", os.environ) or not any(
             hasattr(adapter, "spec_links_brief") for adapter, _ in plan.active):
         return []
     try:
-        return specs_mod.link_lines(specs_mod.unlinked(workdir, base, changed))
+        return specs_mod.unlinked(workdir, base, changed)
     except (OSError, ValueError):
         return []
+
+
+def _links(plan: Plan, changed: Sequence[str], workdir: Path | None, base: str | None) -> list[str]:
+    """`_unlinked` as lines: a spec written with none blocks; one that was there before is a warning."""
+    return specs_mod.link_lines(_unlinked(plan, changed, workdir, base))
+
+
+def _risk_of_change(plan: Plan, changed: Sequence[str] | None, workdir: Path | None, base: str | None) -> None:
+    """The tier raised by what an attempt changed (`risk_mod.of_change`), and to high when it wrote a spec
+    that no code links: the report calls that a blocker, and only the independent check can block."""
+    risk_mod.of_change(plan.risk, changed)
+    if changed and any(r.new for r in _unlinked(plan, changed, workdir, base)):
+        plan.risk.raise_to("high", "it wrote a spec that no code names in an `@spec:` comment")
 
 
 def _fixing(options: Options) -> list[str]:
@@ -2752,7 +2765,7 @@ def _ahead(result: launch.WorkerResult, *, options: Options, verifying: bool,
             and config.enabled("overlap", os.environ)):
         return None
     so_far = list(isolate.changed(workspace))
-    risk_mod.of_change(plan.risk, so_far)
+    _risk_of_change(plan, so_far, workdir, base)
     if not so_far or not risk_mod.needs_verifier(plan.risk, cheap=_cheap(cell)):
         return None
     check, _ = _check_spec(text=text, kind=plan.kind, cell=cell, spec=spec, workdir=workdir, base=base,

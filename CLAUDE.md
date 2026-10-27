@@ -644,7 +644,9 @@ yields the default kind, not a guess.
   writing worker is told to put `@spec:<capability>-<requirement-name>` on the code that implements a
   spec it writes (`spec_links_brief`), and what the change touched that no code names is a line of the
   report and of the independent check's brief (`specs.unlinked`, `LINK_PREFIX`): a spec the change
-  wrote blocks, one that was already there is a warning, data and never a verdict of cauce's own. Each
+  wrote blocks, one that was already there is a warning, data and never a verdict of cauce's own. A spec
+  the change wrote with none raises its tier to high (`orchestrate._risk_of_change`), so the independent
+  check that blocks always runs, a docs task's too; a warning raises nothing. Each
   attempt keeps the livespec calls its worker made (`attempt_finished.livespec_calls`), and `cauce
   stats` compares tokens per kind with livespec called against not called: observed, never a trial.
   Tests run with `CAUCE_LIVESPEC_WAIT=0`.

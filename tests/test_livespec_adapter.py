@@ -512,7 +512,7 @@ def test_every_tool_the_orientation_and_the_spec_links_name_exists_in_livespec(t
     named = _named([*livespec_mod.orientation("implement"), *livespec_mod.orientation("explore", has_specs=False),
                     *adapter(tmp_path).spec_links_brief(git_repo)])
     assert {"list_specs", "get_spec_implementation", "quick_orient", "read_unit", "search_similar",
-            "git_diff_impact", "index_project"} <= named
+            "git_diff_impact", "index_project", "sync_openspec"} <= named
     assert named <= TOOLS, named - TOOLS
 
 
@@ -546,8 +546,17 @@ def test_orient_reads_whether_the_index_holds_specs_and_says_nothing_when_it_can
 def test_the_spec_links_brief_tells_a_shared_index_not_to_be_indexed_from_a_worktree(tmp_path, git_repo):
     a = adapter(tmp_path)
     own = "\n".join(a.spec_links_brief(git_repo))
-    assert "`@spec:<capability>-<requirement-name>`" in own and "`index_project`" in own
-    assert "a warning" in own and "blocks" in own
+    assert "`@spec:<capability>-<requirement-name>`" in own
+    # A spec the worker just wrote is in the index only after `sync_openspec` (index_project reads specs only
+    # where `.livespec.toml` asks it to), and that is what links its comments.
+    assert "`sync_openspec`" in own
+    assert "`index_project`" in own
+    assert "validación becomes validacion" in own
+    assert "livespec:id" in own
+    assert "a warning" in own
+    assert "blocks" in own
     (git_repo / ".livespec.toml").write_text(f'[workspace]\ngroup_db = "{tmp_path / "shared" / "docs.db"}"\n')
     shared = "\n".join(a.spec_links_brief(git_repo))
-    assert "do not index the directory you work in" in shared and "index_project" not in shared
+    assert "do not index the directory you work in" in shared
+    assert "index_project" not in shared
+    assert "sync_openspec" not in shared

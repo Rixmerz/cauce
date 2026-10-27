@@ -63,7 +63,7 @@ TOOLS = frozenset({
     "quick_orient", "find_symbol", "who_calls", "who_does_this_call", "analyze_impact",
     "git_diff_impact", "get_symbol_source", "get_spec_implementation", "list_specs",
     "audit_coverage", "find_orphan_tests", "find_dead_code", "search",
-    "read_unit", "search_similar", "index_project",
+    "read_unit", "search_similar", "index_project", "sync_openspec",
 })
 
 _HINTS: Mapping[str, str] = {
@@ -652,22 +652,28 @@ class Livespec:
 
     def spec_links_brief(self, repo_dir: Path) -> list[str]:
         """What a worker that writes or changes an OpenSpec spec is told so the spec reaches its code:
-        a `@spec:<id>` comment on each function that implements it, and the directory it works in
-        indexed again, so `get_spec_implementation` lists them. A shared index (`group_db`) is not
-        indexed again from a worktree: that would add a project for a directory that is removed."""
+        a `@spec:<id>` comment on each function that implements it, and the index of the directory it
+        works in brought up to date (`sync_openspec` reads the spec and links the comments, `index_project`
+        indexes the functions), so `get_spec_implementation` lists them. A shared index (`group_db`) is
+        not touched from a worktree: that would add a project for a directory that is removed."""
         root = (repo.toplevel(repo_dir) or repo_dir).resolve()
         shared = self.db_path(root) != root / ".mcp-docs" / "docs.db"
         lines = [f"A spec you write or change is linked to the code that implements it: put `@spec:{SPEC_ID}` in a "
                  "comment on each function that implements it (the capability folder under `openspec/specs/`, a "
-                 "hyphen and the requirement's name in lower case with hyphens; `list_specs` shows the ids). "
+                 "hyphen and the requirement's name in lower case with hyphens and accents folded: validación "
+                 "becomes validacion; a requirement with a `<!-- livespec:id=… -->` marker under its heading has "
+                 "that id; `list_specs` shows the ids of the specs already indexed). "
                  "cauce's check reads those comments: a spec you wrote with none is a finding that blocks, and "
                  "one that already existed and has none is a warning."]
         if shared:
             lines.append("This repository's index is shared with others (`group_db`): do not index the directory "
                          "you work in; the links are made when it is indexed after your work lands.")
         else:
-            lines.append("Then index the directory you work in again (`index_project` with that workspace; it is "
-                         "incremental) and check with `get_spec_implementation` that each spec lists its code.")
+            lines.append("Then bring the index of the directory you work in up to date: `sync_openspec` with that "
+                         "workspace reads the specs you wrote and links the comments, and `index_project` (it is "
+                         "incremental) indexes the functions they sit on. Check with `get_spec_implementation` that "
+                         "each spec under `openspec/specs/` lists its code; a requirement you only proposed under "
+                         "`openspec/changes/` links once it is applied, so it needs the comment and no check.")
         return lines
 
     # --- for the worker ------------------------------------------------------

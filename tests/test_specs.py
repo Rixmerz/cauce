@@ -174,8 +174,56 @@ def test_a_spec_id_is_the_capability_and_the_requirement_name_as_livespec_derive
     assert specs.slug("  Retry (3x) -- then stop ") == "retry-3x-then-stop"
     assert specs.slug("???") == "requirement"
     found = specs._requirements("openspec/specs/Login Flow/spec.md", LOGIN_SPEC)
-    assert [(i, new) for i, _, _, new in found] == [("login-flow-valid-credentials", True),
-                                                    ("login-flow-lockout-after-failures", True)]
+    assert [(r.spec_id, r.added) for r in found] == [("login-flow-valid-credentials", True),
+                                                     ("login-flow-lockout-after-failures", True)]
+
+
+ACCENTED_SPEC = """# acceso
+
+## Requirements
+### Requirement: Validación de contraseñas
+El sistema DEBE validar la contraseña.
+
+### Requirement: Valid credentials
+<!-- livespec:id=SPEC-007 -->
+The system SHALL sign a user in with valid credentials.
+"""
+
+
+def test_a_spec_id_folds_accents_as_livespec_does_and_keeps_the_old_one_as_its_alias():
+    # livespec transliterates (`validación` -> `validacion`); before it did, a non-ASCII letter became a hyphen.
+    assert specs.slug("Validación de contraseñas") == "validacion-de-contrasenas"
+    assert specs.slug("Straße Ørsted") == "strasse-orsted"
+    found = specs._requirements("openspec/specs/acceso/spec.md", ACCENTED_SPEC)
+    assert found[0].spec_id == "acceso-validacion-de-contrasenas"
+    assert found[0].legacy == "acceso-validaci-n-de-contrase-as"
+    assert found[1].legacy == "", "an id the heading derives the same either way has no alias"
+
+
+def test_a_livespec_id_marker_under_the_heading_is_the_requirements_id():
+    found = specs._requirements("openspec/specs/acceso/spec.md", ACCENTED_SPEC)
+    assert found[1].spec_id == "SPEC-007"
+    # A marker is read only before the prose: one after it is the prose's own text.
+    late = "### Requirement: Late\nThe system SHALL do it.\n<!-- livespec:id=SPEC-008 -->\n"
+    assert specs._requirements("openspec/specs/acceso/spec.md", late)[0].spec_id == "acceso-late"
+
+
+def test_a_comment_with_the_accent_folded_id_the_marker_id_or_the_old_id_links_the_spec(git_repo):
+    (git_repo / "openspec" / "specs" / "acceso").mkdir(parents=True)
+    spec = git_repo / "openspec" / "specs" / "acceso" / "spec.md"
+    spec.write_text("# acceso\n")
+    git(git_repo, "add", "-A")
+    git(git_repo, "commit", "-q", "-m", "specs")
+    base = git(git_repo, "rev-parse", "HEAD")
+    spec.write_text(ACCENTED_SPEC)
+    changed = ["openspec/specs/acceso/spec.md"]
+    assert [r.spec_id for r in specs.unlinked(git_repo, base, changed)] == ["acceso-validacion-de-contrasenas",
+                                                                            "SPEC-007"]
+    (git_repo / "auth.py").write_text("# @spec:acceso-validacion-de-contrasenas, spec-007\ndef check(): ...\n")
+    assert specs.unlinked(git_repo, base, changed) == []
+    # Code annotated before livespec folded accents still links: livespec keeps the old id as an alias.
+    (git_repo / "auth.py").write_text("# @spec:acceso-validaci-n-de-contrase-as\n# @spec:SPEC-007\ndef check(): ...\n")
+    assert specs.unlinked(git_repo, base, changed) == []
 
 
 def test_only_the_requirements_a_change_touched_are_its_own_and_new_ones_are_told_from_old(git_repo):
@@ -262,7 +310,7 @@ class _Writes:
 NEW_REQUIREMENT = LOGIN_SPEC + "\n### Requirement: Password reset\nThe system SHALL mail a reset link.\n"
 
 
-def _link_run(git_repo, store, tmp_path, monkeypatch, files, *, indexed=True):
+def _link_run(git_repo, store, tmp_path, monkeypatch, files, *, indexed=True, of_kind="implement"):
     from .livespec_fixture import build
     from .test_orchestrate import _livespec
 
@@ -274,7 +322,7 @@ def _link_run(git_repo, store, tmp_path, monkeypatch, files, *, indexed=True):
     else:
         (git_repo / ".mcp-docs" / "docs.db").unlink(missing_ok=True)
     writes = _Writes(files)
-    report = run("fix the cart total", git_repo, store, registry={}, launcher=writes, classifier=kind("implement"),
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=writes, classifier=kind(of_kind),
                  adapters=[_livespec(tmp_path)] if indexed else [])
     return report, writes
 
@@ -301,9 +349,37 @@ def test_a_spec_whose_functions_carry_the_comment_is_no_finding(git_repo, store,
     report, writes = _link_run(git_repo, store, tmp_path, monkeypatch, {
         "openspec/specs/login/spec.md": NEW_REQUIREMENT,
         "auth.py": "# @spec:login-password-reset\ndef mail_reset_link(): ...\n"})
-    assert report.status == "done" and _links_said(report) == []
+    assert report.status == "done"
+    assert _links_said(report) == []
     assert writes.verifier_prompts
     assert all("cauce found these without the comment" not in p for p in writes.verifier_prompts)
+    assert not any(NO_LINK_RISK in reason for reason in report.plan.risk.reasons)
+
+
+NO_LINK_RISK = "it wrote a spec that no code names in an `@spec:` comment"
+
+
+def test_a_spec_written_with_no_comment_reaches_the_independent_check_whatever_the_risk_was(
+        git_repo, store, tmp_path, monkeypatch):
+    # A docs task starts passive and writes no code, so no tier of its own would run the check that blocks.
+    report, writes = _link_run(git_repo, store, tmp_path, monkeypatch,
+                               {"openspec/specs/login/spec.md": NEW_REQUIREMENT}, of_kind="docs")
+    assert report.status == "done"
+    assert report.plan.risk.tier == "high"
+    assert NO_LINK_RISK in report.plan.risk.reasons
+    prompt, = writes.verifier_prompts
+    assert "cauce found these without the comment:" in prompt
+
+
+def test_a_spec_that_was_already_there_raises_no_risk_and_runs_no_check(git_repo, store, tmp_path, monkeypatch):
+    edited = LOGIN_SPEC.replace("a user in", "a person in")
+    report, writes = _link_run(git_repo, store, tmp_path, monkeypatch,
+                               {"openspec/specs/login/spec.md": edited}, of_kind="docs")
+    assert report.status == "done"
+    assert len(_links_said(report)) == 1
+    assert report.plan.risk.tier == "passive"
+    assert NO_LINK_RISK not in report.plan.risk.reasons
+    assert writes.verifier_prompts == []
 
 
 def test_a_spec_that_was_already_there_is_a_warning_and_a_repository_with_no_index_is_not_asked(
