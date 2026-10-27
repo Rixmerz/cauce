@@ -653,6 +653,40 @@ def test_a_run_in_a_folder_of_several_repositories_is_read_in_each_while_it_runs
     assert store.final_event(report.task_id)["data"]["in_place"] == ["api", "web"]
 
 
+def test_a_later_attempt_in_a_folder_of_repositories_still_reads_the_work_of_the_earlier_ones(tmp_path, store):
+    """The repositories' starting point is the run's, taken once: a second attempt begins on what the
+    first wrote in the person's checkouts, which is the task's work and not what they already had."""
+    from cauce import progress
+
+    from .conftest import git
+
+    folder = tmp_path / "capacitacion"
+    api = folder / "api"
+    api.mkdir(parents=True)
+    git(api, "init", "-q", "-b", "main")
+    (api / "README.md").write_text("hi\n")
+    git(api, "add", "-A")
+    git(api, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
+    seen: list = []
+
+    def launcher(spec):
+        task = store.list_tasks(status=["running"])[0]
+        started = store.last_event(task["id"], "attempt_started")["data"]
+        seen.append((started["places"], progress.changes(task["id"], None, places=started["places"])))
+        name = f"f{len(seen)}.js"
+        (api / name).write_text("a\n")
+        if len(seen) == 1:
+            return WorkerResult(False, Failure.CODE_BUG, "still broken", cost_usd=0.1, changed_paths=(f"api/{name}",))
+        return WorkerResult(True, None, "done", evidence="1 passed", changed_paths=("api/f1.js", f"api/{name}"))
+
+    report = run("edit the api", folder, store, Options(), registry={}, launcher=launcher,
+                 classifier=kind("implement"))
+    assert report.status == "done" and len(seen) == 2
+    assert seen[0][0] == seen[1][0]  # the same starting point, recorded again for the attempt that reads it
+    assert seen[0][1]["files"] == 0
+    assert seen[1][1]["paths"] == ["api/f1.js"]  # what the first attempt wrote is not "already there"
+
+
 def test_work_that_failed_is_dropped_and_the_report_says_so(git_repo, store):
     script = Script(bad(Failure.SPEC_BUG, "no such API"), write="half.py")
     report = run("do it", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))

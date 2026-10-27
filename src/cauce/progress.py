@@ -84,12 +84,15 @@ def _new_lines(path: Path) -> int:
 def _changes_in(places: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
     """The same count for a task that runs with no worktree: each checkout it may change, read
     against how it stood when the attempt started (`isolate.stand`). The lines of a file that was
-    already modified there before the attempt include what the person had written."""
+    already modified there before the attempt include what the person had written. These are the
+    person's own checkouts, read every few seconds while their worker (or they) run `git add` and
+    `git commit` in them: `git diff` rewrites the index to refresh its stat data (and
+    `--no-optional-locks` does not stop it), so the plumbing `diff-index` reads them, which never does."""
     files, added, removed = set(), 0, 0
     for place in places:
         top = Path(place["path"])
         moved = isolate.moved_in_place(place)
-        numstat = _git(top, "diff", "--numstat", place["head"], "--")
+        numstat = _git(top, "diff-index", "--numstat", place["head"], "--")
         if moved is None or numstat is None:
             return None
         seen = set()
@@ -154,7 +157,7 @@ def _peek_in(places: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
             continue
         prefix = f"{place['name']}/" if place.get("name") else ""
         flags = [f"--src-prefix=a/{prefix}", f"--dst-prefix=b/{prefix}"]
-        tracked = _git(top, "diff", "--stat", "--patch", "--no-color", *flags, place["head"], "--", *moved)
+        tracked = _git(top, "diff-index", "--stat", "--patch", "--no-color", *flags, place["head"], "--", *moved)
         untracked = _git(top, "ls-files", "--others", "--exclude-standard")
         if tracked is None or untracked is None:
             return None

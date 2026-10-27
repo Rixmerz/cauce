@@ -7,12 +7,16 @@
 - **A task sent from a folder that holds several repositories showed nothing of its work:** such
   a folder is no checkout, so the task runs with no worktree, and its progress line, `cauce peek`
   and phase all diffed a worktree that was not there ("works in no worktree of its own, or git
-  cannot say", no files or lines written, the phase stuck on "exploring"). Each attempt now
-  records, as it starts, the commit each repository inside the folder (or the checkout itself,
-  for a run with `--no-isolate`) was at and the files already modified there. Progress, `cauce
+  cannot say", no files or lines written, the phase stuck on "exploring"). A run now
+  records, as its first attempt starts, the commit each repository inside the folder (or the
+  checkout itself, for a run with `--no-isolate`) was at and the files already modified there; a
+  retry or a climb reads from that same point, so the work of its earlier attempts still shows.
+  Progress, `cauce
   peek` (`--stat` too), the task page's diff, the phase and the files a running task is said to
   have changed read each of those repositories against that record, files named from the folder
-  (`api/src/x.js`), so what the person already had uncommitted is not the worker's.
+  (`api/src/x.js`), so what the person already had uncommitted is not the worker's. They are read
+  without touching the repositories' indexes (`git diff-index`; `git diff` rewrites one to refresh
+  its stat data, under a lock the person's own `git add` may be waiting for).
 - **The ending says which repositories were changed in place:** a run with no worktree in a
   folder of several repositories ended with "these changes are in your checkout". It now names
   each repository and its file count, and says none of them has a branch to review or merge.

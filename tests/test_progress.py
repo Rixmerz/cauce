@@ -1,6 +1,7 @@
 """What a running task shows of itself: time against its kind's usual, stage, what it wrote, a quiet worker."""
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from datetime import datetime
@@ -232,3 +233,23 @@ def test_a_checkout_git_cannot_read_says_nothing_rather_than_less(tmp_path, stor
     assert isolate.changed_so_far(home(), folder, task["id"], {"places": places}) is None
     assert main(["peek", str(task["id"]), "--stat"]) == 1
     assert "no worktree of its own, or git cannot say" in capsys.readouterr().err
+
+
+def test_reading_a_checkout_never_rewrites_its_index(tmp_path, store):
+    """The checkout is the person's, and the worker or they may run `git add` in it while a view reads it:
+    `git diff` would rewrite its index to refresh the stat data of a file touched and left as it was."""
+    folder, api, web = _folder_of_two_repositories(tmp_path)
+    task = _running(store)
+    places = isolate.stand(folder, [api, web])
+    store.add_event(task["id"], "attempt_started", seq=2, places=places)
+    (api / "app.py").write_text("print('hi')\nprint('there')\n")
+    (web / "new.ts").write_text("a\n")
+    older = (web / "app.py").stat().st_mtime_ns - 5_000_000_000
+    os.utime(web / "app.py", ns=(older, older))  # touched, content the same: stat-dirty
+    indexes = [api / ".git" / "index", web / ".git" / "index"]
+    before = [(i.stat().st_ino, i.stat().st_mtime_ns) for i in indexes]
+
+    assert progress.changes(task["id"], None, places=places)["paths"] == ["api/app.py", "web/new.ts"]
+    assert "+print('there')" in progress.peek(task["id"], None, places=places)["diff"]
+    assert isolate.changed_so_far(home(), folder, task["id"], {"places": places}) == ("api/app.py", "web/new.ts")
+    assert [(i.stat().st_ino, i.stat().st_mtime_ns) for i in indexes] == before

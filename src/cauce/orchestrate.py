@@ -1256,6 +1256,7 @@ def run(
                                       MAX_TURNS_CEILING)
     attempts: list[Attempt] = []
     changed: set[str] = set()
+    started_at: list[dict[str, Any]] | None = None
     decision: Decision | None = None
     # What the brief says of work set aside when a new model started from the base.
     aside: list[str] = []
@@ -1393,9 +1394,13 @@ def run(
             )
             store.update_task(task["id"], current_cell=cell.label)
             say(f"cauce: #{task['id']} attempt {nth} at {cell.label}")
-            # With no worktree, where each checkout the attempt may change stands now: what it wrote
-            # is read in them later (`isolate.moved_in_place`), as a worktree is read against its base.
-            places = isolate.stand(repo_dir, in_place_checkouts(repo_dir)) if in_place else []
+            # With no worktree, where each checkout the run may change stood when it started: what the
+            # worker wrote is read in them (`isolate.moved_in_place`) as a worktree is read against its
+            # base. Taken once, at the first attempt: a later one starts on its earlier attempts' work,
+            # which is the task's own and no more the person's.
+            if in_place and started_at is None:
+                started_at = isolate.stand(repo_dir, in_place_checkouts(repo_dir))
+            places = started_at or []
             store.add_event(task["id"], "attempt_started", seq=nth, cell=cell.label,
                             **({"base": workspace.base, "links": list(workspace.links)} if workspace else {}),
                             **({"places": places} if places else {}),
