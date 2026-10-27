@@ -301,13 +301,30 @@ yields the default kind, not a guess.
   failing lines are a non-empty subset of the base's (`launch.preexisting`; a
   `_REPRODUCES` kind must clear at least one), recorded as `check_preexisting`,
   said in the report and on the verdict card (`failing at base, unchanged`),
-  and the ending offers its bugfix without starting it. A base that passes or
-  cannot tell, an unreadable output, or a new failing line keeps it a
-  `code_bug`, fail closed, and the evidence names which lines are new. A worker
+  and the ending offers its bugfix without starting it. A base that passes, an
+  unreadable output, or a new failing line keeps it a `code_bug`, fail closed,
+  and the evidence names which lines are new. The base's run is given
+  `orchestrate.base_timeout_s` (the longest run of the work's own check seen,
+  `Baseline.check_s`, times `BASE_TIMEOUT_FACTOR` plus `BASE_TIMEOUT_MARGIN_S`,
+  never under `VERIFY_TIMEOUT_S`), and one that timed out is never kept: it
+  runs again at the next try, since a kept timeout read as the base's answer to
+  every task on that commit for a day. A base that cannot tell (it timed out,
+  could not run, no worktree) is no `code_bug` either: the failing tests are
+  read against the last base run of that command here that could tell, at any
+  commit (`Baseline.known`, kept apart and never expired); when every one is in
+  it they were there before (`check_preexisting` with `known_at`), else the
+  attempt is `environment` with `base_unknown` and the task stops as
+  `base_unknown`, its work kept, the reason saying how many failing tests the
+  worker's own account names, and `cauce resume N` as the line. A worker
   that stopped on a point (`spec_bug`, `architecture_bug`) whose work stands
   only because the check's failures were all at the base, that names the check
   or one of those failures, and that leaves no criterion unmet passes
   (`orchestrate._only_the_base`); any other point stays a `decision`.
+- Two attempts that leave exactly the same failing tests of cauce's check
+  (`WorkerResult.failing`, `Attempt.failing`) climb no further: a second climb
+  would repeat the first and re-run the whole check. The task stops as
+  `same_failures` (`escalate._same_failing`, `Decision.stuck`), its work kept.
+  A try the network dropped under or the load timed out is not one of the two.
 - A check whose exit is a pipeline filter's without `pipefail`, or that always
   exits 0, is said in the plan (`ci.weak`): a warning, never a refusal. So is one
   that runs a tool a project script runs with more (`ng test` against `npm test`'s

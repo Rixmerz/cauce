@@ -447,6 +447,12 @@ class WorkerResult:
     #: The line where cauce's check says its tests timed out, when timeouts are most of what
     #: failed it after a claimed pass (`check_timed_out`): the machine's load, not the code.
     load: str = ""
+    #: The failing lines of cauce's own check that turned a claimed pass down (`check_failures`):
+    #: two attempts that left the same ones did not change what fails.
+    failing: frozenset[str] = frozenset()
+    #: Why that failure could not be told from the base's, when the same check at the base could
+    #: not say what fails there (a timeout, an error): nothing shows the work caused it.
+    base_unknown: str = ""
     #: It continued an earlier attempt's session instead of starting from its brief.
     resumed: bool = False
     #: Why a session it was asked to continue started fresh instead; "" when it did not.

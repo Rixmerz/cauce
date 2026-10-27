@@ -48,6 +48,11 @@ CAUSES = {
     "load": ("blocked", "environment"),
     # The account's usage limit turned its session away: it resumes once the limit resets.
     "limit": ("blocked", "environment"),
+    # cauce's check failed and the same check at the base could not say what fails there: nothing
+    # shows the work caused it, so it is neither charged to the work nor climbed.
+    "base_unknown": ("blocked", "cauce"),
+    # Two cells left the same failing tests: a third would repeat them.
+    "same_failures": ("blocked", "cauce"),
     "budget": ("blocked", "budget"),
     "missing_dir": ("blocked", "environment"),
     "approval": ("needs_approval", "cauce"),
@@ -246,6 +251,11 @@ def what_to_do(stop: Stop) -> str:
                  "resets" + (f" ({stop.extra['resets_at']})" if stop.extra.get("resets_at") else ""),
         "load": "its check's tests kept timing out while the machine was loaded, after the worker's own run "
                 "passed; its work is kept: resume it when the machine is quieter",
+        "base_unknown": "its check failed, and the same check at the base could not say what fails there (it "
+                        "timed out or could not run), so nothing shows the work caused it; its work is kept: resume "
+                        "it, and the base's run is tried again with the time this check was seen to take",
+        "same_failures": "two cells left the same failing tests, so a third would repeat them; its work is kept: "
+                         "read those tests (they may fail here whatever the work does), then resume or rewrite it",
         "budget": "an older cauce stopped it on a dollar budget, which no longer exists: resume it",
         "missing_dir": "the task's directory is gone: restore it, or queue the task again where it now lives",
         "approval": "approve the next cell by resuming with --allow-approval",

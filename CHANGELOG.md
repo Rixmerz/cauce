@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A check slower than its limit no longer burns a night of climbs** (tasks that ran 4+ hours
+  with the repository's 15-minute check). The check failed on three tests that also fail at the
+  base, but the base's run timed out, so each attempt was charged `code_bug` and climbed
+  sonnet/high, sonnet/xhigh, opus/high, re-running the whole check each time:
+  - **The base's run is sized from the check's own duration.** It gets the longest run of the
+    work's own check times two plus five minutes, never less than the 30 minutes the work's own
+    run has (`orchestrate.base_timeout_s`). A base run that timed out is no longer kept for a
+    day: it was read as the base's answer by every task on the same commit.
+  - **A base that cannot tell is not the work's failure.** The failing tests are read against the
+    last base run of that command in the repository that could tell, at any commit. When every
+    one is in it they were there before and the pass stands (the report names that commit). When
+    not, the task ends blocked as `base_unknown`, its work kept, saying how many of the failing
+    tests the worker's own account names, with `cauce resume N` as the line.
+  - **The same failing tests never earn a second climb.** When two attempts leave exactly the
+    same failing tests, the task ends blocked as `same_failures`, its work kept, instead of
+    climbing again.
+
 ## [0.56.0] - 2026-10-27
 
 ### Added
