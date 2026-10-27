@@ -233,6 +233,14 @@ def phases(found: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "share": {k: round(v / whole, 3) if whole else 0.0 for k, v in totals.items()}}
 
 
+def _waited(r: Mapping[str, Any]) -> float | None:
+    """A run's wait before it started: its pickup and spawn where they were measured apart, else
+    its queued time."""
+    if r.get("pickup_s") is None and r.get("spawn_s") is None:
+        return r.get("queued_s")
+    return (r.get("pickup_s") or 0.0) + (r.get("spawn_s") or 0.0)
+
+
 def _summary(found: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     passed = [r for r in found if r["status"] == "done"]
     first = [r for r in found if r["first_try"] is not None]
@@ -246,7 +254,7 @@ def _summary(found: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "climbed_rate": round(sum(r["attempts"] > 1 for r in found) / len(found), 3) if found else None,
         "attempts_avg": round(sum(r["attempts"] for r in found) / len(found), 2) if found else None,
         "wall_p50_s": pct(wall, 0.5), "wall_p90_s": pct(wall, 0.9),
-        "queued_p50_s": pct((r["queued_s"] for r in found), 0.5),
+        "queued_p50_s": pct((_waited(r) for r in found), 0.5),
         "cost_usd": round(cost, 2), "cost_per_pass_usd": round(cost / len(passed), 2) if passed else None,
         "cost_p50_usd": pct((r["cost_usd"] for r in found), 0.5),
         "hours": round(hours, 2), "minutes_per_pass": round(hours * 60 / len(passed), 1) if passed else None,

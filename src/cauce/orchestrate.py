@@ -418,6 +418,10 @@ class Report:
         return "\n".join(lines)
 
 
+#: Reading kinds a high complexity does not raise: their first rung is measured as enough.
+UNRAISED_KINDS = frozenset({"plan"})
+
+
 def choose_start(
     ladder: Sequence[Cell],
     complexity: str,
@@ -425,6 +429,7 @@ def choose_start(
     global_landings: Sequence[str],
     *,
     writes: bool = False,
+    kind: str | None = None,
 ) -> tuple[Cell, list[str]]:
     """The cell the first attempt runs at, and why.
 
@@ -433,10 +438,12 @@ def choose_start(
     passes where it starts (a landing of "", `Store.landings`) is no reason to
     start higher, wherever it started. A high complexity raises a reading kind's
     start one rung, never a writing kind's: a build classified high passed as often
-    at its ladder's first cell, five times sooner (`bench/speed/versus.py`).
+    at its ladder's first cell, five times sooner (`bench/speed/versus.py`). Nor a plan's
+    (`UNRAISED_KINDS`): opus/high drew the same parts as opus/xhigh and opus/max, in half
+    the time of xhigh (`bench/speed/plan.py`).
     """
     index, reasons = 0, []
-    if complexity == "high" and len(ladder) > 1 and not writes:
+    if complexity == "high" and len(ladder) > 1 and not writes and kind not in UNRAISED_KINDS:
         index = 1
         reasons.append("classified as high complexity: one rung up")
     samples, where = (repo_landings, "this repository") if len(repo_landings) >= MIN_REPO_SAMPLES else (
@@ -559,7 +566,7 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
                 # below were never shown to fail; a reading kind's is its answer, kept as before.
                 store.landings(kind, repo=key, climbs=kind not in READ_ONLY_KINDS) if key else [],
                 store.landings(kind, climbs=kind not in READ_ONLY_KINDS),
-                writes=kind not in READ_ONLY_KINDS,
+                writes=kind not in READ_ONLY_KINDS, kind=kind,
             )
         if raise_rungs:
             raised = min(_index_of(ladder, start) + raise_rungs, len(ladder) - 1)
@@ -2516,8 +2523,10 @@ def _after_ending(work: Callable[[Store], None], store: Store, *, detach: bool) 
                     work(child)
                 finally:
                     child.close()
-            except BaseException:  # noqa: S110 - a detached child never reaches the caller
-                pass
+            except BaseException:  # a detached child never reaches the caller: its error is kept
+                with contextlib.suppress(Exception):
+                    from cauce import hooks
+                    hooks.note_error(home(), "after-ending")
             finally:
                 os._exit(0)
         if pid > 0:
