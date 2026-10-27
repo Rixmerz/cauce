@@ -72,7 +72,8 @@ starts, cauce indexes or refreshes the repository's livespec index (incrementall
 for it up to `livespec_wait` seconds: 120 by default, `cauce config livespec_wait 30` changes
 it, 0 never waits. In a folder that holds several repositories it does each repository, never
 the folder. Past the wait the task starts without the index: its plan says `still indexing …
-this task runs without it`, and the index keeps building for the next task. With an index, the
+this task runs without it` (`uses the index as it is` where a stale one exists), and the
+index keeps building for the next task. With an index, the
 worker's brief opens with how to find its way: the spec for the request (`list_specs`,
 `search`), the code it names (`get_spec_implementation`), one symbol at a time (`quick_orient`,
 `read_unit`), a whole file last; `search_similar` before it writes a helper and

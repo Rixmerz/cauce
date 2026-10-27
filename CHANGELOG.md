@@ -8,10 +8,12 @@
   refreshes its repository's livespec index (incrementally) before its worker starts and waits
   for it up to `livespec_wait` seconds (120 by default; `cauce config livespec_wait`,
   `CAUCE_LIVESPEC_WAIT`, a plugin option; 0 never waits). In a folder that holds several
-  repositories each one is indexed on its own, honouring `.livespec.toml` `group_db`, and the
-  folder never is. Past the wait the task starts without the index and its plan says so; the
-  index keeps building (it is never killed). Before, the index started in the background and
-  the task ran without it, so workers oriented by opening files.
+  repositories each one is indexed on its own, honouring `.livespec.toml` `group_db` (repositories
+  that share one index file are indexed one after another, each once the one before lets the file's
+  lock go), and the folder never is. Past the wait the task starts without the index, or on the
+  stale one a repository already has, and its plan says which; the index keeps building (it is never
+  killed). Before, the index started in the background and the task ran without it, so workers
+  oriented by opening files.
 - **Spec-first orientation in the worker's brief** wherever livespec has an index: find the
   spec for the request (`list_specs`, `search`), reach its code (`get_spec_implementation`), read
   one symbol at a time (`quick_orient`, `read_unit`), open a whole file last; `search_similar`

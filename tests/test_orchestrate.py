@@ -469,6 +469,25 @@ def test_past_the_wait_the_task_starts_without_the_index_and_says_so(git_repo, s
     assert "Code map from livespec" not in script.specs[0].prompt
 
 
+def test_past_the_wait_a_stale_index_still_reaches_the_worker_and_the_plan_says_it_is_used_as_it_is(
+        git_repo, store, tmp_path, monkeypatch):
+    from cauce.adapters import livespec as ls
+
+    from .livespec_fixture import build
+
+    build(git_repo)
+    monkeypatch.setattr(ls, "_older_than_head", lambda indexed_at, root: True)
+    monkeypatch.setenv("CAUCE_LIVESPEC_WAIT", "30")
+    script = Script(ok())
+    report = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"),
+                 adapters=[_livespec(tmp_path, popen=lambda argv, **kw: _Index(git_repo, late=True))])
+    said = [r for r in report.plan.reasons if r.startswith("livespec: repo: still indexing after the 30 s")]
+    assert len(said) == 1
+    assert "this task uses the index as it is" in said[0]
+    assert "22 caller(s)" in script.specs[0].prompt
+
+
 def test_a_task_in_a_folder_of_repositories_indexes_each_one_and_never_the_folder(store, tmp_path, monkeypatch):
     from .test_livespec_adapter import make_repo
 

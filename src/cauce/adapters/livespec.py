@@ -121,6 +121,17 @@ _STARTED = object()
 
 
 @dataclass(frozen=True)
+class _Wait:
+    """How long `ensure_fresh` waits, shared by every repository it waits on."""
+
+    began: float
+    deadline: float
+    wait_s: float
+    pause: Callable[[float], None]
+    clock: Callable[[], float]
+
+
+@dataclass(frozen=True)
 class Indexed:
     """One repository's index as `ensure_fresh` left it."""
 
@@ -478,56 +489,74 @@ class Livespec:
         one, and wait for them up to `wait_s` seconds in all: the step that comes before the
         worker, so it orients by specs and symbols instead of opening files. Incremental:
         livespec re-reads only what changed. Past `wait_s` a repository is `late`: its
-        refresh is left running, never killed, and the task starts without it. A repository
-        whose last index failed at this commit is not tried again until the checkout moves."""
+        refresh is left running, never killed, and the task starts without it (on the stale
+        index a repository already has, said so). A repository whose last index failed at this
+        commit is not tried again until the checkout moves."""
         began = clock()
-        deadline = began + wait_s
         found: list[Indexed] = []
-        running: list[tuple[Path, Any]] = []
+        running: list[tuple[Path, Any, str]] = []
         for root in self.roots(repo_dir):
             status = self.inspect(root)
+            # A stale index is still read by the task; only a missing or unreadable one is done without.
+            meanwhile = "this task uses the index as it is" if status.present else "this task runs without it"
             if status.present and not status.stale:
                 found.append(Indexed(root, FRESH, status.detail))
             elif failed := self.last_failure(root):
                 found.append(Indexed(root, FAILED, f"its last index here failed ({failed}); not tried again "
-                                                   "until the checkout moves; this task runs without it"))
+                                                   f"until the checkout moves; {meanwhile}"))
             elif self.server() is None:
                 found.append(Indexed(root, FAILED, "cannot index here: no livespec, and no `uvx` to run the "
-                                                   "pinned release; this task runs without it"))
+                                                   f"pinned release; {meanwhile}"))
             else:
-                handle = self.start_refresh(root, home(self.env) / f"{self.name}-index.log")
-                if handle is not None and say is not None:
+                started = self.start_refresh(root, self._index_log())
+                if started is not None and say is not None:
                     say(f"cauce: livespec is indexing {root.name} before the worker starts "
                         f"(waits up to {int(wait_s)} s)")
-                running.append((root, None if handle is _STARTED else handle))
-        for root, handle in running:
-            found.append(self._settled(root, handle, deadline, wait_s, began, pause, clock))
+                running.append((root, started, meanwhile))
+        wait = _Wait(began, began + wait_s, wait_s, pause, clock)
+        for root, started, meanwhile in running:
+            found.append(self._settled(root, started, meanwhile, wait))
         return found
 
-    def _settled(self, root: Path, handle: Any, deadline: float, wait_s: float, began: float,
-                 pause: Callable[[float], None], clock: Callable[[], float]) -> Indexed:
-        """One refresh `ensure_fresh` waited on: ended well, ended badly, or still running at the deadline."""
-        if handle is not None and hasattr(handle, "wait"):
-            try:
-                handle.wait(timeout=max(deadline - clock(), 0))
-            except subprocess.TimeoutExpired:
-                return self._late(root, wait_s)
-        else:
-            # Another process holds this index (or the fake that started none): look at its lock.
-            while self.indexing(root):
-                if clock() >= deadline:
-                    return self._late(root, wait_s)
-                pause(POLL_S)
-        status = self.inspect(root)
-        if status.present and not status.stale:
-            return Indexed(root, BUILT, f"indexed before the worker started (took {int(clock() - began)} s)")
-        failed = self.last_failure(root) or "it left no usable index"
-        return Indexed(root, FAILED, f"indexing failed ({failed}); this task runs without it")
+    def _index_log(self) -> Path:
+        return home(self.env) / f"{self.name}-index.log"
 
-    @staticmethod
-    def _late(root: Path, wait_s: float) -> Indexed:
-        return Indexed(root, LATE, f"still indexing after the {int(wait_s)} s cauce waits; this task runs without "
-                                   "it, the index keeps building and the next task gets it")
+    def _settled(self, root: Path, started: Any, meanwhile: str, wait: _Wait) -> Indexed:
+        """One repository `ensure_fresh` waited on: indexed, failed, or still indexing at the deadline.
+        `started` is the refresh it started for it, None when another held the index's lock then.
+        A lock another refresh held may have been for another repository of a shared index
+        (`group_db`), which leaves this one as it was: once it is let go, this one's own starts."""
+        while True:
+            if not self._waited(root, started, wait):
+                return Indexed(root, LATE, f"still indexing after the {int(wait.wait_s)} s cauce waits; "
+                                           f"{meanwhile}; the index keeps building and the next task gets it")
+            status = self.inspect(root)
+            if status.present and not status.stale:
+                return Indexed(root, BUILT, f"indexed before the worker started "
+                                            f"(took {int(wait.clock() - wait.began)} s)")
+            if started is not None or self.last_failure(root) or wait.clock() >= wait.deadline:
+                break
+            started = self.start_refresh(root, self._index_log())
+            if started is None and not self.indexing(root):
+                break
+        failed = self.last_failure(root) or "it left no usable index"
+        return Indexed(root, FAILED, f"indexing failed ({failed}); {meanwhile}")
+
+    def _waited(self, root: Path, started: Any, wait: _Wait) -> bool:
+        """Whether the refresh `started` (or, with none, the one holding the index's lock) ended
+        before the deadline. One that did not is left running."""
+        if started is not None and hasattr(started, "wait"):
+            try:
+                started.wait(timeout=max(wait.deadline - wait.clock(), 0))
+            except subprocess.TimeoutExpired:
+                return False
+            return True
+        # Another process holds this index, or a start whose `Popen` handed nothing back: look at its lock.
+        while self.indexing(root):
+            if wait.clock() >= wait.deadline:
+                return False
+            wait.pause(POLL_S)
+        return True
 
     # --- before the first attempt ------------------------------------------
 

@@ -443,6 +443,48 @@ def test_ensure_fresh_reports_a_failed_index_and_does_not_retry_it_at_the_same_c
     assert "cannot index here" in nowhere[0].detail
 
 
+def stale_index(git_repo, monkeypatch):
+    """An index that exists and is older than the last commit: readable, so a task can still use it."""
+    build(git_repo)
+    monkeypatch.setattr(livespec_mod, "_older_than_head", lambda indexed_at, root: True)
+
+
+def test_past_the_wait_a_stale_index_is_said_to_be_used_as_it_is_not_to_be_missing(tmp_path, git_repo, monkeypatch):
+    stale_index(git_repo, monkeypatch)
+
+    def too_long(root, timeout):
+        raise subprocess.TimeoutExpired("index-livespec", timeout)
+
+    a = adapter(tmp_path, tool(tmp_path, "uvx"), popen=spawner([], too_long))
+    found = a.ensure_fresh(git_repo, 7)
+    assert [f.outcome for f in found] == [livespec_mod.LATE]
+    assert "still indexing after the 7 s cauce waits; this task uses the index as it is" in found[0].line()
+    assert "runs without it" not in found[0].line()
+
+
+def test_a_refresh_that_leaves_the_index_stale_says_the_task_uses_it_as_it_is(tmp_path, git_repo, monkeypatch):
+    stale_index(git_repo, monkeypatch)
+    a = adapter(tmp_path, tool(tmp_path, "uvx"), popen=spawner([], lambda root, timeout: 0))
+    found = a.ensure_fresh(git_repo, 30)
+    assert [f.outcome for f in found] == [livespec_mod.FAILED]
+    assert "indexing failed (it left no usable index); this task uses the index as it is" in found[0].line()
+
+
+def test_a_failure_at_this_commit_with_a_stale_index_says_the_task_uses_it_as_it_is(tmp_path, git_repo, monkeypatch):
+    stale_index(git_repo, monkeypatch)
+    a = adapter(tmp_path, tool(tmp_path, "uvx"), popen=spawner([], lambda root, timeout: 0))
+    a._remember_failure(git_repo, "index crashed")
+    found = a.ensure_fresh(git_repo, 30)
+    assert "not tried again until the checkout moves; this task uses the index as it is" in found[0].line()
+
+
+def test_with_no_livespec_a_stale_index_is_said_to_be_used_as_it_is(tmp_path, git_repo, monkeypatch):
+    stale_index(git_repo, monkeypatch)
+    found = adapter(tmp_path / "other").ensure_fresh(git_repo, 30)
+    assert "cannot index here" in found[0].line()
+    assert "this task uses the index as it is" in found[0].line()
+
+
 def test_ensure_fresh_waits_on_a_refresh_another_process_holds(tmp_path, git_repo):
     started, clock_now = [], [0.0]
     a = adapter(tmp_path, tool(tmp_path, "uvx"), popen=spawner(started, builds))
@@ -497,6 +539,40 @@ def test_ensure_fresh_honours_a_shared_group_index(tmp_path):
     assert found[two] != livespec_mod.FRESH
     assert [Path(argv[-1]) for argv in started] == [two]
     assert a.lock_path(one) == a.lock_path(two)
+
+
+def _add_project(db: Path, root: Path) -> None:
+    """What `livespec index <root>` leaves in a shared index: its project and a finished run."""
+    with sqlite3.connect(db) as conn:
+        project = conn.execute("INSERT INTO project (name, root) VALUES (?, ?)", (root.name, str(root))).lastrowid
+        conn.execute("INSERT INTO index_run (project_id, finished_at) VALUES (?, '2999-01-01 00:00:00')", (project,))
+
+
+def test_a_shared_group_index_indexes_the_next_repository_once_the_first_lets_its_lock_go(tmp_path):
+    folder = tmp_path / "folder"
+    one, two = make_repo(folder, "one"), make_repo(folder, "two")
+    db = build(tmp_path / "shared", project_root=tmp_path / "elsewhere")
+    for member in (one, two):
+        (member / ".livespec.toml").write_text(f'[workspace]\ngroup_db = "{db}"\n')
+    a = adapter(tmp_path, tool(tmp_path, "uvx"))
+    held, started = contextlib.ExitStack(), []
+
+    def popen(argv, **kw):
+        root = Path(argv[-1])
+        started.append(root)
+        # The child holds the one lock of the shared file while it indexes its repository.
+        held.enter_context(lock(a.lock_path(root), wait_s=0))
+
+        def wait(timeout):
+            _add_project(db, root)
+            held.close()
+            return 0
+        return Handle(wait)
+
+    a.popen = popen
+    found = {f.root: f.outcome for f in a.ensure_fresh(folder, 30)}
+    assert started == [one, two]
+    assert found == {one: livespec_mod.BUILT, two: livespec_mod.BUILT}
 
 
 # --- spec-first orientation ------------------------------------------------------
