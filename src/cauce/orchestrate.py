@@ -3480,12 +3480,16 @@ def _settled(result: launch.WorkerResult, command: str, workdir: Path,
     )
 
 
-#: What a worker says when the failure its check shows was there before its work.
-_BASE_CLAIM = re.compile(
-    r"pre-?existing|already (?:fail\w*|broken|red)|(?:fails?|failed|failing|red) (?:at|on|in) the base"
-    r"|(?:at|on) the base (?:commit|branch)|before (?:my|this|the) (?:change|work)"
-    r"|not (?:caused|introduced) by (?:my|this|the)|unrelated to (?:my|this|the) (?:change|work|task)",
-    re.IGNORECASE)
+#: What a worker says when the failure its check shows was there before its work: one pattern per
+#: way of saying it, each kept small enough to read.
+_BASE_CLAIM = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
+    r"pre-?existing|already (?:fail\w*|broken|red)",
+    r"(?:fail\w*|red) (?:at|on|in) the base",
+    r"(?:at|on) the base (?:commit|branch)",
+    r"before (?:my|this|the) (?:change|work)",
+    r"not (?:caused|introduced) by (?:my|this|the)",
+    r"unrelated to (?:my|this|the) (?:change|work|task)",
+))
 #: The failures a worker's own account may be of a failure that was already there: not a refusal, not a turn limit.
 _CLAIMS_BASE = frozenset({Failure.CODE_BUG, Failure.TEST_BUG, Failure.INCONCLUSIVE, Failure.ENVIRONMENT})
 
@@ -3495,7 +3499,8 @@ def _claims_base(result: launch.WorkerResult) -> bool:
     work: a finding it marks `pre-existing`, or words that say so."""
     if any(f.get("cause") == "pre-existing" for f in result.findings):
         return True
-    return bool(_BASE_CLAIM.search(f"{result.summary}\n{result.evidence}"))
+    said = f"{result.summary}\n{result.evidence}"
+    return any(pattern.search(said) for pattern in _BASE_CLAIM)
 
 
 def _weigh_base_claim(result: launch.WorkerResult, command: str | None, workdir: Path,
