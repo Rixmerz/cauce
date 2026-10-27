@@ -31,6 +31,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -96,6 +97,23 @@ _TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|spec)/|(^|/)test_[^/]*$|_test\.
 Runner = Callable[..., subprocess.CompletedProcess]
 
 
+def _run_in_group(argv: Sequence[str], *, timeout: float, env: Mapping[str, str]) -> subprocess.CompletedProcess[str]:
+    """`subprocess.run` for an index, with the child leading its own process group and the timeout
+    ending the whole group. `uvx` starts the `livespec index` that does the work as its child:
+    `subprocess.run` kills only `uvx` at the timeout, and that child goes on indexing with nobody
+    holding the lock, so `Livespec.indexing` says no and a second index starts beside it."""
+    with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=dict(env),
+                          start_new_session=True) as proc:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except BaseException:  # the timeout, and an interrupt too, as `subprocess.run` treats both
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+            raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
 class LivespecError(RuntimeError):
     """livespec could not be asked: it did not start, did not answer in time, or answered with an error."""
 
@@ -152,7 +170,7 @@ class Livespec:
     def __init__(
         self,
         env: Mapping[str, str] | None = None,
-        runner: Runner = subprocess.run,
+        runner: Runner = _run_in_group,
         popen: Callable[..., Any] = subprocess.Popen,
     ) -> None:
         self.env = dict(os.environ) if env is None else dict(env)
@@ -408,8 +426,7 @@ class Livespec:
                 if status.present and not status.stale:
                     return "done", "livespec index refreshed by the run this one waited for"
             try:
-                proc = self.runner(argv, capture_output=True, text=True, timeout=left(), check=False,
-                                   env={**self.env, "CAUCE_HOOKS_OFF": "1"})
+                proc = self.runner(argv, timeout=left(), env={**self.env, "CAUCE_HOOKS_OFF": "1"})
             except (OSError, subprocess.TimeoutExpired) as exc:
                 return "pending", f"livespec index did not run: {exc}"
             fell_back = ""
@@ -427,8 +444,7 @@ class Livespec:
                     fell_back = (f"livespec {missing} is not published, so the pinned {self.pin()} ran instead "
                                  "(and will, until the plugin names a published release)")
                     try:
-                        proc = self.runner(again, capture_output=True, text=True, timeout=left(),
-                                           check=False, env={**self.env, "CAUCE_HOOKS_OFF": "1"})
+                        proc = self.runner(again, timeout=left(), env={**self.env, "CAUCE_HOOKS_OFF": "1"})
                     except (OSError, subprocess.TimeoutExpired) as exc:
                         return "pending", f"{fell_back}; livespec index did not run: {exc}"
         if proc.returncode != 0:

@@ -161,6 +161,7 @@ def test_spec_first_on_in_a_repository_with_no_openspec_says_nothing_is_enforced
 
 @pytest.mark.parametrize("path", [
     "src/app.py", "lib/pay.ts", "main.go", "web/Cart.tsx", "src/lib.rs", "scripts/deploy.sh",
+    "src/build/compiler.py", "lib/out/render.ts", "internal/target/plan.go",  # below the root they are names
 ])
 def test_files_that_hold_behaviour_owe_a_spec(path):
     assert specs.holds_behaviour(path)
@@ -173,7 +174,7 @@ def test_files_that_hold_behaviour_owe_a_spec(path):
     "vite.config.ts", "jest.config.js", "Dockerfile", "Makefile", ".gitignore", "settings.ini",
     ".env.example",  # config
     "dist/app.js", "build/out.css", "web/app.min.js", "src/api_pb2.py", "src/__snapshots__/a.snap",
-    "node_modules/x/index.js", "src/types.generated.ts",  # generated
+    "node_modules/x/index.js", "src/types.generated.ts", "out/main.js", "target/classes/App.js",  # generated
     "README.md", "docs/guide.html", "openspec/specs/a/spec.md", "notes.txt",  # documents and specs
 ])
 def test_files_that_hold_no_behaviour_owe_no_spec(path):

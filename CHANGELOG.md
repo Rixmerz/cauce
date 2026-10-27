@@ -9,7 +9,8 @@
   within 20 per second of the wait), so the task gets the code map and livespec's tools instead
   of running without them. The wait is `index_wait` (seconds, 20 by default; `cauce config
   index_wait N`, `CAUCE_INDEX_WAIT`, or the plugin option; `0` never waits) and the run is cut at
-  it. A larger repository, an index that outlasts the wait and one another run holds go on in the
+  it: the whole process group of `livespec index`, not only `uvx`, so a cut index never goes on
+  beside the one the background refresh starts next. A larger repository, an index that outlasts the wait and one another run holds go on in the
   background as before, and the plan says which.
 - **The independent check gets livespec's tools:** where the repository has an index, the check
   (the late one too) is handed livespec's MCP server behind a new `livespec` policy of
@@ -39,7 +40,8 @@
 - **A change of tests, lockfiles, config or generated files no longer "owes a spec":** in a spec-first
   repository, any file outside `docs/` that was not a document counted as code that owed its spec,
   so a build that only touched `package-lock.json`, a CI file, a test or `dist/` was held back for a
-  spec it had nothing to write. Those files are left out.
+  spec it had nothing to write. Those files are left out. `build/`, `out/` and `target/` count as
+  generated only at the repository root: `src/build/compiler.py` is code and owes its spec.
 
 - **A task sent from a folder that holds several repositories showed nothing of its work:** such
   a folder is no checkout, so the task runs with no worktree, and its progress line, `cauce peek`

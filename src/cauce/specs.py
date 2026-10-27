@@ -105,9 +105,12 @@ _LOCKFILE = re.compile(r"\.lockb?$|(^|/)(package-lock\.json|npm-shrinkwrap\.json
 _CONFIG_FILE = re.compile(
     r"\.(jsonc?|ya?ml|toml|ini|cfg|conf|properties|env)$|(^|/)\.[^/]+$|(^|/)(Dockerfile|Makefile|Procfile)$|"
     r"\.config\.[cm]?[jt]s$|(^|/)(\.github|\.vscode|\.idea)/")
+#: `build`, `out` and `target` are output only at the root, where the build tools put it: below it they
+#: are ordinary names (`src/build/compiler.py`, `lib/out/render.ts`, `internal/target/plan.go`).
 _GENERATED = re.compile(
-    r"(^|/)(dist|build|out|target|vendor|node_modules|coverage|__pycache__|__generated__|generated|"
-    r"__snapshots__)/|\.(min\.(js|css)|map|snap|pb\.go)$|\.generated\.|_pb2(_grpc)?\.pyi?$")
+    r"(^|/)(dist|vendor|node_modules|coverage|__pycache__|__generated__|generated|__snapshots__)/|"
+    r"^(build|out|target)/|"
+    r"\.(min\.(js|css)|map|snap|pb\.go)$|\.generated\.|_pb2(_grpc)?\.pyi?$")
 
 
 def holds_behaviour(path: str) -> bool:

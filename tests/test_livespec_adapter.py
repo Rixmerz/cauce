@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
+import shlex
+import signal
 import sqlite3
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -375,6 +379,47 @@ def test_a_first_index_within_a_budget_says_done_failed_large_or_pending(tmp_pat
     with lock(held.lock_path(git_repo), wait_s=0) as (got, _):
         assert got
         assert held.refresh_within(git_repo, 1)[0] == "pending"
+
+
+def test_an_index_that_finishes_in_time_gives_its_code_and_both_outputs():
+    done = livespec_mod._run_in_group(["/bin/sh", "-c", "echo out; echo err >&2; exit 3"], timeout=10,
+                                      env={"PATH": "/usr/bin:/bin"})
+    assert done.returncode == 3
+    assert done.stdout == "out\n"
+    assert done.stderr == "err\n"
+
+
+def _running(pid: int) -> bool:
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True,
+                           check=False).stdout.strip()
+    return bool(state) and not state.startswith("Z")  # a zombie is dead, only not reaped yet
+
+
+def test_a_budget_that_runs_out_ends_the_whole_index_not_only_uvx(tmp_path, git_repo, monkeypatch):
+    # `uvx` starts the `livespec index` that does the work as its child. A timeout that killed
+    # only `uvx` left that child indexing with nobody holding the lock: `indexing()` then said
+    # False and the background refresh started a second index on the same file.
+    pidfile = tmp_path / "child.pid"
+    exe = tmp_path / "bin" / "uvx"
+    exe.parent.mkdir(exist_ok=True)
+    exe.write_text(f"#!/bin/sh\nPATH=/usr/bin:/bin\nsleep 60 &\necho $! > {shlex.quote(str(pidfile))}\nwait\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(livespec_mod, "_tracked_files", lambda root: 3)
+    a = adapter(tmp_path, str(exe.parent))
+    try:
+        outcome, words = a.refresh_within(git_repo, 1)
+        assert outcome == "pending"
+        assert "did not run" in words
+        child = int(pidfile.read_text())
+        deadline = time.monotonic() + 5
+        while _running(child) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _running(child), "the index child outlived the budget that cut it"
+        assert not a.indexing(git_repo)
+    finally:
+        if pidfile.exists():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pidfile.read_text()), signal.SIGKILL)
 
 
 FAKE_SERVER = '''#!{python}
