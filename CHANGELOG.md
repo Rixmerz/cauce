@@ -4,6 +4,21 @@
 
 ### Fixed
 
+- **The independent check got the wrong CORRECT lines from a real TRACER flow:** it kept every line
+  that contained the word "CORRECT". TRACER's critical-flow template writes the failure paths as a
+  table whose header row (`| Failure | WORKS (…) | CORRECT (…) |`) is the only one that says it, so the
+  check was handed that header as a criterion and every failure path's CORRECT cell was dropped; a
+  `CORRECT:` item that goes on over several lines (or lists its lines under it) was cut at its first.
+  The flow is now read as the template defines it: the `CORRECT:` items of the success path with the
+  lines under them, and the CORRECT column of each table found by its header, led by the row's first
+  cell. The test fixture is now the template's own shape (it had written `CORRECT:` inside a cell,
+  which the template never does).
+- **A request that did not repeat a flow's file name reached none of its flows:** flows were matched
+  by the words of the file name alone. A flow is now also reached by its own title (its `Flow:` and
+  `Capability:` lines and its first heading, two words or more, all in the request), and by a
+  capability named in `docs/tracer/capabilities.md` (its headings, list entries and table rows) whose
+  words all lie in the flow's name or title. A title of one word, or a generic one, names nothing.
+
 - **A task sent from a folder that holds several repositories showed nothing of its work:** such
   a folder is no checkout, so the task runs with no worktree, and its progress line, `cauce peek`
   and phase all diffed a worktree that was not there ("works in no worktree of its own, or git

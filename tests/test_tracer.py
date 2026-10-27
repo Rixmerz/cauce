@@ -8,13 +8,29 @@ from .conftest import git
 from .test_checking import check, passing
 from .test_orchestrate import Script, kind
 
+#: The shape of TRACER's own `plugin/templates/critical-flow.md`, filled in: the success path as `-` items,
+#: the failure paths as a table whose header row is the only one that says CORRECT.
 FLOW = """Flow: find training material by its title
 Capability: find material
+Audience: learners
+Starts at: the material screen
+Steps the person takes:
+  1. types a title
+  2. reads the list
+
 Success path
 - WORKS: the search returns the file
 - CORRECT: the file shows under its real name with a thumbnail
+
 Failure paths
-| Empty data | 200 | CORRECT: the screen says what it is for and the first thing to do |
+| Failure | WORKS (system behaviour) | CORRECT (what the person sees and how they recover) |
+| Invalid input | 400 | the field says which character is not allowed |
+| Network or server error | 503 | the screen says it could not search and offers to try again |
+| No permission | 403 | the screen says who can give access |
+| Empty data | 200 | the screen says what it is for and the first thing to do |
+
+Runs: end to end through the interface, against a production-like system
+Verified by: someone who did not build it
 """
 
 
@@ -51,6 +67,8 @@ def test_a_writing_worker_reads_the_method_and_the_check_holds_the_change_to_its
     assert "track-progress" not in worker  # a flow the request does not name stays out
     assert "CORRECT lines of the flows this request names" in verifier
     assert "real name with a thumbnail" in verifier and "storage key or UUID" in verifier
+    assert "first thing to do" in verifier  # a failure path's CORRECT cell
+    assert "WORKS (system behaviour)" not in verifier and "400" not in verifier
     planned = store.last_event(report.task_id, "planned")["data"]
     assert any(r.startswith("tracer: ") for r in planned["reasons"])
 
@@ -81,3 +99,80 @@ def test_the_bundled_tracer_slice_workflow_is_a_valid_definition(tmp_path):
     found = workflows.load("tracer-slice", tmp_path)
     assert found["scope"] == "bundled" and found["inputs"] == ["slice"]
     assert [s["id"] for s in found["steps"]] == ["build", "verify", "refute", "fix", "recheck"]
+
+
+def test_the_correct_cells_of_the_failure_table_are_read_by_the_header_and_the_header_is_not_one():
+    found = tracer.correct_lines(FLOW)
+    assert "the file shows under its real name with a thumbnail" in found
+    assert "Empty data: the screen says what it is for and the first thing to do" in found
+    assert "Invalid input: the field says which character is not allowed" in found
+    assert len(found) == 5
+    assert not any("CORRECT" in line or "WORKS" in line or "system behaviour" in line for line in found)
+
+
+def test_a_table_is_read_by_its_header_wherever_the_column_is_and_with_a_separator_row():
+    body = ("| CORRECT | Failure | WORKS |\n| :--- | --- | ---: |\n| the page says it is offline | Network | 503 |\n"
+            "| | Empty | 200 |\n")
+    assert tracer.correct_lines(body) == ["the page says it is offline"]
+    assert tracer.correct_lines("| Failure | WORKS |\n| Empty | CORRECT: said |\n") == []
+
+
+def test_a_correct_bullet_keeps_the_lines_under_it():
+    body = """Success path
+- WORKS: stored
+- CORRECT: the list shows the file
+  under its real name
+  - with a thumbnail
+  - and a size in MB
+- CORRECT:
+  - the first row is the newest
+  - the empty list says what to do
+- WORKS: the status is 200
+**CORRECT:** the bold one
+CORRECT:
+- a bare head
+- with items at its own level
+
+Failure paths
+"""
+    assert tracer.correct_lines(body) == [
+        "the list shows the file under its real name", "with a thumbnail", "and a size in MB",
+        "the first row is the newest", "the empty list says what to do", "the bold one",
+        "a bare head", "with items at its own level"]
+
+
+def _flow(repo, name, body):
+    folder = repo / "docs" / "tracer"
+    (folder / "flows").mkdir(parents=True, exist_ok=True)
+    (folder / "flows" / f"{name}.md").write_text(body)
+    return folder
+
+
+def test_a_flow_is_named_by_its_own_title_when_the_request_does_not_repeat_the_file_name(tmp_path):
+    _flow(tmp_path, "browse-files", FLOW)
+    assert tracer.flows_for(tmp_path, "let learners search by title") == []
+    assert [p.stem for p in tracer.flows_for(tmp_path, "the way to find the training material by title")] == [
+        "browse-files"]
+    # the `Capability:` line, and a heading, are titles as well
+    assert [p.stem for p in tracer.flows_for(tmp_path, "learners find material faster")] == ["browse-files"]
+    _flow(tmp_path, "other", "# Flow: close the account\n- CORRECT: said\n")
+    assert [p.stem for p in tracer.flows_for(tmp_path, "the close account button")] == ["other"]
+
+
+def test_a_title_of_one_word_or_a_generic_one_names_nothing(tmp_path):
+    _flow(tmp_path, "pay", "Flow: payment\nCapability: pay\n# Critical flow\n- CORRECT: said\n")
+    assert tracer.flows_for(tmp_path, "the payment page and the critical flow of it") == []
+
+
+def test_a_flow_is_reached_by_the_capability_of_the_map_that_the_request_names(tmp_path):
+    folder = _flow(tmp_path, "find-material-by-title", "Flow: search\n- CORRECT: said\n")
+    _flow(tmp_path, "track-progress", "Flow: progress\n- CORRECT: a bar\n")
+    (folder / "capabilities.md").write_text(
+        "# Capabilities\n\n- CAP-1: Find material (REQ-1, REQ-2)\n- **Track progress** — what the learner did\n"
+        "\n| Capability | Requirements |\n| --- | --- |\n| Close account | REQ-9 |\n")
+    assert tracer.capability_names(tmp_path) == ["Find material", "Track progress", "Close account"]
+    # the request has neither the whole file name nor a title, only the capability's name
+    assert [p.stem for p in tracer.flows_for(tmp_path, "learners must find material")] == ["find-material-by-title"]
+    # a capability the request names with no flow written, or a word of one, reaches nothing
+    assert tracer.flows_for(tmp_path, "close account page") == []
+    assert tracer.flows_for(tmp_path, "the material list") == []

@@ -15,6 +15,8 @@ Nothing here is a model call, and nothing is written in the repository.
 """
 from __future__ import annotations
 
+import re
+from itertools import groupby
 from pathlib import Path
 
 from cauce.text import clip, fold, words
@@ -38,19 +40,82 @@ def _read(path: Path) -> str:
         return ""
 
 
+#: `Flow: …` and `Capability: …` as the critical-flow template writes them (markdown emphasis removed first).
+_LABEL = re.compile(r"^\s*(flow|capability)\s*:\s*(.+)$", re.IGNORECASE)
+_HEADING = re.compile(r"^#+\s+(.+)$")
+_FLOW_PREFIX = re.compile(r"^(?:critical\s+)?flow\s*:\s*", re.IGNORECASE)
+#: Words every flow file carries, so naming one names no flow in particular.
+_GENERIC = {"critical", "flow", "flows"}
+#: An id or a link after a capability's name in the capability map: `CAP-3: …`, `… (REQ-1)`, `… — requirements`.
+_CAPABILITY_ID = re.compile(r"^[A-Za-z]+-\d+\s*[:.\u2014\u2013-]?\s*")
+_CAPABILITY_TAIL = re.compile(r"\s[\u2014\u2013-]\s|\s\(|:|\[")
+_LIST_ENTRY = re.compile(r"^(?:#+|[-*+]|\d+[.)])\s+")
+
+
+def _titles(body: str) -> list[str]:
+    """What a flow file calls itself: its `Flow:` and `Capability:` lines and its first heading."""
+    found, heading = [], False
+    for raw in body.splitlines():
+        line = raw.replace("*", "").replace("`", "")
+        match, title = _LABEL.match(line), _HEADING.match(line)
+        if title and not heading:
+            heading = True
+            found.append(_FLOW_PREFIX.sub("", title.group(1)))
+        elif match and not title:
+            found.append(match.group(2))
+    return found
+
+
+def capability_names(repo_dir: Path) -> list[str]:
+    """The names in the capability map (`docs/tracer/capabilities.md`): its headings, its unindented list
+    entries and the first column of a table, each without the id or the requirement links after it."""
+    names = []
+    for raw in _read(repo_dir / FOLDER / "capabilities.md").splitlines():
+        line = raw.replace("*", "").replace("`", "")
+        entry = _LIST_ENTRY.match(line)
+        if entry:
+            name = line[entry.end():]
+        elif line.startswith("|") and not _SEPARATOR.match(line):
+            name = _cells(line)[0]
+        else:
+            continue
+        name = _CAPABILITY_TAIL.split(_CAPABILITY_ID.sub("", name.strip()), maxsplit=1)[0].strip()
+        if name and fold(name) not in ("capability", "capabilities"):
+            names.append(name)
+    return names
+
+
+def _covered(named: list[str], asked: set[str], at_least: int) -> bool:
+    """Every word of a name is in the request, or begins one of its words (`print` for "printed")."""
+    core = [w for w in named if w not in _GENERIC]
+    return len(core) >= at_least and all(
+        any(a == w or (len(w) >= 4 and a.startswith(w)) for a in asked) for w in core)
+
+
+def _reached(stem: list[str], titles: list[list[str]], asked: set[str], capabilities: list[list[str]]) -> bool:
+    """A flow is named by its file name, by a title of its own with two words or more, or by a capability of
+    the map the request names whose words all lie in one of those: the flow file belongs to that capability."""
+    if _covered(stem, asked, 1) or any(_covered(t, asked, 2) for t in titles):
+        return True
+    return any(set(c) <= set(w) for c in capabilities for w in (stem, *titles))
+
+
 def flows_for(repo_dir: Path, text: str) -> list[Path]:
     """The critical flows a request reaches: a file under `docs/tracer/flows/` whose name's words all
     appear in the request, or begin one of its words (`flows/print-receipt.md` for "...the printed
-    receipts..."). Strict on purpose:
-    a flow briefed by a loose match puts another capability's CORRECT lines on the work."""
+    receipts..."); or one whose own title (its `Flow:` or `Capability:` line, its heading) holds two
+    words or more that all appear; or one that belongs to a capability of `capabilities.md` the request
+    names. Strict on purpose: a flow briefed by a loose match puts another capability's CORRECT lines
+    on the work."""
     folder = repo_dir / FOLDER / "flows"
     if not folder.is_dir():
         return []
-    asked = set(words(fold(text)))
+    asked = set(words(text))
+    capabilities = [w for w in (words(n) for n in capability_names(repo_dir)) if _covered(w, asked, 2)]
     out = []
     for path in sorted(folder.glob("*.md")):
-        named = [w for w in words(fold(path.stem.replace("-", " ").replace("_", " "))) if len(w) > 2]
-        if named and all(any(a == w or (len(w) >= 4 and a.startswith(w)) for a in asked) for w in named):
+        stem = words(path.stem.replace("-", " ").replace("_", " "))
+        if _reached(stem, [words(t) for t in _titles(_read(path))], asked, capabilities):
             out.append(path)
     return out
 
@@ -87,6 +152,73 @@ def brief_lines(repo_dir: Path, text: str) -> list[str]:
     return lines
 
 
+#: A line that opens a CORRECT criterion as the template writes it: `- CORRECT: …` (bold or not).
+_CORRECT_HEAD = re.compile(r"^(\s*)([-*+]\s+)?\**CORRECT\**\s*:")
+_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+_SEPARATOR = re.compile(r"^[\s|:-]+$")
+
+
+def _cells(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _table_correct(block: list[str]) -> list[str]:
+    """A table whose header row has a CORRECT column (the template's failure paths): that column's
+    cell of each row, led by the row's first cell; the header row itself is no criterion."""
+    header = _cells(block[0])
+    column = next((i for i, cell in enumerate(header) if cell.upper().startswith("CORRECT")), None)
+    if column is None:
+        return []
+    out = []
+    for row in block[1:]:
+        cells = _cells(row)
+        if _SEPARATOR.match(row) or column >= len(cells) or not cells[column]:
+            continue
+        out.append(f"{cells[0]}: {cells[column]}" if column else cells[column])
+    return out
+
+
+def _continues(line: str, indent: int, bullet: bool) -> bool:
+    """A line that goes on with the CORRECT line above it: deeper in, or (for a bare `CORRECT:` that is
+    no list item) the list items right under it."""
+    if not line.strip() or line.lstrip().startswith("|") or _CORRECT_HEAD.match(line):
+        return False
+    here = len(line) - len(line.lstrip())
+    return here > indent or (not bullet and here == indent and bool(_ITEM.match(line)))
+
+
+def _bullet_correct(lines: list[str]) -> list[str]:
+    """Each `CORRECT:` criterion with what goes on under it: an item under it is a line of its own,
+    any other line is the same line wrapped."""
+    out, i = [], 0
+    while i < len(lines):
+        head = _CORRECT_HEAD.match(lines[i])
+        i += 1
+        if not head:
+            continue
+        entries = [lines[i - 1][head.end():].strip(" *")]
+        while i < len(lines) and _continues(lines[i], len(head.group(1)), bool(head.group(2))):
+            item = _ITEM.match(lines[i])
+            if item or not entries[-1]:
+                entries.append(lines[i][item.end():].strip() if item else lines[i].strip())
+            else:
+                entries[-1] += " " + lines[i].strip()
+            i += 1
+        out += [e for e in entries if e]
+    return out
+
+
+def correct_lines(body: str) -> list[str]:
+    """The CORRECT criteria of a critical flow, read as TRACER's template defines them: `CORRECT:` items of
+    the success path (with their continuation lines) and the CORRECT column of the failure-path table."""
+    lines = body.splitlines()
+    out = _bullet_correct(lines)
+    for is_table, block in groupby(lines, key=lambda line: line.lstrip().startswith("|")):
+        if is_table:
+            out += _table_correct(list(block))
+    return out
+
+
 #: How the measuring neighbours check what TRACER asks of an interface, when the check has them.
 MEASURED_BY = {
     "layout-inspector": "Measure the floors and anti-patterns on the rendered page instead of judging them by eye: "
@@ -105,8 +237,7 @@ def verifier_lines(repo_dir: Path, text: str, measures: tuple[str, ...] = ()) ->
         return []
     correct = []
     for path in flows_for(repo_dir, text):
-        correct += [f"- {path.stem}: {line.strip().lstrip('-|').strip()}" for line in _read(path).splitlines()
-                    if "CORRECT" in line and line.strip().lstrip("-|").strip() not in ("CORRECT", "")]
+        correct += [f"- {path.stem}: {line}" for line in correct_lines(_read(path))]
     catalogue = _read(repo_dir / FOLDER / "anti-patterns.md")
     if not correct and not catalogue:
         return []
