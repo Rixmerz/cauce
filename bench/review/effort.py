@@ -11,6 +11,7 @@ refuter), so recall is the review's own.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -51,6 +52,8 @@ def main(argv: list[str]) -> None:
     def run(job: tuple[int, str]) -> None:
         rep, cell = job
         row = {"run": f"{cell}-{rep}", **one(cell)}
+        if os.environ.get("BENCH_MAX_TURNS"):  # a cap the arm ran under is part of its name
+            row["arm"] = f"{row['arm']}@{os.environ['BENCH_MAX_TURNS']}turns"
         with out.open("a") as fh:
             fh.write(json.dumps(row) + "\n")
         print(json.dumps({k: row[k] for k in ("run", "cost", "path_s")} | {"rows": len(row["rows"])}), flush=True)

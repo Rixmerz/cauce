@@ -800,6 +800,10 @@ class Store:
             "SELECT * FROM tasks WHERE status = 'queued' AND repo IS ? ORDER BY id", (repo,)).fetchall()
         return [dict(r) for r in rows]
 
+    def queued_everywhere(self) -> list[dict]:
+        """Every queued task, of every lane, oldest first."""
+        return [dict(r) for r in self._conn.execute("SELECT * FROM tasks WHERE status = 'queued' ORDER BY id")]
+
     def dispatched_running(self, repo: str | None) -> list[dict]:
         """What the dispatcher has running in a lane now."""
         rows = self._conn.execute(

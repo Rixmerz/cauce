@@ -64,6 +64,10 @@ DEFAULTS: dict[str, Any] = {
     # The independent check starts beside cauce's own check, not after it: it reads the same
     # diff, a failed check stops it, and it is told not to run the check itself (`orchestrate.Ahead`).
     "overlap": True,
+    # The independent check of a task that is no workflow step and that nothing waits on runs
+    # after its ending: the run ends on cauce's own check, and a blocker the verifier shows
+    # reopens it as `review`. Off: the ending waits for the verifier.
+    "late_verifier": True,
     # A role's lessons in each repository improve by measured trial: an editor (Haiku) proposes
     # them from what the role's workers met there, its tasks alternate with and without them,
     # and they are kept only where they won (`cauce.revisions`). Off: the role's own text alone.

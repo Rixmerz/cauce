@@ -20,6 +20,7 @@ Arms, each a chain cauce runs or could run:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -43,7 +44,7 @@ REQUEST = ("Add loyalty (gold 10%, silver 5% off the order), promo (lines tagged
            "(a line of 10 or more of one item gets 5% off) rules, a printed receipt, and a CSV export of an "
            "order for finance.")
 TARGET = f"the change on this branch, `git diff main...HEAD`. It was asked as: \"{REQUEST}\""
-MAX_TURNS = 40
+MAX_TURNS = int(os.environ.get("BENCH_MAX_TURNS", "0")) or 40
 TOOLS = ("Bash(git:*)", "Bash(make:*)", "Bash(python3:*)")
 
 BLIND = ("Review, without changing any file: {target}\n\nYou are one of two reviewers working apart: find the "
