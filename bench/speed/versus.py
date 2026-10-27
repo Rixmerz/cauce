@@ -10,7 +10,9 @@ result (`build.hidden`). Arms:
   guidelines: think first, simplicity, surgical changes, verifiable goals) committed in the copy,
   where Claude Code reads it as the project's instructions (`KARPATHY`, a clone of that repository);
 - `cauce`: `cauce run <request> --verify 'make test'` in the copy, with a cauce home of its own
-  (no history: every start comes from cauce's rules), the work judged on the branch it kept.
+  (no history: every start comes from cauce's rules), the work judged on the branch it kept. Its
+  wall time ends when the command exits; a late independent check (`late_verifier`) that runs after
+  it is waited for and kept apart (`late_s`, `late_passed`), never in the wall time.
 
 The wall time is the whole command's, from start to its exit; the cost is what the CLI reports
 (for cauce, the task's: classification, attempts and the independent check).
@@ -76,10 +78,16 @@ def cauce(where: Path, request: str, arm: str = "cauce") -> dict:
     start = ["--start", arm.split("@", 1)[1]] if "@" in arm else []
     done = subprocess.run([str(ROOT / "bin" / "cauce"), "run", request, "--verify", "make test", *start], cwd=where,
                           env=env, capture_output=True, text=True, timeout=7200)
+    ended = time.monotonic()
     db = sqlite3.connect(home / "cauce.db")
     task = db.execute("SELECT id, status, start_cell, final_cell, cost_usd FROM tasks WHERE source = 'cauce' "
                       "ORDER BY id DESC LIMIT 1").fetchone()
     attempts = db.execute("SELECT COUNT(*) FROM attempts WHERE task_id = ?", (task[0],)).fetchone()[0] if task else 0
+    late = waited_late(db, task[0]) if task else {}
+    if late:
+        late["late_s"] = round(time.monotonic() - ended, 1)
+        task = db.execute("SELECT id, status, start_cell, final_cell, cost_usd FROM tasks WHERE id = ?",
+                          (task[0],)).fetchone()
     db.close()
     shutil.rmtree(home, ignore_errors=True)
     if not task:
@@ -88,7 +96,24 @@ def cauce(where: Path, request: str, arm: str = "cauce") -> dict:
     if subprocess.run(["git", "rev-parse", "--verify", "-q", branch], cwd=where, capture_output=True).returncode == 0:
         subprocess.run(["git", "checkout", "-q", branch], cwd=where, check=True)
     return {"cost": round(float(task[4] or 0), 4), "status": task[1], "start": task[2], "final": task[3],
-            "attempts": attempts}
+            "attempts": attempts, **late}
+
+
+def waited_late(db: sqlite3.Connection, task_id: int, within_s: float = 900) -> dict:
+    """A late independent check (`late_verifier`) runs after `cauce run` exits: wait for its verdict, so
+    the cauce home is not removed under it, and keep what it said apart from the foreground wall time."""
+    if not db.execute("SELECT 1 FROM events WHERE task_id = ? AND kind = 'verifier_deferred'",
+                      (task_id,)).fetchone():
+        return {}
+    deadline = time.monotonic() + within_s
+    while time.monotonic() < deadline:
+        row = db.execute("SELECT data FROM events WHERE task_id = ? AND kind = 'verified' ORDER BY id DESC LIMIT 1",
+                         (task_id,)).fetchone()
+        if row and json.loads(row[0]).get("late"):
+            data = json.loads(row[0])
+            return {"late_passed": data.get("passed"), "late_blocking": data.get("blocking")}
+        time.sleep(2)
+    return {"late_passed": None}
 
 
 def diffstat(where: Path) -> dict:

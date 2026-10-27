@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-10-27
+
+### Changed
+
+- **The independent check runs after the ending (`late_verifier`, on by default).** A pass that
+  cauce's own check settled ends at once; the verifier reads the branch it kept afterwards, in a
+  temporary worktree at its tip, and its cost is the task's. A blocker it shows reopens the task as
+  `review`, its work kept, and its session hears of it as a new ending; a check that cannot decide
+  leaves the pass. It still runs before the ending with no check of cauce's, for a workflow step, a
+  fix of ledger rows, and work something queued `--after` waits on: what those release could not be
+  taken back. On `bench/speed/versus.py`'s harder build the verifier was 50 s of cauce's 213 s.
+  LATE_NUMBERS
+- **`cauce run` exits with the ending.** Filing what the worker learned (about 7 s) and the late
+  check run in a detached process with its own store, for `cauce run` and the runs the dispatcher
+  starts.
+- **Opus at low effort is no cheap cell.** A medium-risk change it made no longer calls the
+  verifier by that alone: it passed every hidden test of `versus.py`'s builds on its own, and
+  checked as cheap, two of three medium builds climbed to opus/high for nothing (209 s against
+  87 s).
+
+### Added
+
+- **`bench/speed/README.md` opens with a summary**: what was measured and its numbers, what was
+  built, what was measured and not built and why, what not to change and why, and what was never
+  measured.
+- `versus.py` waits for a late check and keeps it apart from the foreground wall time
+  (`late_s`, `late_passed`).
+
 ## [0.50.0] - 2026-10-27
 
 ### Changed

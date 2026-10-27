@@ -308,3 +308,69 @@ the work added, at the median:
 
 The guidelines kept diffs 4 to 15% smaller, most of it in tests, and made opus/low faster; they
 made sonnet and cauce no faster. Three runs a cell is noisy: nothing here was built from it.
+
+## O: which model makes cauce's own small decisions (`delegate.py`)
+
+The classifier and the dispatcher are Haiku calls. The same prompts and schemas, with only the
+model changed, two runs each: the classifier on 36 requests labelled with the kinds that fit
+them (the rules skipped, so this is the model's part alone), the dispatcher on `dispatch.py`'s 42
+pairs.
+
+| Decision | Model | Right | Wall p50 | Cost against Haiku |
+|---|---|---|---|---|
+| classify | haiku/low | 71/72 | about 6 s | 1× |
+| classify | sonnet/low | 70/72 | about 6 s | |
+| classify | opus/low | 72/72 | about 6 s | 20× |
+| dispatch | haiku/low | 84/84 | | 1× |
+| dispatch | opus/low | 84/84 | | 37× |
+
+Opus was right once more in 72 at twenty times the cost and no faster: both stay on Haiku. The
+classifier runs only for a request no rule claims, about one in ten here, and the session that
+sends work already read the request: from 0.50 the orchestration guide and the mod's `queue`
+tool tell it to pass `--kind`, which skips the call. Whether an intermediary pays when the
+session itself is the same model as the worker is answered by M and N: a session at opus/low on
+its own took 86 to 96 s on the harder build; cauce pinned to that cell with no verifier took
+91 s. The intermediary costs about 5 s; what it adds is the check, the worktree and the record.
+
+## P: one build as two tasks side by side (`versus.py`, `cauce-split`)
+
+The medium build as the two tasks a session would send at once (the pricing rules; the receipt
+and the export), each with its kind, merged after. Three runs:
+
+| Arm | Right | Wall p50 | Merge conflict |
+|---|---|---|---|
+| cauce, one task | 3/3 | 88 s | |
+| cauce-split, two tasks | 7/7 hidden tests | 113 s | none |
+
+Slower, and the repository's own tests failed after the merge, though each branch passed alone
+and the hidden tests passed (why was not dug into: the receipt's half reads the discounts the
+other half adds). Splitting a build whose halves read each other's change is not worth it; `route.split_first` already asks for a
+split only for builds of several independent pieces.
+
+## Q: a start at Opus low effort, with the verifier (`versus.py`, `cauce@opus/low`)
+
+| Build | Arm | Wall p50 |
+|---|---|---|
+| medium | opus/low, one session | 87 s |
+| medium | cauce pinned at opus/low, with the verifier | 209 s |
+| harder | cauce pinned at opus/low, no verifier | 91 s |
+| harder | cauce pinned at opus/low, with the verifier | 259 s |
+
+Opus at low effort counted as a cheap cell, so a medium-risk change it made called the verifier,
+and two of the three medium builds climbed to opus/high on what it said, though every arm at
+opus/low passed every hidden test on its own. From 0.51 a cheap cell is Haiku or a model below
+Opus at low effort.
+
+The verifier's own cell on `bench/review`'s large change (42 planted bugs, `effort.py`):
+
+| Verifier cell | Caught | Wall p50 |
+|---|---|---|
+| sonnet/high (as it runs) | 27/42 | 51 s |
+| sonnet/high, 20 turns | 30/42 | 67 s |
+| sonnet/medium | 20/42 | 36 s |
+| opus/low | 18/42 | 36 s |
+| opus/medium | 36/42 | 81 s, $0.45 |
+
+A turn cap saved nothing. The faster cells missed a third of what high catches. In this store
+the verifier found blockers in 16 of 53 checks, at 19 turns p50 and 33 p90: it stays where it is,
+and moves off the critical path instead (R).

@@ -1179,10 +1179,11 @@ def run(
         the_plan.reasons.append("no independent check of its own: the blind review step that follows reads "
                                 "this change as the verifier would")
     # The independent check after the ending (`late_verifier`): the run ends on cauce's own
-    # check and the verifier reads the kept branch afterwards. Never for a workflow step, a fix
-    # that answers ledger rows, or work something waits on: a step or held work it released
-    # could not be taken back.
-    late = verifying and config.enabled("late_verifier", os.environ) and not task.get("workflow_run") \
+    # check and the verifier reads the kept branch afterwards. Only with a check of cauce's to end
+    # on, and never for a workflow step, a fix that answers ledger rows, or work something waits
+    # on: a step or held work it released could not be taken back.
+    late = verifying and bool(options.verify) and config.enabled("late_verifier", os.environ) \
+        and not task.get("workflow_run") \
         and not _fixing(options) and not options.ledger and not _awaited(store, task["id"])
     deferred: dict[str, Any] | None = None
     ledger: dict[str, Mapping[str, str]] = {findings_mod.key(f): f for f in known_findings}

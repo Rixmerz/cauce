@@ -1,8 +1,11 @@
 """What was asked, findings as records, risk, and the independent check."""
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import subprocess
+import time
 
 import pytest
 
@@ -1099,3 +1102,90 @@ def test_a_check_that_fails_drops_what_ran_beside_it_and_keeps_its_cost(git_repo
     assert len(dropped) == 1 and dropped[0]["data"]["cost_usd"] == pytest.approx(0.05)
     assert [e["data"]["seq"] for e in store.events_of(report.task_id, "verified")] == [2]
     assert store.attempts(report.task_id)[0]["cost_usd"] == pytest.approx(0.15)
+
+
+# --- the late independent check -------------------------------------------------------
+
+
+@pytest.fixture
+def late(monkeypatch, verifier_on):
+    monkeypatch.setenv("CAUCE_LATE_VERIFIER", "on")
+
+
+def test_a_late_check_runs_after_the_ending_and_a_blocker_reopens_the_task(git_repo, store, late):
+    script = Script(passing(), check("fail", [BUG]), write="app.py")
+    report = run("fix the cart total", git_repo, store, Options(verify="true"), registry={}, launcher=script,
+                 classifier=kind("implement"))
+    # The run ended as a pass before its check ran, and said the check comes after it.
+    assert report.status == "done" and report.late_check and "runs now, after this ending" in report.text()
+    kinds = [e["kind"] for e in store.events(task_id=report.task_id)]
+    assert "verifier_deferred" in kinds
+    first_end, late_check = kinds.index("finished"), kinds.index("verified")
+    assert first_end < late_check
+    verified = store.last_event(report.task_id, "verified")["data"]
+    assert verified["late"] and verified["blocking"] == 1
+    # The blocker reopens it as a review, with an ending of its own, its work on its branch.
+    assert kinds.count("finished") == 2 and kinds.index("finished", late_check) > late_check
+    finished = store.last_event(report.task_id, "finished")["data"]
+    assert finished["stop"]["cause"] == "review"
+    assert store.get_task(report.task_id)["status"] != "done"
+    assert isolate.branch_for(report.task_id) in subprocess.run(
+        ["git", "branch"], cwd=git_repo, capture_output=True, text=True).stdout
+    # Its cost is the task's.
+    assert store.get_task(report.task_id)["cost_usd"] == pytest.approx(0.15)
+
+
+def test_a_late_check_that_passes_leaves_the_pass(git_repo, store, late):
+    script = Script(passing(), check("pass"), write="app.py")
+    report = run("fix the cart total", git_repo, store, Options(verify="true"), registry={}, launcher=script,
+                 classifier=kind("implement"))
+    assert report.status == "done" and store.get_task(report.task_id)["status"] == "done"
+    assert store.last_event(report.task_id, "verified")["data"]["passed"]
+    assert [e["kind"] for e in store.events(task_id=report.task_id)].count("finished") == 1
+
+
+def test_work_something_waits_on_is_checked_before_its_ending(git_repo, store, late):
+    script = Script(passing(), check("fail", [BUG]), passing("fixed"), check("pass"), write="app.py")
+    task = store.create_task("fix the cart total", status="queued", source="cauce")
+    store.create_task("then ship it", status="queued", source="cauce",
+                      options=json.dumps({"after": {"task": task["id"]}}))
+    assert orchestrate._awaited(store, task["id"])
+    report = run("fix the cart total", git_repo, store, Options(verify="true"), registry={}, launcher=script,
+                 classifier=kind("implement"), task_id=task["id"])
+    assert report.status == "done" and not report.late_check
+    assert not store.events_of(report.task_id, "verifier_deferred")
+    assert [e["data"]["blocking"] for e in store.events_of(report.task_id, "verified")] == [1, 0]
+
+
+def test_a_fix_of_ledger_rows_is_never_checked_late(git_repo, store, late):
+    script = Script(passing(), check("pass"), write="app.py")
+    report = run("fix the cart total", git_repo, store, Options(verify="true", ledger={"role": "fix", "ids": ["F1"]}),
+                 registry={}, launcher=script, classifier=kind("implement"))
+    assert not report.late_check and not store.events_of(report.task_id, "verifier_deferred")
+
+
+def test_a_pass_with_no_check_of_cauce_s_is_never_checked_late(git_repo, store, late):
+    script = Script(passing(), check("pass"), write="app.py")
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    assert not report.late_check and not store.events_of(report.task_id, "verifier_deferred")
+    assert store.last_event(report.task_id, "verified")["data"]["passed"]
+
+
+def test_opus_at_low_effort_is_no_cheap_cell_and_a_model_below_it_is():
+    assert not orchestrate._cheap(Cell("opus", "low"))
+    assert orchestrate._cheap(Cell("sonnet", "low")) and orchestrate._cheap(Cell("haiku", "medium"))
+    assert not orchestrate._cheap(Cell("sonnet", "medium"))
+
+
+def test_what_follows_an_ending_detached_runs_in_a_child_with_its_own_store(store, tmp_path):
+    mark = tmp_path / "done"
+    orchestrate._after_ending(lambda s: mark.write_text(str(s.path)), store, detach=True)
+    deadline = time.monotonic() + 10
+    while not mark.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    with contextlib.suppress(ChildProcessError):
+        os.waitpid(-1, 0)
+    assert mark.read_text() == str(store.path)
+    # Without detaching, it runs here, on the caller's store.
+    orchestrate._after_ending(lambda s: mark.write_text(str(id(s))), store, detach=False)
+    assert mark.read_text() == str(id(store))
