@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+### Added
+
+- **livespec is a step before the worker, not a tool it may ignore.** A task now builds or
+  refreshes its repository's livespec index (incrementally) before its worker starts and waits
+  for it up to `livespec_wait` seconds (120 by default; `cauce config livespec_wait`,
+  `CAUCE_LIVESPEC_WAIT`, a plugin option; 0 never waits). In a folder that holds several
+  repositories each one is indexed on its own, honouring `.livespec.toml` `group_db` (repositories
+  that share one index file are indexed one after another, each once the one before lets the file's
+  lock go), and the folder never is. Past the wait the task starts without the index, or on the
+  stale one a repository already has, and its plan says which; the index keeps building (it is never
+  killed). Before, the index started in the background and the task ran without it, so workers
+  oriented by opening files.
+- **Spec-first orientation in the worker's brief** wherever livespec has an index: find the
+  spec for the request (`list_specs`, `search`), reach its code (`get_spec_implementation`), read
+  one symbol at a time (`quick_orient`, `read_unit`), open a whole file last; `search_similar`
+  before a new helper and `git_diff_impact` before finishing, for the kinds that write. An
+  index with no specs starts from `search` and `find_symbol` instead.
+- **Spec-code links are part of done.** A worker that writes or changes an OpenSpec spec is
+  told to put `@spec:<capability>-<requirement-name>` on the functions that implement it and
+  to index again (not from a shared `group_db` index). The report, the independent check's
+  brief and a workflow's review step name the specs a change touched that no code names: a
+  spec the change wrote is a blocker, one that was already there a warning.
+- **`cauce stats` keeps which livespec calls a worker made and compares tokens.** Each attempt's
+  `attempt_finished` event holds `livespec_calls` (by tool) when livespec was handed; a run's row
+  has `livespec_handed`, `livespec_calls` and `tokens`; the report adds tokens per run by kind with
+  livespec called against not called (observed, not a trial).
+- **`cauce doctor` flags the livespec index:** `index-missing`, `index-unreadable` and
+  `index-stale` for repositories recent runs were in, and `specs-with-no-code` for specs in the
+  index that no symbol implements. Suspect, never broken.
+
 ### Fixed
 
 - **A request's backticks no longer reach the shell, and a bad task id is one line, not a
@@ -43,6 +73,12 @@
   branch per repository to merge; one worktree per repository is a larger change (a branch, a
   commit and a merge for each). The lines of a file the person had already modified before the
   attempt include what they wrote.
+- **A folder that is no repository could be indexed.** livespec was asked to index the folder a
+  task ran in when it had no git root, which for a folder of several repositories indexes the
+  parent of many. It is refused now (`cauce index-livespec` says why) and its repositories are
+  indexed instead.
+- A worker's own livespec index (`.mcp-docs/`) in its worktree is a tool artifact: never a changed
+  file, never committed.
 
 ## [0.55.0] - 2026-10-27
 

@@ -22,6 +22,8 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # it on with a fake: a real `uvx livespec index` in a unit test is minutes
     # of network and indexing nobody asked for.
     monkeypatch.setenv("CAUCE_LIVESPEC", "off")
+    # And a task never waits on an index before its worker: a test that wants the wait sets it.
+    monkeypatch.setenv("CAUCE_LIVESPEC_WAIT", "0")
     # The same for the two settings that would call a model or start a process:
     # a test that wants them turns them on with a fake.
     monkeypatch.setenv("CAUCE_PARALLEL", "off")

@@ -442,9 +442,10 @@ def reset(ws: Workspace) -> None:
 
 
 #: Folders a worker's tools write for their own use (a browser server's page
-#: snapshots and console logs, an interpreter's bytecode, a dev-server plugin's state).
+#: snapshots and console logs, an interpreter's bytecode, a dev-server plugin's state, the
+#: database a code index (livespec) builds in the directory it is asked to index).
 #: They are no work: never a changed file, never committed to a kept branch.
-ARTIFACT_DIRS = frozenset({".playwright-mcp", "__pycache__", ".fresh-dev"})
+ARTIFACT_DIRS = frozenset({".playwright-mcp", "__pycache__", ".fresh-dev", ".mcp-docs"})
 
 
 def is_artifact(path: str) -> bool:

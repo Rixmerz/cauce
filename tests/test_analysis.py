@@ -329,3 +329,103 @@ def test_livespec_use_is_counted_from_the_attempts_it_was_handed(store):
     store.add_event(other["id"], "attempt_started", seq=1, capabilities=[])
     use = analysis.capability_use(store.capability_use("livespec"))
     assert use == {"given": 2, "used": 1, "calls": 3, "passed_used": 1.0, "passed_idle": 0.0}
+
+
+# --- livespec: used or not, which calls, and what a run cost in tokens ----------------
+
+
+class Calling:
+    """A launcher whose worker calls tools through the hooks' own fast path (`signature.append`), as a
+    `claude -p` worker does, then answers with `tokens` spent."""
+
+    def __init__(self, tools, tokens, store):
+        self.tools, self.tokens, self.store, self.specs = tools, tokens, store, []
+
+    def __call__(self, spec):
+        from cauce import signature
+
+        self.specs.append(spec)
+        task = self.store._conn.execute("SELECT max(id) FROM tasks").fetchone()[0]
+        env = {"CAUCE_HOME": str(home()), "CAUCE_WORKER_TASK": str(task),
+               "CAUCE_WORKER_ATTEMPT": str(len(self.specs))}
+        for tool in self.tools:
+            signature.append({"tool_name": tool, "tool_input": {"q": "x"}, "session_id": "w"}, env)
+        return WorkerResult(True, None, "done", evidence="1 passed", cost_usd=0.1, input_tokens=self.tokens,
+                            output_tokens=1_000)
+
+
+def _indexed_run(git_repo, tmp_path, store, text, tools, tokens, *, kind_name="implement", livespec=True):
+    from .test_orchestrate import _livespec
+
+    adapters = [_livespec(tmp_path)] if livespec else []
+    return run(text, git_repo, store, registry={}, launcher=Calling(tools, tokens, store),
+               classifier=kind(kind_name), adapters=adapters)
+
+
+def test_an_attempt_keeps_the_livespec_calls_its_worker_made_and_a_run_without_livespec_keeps_none(
+        git_repo, tmp_path, store):
+    from .livespec_fixture import build
+
+    build(git_repo)
+    live = "mcp__livespec__"
+    used = _indexed_run(git_repo, tmp_path, store, "fix the cart total",
+                        [live + "quick_orient", live + "read_unit", live + "quick_orient", "Read"], 100_000)
+    assert store.events_of(used.task_id, "attempt_finished")[0]["data"]["livespec_calls"] == {
+        "quick_orient": 2, "read_unit": 1}
+    idle = _indexed_run(git_repo, tmp_path, store, "fix the invoice total", ["Read", "Grep"], 100_000)
+    assert store.events_of(idle.task_id, "attempt_finished")[0]["data"]["livespec_calls"] == {}
+    bare = _indexed_run(git_repo, tmp_path, store, "fix the coupon total", [live + "quick_orient"], 100_000,
+                        livespec=False)
+    assert "livespec_calls" not in store.events_of(bare.task_id, "attempt_finished")[0]["data"]
+
+
+def test_tool_counts_are_one_attempt_s_calls_by_name(store):
+    task = store.create_task("t", status="done", source="cauce")
+    for attempt, tool in ((1, "mcp__livespec__who_calls"), (1, "mcp__livespec__who_calls"),
+                          (1, "mcp__livespec__read_unit"), (1, "Read"), (2, "mcp__livespec__find_symbol")):
+        store.add_tool_event(task_id=task["id"], attempt=attempt, tool=tool, sig="x", arg_hash="h", ok=1)
+    assert store.tool_counts(task["id"], 1, "mcp__livespec__") == {"read_unit": 1, "who_calls": 2}
+    assert store.tool_counts(task["id"], 2, "mcp__livespec__") == {"find_symbol": 1}
+    assert store.tool_counts(task["id"], 3, "mcp__livespec__") == {}
+
+
+def test_stats_compare_the_tokens_of_runs_that_called_livespec_with_those_that_did_not(git_repo, tmp_path, store):
+    from .livespec_fixture import build
+
+    build(git_repo)
+    live = "mcp__livespec__"
+    _indexed_run(git_repo, tmp_path, store, "fix the cart total", [live + "quick_orient"], 99_000)
+    _indexed_run(git_repo, tmp_path, store, "fix the invoice total", [live + "read_unit"], 119_000)
+    _indexed_run(git_repo, tmp_path, store, "fix the coupon total", ["Read"], 299_000)
+    report = analysis.compute(store, days=30, keep_runs=None)
+    rows = {r["kind"]: r for r in report["livespec_tokens"]}
+    row = rows["implement"]
+    assert row["with"] == {"runs": 2, "avg": 110_000, "p50": 100_000.0}
+    assert row["without"] == {"runs": 1, "avg": 300_000, "p50": 300_000.0}
+    assert row["change"] == round((110_000 - 300_000) / 300_000, 3)
+    said = analysis.text(report)
+    assert "tokens per run by kind, livespec called against not called (observed, not a trial):" in said
+    assert "implement" in said and "with 2 run(s) avg 110k p50 100k" in said and "without 1 run(s) avg 300k" in said
+    assert "(-63%)" in said
+    by_run = {r["task"]: r for r in report["runs"]}
+    first = min(by_run)
+    assert by_run[first]["livespec_handed"] is True and by_run[first]["livespec_calls"] == 1
+    assert by_run[first]["tokens"] == 100_000 and by_run[first]["livespec_tools"] == {"quick_orient": 1}
+    csv_rows = list(csv.DictReader(io.StringIO(analysis.runs_csv(report["runs"]))))
+    assert {"livespec_handed", "livespec_calls", "tokens"} <= set(csv_rows[0])
+    assert csv_rows[0]["tokens"] == "100000" and csv_rows[0]["livespec_calls"] == "1"
+
+
+def test_the_token_comparison_holds_one_arm_and_leaves_out_runs_that_spent_none():
+    rows = analysis.livespec_tokens([
+        {"kind": "ui", "tokens": 50_000, "livespec_calls": 4},
+        {"kind": "ui", "tokens": 0, "livespec_calls": 0},
+        {"kind": "docs", "tokens": 10_000, "livespec_calls": 0},
+        {"kind": "plan", "tokens": 0, "livespec_calls": 0},
+        {"kind": None, "tokens": 5, "livespec_calls": 0}])
+    assert [r["kind"] for r in rows] == ["docs", "ui"]
+    ui = rows[1]
+    assert ui["with"]["runs"] == 1 and ui["without"] == {"runs": 0, "avg": None, "p50": None}
+    assert ui["change"] is None
+    assert "ui" in analysis._tokens_line(ui) and "without 0 run(s) avg - p50 -" in analysis._tokens_line(ui)
+    assert analysis._tokens(950) == "950" and analysis._tokens(None) == "-"

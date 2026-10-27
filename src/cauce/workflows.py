@@ -38,6 +38,7 @@ from typing import Any, NamedTuple
 
 from cauce import after, dispatch, isolate, ledger, project, repo, surfaces, trunks
 from cauce import findings as findings_mod
+from cauce import specs as specs_mod
 from cauce.escalate import MAX_TURNS_CEILING
 from cauce.matrix import KINDS, READ_ONLY_KINDS, Cell
 from cauce.store import Store, home
@@ -1178,6 +1179,10 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
     elif base and options.get("origin") and base != options["origin"]:
         body += ("\n\nEverything this workflow changed so far is in this checkout: "
                  f"`git diff {options['origin'][:12]}` shows it.")
+    if str(step.get("kind") or "").startswith("review") and options.get("origin") and \
+            specs_mod.links_expected(run["cwd"], os.environ):
+        # Workers here were told to link the specs they write to their code: a review checks that they did.
+        body += "\n\n" + specs_mod.LINK_CHECK
     touches = _touches(run, options, base, area) if (str(step.get("kind") or "").startswith("review")
                                                      or step.get("ledger")) else None
     trunk_for = trunks.is_trunk(defn, step["id"]) and trunks.enabled()

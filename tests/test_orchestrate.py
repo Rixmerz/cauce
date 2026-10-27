@@ -411,6 +411,151 @@ def test_an_unindexed_repo_is_indexed_in_the_background_and_the_task_starts_at_o
     assert len(started) == 1 and "22 caller(s)" in script.specs[0].prompt
 
 
+class _Index:
+    """A `cauce index-livespec` process: `wait` builds the index the fixture describes, or runs out of time."""
+
+    def __init__(self, repo_dir, *, late=False):
+        self.repo_dir, self.late = repo_dir, late
+
+    def wait(self, timeout=None):
+        from .livespec_fixture import build
+
+        if self.late:
+            raise subprocess.TimeoutExpired("index-livespec", timeout)
+        build(self.repo_dir)
+        return 0
+
+
+def test_a_task_waits_for_the_index_before_its_worker_starts(git_repo, store, tmp_path, monkeypatch):
+    monkeypatch.setenv("CAUCE_LIVESPEC_WAIT", "30")
+    started = []
+
+    def popen(argv, **kw):
+        started.append(argv)
+        return _Index(git_repo)
+
+    dry = run("parse_amount rounds wrong", git_repo, store, Options(dry_run=True), registry={},
+              classifier=kind("implement"), adapters=[_livespec(tmp_path, popen=popen)])
+    assert "livespec: would index before the worker starts (waits up to 30 s)" in dry.plan.reasons
+    assert started == [] and not (git_repo / ".mcp-docs").exists()
+    script, lines = Script(ok()), []
+    report = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"), adapters=[_livespec(tmp_path, popen=popen)], progress=lines.append)
+    assert len(started) == 1 and started[0][-2:] == ["index-livespec", str(git_repo.resolve())]
+    assert any(r.startswith("livespec: repo: indexed before the worker started") for r in report.plan.reasons)
+    # The worker's brief opens with the map of the index that was built for it.
+    assert "Code map from livespec" in script.specs[0].prompt and "22 caller(s)" in script.specs[0].prompt
+    assert report.status == "done"
+    waiting = next(i for i, line in enumerate(lines) if "livespec is indexing repo before the worker starts" in line)
+    assert waiting < next(i for i, line in enumerate(lines) if "started: implement" in line)
+
+
+def test_past_the_wait_the_task_starts_without_the_index_and_says_so(git_repo, store, tmp_path, monkeypatch):
+    monkeypatch.setenv("CAUCE_LIVESPEC_WAIT", "30")
+    started = []
+
+    def popen(argv, **kw):
+        started.append(argv)
+        return _Index(git_repo, late=True)
+
+    script = Script(ok())
+    report = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"), adapters=[_livespec(tmp_path, popen=popen)])
+    assert report.status == "done" and len(started) == 1
+    said = [r for r in report.plan.reasons if r.startswith("livespec: repo: still indexing after the 30 s")]
+    assert len(said) == 1 and "this task runs without it" in said[0]
+    # Said once: not again as a background refresh.
+    assert not any("in the background" in r for r in report.plan.reasons)
+    assert "Code map from livespec" not in script.specs[0].prompt
+
+
+def test_past_the_wait_a_stale_index_still_reaches_the_worker_and_the_plan_says_it_is_used_as_it_is(
+        git_repo, store, tmp_path, monkeypatch):
+    from cauce.adapters import livespec as ls
+
+    from .livespec_fixture import build
+
+    build(git_repo)
+    monkeypatch.setattr(ls, "_older_than_head", lambda indexed_at, root: True)
+    monkeypatch.setenv("CAUCE_LIVESPEC_WAIT", "30")
+    script = Script(ok())
+    report = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("implement"),
+                 adapters=[_livespec(tmp_path, popen=lambda argv, **kw: _Index(git_repo, late=True))])
+    said = [r for r in report.plan.reasons if r.startswith("livespec: repo: still indexing after the 30 s")]
+    assert len(said) == 1
+    assert "this task uses the index as it is" in said[0]
+    assert "22 caller(s)" in script.specs[0].prompt
+
+
+def test_a_task_in_a_folder_of_repositories_indexes_each_one_and_never_the_folder(store, tmp_path, monkeypatch):
+    from .test_livespec_adapter import make_repo
+
+    monkeypatch.setenv("CAUCE_LIVESPEC_WAIT", "30")
+    folder = tmp_path / "folder"
+    one, two = make_repo(folder, "one"), make_repo(folder, "two")
+    started = []
+
+    def popen(argv, **kw):
+        started.append(Path(argv[-1]))
+        return _Index(Path(argv[-1]))
+
+    the_plan = orchestrate.plan("parse_amount rounds wrong", folder, store, Options(), {},
+                                classifier=kind("implement"), adapters=[_livespec(tmp_path, popen=popen)])
+    assert sorted(started) == [one, two]
+    assert folder.resolve() not in started and not (folder / ".mcp-docs").exists()
+    assert sum(r.startswith("livespec: ") and "indexed before the worker started" in r
+               for r in the_plan.reasons) == 2
+
+
+def test_a_worker_is_told_to_orient_by_specs_before_the_map_and_before_opening_files(git_repo, store, tmp_path):
+    from .livespec_fixture import build
+
+    build(git_repo)
+    script = Script(ok())
+    run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+        adapters=[_livespec(tmp_path)])
+    prompt = script.specs[0].prompt
+    assert prompt.index("Orient by livespec before you open files") < prompt.index("Code map from livespec")
+    assert prompt.index("`list_specs`") < prompt.index("`get_spec_implementation`") < prompt.index("`read_unit`")
+    assert "`search_similar`" in prompt and "`git_diff_impact`" in prompt
+    # Told also when the request names no symbol the index knows: there is no map, and the way still holds.
+    bare = Script(ok())
+    run("make the build faster", git_repo, store, registry={}, launcher=bare, classifier=kind("explore"),
+        adapters=[_livespec(tmp_path)])
+    assert "Orient by livespec before you open files" in bare.specs[0].prompt
+    assert "Code map from livespec" not in bare.specs[0].prompt and "`search_similar`" not in bare.specs[0].prompt
+
+
+def test_a_worker_with_no_index_is_not_told_to_call_livespec(git_repo, store, tmp_path):
+    script = Script(ok())
+    run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+        adapters=[_livespec(tmp_path)])
+    assert "Orient by livespec" not in script.specs[0].prompt
+
+
+def test_a_worker_that_writes_in_a_repository_with_specs_is_told_to_link_them_to_their_code(git_repo, store,
+                                                                                            tmp_path):
+    from .livespec_fixture import build
+    from .test_specs import _behind
+
+    _behind(git_repo, code_commits=1)
+    build(git_repo)
+    writing, reading, unindexed = Script(ok()), Script(ok()), Script(ok())
+    run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=writing, classifier=kind("implement"),
+        adapters=[_livespec(tmp_path)])
+    assert "`@spec:<capability>-<requirement-name>`" in writing.specs[0].prompt
+    assert "`index_project`" in writing.specs[0].prompt
+    run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=reading, classifier=kind("explore"),
+        adapters=[_livespec(tmp_path)])
+    assert "@spec:" not in reading.specs[0].prompt
+    # With no index there is nothing to re-index: the spec-links rule is livespec's, so it is not said.
+    (git_repo / ".mcp-docs" / "docs.db").unlink()
+    run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=unindexed, classifier=kind("implement"),
+        adapters=[_livespec(tmp_path)])
+    assert "@spec:" not in unindexed.specs[0].prompt
+
+
 def test_a_stale_index_is_used_as_it_is_while_one_refresh_runs(git_repo, store, tmp_path, monkeypatch):
     from cauce.adapters import livespec as ls
 

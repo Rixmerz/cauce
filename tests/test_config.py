@@ -30,3 +30,25 @@ def test_a_broken_file_is_the_defaults(_isolated_home):
     assert config.load({"CAUCE_HOME": str(_isolated_home)}) == config.DEFAULTS
     (_isolated_home / "config.json").write_text("[1]")
     assert config.load({"CAUCE_HOME": str(_isolated_home)}) == config.DEFAULTS
+
+
+def test_livespec_wait_is_whole_seconds_from_flag_variable_file_and_default(_isolated_home):
+    env = {"CAUCE_HOME": str(_isolated_home)}
+    assert config.livespec_wait(env) == 120
+    config.save({"livespec_wait": 30}, env)
+    assert config.livespec_wait(env) == 30
+    assert config.livespec_wait({**env, "CAUCE_LIVESPEC_WAIT": "5"}) == 5
+    assert config.livespec_wait({**env, "CAUCE_LIVESPEC_WAIT": "0"}) == 0
+    # A value the setting does not take is read as unset: the file's, then the default.
+    assert config.livespec_wait({**env, "CAUCE_LIVESPEC_WAIT": "soon"}) == 30
+    assert config.livespec_wait({**env, "CAUCE_LIVESPEC_WAIT": "-3"}) == 30
+    config.save({"livespec_wait": True}, env)
+    assert config.livespec_wait(env) == 120
+
+
+def test_livespec_wait_reaches_the_file_from_the_plugin_option(_isolated_home):
+    env = {"CAUCE_HOME": str(_isolated_home), "CLAUDE_PLUGIN_OPTION_LIVESPEC_WAIT": "45"}
+    config.sync_plugin_options(env)
+    assert config.load(env)["livespec_wait"] == 45
+    config.sync_plugin_options({"CAUCE_HOME": str(_isolated_home), "CLAUDE_PLUGIN_OPTION_LIVESPEC_WAIT": "later"})
+    assert config.load(env)["livespec_wait"] == 45

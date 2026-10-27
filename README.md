@@ -116,10 +116,13 @@ index takes part in every step, at no token cost:
 | Step | What livespec contributes |
 |---|---|
 | before routing | a task whose code implements a critical spec, or whose symbol is called from everywhere, starts one rung up; a review of such code is reviewed as critical |
-| before the worker starts | a code map at the top of its prompt: the symbols the request is about, where they are, how many callers, the specs they implement, the tests that exercise them |
+| before the worker starts | the repository's index is built or refreshed first (incrementally, each repository of a folder of them, never the folder), waiting up to `livespec_wait` seconds (120 by default); past it the task starts without the index, says so, and the index keeps building |
+| in the worker's brief | how to find its way, spec first: `list_specs`/`search` for the request's spec, `get_spec_implementation` for its code, `quick_orient`/`read_unit` per symbol, a whole file last; `search_similar` before a new helper, `git_diff_impact` before it finishes; then a code map: the symbols the request is about, where they are, how many callers, the specs they implement, the tests that exercise them |
 | during the work | the worker gets livespec's tools, with a hint for its kind of work and the `workspace` every call needs |
+| a spec the work writes | the worker puts `@spec:<capability>-<requirement-name>` on the functions that implement it; the report and the independent check name the specs the change touched that no code names (a block for a spec it wrote, a warning for one already there) |
 | after a pass | the specs the change touched, and the files outside the change that call what it changed, in the report and in the independent check's brief, as where to probe |
-| in `cauce stats` | how many attempts handed livespec called it, and how those attempts went (observed, not a trial) |
+| in `cauce stats` | how many attempts handed livespec called it and how those attempts went, and the tokens a run spent per kind with livespec called against not called (both observed, not a trial); each attempt keeps which calls its worker made |
+| in `cauce doctor` | repositories whose index is missing, unreadable or older than the last commit, and specs in the index that no code implements |
 | between sessions | an index missing or older than the last commit is (re)built in the background when a session starts in an enrolled project |
 
 cauce reads the index (`.mcp-docs/docs.db`) directly with `sqlite3`, read-only,
@@ -129,7 +132,9 @@ otherwise, and the pinned release through `uvx` as the last resort.
 
 Switch it off from the plugin settings (`livespec`), with `cauce config
 livespec off`, `CAUCE_LIVESPEC=off`, or `--no-livespec` for one task.
-`cauce neighbours` shows what cauce sees.
+`cauce config livespec_wait 30` sets how long a task waits for the index before
+its worker starts (`CAUCE_LIVESPEC_WAIT`; 0 never waits). `cauce neighbours`
+shows what cauce sees.
 
 ### Specs that keep up with the code
 
@@ -567,8 +572,9 @@ not told to start one.
 
 `cauce run` prints the task number at once, and each attempt as it starts
 and ends, on stderr; the report comes on stdout when the task stops. A
-livespec index that is missing or stale is rebuilt in the background, never
-before the task. `cauce run` writes in a git worktree on `cauce/task-<id>`; nothing reaches
+livespec index that is missing or stale is built or refreshed before the worker
+starts, for up to `livespec_wait` seconds; the plan says when it was not ready
+in time. `cauce run` writes in a git worktree on `cauce/task-<id>`; nothing reaches
 your checkout until you merge that branch. A task that passed leaves it to
 review; one that stopped for a person (blocked, waiting on approval) leaves it
 too, committed as unverified, and `cauce resume <id>` continues on it; one that

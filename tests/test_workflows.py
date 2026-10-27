@@ -601,6 +601,30 @@ def test_a_review_step_is_blind_and_the_step_after_it_gets_its_findings_as_recor
     assert "- build (task #" in polish["prompt"]
 
 
+def test_a_review_of_a_change_checks_the_spec_links_where_workers_were_told_to_make_them(
+        git_repo, store: Store, kicks, monkeypatch):
+    from cauce import specs
+
+    from .livespec_fixture import build
+    from .test_specs import _spec_repo
+
+    monkeypatch.setenv("CAUCE_LIVESPEC", "on")
+    _spec_repo(git_repo)
+    build(git_repo)
+    _save(CHAIN, git_repo)
+    workflows.start(store, "chain", git_repo, {"goal": "the export"})
+    seen: list[dict] = []
+    flow.work(store, runner=_runner([ok("built it"), ok("no problems"), ok("polished")], seen))
+    building, review = seen[0], seen[1]
+    assert specs.LINK_CHECK in review["prompt"] and specs.LINK_CHECK not in building["prompt"]
+    # With no livespec index there, workers were never told to link: the review is not asked to check it.
+    (git_repo / ".mcp-docs" / "docs.db").unlink()
+    workflows.start(store, "chain", git_repo, {"goal": "the export again"})
+    again: list[dict] = []
+    flow.work(store, runner=_runner([ok("built it"), ok("no problems"), ok("polished")], again))
+    assert len(again) >= 2 and all(specs.LINK_CHECK not in step["prompt"] for step in again)
+
+
 def test_a_review_with_no_change_to_read_gets_what_came_before(git_repo, store: Store, kicks):
     _save({"name": "critique", "inputs": ["goal"], "steps": [
         {"id": "plan", "prompt": "Plan {goal}", "kind": "plan"},

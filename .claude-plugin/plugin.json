@@ -21,6 +21,12 @@
       "description": "Use livespec throughout the flow: index the repository, route on what the index shows, brief every worker with a code map, give workers livespec's tools, and report what a change touched. On by default; runs the pinned release through uvx when livespec is not installed.",
       "default": true
     },
+    "livespec_wait": {
+      "type": "number",
+      "title": "Seconds to wait for livespec's index",
+      "description": "Before a worker starts, cauce indexes or refreshes the repository's livespec index (incrementally) and waits this long for it, so the worker orients by specs and symbols instead of opening files. Past it the task starts without the index and says so; the index keeps building for the next one. 0 never waits.",
+      "default": 120
+    },
     "parallel": {
       "type": "boolean",
       "title": "Haiku decides what runs in parallel",

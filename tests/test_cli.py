@@ -1583,3 +1583,14 @@ def test_a_request_from_an_empty_stdin_is_refused_before_anything_starts(argv, g
         assert store.list_tasks(limit=5) == []
     finally:
         store.close()
+
+
+def test_config_livespec_wait_takes_whole_seconds(capsys, monkeypatch):
+    from cauce import config
+
+    monkeypatch.delenv("CAUCE_LIVESPEC_WAIT")  # the suite sets it to 0, and the variable outranks the file
+    assert cli.main(["config", "livespec_wait", "20"]) == 0
+    assert config.livespec_wait(os.environ) == 20
+    assert cli.main(["config", "livespec_wait", "soon"]) == 1
+    assert "whole seconds" in capsys.readouterr().err
+    assert config.livespec_wait(os.environ) == 20
