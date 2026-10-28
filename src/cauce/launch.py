@@ -690,7 +690,7 @@ def parse(
                             starved="memory" if killed else "disk" if NO_SPACE.search(proc.stderr or "") else "",
                             **common)
     text = str(envelope.get("result") or "")
-    if envelope.get("is_error"):
+    if envelope.get("is_error") and not _answered_anyway(envelope, text):
         subtype = str(envelope.get("subtype") or "")
         if "max_turns" in subtype:
             return WorkerResult(False, Failure.TURNS_EXHAUSTED,
@@ -986,6 +986,16 @@ def network_trouble(*texts: str, flaky: bool = False) -> str:
         if found:
             return found.group(0).strip()[:80]
     return ""
+
+
+def _answered_anyway(envelope: Mapping[str, Any], text: str) -> bool:
+    """A session the CLI flags `is_error` with subtype "success" whose result still holds the one
+    result block, and no API limit or dropped network: the worker answered, and something after its
+    answer (a hook, the last call's bookkeeping) set the flag. Its answer is read as any is; an
+    errored session with no block, or one that names a limit, stays errored."""
+    if str(envelope.get("subtype") or "") != "success" or result_block(text) is None:
+        return False
+    return not api_limit(text)[0] and not network_trouble(text, flaky=True)
 
 
 def read_parts(block: Mapping[str, Any]) -> tuple[tuple[dict[str, Any], ...], str, str]:

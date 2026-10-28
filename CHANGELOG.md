@@ -16,6 +16,11 @@
 - **The orchestration skill lists the kinds `--kind` takes.** Only `cauce guide dispatch` did, and a
   session that did not read it passed a kind cauce has no such name for. Any other word is still
   refused with the list (a few common words, `research` among them, are read as the kind they mean).
+- **A worker that answered is no longer recorded as an errored session.** The CLI's JSON can flag
+  `is_error` with subtype `success` over a full answer; cauce read every such session as errored
+  and retried it. A session flagged so whose result holds the one result block, and names no usage
+  limit or dropped network, is now read as its answer; one with no block, a limit, or another
+  subtype stays errored.
 
 ## [0.58.0] - 2026-10-28
 
