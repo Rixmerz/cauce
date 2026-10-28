@@ -1,0 +1,38 @@
+{
+  "cauce": {
+    "format": 1,
+    "tools": {
+      "analyze_impact": "what changing a symbol reaches",
+      "audit_coverage": "which code no test covers",
+      "find_dead_code": "code nothing reaches",
+      "find_orphan_tests": "tests that cover nothing",
+      "find_symbol": "find a symbol by name",
+      "get_spec_implementation": "the code that implements a spec",
+      "get_symbol_source": "a symbol's source",
+      "git_diff_impact": "what a diff reaches",
+      "index_project": "index the workspace (incremental)",
+      "list_specs": "the specs in the index",
+      "quick_orient": "a symbol's or the project's overview in one call",
+      "read_unit": "a symbol's body, what it calls and the tests that cover it",
+      "search": "search the index",
+      "search_similar": "code like a given snippet",
+      "sync_openspec": "read openspec/ specs and changes into the index",
+      "validate_openspec": "check the specs' structure",
+      "who_calls": "the callers of a symbol",
+      "who_does_this_call": "what a symbol calls"
+    },
+    "hints": {
+      "debug-repro": "find the failing symbol (find_symbol), then who_calls and analyze_impact before changing it",
+      "debug-unclear": "map the path first: who_calls, who_does_this_call and analyze_impact on every suspect",
+      "implement": "before editing a symbol, who_calls and analyze_impact; get_spec_implementation for the spec it serves",
+      "feature": "list_specs and get_spec_implementation for what exists; analyze_impact on each symbol you change",
+      "refactor": "who_calls on every symbol you move or rename; find_dead_code for what can go",
+      "ui": "find_symbol for the component; who_calls to see where it renders",
+      "test": "audit_coverage and find_orphan_tests to see what is untested; get_symbol_source to read the target",
+      "review-routine": "git_diff_impact on the change; analyze_impact on anything it touches",
+      "review-critical": "git_diff_impact on the change; analyze_impact and get_spec_implementation for every spec it touches",
+      "explore": "quick_orient for the overview, then search and find_symbol",
+      "plan": "quick_orient, list_specs and analyze_impact on the parts the plan changes"
+    }
+  }
+}

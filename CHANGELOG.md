@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Neighbours bring their own words:** a plugin may publish a `cauce` block (format 1: `tools`,
+  `hint`, `hints` per kind, `measures`) in its installed `.claude-plugin/plugin.json`, or a
+  `cauce.json` beside it, and cauce reads it when it plans (`cauce.manifests`), newest installed
+  version only, cached per file state. It replaces only descriptive text: the worker's hint,
+  livespec's hint per kind, and what each tool measures in the TRACER check. Policy (guards,
+  `--routines=off`, who measures, `when`, `touches`, arguments, the server command) stays
+  cauce's. A block of another format or shape is ignored whole; a hint naming a tool the block
+  does not list is dropped. The plan says once a day whose words came from a manifest. Schema
+  and drafts for livespec and layout-inspector in `docs/neighbours.md` and `docs/neighbours/`.
+
 ## [0.57.0] - 2026-10-28
 
 ### Added

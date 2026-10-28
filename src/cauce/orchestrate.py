@@ -47,6 +47,7 @@ from cauce import (
     habits,
     isolate,
     launch,
+    manifests,
     models,
     notes,
     plugins,
@@ -940,7 +941,8 @@ def warnings(reasons: Sequence[str]) -> list[str]:
 
 
 #: Plan lines that read the same task after task in a repository: said once a day there.
-_REPEATED = ("CI also runs", "CI: ", "engram: ", "layout-inspector: ", "livespec: ", "specs: ", "tracer: ")
+_REPEATED = ("CI also runs", "CI: ", "engram: ", "layout-inspector: ", "livespec: ", "specs: ", "tracer: ",
+             manifests.PREFIX)
 SAID_META = "said:"
 
 
@@ -1107,6 +1109,8 @@ def run(
     if not options.max_turns and the_plan.turns is None and turns_for(the_plan.kind) != DEFAULT_TURNS:
         the_plan.reasons.append(f"{the_plan.kind} work starts with {turns_for(the_plan.kind)} turns: "
                                 f"at {DEFAULT_TURNS} its attempts ran out")
+    if told := manifests.plan_line(manifests.read_all()):
+        the_plan.reasons.append(told)
     the_plan.quiet = said_today(store, repo.key(repo_dir), [*the_plan.reasons,
                                                            *(st.line() for st in the_plan.neighbours)])
     warned = warnings(the_plan.reasons)
@@ -2994,8 +2998,9 @@ def _check_spec(*, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec, wo
     # It keeps only the capabilities that measure, the work's and any the change touches: what it reports,
     # it measures.
     measures = caps.measuring(registry or {})
-    hints = {name: plugins.MEASURES.get(name) or measures[name].hint
-             for name in [*spec.mcp_servers, *measures] if name in plugins.MEASURES or name in measures}
+    measured_by = plugins.measure_hints()
+    hints = {name: measured_by.get(name) or measures[name].hint
+             for name in [*spec.mcp_servers, *measures] if name in measured_by or name in measures}
     measuring = {name: server for name, server in spec.mcp_servers.items() if name in hints}
     touched = caps.select({n: c for n, c in measures.items() if n not in measuring}, kind, workdir=workdir,
                           paths=changed, reading=True)

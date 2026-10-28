@@ -839,7 +839,10 @@ class Livespec:
 
     def hint(self, kind: str, repo_dir: Path, workdir: Path) -> str:
         root = (repo.toplevel(repo_dir) or repo_dir).resolve()
-        what = _HINTS.get(kind, _HINTS["implement"])
+        from cauce import manifests
+
+        own = manifests.read("livespec", self.env)
+        what = (own.hint_for(kind) if own else "") or _HINTS.get(kind, _HINTS["implement"])
         where = f'pass workspace="{root}" on every call'
         if workdir.resolve() != root:
             where += f"; the index describes the base commit there, your edits are in {workdir}"

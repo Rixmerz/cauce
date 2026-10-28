@@ -296,6 +296,21 @@ def _measured_lines(repo_dir: Path, tool: str) -> list[str]:
     return lines
 
 
+def measured_by(name: str) -> str | None:
+    """How a measuring neighbour checks the method: cauce's framing, with what each of its tools
+    measures in its own installed manifest's words when it has them (`cauce.manifests`, the person's
+    plugin cache, never this repository), else the built-in text alone."""
+    from cauce import manifests
+
+    if name not in MEASURED_BY:
+        return None
+    own = manifests.read(name)
+    if own is None or not own.measures:
+        return MEASURED_BY[name]
+    tools = "\n".join(f"- `{tool}`: {what}" for tool, what in sorted(own.measures.items()))
+    return f"{MEASURED_BY[name]}\nWhat each tool measures, as {own.plugin} {own.version} says:\n{tools}"
+
+
 def verifier_lines(repo_dir: Path, text: str, measures: tuple[str, ...] = ()) -> list[str]:
     """What the independent check must hold the change to: the CORRECT lines of the flows the
     request names and the anti-pattern catalogue, judged as the audience would; with a measuring
@@ -316,8 +331,8 @@ def verifier_lines(repo_dir: Path, text: str, measures: tuple[str, ...] = ()) ->
     if catalogue:
         out.append("Anti-pattern catalogue:\n" + clip(catalogue, BRIEF_CHARS // 2))
     for name in measures:
-        if name in MEASURED_BY:
-            out.append(MEASURED_BY[name])
+        if (how := measured_by(name)) is not None:
+            out.append(how)
             by_line = _measured_lines(repo_dir, name)
             if by_line:
                 out.append("Floors and anti-patterns, with the tool that measures each:\n" + "\n".join(by_line))
