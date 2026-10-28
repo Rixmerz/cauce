@@ -227,12 +227,73 @@ def correct_lines(body: str) -> list[str]:
 
 #: How the measuring neighbours check what TRACER asks of an interface, when the check has them.
 MEASURED_BY = {
-    "layout-inspector": "Measure the floors and anti-patterns on the rendered page instead of judging them by eye: "
-                        "`detect_issues` (overflow, clipping, overlap) and `compare_viewports` for every breakpoint "
-                        "the audience uses, `accessibility_spatial` for keyboard order, focus, target sizes and "
-                        "contrast, `element_context` for the cause of what fails. A floor or anti-pattern it shows "
-                        "broken is a `deterministic` finding with the measurement as its proof.",
+    "layout-inspector": "Measure the floors and anti-patterns on the rendered page instead of judging them by eye; "
+                        "the tool for each is named beside it below. A floor or anti-pattern a tool shows broken is "
+                        "a `deterministic` finding with the measurement as its proof; one that no tool measures is "
+                        "judged from the step or the rendered text, never reported as measured.",
 }
+
+#: What each measuring neighbour's tools can say of a floor or anti-pattern line: the words that
+#: point at it (folded, so no accents) and what is measured. A line may match several. Only what the
+#: installed tool measures is listed: layout-inspector 0.4 has no contrast, focus or keyboard check.
+_Rule = tuple[re.Pattern[str], str]
+MEASURE_RULES: dict[str, tuple[_Rule, ...]] = {
+    "layout-inspector": tuple((re.compile(pattern), how) for pattern, how in (
+        (r"target|tap |touch|hit area|click area|\b(24|44) ?px",
+         "`accessibility_spatial` (WCAG target sizes)"),
+        (r"cover|obscur|unreachable|cannot be (clicked|tapped|reached)|blocked by|behind (a|an|the) ",
+         "`accessibility_spatial` (covered controls), `element_context` for what covers it"),
+        (r"overflow|scroll|clip|cut off|truncat|ellipsis|off-?screen|spill",
+         "`detect_issues` (horizontal scroll, clipping, truncated text), `element_context` for the cause"),
+        (r"overlap|z-?index|stack|occlu|on top of|collid",
+         "`detect_issues` (overlap, occluded content, z-index conflicts)"),
+        (r"breakpoint|responsive|mobile|phone|tablet|desktop|viewport|narrow|wide screen|small screen",
+         "`compare_viewports` for every breakpoint the audience uses"),
+        (r"contrast|colou?r|keyboard|tab order|focus|screen reader|aria|alt text",
+         "no tool measures it (layout-inspector has no contrast, focus or keyboard check): judge it from the "
+         "rendered text"),
+    )),
+}
+_BULLET = re.compile(r"^[\s|>*#-]+|[\s|]+$")
+_LINE_CHARS = 140
+
+
+def _requirement_lines(repo_dir: Path) -> list[tuple[str, str]]:
+    """The floors and anti-patterns of the method, a line each: `(file, line)`."""
+    out = []
+    for name in ("floors.md", "anti-patterns.md"):
+        for raw in _read(repo_dir / FOLDER / name).splitlines():
+            line = _BULLET.sub("", raw)
+            if any(c.isalpha() for c in line) and len(line) > 3 and not set(line) <= set("-|: "):
+                out.append((name, line))
+    return out
+
+
+def _measured_lines(repo_dir: Path, tool: str) -> list[str]:
+    """Each floor and anti-pattern of the repository's method beside the tool of `tool` that measures
+    it, one line each; the ones no rule reaches are counted, never dropped silently. Bounded as a brief
+    is: what does not fit is said by count."""
+    rules = MEASURE_RULES.get(tool, ())
+    lines, unmatched, left, room = [], 0, 0, BRIEF_CHARS // 2
+    for name, line in _requirement_lines(repo_dir):
+        seen = fold(line)
+        how = [h for pattern, h in rules if pattern.search(seen)]
+        if not how:
+            unmatched += 1
+            continue
+        entry = f"- {clip(line, _LINE_CHARS, one_line=True)} ({name.removesuffix('.md')}) -> {'; '.join(how)}"
+        if room < len(entry):
+            left += 1
+            continue
+        room -= len(entry)
+        lines.append(entry)
+    if left:
+        lines.append(f"{left} of the floor and anti-pattern lines did not fit here: read "
+                     f"`{(FOLDER / 'floors.md').as_posix()}` and `{(FOLDER / 'anti-patterns.md').as_posix()}`.")
+    if unmatched:
+        lines.append(f"{unmatched} of the floor and anti-pattern lines name nothing {tool} measures: judge "
+                     "them from the step or the rendered text.")
+    return lines
 
 
 def verifier_lines(repo_dir: Path, text: str, measures: tuple[str, ...] = ()) -> list[str]:
@@ -245,7 +306,7 @@ def verifier_lines(repo_dir: Path, text: str, measures: tuple[str, ...] = ()) ->
     for path in flows_for(repo_dir, text):
         correct += [f"- {path.stem}: {line}" for line in correct_lines(_read(path))]
     catalogue = _read(repo_dir / FOLDER / "anti-patterns.md")
-    if not correct and not catalogue:
+    if not correct and not catalogue and not (measures and _requirement_lines(repo_dir)):
         return []
     out = [f"This repository follows the TRACER method: judge the change as the audience in "
            f"`{FOLDER.as_posix()}/audiences.md` would. A CORRECT line below that does not hold, or an anti-pattern "
@@ -254,5 +315,10 @@ def verifier_lines(repo_dir: Path, text: str, measures: tuple[str, ...] = ()) ->
         out.append("CORRECT lines of the flows this request names:\n" + clip("\n".join(correct), BRIEF_CHARS // 2))
     if catalogue:
         out.append("Anti-pattern catalogue:\n" + clip(catalogue, BRIEF_CHARS // 2))
-    out += [MEASURED_BY[name] for name in measures if name in MEASURED_BY]
+    for name in measures:
+        if name in MEASURED_BY:
+            out.append(MEASURED_BY[name])
+            by_line = _measured_lines(repo_dir, name)
+            if by_line:
+                out.append("Floors and anti-patterns, with the tool that measures each:\n" + "\n".join(by_line))
     return out
