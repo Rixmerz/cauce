@@ -30,6 +30,26 @@
   A `preflight` event keeps what it found. Ports stay `cauce.services`' (a port that answers is
   left alone, one that never listens stops the task).
 
+### Fixed
+
+- **A request with no task in it is refused, never climbed.** An empty request given as an argument,
+  or one of only whitespace or tags (`#review`), was planned and its inconclusive answer earned more
+  effort. `cauce run` and `cauce queue add` now refuse it before anything is recorded, exit 2, and say
+  to send the task's full text.
+- **A reading `--kind` no longer sends an order to a worker that cannot carry it out.** A session that
+  passed `--kind review-routine` or `--kind explore` with "Implement X" got a read-only worker, which
+  stopped on a `spec_bug`. A reading kind given to a request that opens with a verb of change is now
+  widened to `implement`, and the plan says so; a tag, a request that says it changes nothing, a
+  question and a workflow step keep the kind they were given.
+- **The orchestration skill lists the kinds `--kind` takes.** Only `cauce guide dispatch` did, and a
+  session that did not read it passed a kind cauce has no such name for. Any other word is still
+  refused with the list (a few common words, `research` among them, are read as the kind they mean).
+- **A worker that answered is no longer recorded as an errored session.** The CLI's JSON can flag
+  `is_error` with subtype `success` over a full answer; cauce read every such session as errored
+  and retried it. A session flagged so whose result holds the one result block, and names no usage
+  limit or dropped network, is now read as its answer; one with no block, a limit, or another
+  subtype stays errored.
+
 ## [0.58.0] - 2026-10-28
 
 ### Added

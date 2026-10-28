@@ -118,6 +118,22 @@ def test_an_errored_session_says_why_not_its_subtype(tmp_path):
     assert parse(proc(crashed), spec(tmp_path)).summary == "the session errored: error_during_execution"
 
 
+def test_a_session_flagged_errored_that_answered_with_its_block_is_read(tmp_path):
+    """The CLI's JSON said `is_error` with subtype "success" over a worker's full answer: four
+    sessions were recorded as errored and retried although each had passed."""
+    answered = json.loads(envelope(block(verdict="pass", summary="done", evidence="pytest: 12 passed")))
+    answered.update({"is_error": True, "subtype": "success"})
+    result = parse(proc(json.dumps(answered)), spec(tmp_path))
+    assert result.passed and result.summary == "done"
+    # A limit named beside a block is still the limit, and no block is still an errored session.
+    limited = dict(answered, result=answered["result"] + "\nClaude AI usage limit reached")
+    assert parse(proc(json.dumps(limited)), spec(tmp_path)).failure is Failure.ENVIRONMENT
+    bare = dict(answered, result="API Error: 500")
+    assert parse(proc(json.dumps(bare)), spec(tmp_path)).failure is Failure.ENVIRONMENT
+    crashed = dict(answered, subtype="error_during_execution")
+    assert parse(proc(json.dumps(crashed)), spec(tmp_path)).failure is Failure.ENVIRONMENT
+
+
 def test_result_block_rejects_garbage():
     assert result_block("```cauce-result\n[1]\n```") is None
     assert result_block("```cauce-result\n{bad\n```") is None

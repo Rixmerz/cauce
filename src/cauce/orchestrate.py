@@ -77,7 +77,7 @@ from cauce import specs as specs_mod
 from cauce import surfaces as surfaces_mod
 from cauce import tracer as tracer_mod
 from cauce.adapters import ABSENT, Adapter, Status, default_adapters
-from cauce.classify import Classification, classify, narrow
+from cauce.classify import Classification, by_rules, classify, narrow, opens_with_change
 from cauce.escalate import (
     MAX_TURNS_CEILING,
     REPLAN,
@@ -538,6 +538,26 @@ def _bring_current(adapter: Adapter, status: Status, repo_dir: Path, options: Op
     return status, [f"{adapter.name}: already {what}ing in the background; {meanwhile}"]
 
 
+#: Kinds whose worker reads and answers: one given a request that orders a change cannot do it.
+_READING_KINDS = frozenset({"chat", "explore", "review-routine", "review-critical"})
+
+
+def _caller_kind(options: Options, text: str) -> Classification:
+    """The kind a caller passed with `--kind`. A reading kind given a request that opens with a verb of
+    change ("Implement the export…") is widened to `implement`, said in the plan: its worker could only
+    stop on the change it was refused. A tag in the text is the person's word and keeps it; so does a
+    request that says it changes nothing, a question, and a workflow step, whose definition chose it."""
+    given = Classification(str(options.kind), "medium", "rule", "chosen by the caller")
+    if (given.kind not in _READING_KINDS or options.step_role or options.ledger is not None or options.touches
+            or not opens_with_change(text) or text.rstrip().endswith("?")
+            or declares_read_only(given.kind, text)
+            or ((tagged := by_rules(text)) is not None and tagged.reason.startswith("tagged"))):
+        return given
+    return Classification("implement", "medium", "rule",
+                          f"--kind {given.kind} widened to implement: the request opens with a change, "
+                          "and a reading worker cannot make one")
+
+
 def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Mapping[str, caps.Capability],
          *, classifier: Callable[[str], Classification] | None = None,
          adapters: Sequence[Adapter] | None = None, say: Callable[[str], None] | None = None) -> Plan:
@@ -545,7 +565,7 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     team, members, team_notes = _team(options, repo.key(repo_dir), catalog)
     covered = roles.kinds_of(members)
     if options.kind:
-        classification = narrow(Classification(options.kind, "medium", "rule", "chosen by the caller"), covered)
+        classification = narrow(_caller_kind(options, text), covered)
     elif classifier is not None:
         classification = narrow(classifier(text), covered)
     else:
