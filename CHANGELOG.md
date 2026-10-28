@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-10-28
+
 ### Added
 
 - **`cauce specs` reports the specs' structure:** where livespec runs, it asks livespec's
