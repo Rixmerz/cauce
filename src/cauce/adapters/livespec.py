@@ -34,6 +34,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -112,6 +113,28 @@ _IDENT = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\b")
 _TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|spec)/|(^|/)test_[^/]*$|_test\.[a-z]+$|\.(test|spec)\.[a-z]+$")
 
 Runner = Callable[..., subprocess.CompletedProcess]
+
+
+def _run_in_group(argv: Sequence[str], *, timeout: float, env: Mapping[str, str], capture_output: bool = True,
+                  text: bool = True, check: bool = False) -> subprocess.CompletedProcess[str]:
+    """`subprocess.run` for an index, with the child leading its own process group and the timeout
+    ending the whole group. `uvx` starts the `livespec index` that does the work as its child:
+    `subprocess.run` kills only `uvx` at the timeout, and that child goes on indexing with nobody
+    holding the lock, so `Livespec.indexing` says no and a second index starts beside it."""
+    pipe = subprocess.PIPE if capture_output else None
+    with subprocess.Popen(list(argv), stdout=pipe, stderr=pipe, text=text, env=dict(env),
+                          start_new_session=True) as proc:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except BaseException:  # the timeout, and an interrupt too, as `subprocess.run` treats both
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+            raise
+    done = subprocess.CompletedProcess(list(argv), proc.returncode, out, err)
+    if check:
+        done.check_returncode()
+    return done
 
 #: What `ensure_fresh` found of one repository's index when its task's worker was about to start.
 FRESH, BUILT, LATE, FAILED = "fresh", "built", "late", "failed"
@@ -199,7 +222,7 @@ class Livespec:
     def __init__(
         self,
         env: Mapping[str, str] | None = None,
-        runner: Runner = subprocess.run,
+        runner: Runner = _run_in_group,
         popen: Callable[..., Any] = subprocess.Popen,
     ) -> None:
         self.env = dict(os.environ) if env is None else dict(env)

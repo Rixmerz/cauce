@@ -686,7 +686,9 @@ yields the default kind, not a guess.
   its own and never the folder (`Livespec.roots`; `_index_argv` refuses a folder that is no checkout).
   Past the wait the refresh is left running, never killed, and the task starts without the index (or on
   the stale one a repository already has, as it is) and says which; repositories sharing a `group_db`
-  are indexed one after another under its one lock; a refresh that failed at this commit is not tried
+  are indexed one after another under its one lock; an index run cauce waits on leads its own process
+  group (`adapters.livespec._run_in_group`), so its timeout ends `uvx` and the `livespec index` under
+  it together; a refresh that failed at this commit is not tried
   again until the checkout moves. With an
   index the brief opens with `Livespec.orient` (spec, code, symbol, file; writers also `search_similar`
   and `git_diff_impact`) before the code map. Where it has one and the repository keeps `openspec/`, a

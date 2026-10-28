@@ -62,6 +62,11 @@
 
 ### Fixed
 
+- **An index cut at its timeout no longer goes on indexing beside the next one:** `uvx` starts the
+  `livespec index` that does the work as its child, and the timeout killed only `uvx`; the child
+  went on with nobody holding the index lock, so the next refresh started a second index on the
+  same file. The run now leads its own process group and the timeout ends all of it.
+
 - **A change of tests, lockfiles, config or generated files no longer "owes a spec":** in a spec-first
   repository, any file outside `docs/` that was not a document counted as code that owed its spec,
   so a build that only touched `package-lock.json`, a CI file, a test or `dist/` was held back for a

@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
+import shlex
+import signal
 import sqlite3
 import subprocess
+import time
 from pathlib import Path
 
 from cauce.adapters import ABSENT, PRESENT, UNREADABLE, Status
@@ -680,3 +684,40 @@ def test_a_broken_manifest_leaves_the_built_in_pin(tmp_path):
     folder.mkdir(parents=True)
     (folder / "plugin.json").write_text("{not json")
     assert adapter(tmp_path).pin() == PINNED
+
+
+def test_an_index_that_finishes_in_time_gives_its_code_and_both_outputs():
+    done = livespec_mod._run_in_group(["/bin/sh", "-c", "echo out; echo err >&2; exit 3"], timeout=10,
+                                      env={"PATH": "/usr/bin:/bin"})
+    assert (done.returncode, done.stdout, done.stderr) == (3, "out\n", "err\n")
+
+
+def _running(pid: int) -> bool:
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True,
+                           check=False).stdout.strip()
+    return bool(state) and not state.startswith("Z")  # a zombie is dead, only not reaped yet
+
+
+def test_an_index_that_times_out_ends_the_whole_group_not_only_uvx(tmp_path, git_repo, monkeypatch):
+    # `uvx` starts the `livespec index` that does the work as its child. A timeout that killed
+    # only `uvx` left that child indexing with nobody holding the lock: `indexing()` then said
+    # False and the next refresh started a second index on the same file.
+    pidfile = tmp_path / "child.pid"
+    exe = tmp_path / "bin" / "uvx"
+    exe.parent.mkdir(exist_ok=True)
+    exe.write_text(f"#!/bin/sh\nPATH=/usr/bin:/bin\nsleep 60 &\necho $! > {shlex.quote(str(pidfile))}\nwait\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(livespec_mod, "INDEX_TIMEOUT_S", 1)
+    a = adapter(tmp_path, str(exe.parent))
+    try:
+        assert "did not run" in a.refresh(git_repo)
+        child = int(pidfile.read_text())
+        deadline = time.monotonic() + 5
+        while _running(child) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _running(child), "the index child outlived the timeout that cut it"
+        assert not a.indexing(git_repo)
+    finally:
+        if pidfile.exists():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pidfile.read_text()), signal.SIGKILL)
