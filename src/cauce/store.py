@@ -1030,6 +1030,13 @@ class Store:
         rows = self._conn.execute("SELECT * FROM events WHERE task_id = ? AND kind = ? ORDER BY id", (task_id, kind))
         return [{**dict(r), "data": json.loads(r["data"])} for r in rows]
 
+    def check_tails(self, task_id: int) -> dict[int, str]:
+        """What cauce's check said on each attempt of a task that it failed (`launch.check_tail`),
+        by the attempt's `seq`: kept on the `attempt_finished` event, so attempts recorded
+        before it was kept have none."""
+        return {int(e["data"]["seq"]): str(e["data"]["check_tail"]) for e in self.events_of(task_id, "attempt_finished")
+                if e["data"].get("seq") is not None and e["data"].get("check_tail")}
+
     def events_of_kinds(self, kinds: Sequence[str], *, since: str | None = None) -> list[dict]:
         """Every task's events of these kinds, oldest first, from `since` (an ISO time) on."""
         clause = " AND ts >= ?" if since else ""

@@ -218,6 +218,11 @@ yields the default kind, not a guess.
   old one's approach (it starts from the base, the work set aside), and a
   retry, a replan and a resume a person starts are fresh. The independent
   check never runs in a worker's session.
+- A failed check's own output is kept per attempt (`launch.check_tail`, on the `attempt_finished`
+  event, read by `Store.check_tails`): the failing names, the last lines and the base comparison,
+  ANSI stripped, secrets masked, bounded by `CHECK_TAIL_CHARS`. `cauce show`, the task page, the
+  ending of a task that stopped short of a pass (this run's last attempt only) and the next
+  brief (`failed_output`) read it; an attempt without one falls back to its evidence.
 - Cost is measured and shown, never a brake: every attempt keeps what it cost
   (its own and its independent check's apart, and how much of its input the
   cache served), and the report, the board, `cauce spend` and `cauce stats`

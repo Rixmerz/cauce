@@ -817,7 +817,8 @@ def _record_raced(store: Store, task_id: int, raced: Raced, turns: int, capabili
                     summary=o.summary[:500], raced=True, stopped=stopped, wall_s=round(o.duration_s, 2),
                     input_tokens=o.input_tokens, output_tokens=o.output_tokens,
                     cache_read_tokens=o.cache_read_tokens, cache_write_tokens=o.cache_write_tokens,
-                    worker_cost_usd=round(o.cost_usd, 4), served_model=o.served_model)
+                    worker_cost_usd=round(o.cost_usd, 4), served_model=o.served_model,
+                    **({"check_tail": o.check_tail} if o.check_tail else {}))
     if stopped:
         store.set_move(task_id, seq, RACED_OUT, "the other try passed its check first")
     elif first:
@@ -832,7 +833,8 @@ def _raced_attempt(raced: Raced, turns: int) -> Attempt:
     o = raced.other
     return Attempt(raced.other_cell, turns, False, o.failure or Failure.INCONCLUSIVE, o.summary, o.denied,
                    allow=o.allow, changed=o.changed_paths, evidence=o.evidence[-1500:], transient=o.transient,
-                   findings=o.findings, failing=o.failing, base_unknown=o.base_unknown)
+                   findings=o.findings, failing=o.failing, base_unknown=o.base_unknown,
+                   check_tail=o.check_tail)
 
 
 def _launch(launcher: Launcher, spec: launch.LaunchSpec, runner: launch.Stoppable) -> launch.WorkerResult:
@@ -1525,7 +1527,8 @@ def run(
                     changed_paths=tuple(p for p in result.changed_paths if p not in strayed)
                     if workspace is not None else result.changed_paths,
                     summary=f"changed outside its surfaces ({', '.join(strayed[:5])}), {kept}: {result.summary}",
-                    evidence=f"Surfaces: {', '.join(options.surfaces)}. Changed outside them: {', '.join(strayed)}")
+                    evidence=f"Surfaces: {', '.join(options.surfaces)}. Changed outside them: {', '.join(strayed)}",
+                    check_tail="")
                 store.add_event(task["id"], "outside_surfaces", seq=nth, paths=strayed[:50],
                                 surfaces=list(options.surfaces), undone=workspace is not None)
             if result.passed and spec_first and (owed := specs_mod.owed(the_plan.kind, sorted(
@@ -1612,6 +1615,9 @@ def run(
                             # Whether it used the code index it was handed, and which calls (`cauce stats`).
                             **({"livespec_calls": used} if (used := _livespec_calls(
                                 store, task["id"], nth, selection.names)) is not None else {}),
+                            # What cauce's check said where it failed: shown by `cauce show`, the board and
+                            # the ending, and handed to the next attempt's brief.
+                            **({"check_tail": result.check_tail} if result.check_tail else {}),
                             wall_s=round(worker_s, 2), duration_s=round(result.duration_s, 2),
                             check_s=round(check_s, 2), verifier_s=round(verifier_s, 2),
                             input_tokens=result.input_tokens, output_tokens=result.output_tokens,
@@ -1626,6 +1632,7 @@ def run(
                             **({"refused_but_written": list(result.overcome)} if result.overcome else {}))
             attempt = Attempt(cell, turns, result.passed, result.failure, result.summary, result.denied,
                               allow=result.allow, changed=result.changed_paths, evidence=result.evidence[-1500:],
+                              check_tail=result.check_tail,
                               transient=result.transient, findings=result.findings, network=result.network,
                               load=result.load, failing=result.failing, base_unknown=result.base_unknown,
                               shape=result.shape, limited=result.limited, retry_after_s=result.retry_after_s,
@@ -3128,7 +3135,13 @@ def continuation_note(last: Attempt) -> str:
 def failed_output(last: Attempt) -> str:
     """The output that failed an attempt, for the next one: a fresh brief and a session
     that continues alike, since a red check is evidence for whatever comes next."""
-    if last.passed or not last.evidence.strip():
+    if last.passed:
+        return ""
+    if last.check_tail.strip():
+        return ("What cauce's own check said when it failed the last attempt (the failing tests, then the last "
+                "lines of its output): start from this, do not re-run the whole check to find it out:\n"
+                + last.check_tail.strip())
+    if not last.evidence.strip():
         return ""
     return "The output that failed the last attempt, last lines:\n" + last.evidence.strip()[-1500:]
 
@@ -3551,9 +3564,10 @@ def _verified(result: launch.WorkerResult, command: str, workdir: Path,
                                    summary=f"`{command}` timed out after the claimed pass")
     if code == 0:
         return result
+    tail = _tail_of(full, workdir, baseline)
     if (why := cannot_run(code, output)) is not None:
         return dataclasses.replace(
-            result, passed=False, failure=Failure.ENVIRONMENT, evidence=output,
+            result, passed=False, failure=Failure.ENVIRONMENT, evidence=output, check_tail=tail,
             summary=f"claimed a pass, but `{command}` could not run here ({why}): {result.summary}",
         )
     if timed := launch.check_timed_out(output):
@@ -3561,6 +3575,7 @@ def _verified(result: launch.WorkerResult, command: str, workdir: Path,
         # a machine busier than its CPUs, not the work. The level halves on it (`starved`).
         return dataclasses.replace(
             result, passed=False, failure=Failure.ENVIRONMENT, evidence=output, load=timed, starved="load",
+            check_tail=tail,
             summary=f"claimed a pass, but `{command}` timed its tests out, as a loaded machine does ({timed}): "
                     f"{result.summary}",
         )
@@ -3569,6 +3584,7 @@ def _verified(result: launch.WorkerResult, command: str, workdir: Path,
         # nothing about the work, and the same check, waited for, may well pass.
         return dataclasses.replace(
             result, passed=False, failure=Failure.ENVIRONMENT, evidence=output, network=dropped,
+            check_tail=tail,
             summary=f"claimed a pass, but `{command}` lost the network ({dropped}): {result.summary}",
         )
     before, compared = _against_base(baseline, command, full, workdir, claim=f"{result.summary}\n{result.evidence}")
@@ -3581,14 +3597,22 @@ def _verified(result: launch.WorkerResult, command: str, workdir: Path,
         # `code_bug` and no climb (`escalate._unknown_base`).
         return dataclasses.replace(
             result, passed=False, failure=Failure.ENVIRONMENT, evidence=shown, failing=failing,
-            base_unknown=baseline.unknown,
+            base_unknown=baseline.unknown, check_tail=_tail_of(full, workdir, baseline, compared),
             summary=f"claimed a pass, but `{command}` exited {code} and the base could not say whether its failures "
                     f"were there before: {result.summary}",
         )
     return dataclasses.replace(
         result, passed=False, failure=Failure.CODE_BUG, evidence=shown, failing=failing,
+        check_tail=_tail_of(full, workdir, baseline, compared),
         summary=f"claimed a pass, but `{command}` exited {code}: {result.summary}",
     )
+
+
+def _tail_of(full: str, workdir: Path, baseline: Baseline | None, compared: str = "") -> str:
+    """What a failed check kept of its output (`launch.check_tail`), the paths of the work's
+    directory and of the base's copy taken off."""
+    roots = (workdir, baseline.repo_dir) if baseline is not None else (workdir,)
+    return launch.check_tail(full, roots, compared)
 
 
 #: Attempts that stopped before the worker could check its own work, through no
@@ -3635,7 +3659,7 @@ def _settled(result: launch.WorkerResult, command: str, workdir: Path,
     if code != 0:
         why = "timed out" if code is None else f"exited {code}"
         evidence = f"`{command}` {why}:\n{output}".strip() + (f"\n\n{compared}" if compared else "")
-        return dataclasses.replace(result, evidence=evidence,
+        return dataclasses.replace(result, evidence=evidence, check_tail=_tail_of(full, workdir, baseline, compared),
                                    summary=f"{result.summary} ({cause}; cauce ran `{command}`, which {why})")
     return dataclasses.replace(
         result, passed=True, failure=None, evidence=output or f"`{command}` exited 0",
