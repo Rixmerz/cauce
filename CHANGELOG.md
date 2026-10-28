@@ -36,6 +36,12 @@
 
 ### Changed
 
+- **A resume that grants is the person's to run.** `cauce resume N --allow …` started by the
+  orchestrating agent was refused by Claude Code's own permission check as the agent changing its
+  own permissions. `commands/orchestration.md` and `cauce guide endings` now say the person runs a
+  resume with `--allow`, `--allow-approval` or `--keep` (in a terminal, or after `!` in the prompt),
+  and the agent gives them the line.
+
 - **A worker that repeats its result block word for word is read.** Attempts failed with "did not
   answer with exactly one result block" when the worker had written the same `cauce-result` block
   twice. Blocks whose JSON is identical are now one verdict; blocks that differ in anything, or one

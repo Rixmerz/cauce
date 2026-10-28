@@ -512,7 +512,9 @@ yields the default kind, not a guess.
   person's for the run they approved: a resume nobody approved (`--unattended`)
   never uses one an earlier run stored, nor starts on a cell that needs one (a
   `#fable` task's tag is its approval). A resume a session starts on its own
-  carries `--unattended` (`commands/orchestration.md`).
+  carries `--unattended` (`commands/orchestration.md`); one that grants
+  (`--allow`, `--allow-approval`, `--keep`) is the person's to type, and the
+  guidance gives them the line instead of running it.
 - A worker gets a model alias unless a person pinned it (`cauce config model`).
   cauce never hard-codes a model id; the model that served an attempt is read
   from the CLI's `modelUsage`, never assumed from the alias.

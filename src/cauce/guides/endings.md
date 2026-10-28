@@ -15,8 +15,8 @@ branch is not their checkout: nothing is there until it is merged.
   is kept. `cauce split N` shows the pieces; `cauce split N --queue` starts
   them on that work, and what waited for N waits for the last piece. Resume it
   instead only when it is truly one piece (it gets more turns).
-- `needs_approval` — the next cell needs a person (Fable). Ask; rerun with
-  `--allow-approval` only on a yes.
+- `needs_approval` — the next cell needs a person (Fable). Ask; on a yes, the
+  person reruns it with `--allow-approval`.
 - `replan` — the task as written cannot be done, or does not fit. Rewrite or
   split it from the report's reason, then dispatch again. Do not rerun it as is.
 - `blocked` — a refused command or the environment stopped it (an older
@@ -28,7 +28,8 @@ branch is not their checkout: nothing is there until it is merged.
   The report's `stopped by …` line says which, and the line under it is the
   command that continues it. Tell the user both, in those words. Its work
   so far is on its branch, marked unverified. When the user grants what was
-  refused, run that command (`cauce resume <id> --allow "<the refused rule>"`).
+  refused, give them that command to run (`cauce resume <id> --allow "<the refused rule>"`):
+  the person runs it, never you.
   It is not a new task, and you never redo it by hand. When the person
   wants the rule for every task here, add `--keep`: one approval per
   program, not one per task.
@@ -53,8 +54,11 @@ branch is not their checkout: nothing is there until it is merged.
 A resume you start on your own, with nothing the person just granted,
 carries `--unattended`: it refuses what only they can clear (a refused
 rule, a cell that needs their approval) and stops after two runs' worth of
-attempts. Leave it off only for a resume that carries what they granted in
-this conversation (`--allow`, `--allow-approval`, `--keep`).
+attempts. A resume that carries what they granted in this conversation
+(`--allow`, `--allow-approval`, `--keep`) is theirs to run, not yours: give
+them the line, to type in a terminal or after `!` in this prompt. Claude
+Code's permission check refuses it from an agent as a change to its own
+permissions.
 
 A task that stops pauses its lane, and the queued work behind it waits.
 When its ending says the lane is paused, deal with the stop first, then
