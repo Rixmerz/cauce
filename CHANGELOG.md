@@ -8,6 +8,11 @@
   or one of only whitespace or tags (`#review`), was planned and its inconclusive answer earned more
   effort. `cauce run` and `cauce queue add` now refuse it before anything is recorded, exit 2, and say
   to send the task's full text.
+- **A reading `--kind` no longer sends an order to a worker that cannot carry it out.** A session that
+  passed `--kind review-routine` or `--kind explore` with "Implement X" got a read-only worker, which
+  stopped on a `spec_bug`. A reading kind given to a request that opens with a verb of change is now
+  widened to `implement`, and the plan says so; a tag, a request that says it changes nothing, a
+  question and a workflow step keep the kind they were given.
 
 ## [0.58.0] - 2026-10-28
 

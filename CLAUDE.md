@@ -239,8 +239,12 @@ yields the default kind, not a guess.
   exit says nothing about the work, and it is no dead end. npm's EBADENGINE
   warning is not such a line. Dead ends reach a brief only on a strict match.
 - A request that opens with a verb of change is never read as a read-only
-  kind unless a tag or `--kind` says so, and is read as `test` only when its
+  kind unless a tag says so, and is read as `test` only when its
   first change is about tests: a fix that asks for its own tests is the fix.
+  A reading kind a caller passes with `--kind` (`chat`, `explore`, a review) on
+  such a request is widened to `implement` and the plan says so
+  (`orchestrate._caller_kind`), unless the text says it changes nothing, is a
+  question, or the task is a workflow step, whose definition chose its kind.
 - The plan says a task needs servers when it tells the worker to start them,
   or mentions one and its check talks to one (or it has no check), and names
   the words that set it off: a mention is no need. A task that mentions a

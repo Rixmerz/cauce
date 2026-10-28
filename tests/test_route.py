@@ -172,6 +172,16 @@ def test_the_corpus_of_real_requests_goes_where_each_belongs():
     assert wrong == []
 
 
+def test_a_reading_kind_a_session_gave_an_order_in_the_corpus_is_widened():
+    from cauce.orchestrate import Options, _caller_kind
+
+    corpus = json.loads((Path(__file__).parent / "corpus" / "requests.json").read_text())["requests"]
+    given = [item for item in corpus if "given_kind" in item]
+    assert given
+    assert [item["text"] for item in given
+            if _caller_kind(Options(kind=item["given_kind"]), item["text"]).kind != "implement"] == []
+
+
 def test_a_build_that_lists_many_items_is_asked_split_before_a_worker_starts():
     big = ("Implement the student side of the platform:\n- the opinion form and grade before each quiz opens\n"
            "- a quiz per module and a final exam module\n- submodules the server locks, by 403 or a locked state\n"

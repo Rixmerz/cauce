@@ -2388,3 +2388,32 @@ def test_a_task_about_a_readme_in_a_repository_with_several_is_warned(git_repo, 
     (git_repo / "bench" / "README.md").unlink()
     again = run("update the README", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("docs"))
     assert not [w for w in orchestrate.warnings(again.plan.reasons) if "README" in w]
+
+
+@pytest.mark.parametrize("kind", ["explore", "review-routine", "review-critical", "chat"])
+@pytest.mark.parametrize("text", ["Implement the export of the monthly report as CSV",
+                                  "Add a retry to the upload client and its tests",
+                                  "Implementa la exportacion del reporte mensual"])
+def test_a_reading_kind_given_to_a_request_that_orders_a_change_is_widened(kind, text):
+    """A session's `--kind review` on "Implement X" sent a reading worker work it could only refuse."""
+    from cauce.orchestrate import _caller_kind
+
+    found = _caller_kind(Options(kind=kind), text)
+    assert found.kind == "implement"
+    assert f"--kind {kind} widened" in found.reason
+
+
+@pytest.mark.parametrize(("kind", "text", "options"), [
+    ("review-routine", "Review the export module for bugs", {}),
+    ("explore", "Implement or not? read the export module first?", {}),
+    ("explore", "Implement nothing (read-only): map how the export module works", {}),
+    ("review-routine", "#review-routine Implement the export as CSV", {}),
+    ("review-routine", "Implement the export as CSV", {"step_role": "reviewer"}),
+    ("review-routine", "Implement the export as CSV", {"touches": ("src/export.py",)}),
+    ("implement", "Implement the export as CSV", {}),
+    ("plan", "Implement the export as CSV", {}),
+])
+def test_a_given_kind_stays_when_the_request_or_its_source_chose_it(kind, text, options):
+    from cauce.orchestrate import _caller_kind
+
+    assert _caller_kind(Options(kind=kind, **options), text).kind == kind
