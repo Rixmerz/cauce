@@ -13,6 +13,9 @@
   stopped on a `spec_bug`. A reading kind given to a request that opens with a verb of change is now
   widened to `implement`, and the plan says so; a tag, a request that says it changes nothing, a
   question and a workflow step keep the kind they were given.
+- **The orchestration skill lists the kinds `--kind` takes.** Only `cauce guide dispatch` did, and a
+  session that did not read it passed a kind cauce has no such name for. Any other word is still
+  refused with the list (a few common words, `research` among them, are read as the kind they mean).
 
 ## [0.58.0] - 2026-10-28
 

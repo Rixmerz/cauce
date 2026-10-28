@@ -65,7 +65,11 @@ that run in rounds), `notes` (and compacting), `memory`, `relay`.
    `mcp__cauce__*` tools are in your list, use `queue`, `tasks`, `resume`,
    `recall` and `note` instead. If `cauce` is not found, call
    `${CLAUDE_PLUGIN_ROOT}/bin/cauce`; never do the work by hand because the
-   command did not resolve. More in `cauce guide dispatch`.
+   command did not resolve. `--kind` takes only cauce's kinds: `explore`,
+   `review-routine`, `review-critical`, `plan`, `docs`, `test`, `ui`,
+   `refactor`, `implement`, `feature`, `debug-repro`, `debug-unclear`; any
+   other word is refused with this list, and leaving it out lets cauce
+   classify. More in `cauce guide dispatch`.
 
 4. **Decide on each ending, at once.** You are the orchestrator: every stop is
    yours to carry. Ask the person only for what only they can grant (a refused

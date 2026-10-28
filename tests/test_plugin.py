@@ -5,7 +5,9 @@ import json
 import os
 from pathlib import Path
 
-from cauce import __version__, hooks
+import pytest
+
+from cauce import __version__, cli, hooks
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -78,6 +80,26 @@ def test_the_skill_is_short_and_every_guide_it_names_exists(capsys):
     assert cli.main(["guide", "endings"]) == 0
     assert "`replan` with `split`" in capsys.readouterr().out
     assert cli.main(["guide", "nope"]) == 2
+
+
+def test_the_guidance_lists_every_kind_a_session_may_pass():
+    """A session that found no list invented `--kind research`."""
+    from cauce import matrix
+
+    skill = (ROOT / "commands" / "orchestration.md").read_text(encoding="utf-8")
+    guide = (ROOT / "src" / "cauce" / "guides" / "dispatch.md").read_text(encoding="utf-8")
+    given = [k for k in matrix.KINDS if k not in ("chat", "classify", "frontier")]
+    for text in (skill, guide):
+        assert [k for k in given if f"`{k}`" not in text] == []
+
+
+def test_an_unknown_kind_is_refused_with_the_kinds(capsys):
+    from cauce import matrix
+
+    with pytest.raises(SystemExit):
+        cli.main(["run", "--kind", "spelunking", "--dry-run", "x"])
+    err = capsys.readouterr().err
+    assert "is not a kind" in err and all(k in err for k in matrix.KINDS)
 
 
 def test_the_dispatch_instructions_send_the_request_through_a_quoted_heredoc():
