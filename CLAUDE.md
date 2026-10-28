@@ -17,6 +17,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/capabilities.py` | which MCP servers a worker gets, from the user-level registry |
 | `src/cauce/mcp_guard.py` | a JSON-RPC guard between a worker and an MCP server: the calls a policy refuses never reach the server; stdlib, imports nothing of cauce |
 | `src/cauce/plugins.py` | neighbours the person installed as Claude Code plugins (layout-inspector, rastro), read from the plugin cache or PATH and handed over as capabilities with their skill; `versions` is the one reader of the cache (folders only, never a `temp_*` clone `/plugin` left half done) |
+| `src/cauce/manifests.py` | what a neighbour says of itself: the `cauce` block of its newest installed plugin manifest (or `cauce.json` beside it), read at plan time and cached per file state; words only (hint, hints per kind, tool descriptions, what tools measure), ignored whole when malformed (`docs/neighbours.md`) |
 | `src/cauce/roles.py` | what a worker is: role files (bundled `roles/`, the person's in their cauce home), `extends` and `match`, skills found by name and put into the worker's system prompt |
 | `src/cauce/teams.py` | the person's teams of roles and which one each project uses (kept in their cauce home); a project's team bounds the kinds it is classified into; `team_cli.py` is `cauce roles …` and `cauce team …` |
 | `src/cauce/survey.py` | what this machine says about how the person works (`cauce survey`): every Claude Code session it kept (requests, shapes, friction, errors and the call that passed after them) and each repository's commit history; read only, no model |
@@ -1323,6 +1324,14 @@ yields the default kind, not a guess.
   profile, no saved routine, writes and uploads to loopback hosts only, every
   call in its own session. A policy that matters is enforced there, never only
   asked of the worker in its prompt.
+- A neighbour's own manifest (`cauce.manifests`) brings words, never policy: its hint, livespec's
+  hints per kind, its tools' descriptions and what they measure override the built-in text
+  (`plugins.KNOWN`, `livespec._HINTS`, `tracer.MEASURED_BY`, which stay as the fallback); every
+  `mcp_guard` policy, rastro's `--routines=off`, `Neighbour.measures`, `when`, `touches`,
+  `extra_args` and the server command are cauce's code alone. It is read from the person's plugin
+  cache only (newest version through `plugins.versions`), never from a repository; a block of
+  another format or shape is ignored whole, and a hint naming a tool its own `tools` lacks is
+  dropped.
 - A role is not a subagent: it adds identity and instructions, never a dial.
   It names no model, no effort and no tool to add; it may take tools away,
   carry or point at skills, and name capabilities, which come only from the

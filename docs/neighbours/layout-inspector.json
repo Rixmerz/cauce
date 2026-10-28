@@ -1,0 +1,20 @@
+{
+  "cauce": {
+    "format": 1,
+    "tools": {
+      "check_environment": "why a browser will not start",
+      "inspect_layout": "the raw computed layout tree",
+      "detect_issues": "overlaps, horizontal scroll, clipping, truncated text, occlusion and z-index traps",
+      "element_context": "the stacking and clipping chain of one element",
+      "compare_viewports": "findings compared across breakpoints",
+      "accessibility_spatial": "WCAG target sizes and covered controls"
+    },
+    "hint": "measure the rendered page instead of judging it by eye: detect_issues (or compare_viewports for every breakpoint), element_context for the cause, then measure again after the fix; check_environment says why a browser will not start. It measures a page that renders: the URL of a server this task started, else the repository's own build served or opened from a file:// path, or a small HTML fixture of the component",
+    "measures": {
+      "accessibility_spatial": "WCAG target sizes and covered controls",
+      "compare_viewports": "every breakpoint the audience uses",
+      "detect_issues": "horizontal scroll, clipping, truncated text, overlap, occluded content, z-index conflicts",
+      "element_context": "what covers or clips one element: the cause"
+    }
+  }
+}

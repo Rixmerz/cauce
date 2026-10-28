@@ -1059,6 +1059,15 @@ uploads only to the app on this machine (localhost), and every call in a
 session of its own. A `capabilities.json` entry of the same name wins over an
 installed plugin.
 
+**Neighbours say how to use them.** livespec, layout-inspector or rastro may
+ship a `cauce` block in their plugin manifest: the hint a worker gets, a hint
+per kind of work, what each tool is for and what it measures. cauce reads it
+from the newest installed version when it plans, so updating the plugin
+updates what workers are told, without a cauce release. It brings words only:
+guards, which servers a worker gets and who the verifier gets stay cauce's.
+A block cauce cannot read is ignored and the built-in text is used. Schema and
+examples: [docs/neighbours.md](docs/neighbours.md).
+
 A server whose tools act on the world (send mail, post, reply) names them, and
 runs behind the same guard: refused outside a loop you set to act (below).
 

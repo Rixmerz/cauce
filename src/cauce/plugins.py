@@ -91,6 +91,20 @@ KNOWN: tuple[Neighbour, ...] = (
 MEASURES: Mapping[str, str] = {n.server: n.hint for n in KNOWN if n.measures}
 
 
+def hint_of(neighbour: Neighbour, env: Mapping[str, str] | None = None) -> str:
+    """The neighbour's line for a worker: its installed manifest's, else cauce's built-in one
+    (`cauce.manifests`). Only the words: when it comes and how it runs stay `KNOWN`'s."""
+    from cauce import manifests
+
+    found = manifests.read(neighbour.plugin, env)
+    return (found.hint if found else "") or neighbour.hint
+
+
+def measure_hints(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """`MEASURES` with each neighbour's words read from its manifest: who measures stays `KNOWN`'s."""
+    return {n.server: hint_of(n, env) for n in KNOWN if n.measures}
+
+
 def claude_dir(env: Mapping[str, str]) -> Path:
     configured = env.get("CLAUDE_CONFIG_DIR")
     return Path(configured) if configured else Path(env.get("HOME", "~")).expanduser() / ".claude"
@@ -210,7 +224,7 @@ def capabilities(env: Mapping[str, str] | None = None) -> dict[str, Capability]:
     out = {}
     for name, found in installed(env).items():
         n = found.neighbour
-        hint = n.hint
+        hint = hint_of(n, env)
         if found.skill_dir is not None:
             hint += f". Before the first call, read {found.skill_dir / 'SKILL.md'}"
         out[name] = Capability(name, found.server, when=n.when, after_failure=n.after_failure, hint=hint,
