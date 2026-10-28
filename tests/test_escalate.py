@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from cauce.escalate import Attempt, Failure, Move, decide, repeated_answer
+from cauce.escalate import Attempt, Failure, Move, Skip, decide, repeated_answer
 from cauce.matrix import LADDERS, Cell
 
 IMPLEMENT = LADDERS["implement"]  # sonnet/medium, sonnet/high, sonnet/xhigh, opus/high
@@ -380,3 +380,33 @@ def test_a_check_that_could_not_be_compared_with_its_base_blocks_without_a_climb
     assert "the base run timed out" in d.reason
     assert "resume" in d.reason
     assert "no stronger cell" in " ".join(d.because)
+
+
+# --- a standard's skip of a rung ------------------------------------------------------------------
+
+def test_a_standard_skip_sends_the_climb_past_its_rung_and_names_the_change():
+    skips = {("sonnet/high", "sonnet/xhigh"): Skip(Cell("opus", "high"), 7, "0 of 4 passed")}
+    d = decide(IMPLEMENT, [fail("sonnet/high", Failure.CODE_BUG)], skips=skips)
+    # Past sonnet's last effort the rung after is another model: a new model, fresh.
+    assert d.move is Move.NEXT_MODEL and d.cell == Cell("opus", "high") and d.standard == 7
+    assert any("sonnet/xhigh: skipped by standard change #7" in s for s in d.skipped)
+    assert any("standard change #7" in b for b in d.because) and d.because[-1].startswith("next: opus/high")
+    # A climb the skip does not name is left as it was.
+    other = decide(IMPLEMENT, [fail("sonnet/medium", Failure.CODE_BUG)], skips=skips)
+    assert other.cell == Cell("sonnet", "high") and other.standard is None
+
+
+def test_a_skip_that_stays_on_the_model_is_more_effort():
+    skips = {("sonnet/medium", "sonnet/high"): Skip(Cell("sonnet", "xhigh"), 2)}
+    d = decide(IMPLEMENT, [fail("sonnet/medium", Failure.CODE_BUG)], skips=skips)
+    assert d.move is Move.MORE_EFFORT and d.cell == Cell("sonnet", "xhigh") and d.standard == 2
+
+
+def test_a_skip_never_lands_on_a_rung_that_needs_an_approval_nor_touches_a_retry():
+    fable = {("opus/xhigh", "opus/max"): Skip(Cell("fable", "high"), 3)}
+    d = decide(PLAN, [fail("opus/xhigh", Failure.CODE_BUG)], skips=fable)
+    assert d.cell == Cell("opus", "max") and d.standard is None
+    skips = {("sonnet/medium", "sonnet/medium"): Skip(Cell("sonnet", "xhigh"), 4)}
+    assert decide(IMPLEMENT, [broke("sonnet/medium")], skips=skips).move is Move.RETRY
+    turns = decide(IMPLEMENT, [fail("sonnet/medium", Failure.TURNS_EXHAUSTED)], skips=skips)
+    assert turns.move is Move.MORE_TURNS and turns.standard is None

@@ -507,6 +507,19 @@ yields the default kind, not a guess.
   the fact) and calibrates every repository with sized endings at once; a task
   that ends with no size is sized when its ending is settled. Changes, verdicts and the daily
   snapshots are append-only: the database refuses an update or a delete.
+- A calibration may also skip a rung of a kind's ladder (field `standards.SKIP`, band
+  `ANY_SIZE`, value `from>to`): when the climbs from one rung to the next of one move
+  (`SKIP_MOVES`: more effort, next model) passed their next try under `SKIP_PASS_BELOW` over at
+  least `SKIP_MIN_MOVES`, later climbs from it go to the rung after (`escalate.decide`'s
+  `skips`, `Decision.skipped` and `standard`, kept on the `moved` event). Read in the
+  repository, and from every repository only when it has fewer (the ladder is code, one per
+  kind), the evidence saying which (`pooled`). Never the last rung, never onto or past a rung
+  that needs an approval, never a retry, more turns or a wait, never by cost; one per kind per
+  calibration, and none while another of the kind waits for its verdict; it holds no start
+  cell back. It is appended and judged once like any change, by its climbs: after
+  `JUDGE_AFTER` climbs past the rung against those into it before, reverted as its own change
+  when they pass less by more than `REVERT_MARGIN` or their tasks took `SKIP_SLOWER` times as
+  long to pass, at the median.
 - The evolution history takes one snapshot a day, at the first ending of a new
   day in the person's time zone or with `cauce evolution --snapshot`, of what
   ended since the last one. `cauce evolution` and the UI's Evolution read it

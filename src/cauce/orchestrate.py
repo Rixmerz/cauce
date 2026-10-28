@@ -84,6 +84,7 @@ from cauce.escalate import (
     Decision,
     Failure,
     Move,
+    Skip,
     decide,
     review_reason,
     waited,
@@ -794,6 +795,12 @@ class Raced:
     other_cell: Cell
     #: The kept try's check already ran, in the worktree its work came from.
     checked: bool
+
+
+def _skips(store: Store, key: str | None, kind: str) -> dict[tuple[str, str], Skip]:
+    """The standards' skips in force for this kind here, as `escalate.decide` takes them."""
+    return {pair: Skip(s["onto"], s["change"], s["because"])
+            for pair, s in standards.active_skips(store, key, kind).items()}
 
 
 #: The move a race's stopped try is kept with: it says nothing of its cell (`standards.samples`).
@@ -1701,7 +1708,7 @@ def run(
                           role=role_name)
             reading = not writes or (declared_read_only and not any(a.changed for a in attempts))
             decision = decide(the_plan.ladder, attempts, allow_approval=options.allow_approval, reading=reading,
-                              several=_several(the_plan, options, task))
+                              several=_several(the_plan, options, task), skips=_skips(store, key, the_plan.kind))
             resume, fresh = _continues(decision, session)
             store.set_move(task["id"], seq, decision.move.value, decision.reason)
             to = decision.cell.label if decision.cell and decision.continues else None
@@ -1712,6 +1719,7 @@ def run(
                             from_cell=cell.label, to_cell=to, axis=decision.axis,
                             trigger=(result.failure or Failure.INCONCLUSIVE).value,
                             because=list(decision.because), skipped=list(decision.skipped),
+                            **({"standard": decision.standard} if decision.standard else {}),
                             turns_from=turns, turns_to=decision.max_turns if decision.continues else None,
                             spent_usd=round(report.cost_usd, 4),
                             **(_continuation(decision, resume, fresh) if decision.continues else {}),

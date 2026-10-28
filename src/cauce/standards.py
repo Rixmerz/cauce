@@ -23,7 +23,9 @@ A band moves one field at a time, and not again before that change is judged: on
 compared (pass-first rate, attempts, time and cost per point), and a change that
 made pass-first worse by more than `REVERT_MARGIN` is reverted, one step back, as a
 change of its own. Every change and verdict is appended to the store with its rule,
-its evidence and cauce's version. No model decides any of it, and money moves
+its evidence and cauce's version. A calibration may also skip a rung of a kind's ladder
+whose climbs rarely pass their next try (`calibrate_skips`), judged by those climbs and
+reverted the same way (`_judge_skip`). No model decides any of it, and money moves
 nothing: a point's cost is measured and shown, never a rule's input.
 """
 from __future__ import annotations
@@ -60,7 +62,27 @@ REVERT_MARGIN = 0.2
 NO_VERDICT = frozenset({"environment", "permission"})
 #: The moves after which an attempt goes on with the same cell's try: room, or a launch that broke.
 GOES_ON = frozenset({"retry", "more_turns"})
-FIELDS = ("start_cell", "start_turns")
+FIELDS = ("start_cell", "start_turns", "skip")
+#: The field of a change that skips a rung of a kind's ladder on climbs from the rung below it
+#: (`calibrate_skips`): its value is `from>to`, the climb it replaces. It is kept at `ANY_SIZE`:
+#: the ladder is one per kind, never one per size.
+SKIP = "skip"
+#: The moves a skip may replace: the two climbs of the ladder. A retry or more turns stays on its
+#: cell and a network or load wait is a retry: none of them is a climb, and none is ever skipped.
+SKIP_MOVES = frozenset({"more_effort", "next_model"})
+#: A climb into a rung is skipped once its next try passed under `SKIP_PASS_BELOW` over at least
+#: `SKIP_MIN_MOVES` of them. The rungs that asked for it passed 0 of 2 and 0 of 1 again and again;
+#: four climbs with at most one pass in five is a rung that costs a whole attempt and almost never
+#: pays it back. Far under `PASS_FIRST` on purpose: a start must be good to be chosen, a rung must
+#: be nearly useless to be passed over.
+SKIP_MIN_MOVES = 4
+SKIP_PASS_BELOW = 0.25
+#: The climbs of one kind and pair of rungs a skip reads, newest last.
+SKIP_WINDOW = WINDOW
+#: How much longer, at the median, the passing tasks whose climbs went past the rung may take to
+#: pass than those that climbed into it, before the skip is reverted: a skip is for time, and one
+#: that does not save it is undone, as one whose climbs pass less by `REVERT_MARGIN` is.
+SKIP_SLOWER = 1.25
 #: The band of a kind at every size: its start cell is measured over all of the kind's tasks
 #: here, for the sizes whose own band has too few to tell (`for_plan`). Its turns never move:
 #: what a task needs in turns depends on its size.
@@ -303,7 +325,9 @@ def calibrate(store: Store, repo: str, *, now: datetime | None = None) -> list[d
         if len(sparse) >= 2:
             bands[(kind, ANY_SIZE)] = sorted((t for b in sparse for t in bands[(kind, b)]),
                                              key=lambda t: t.ended_at)
-    waiting = {(c["kind"], c["band"]) for c in _open(store, repo)}
+    # A skip waiting for its verdict holds only the skips of its kind (`calibrate_skips`): the
+    # ladder is another field, and the start cell at any size moves by its own rules.
+    waiting = {(c["kind"], c["band"]) for c in _open(store, repo) if c["field"] != SKIP}
     changes = []
     for (kind, band), tasks in sorted(bands.items()):
         window = tasks[-WINDOW:]
@@ -335,7 +359,189 @@ def calibrate(store: Store, repo: str, *, now: datetime | None = None) -> list[d
                                    old_value=str(current) if current else None, new_value=str(turns), rule=rule,
                                    evidence={**evidence, "tasks": len(window)}))
             store.set_standard(repo, kind, band, start_turns=turns)
+    return changes + calibrate_skips(store, repo, now=now)
+
+
+# --- skipping a rung that rarely helps -------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Climb:
+    """One climb of the ladder in a task: the move, the rung it left and the rung it went to,
+    and whether the try on that rung passed (more turns or a retry on it go on with the try)."""
+
+    task: int
+    repo: str | None
+    move: str
+    source: str
+    target: str
+    passed: bool
+    task_passed: bool
+    wall_s: float
+    ended_at: str
+
+
+def climbs(task: Ended) -> list[Climb]:
+    """The climbs in a task's attempts. A try on the new rung that ended only on the environment
+    or a refusal says nothing of the rung: no climb is counted for it."""
+    out = []
+    attempts = task.attempts
+    for i, a in enumerate(attempts[:-1]):
+        source, target = _label(a.get("cell")), _label(attempts[i + 1].get("cell"))
+        if a.get("move") not in SKIP_MOVES or not source or not target or source == target:
+            continue
+        passed = said = False
+        for b in attempts[i + 1:]:
+            if _label(b.get("cell")) != target:
+                break
+            passed = passed or bool(b["passed"])
+            said = said or bool(b["passed"]) or b.get("failure") not in NO_VERDICT
+            if b.get("move") not in GOES_ON:
+                break
+        if said:
+            out.append(Climb(task.id, task.repo, str(a["move"]), source, target, passed, task.passed,
+                             task.wall_s, task.ended_at))
+    return out
+
+
+def skip_onto(ladder: Sequence[Cell], source: str, target: str) -> Cell | None:
+    """Where a climb from `source` goes when `target` is skipped: the rung after it. None when
+    there is none (the last rung is never skipped), when either rung needs an approval (fable is
+    a person's to start, never a rung a rule lands on or passes over), or when the climb is not
+    up the ladder."""
+    labels = [c.label for c in ladder]
+    if source not in labels or target not in labels:
+        return None
+    at, to = labels.index(source), labels.index(target)
+    if to <= at or to + 1 >= len(ladder):
+        return None
+    onto = ladder[to + 1]
+    if ladder[to].needs_approval or onto.needs_approval:
+        return None
+    return onto
+
+
+def active_skips(store: Store, repo: str | None, kind: str) -> dict[tuple[str, str], dict[str, Any]]:
+    """The skips in force for a kind here, by the climb they replace (`from`, `to`): each with the
+    rung it goes to (`onto`) and the change that made it. A revert takes its change's skip away."""
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    if not repo:
+        return out
+    for change in store.calibrations(repo=repo):
+        if change["field"] != SKIP or change["kind"] != kind:
+            continue
+        value = change["new_value"] if not change["reverts"] else change["old_value"]
+        source, _, target = (value or "").partition(">")
+        if change["reverts"]:
+            out.pop((source, target), None)
+            continue
+        onto = skip_onto(ladder_for(kind), source, target)
+        if onto is not None:
+            out[(source, target)] = {"onto": onto, "change": int(change["id"]), "because": because(change)}
+        else:
+            # The ladder changed under it: the skip no longer has a rung to go to, and stops.
+            out.pop((source, target), None)
+    return out
+
+
+def _climb_rate(found: Sequence[Climb]) -> dict[str, Any]:
+    passed = sum(c.passed for c in found)
+    times = sorted(c.wall_s for c in found if c.task_passed and c.wall_s > 0)
+    mid = len(times) // 2
+    median = (times[mid] if len(times) % 2 else (times[mid - 1] + times[mid]) / 2) if times else None
+    return {"climbs": len(found), "passed": passed,
+            "pass_first": round(passed / len(found), 3) if found else None,
+            "time_to_pass_s": round(median, 1) if median is not None else None}
+
+
+def calibrate_skips(store: Store, repo: str, *, now: datetime | None = None) -> list[dict[str, Any]]:
+    """For each kind here, skip one rung its climbs rarely pass on: a climb from a rung to the
+    next (the same move) whose next try passed under `SKIP_PASS_BELOW` over at least
+    `SKIP_MIN_MOVES` of them goes to the rung after instead. The climbs are read in this
+    repository, and from every repository only when this one has fewer than `SKIP_MIN_MOVES`
+    of that climb (the ladder is code, one per kind); the evidence says which. One skip per kind
+    per calibration, and none while another of the kind waits for its verdict. Never the last
+    rung, never one that needs an approval, never a retry or more turns, never by cost."""
+    at = _stamp(now)
+    mine = ended(store, repo=repo)
+    everyone: list[Ended] | None = None
+    waiting = {c["kind"] for c in _open(store, repo) if c["field"] == SKIP}
+    changes = []
+    for kind in sorted({t.kind for t in mine if t.kind} - waiting):
+        ladder = ladder_for(kind)
+        active = active_skips(store, repo, kind)
+        here: dict[tuple[str, str, str], list[Climb]] = defaultdict(list)
+        for task in mine:
+            if task.kind == kind:
+                for c in climbs(task):
+                    here[(c.move, c.source, c.target)].append(c)
+        for (move, source, target) in sorted(here):
+            if (source, target) in active or skip_onto(ladder, source, target) is None:
+                continue
+            found, pooled = here[(move, source, target)][-SKIP_WINDOW:], False
+            if len(found) < SKIP_MIN_MOVES:
+                if everyone is None:
+                    everyone = ended(store)
+                found = [c for t in everyone if t.kind == kind for c in climbs(t)
+                         if (c.move, c.source, c.target) == (move, source, target)][-SKIP_WINDOW:]
+                pooled = True
+            measured = _climb_rate(found)
+            if measured["climbs"] < SKIP_MIN_MOVES or measured["pass_first"] >= SKIP_PASS_BELOW:
+                continue
+            onto = skip_onto(ladder, source, target)
+            assert onto is not None
+            where = f"in every repository ({len({c.repo for c in found})} of them)" if pooled else "here"
+            rule = (f"{measured['passed']} of {measured['climbs']} {move} climbs from {source} to {target} "
+                    f"passed their next try {where}, under {SKIP_PASS_BELOW:.0%} of {SKIP_MIN_MOVES} or more: "
+                    f"climbs from {source} go to {onto.label}")
+            changes.append(_record(store, at=at, repo=repo, kind=kind, band=ANY_SIZE, field=SKIP,
+                                   old_value=None, new_value=f"{source}>{target}", rule=rule,
+                                   evidence={**measured, "move": move, "from": source, "to": target,
+                                             "onto": onto.label, "pooled": pooled,
+                                             "repos": len({c.repo for c in found}),
+                                             "threshold": SKIP_PASS_BELOW, "min_moves": SKIP_MIN_MOVES}))
+            break
     return changes
+
+
+def _judge_skip(store: Store, repo: str, change: Mapping[str, Any], at: str) -> dict[str, Any] | None:
+    """A skip, judged once its climbs ran `JUDGE_AFTER` times: the climbs from its rung after it
+    (onto the rung after the one skipped) against the climbs into the skipped rung before it, here
+    (from every repository when it was made on theirs). Reverted when they pass less by more than
+    `REVERT_MARGIN`, or their tasks took more than `SKIP_SLOWER` times as long to pass."""
+    evidence = json.loads(change.get("evidence") or "{}")
+    source, target, onto = evidence.get("from"), evidence.get("to"), evidence.get("onto")
+    kind = change["kind"]
+    tasks = [t for t in ended(store, repo=repo) if t.kind == kind]
+    after = [c for t in tasks if t.ended_at >= change["at"] for c in climbs(t)
+             if c.source == source and c.target == onto][:JUDGE_AFTER]
+    if len(after) < JUDGE_AFTER:
+        return None
+    pool = ended(store) if evidence.get("pooled") else tasks
+    before = [c for t in pool if t.kind == kind and t.ended_at < change["at"] for c in climbs(t)
+              if c.source == source and c.target == target][-SKIP_WINDOW:]
+    then, was = _climb_rate(after), _climb_rate(before)
+    fell = was["pass_first"] is not None and round(was["pass_first"] - then["pass_first"], 6) > REVERT_MARGIN
+    slower = was["time_to_pass_s"] and then["time_to_pass_s"] and \
+        then["time_to_pass_s"] > was["time_to_pass_s"] * SKIP_SLOWER
+    worse = bool(fell or slower)
+    reason = (f"climbs from {source} passed their next try {_pct(was['pass_first'])} of {was['climbs']} into "
+              f"{target} before, {_pct(then['pass_first'])} of {then['climbs']} onto {onto} after; time to pass "
+              f"{_secs(was['time_to_pass_s'])} before, {_secs(then['time_to_pass_s'])} after")
+    verdict = "reverted" if worse else "kept"
+    store.add_verdict(at=at, change_id=change["id"], verdict=verdict, window_before=was, window_after=then,
+                      reason=reason, version=__version__)
+    if worse:
+        why = (f"they passed less by more than {REVERT_MARGIN:.0%}" if fell
+               else f"they took more than {SKIP_SLOWER:g} times as long to pass")
+        _record(store, at=at, repo=repo, kind=kind, band=change["band"], field=SKIP,
+                old_value=change["new_value"], new_value=None, reverts=change["id"],
+                rule=f"revert #{change['id']}: {why} ({reason})",
+                evidence={"before": was, "after": then, "margin": REVERT_MARGIN, "slower": SKIP_SLOWER})
+    return {"change": change["id"], "repo": repo, "verdict": verdict, "before": was, "after": then}
+
+
+def _secs(value: float | None) -> str:
+    return "—" if value is None else f"{value / 60:.0f} min"
 
 
 def backfill(store: Store, ids: Sequence[int] | None = None) -> int:
@@ -385,6 +591,11 @@ def judge(store: Store, repo: str, *, now: datetime | None = None) -> list[dict[
     tasks = [t for t in ended(store, repo=repo) if t.band]
     out = []
     for change in pending:
+        if change["field"] == SKIP:
+            # A skip is judged by the climbs it changed, not by tasks that started on it.
+            if (verdict := _judge_skip(store, repo, change, at)) is not None:
+                out.append(verdict)
+            continue
         # A change of the kind at any size is judged by the kind's tasks of every size.
         band = [t for t in tasks if t.kind == change["kind"] and change["band"] in (t.band, ANY_SIZE)]
         # A change carried from a repository that joined a workspace is judged by the tasks
@@ -480,6 +691,10 @@ def because(change: Mapping[str, Any]) -> str:
     evidence = json.loads(change["evidence"]) if isinstance(change["evidence"], str) else change["evidence"]
     if change.get("reverts"):
         return change["rule"]
+    if change["field"] == SKIP:
+        where = (f" in {evidence.get('repos')} repositories" if evidence.get("pooled") else " here")
+        return (f"{evidence.get('passed')} of {evidence.get('climbs')} {evidence.get('move')} climbs from "
+                f"{evidence.get('from')} to {evidence.get('to')} passed their next try{where}")
     if change["field"] == "start_cell":
         cells = [f"{p} of {n} " + ("passed first at " if i == 0 else "at ") + label
                  for i, (label, (p, n)) in enumerate((evidence.get("cells") or {}).items())]
