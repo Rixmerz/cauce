@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-10-28
+
 ### Added
 
 - **Neighbours bring their own words:** a plugin may publish a `cauce` block (format 1: `tools`,
