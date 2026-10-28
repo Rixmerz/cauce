@@ -4,10 +4,12 @@ A repository that keeps its behaviour in OpenSpec (`openspec/`) and lets its cod
 it ends up with specs that describe a product it no longer is. cauce reads those specs to brief
 and assess, so it is the one place that sees every change land; this module says how far the
 specs are behind, tells a writing worker the repository keeps them, and gives the ending the
-line that would bring them up to date. It starts nothing and writes nothing.
+line that would bring them up to date. It writes nothing in the repository. Only `structure`
+starts anything: livespec, on a temporary copy of `openspec/`, never on the person's checkout.
 """
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import subprocess
@@ -21,6 +23,8 @@ from typing import Any, NamedTuple
 OPENSPEC = "openspec"
 #: Code commits since the specs last changed from which they are said to be behind.
 BEHIND_COMMITS = 5
+#: Kinds of structural finding `structure_lines` names; the rest are counted.
+FINDINGS_SHOWN = 8
 #: The repositories a person made spec-first (`cauce specs first on`), kept per repository key in
 #: the store's meta: the person's cauce home, never a repository, which cannot make its own workers
 #: answer to a rule by committing a file.
@@ -121,10 +125,36 @@ def touched(changed: Sequence[str]) -> bool:
     return any(p == OPENSPEC or p.startswith(OPENSPEC + "/") for p in changed)
 
 
+#: Files that hold no behaviour a spec describes, though they are not documents. A lockfile pins what
+#: a manifest already says; a config file sets a tool or a deploy up; a generated file is built from
+#: another; a test checks behaviour a spec states. A build that changes only these owes no spec.
+_LOCKFILE = re.compile(r"\.lockb?$|(^|/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|go\.sum)$")
+_CONFIG_FILE = re.compile(
+    r"\.(jsonc?|ya?ml|toml|ini|cfg|conf|properties|env)$|(^|/)\.[^/]+$|(^|/)(Dockerfile|Makefile|Procfile)$|"
+    r"\.config\.[cm]?[jt]s$|(^|/)(\.github|\.vscode|\.idea)/")
+#: `build`, `out`, `target` and `generated` are output only at the root, where the build tools put it:
+#: below it they are ordinary names (`src/build/compiler.py`, `lib/out/render.ts`,
+#: `internal/target/plan.go`, `src/generated/x.py`). The rest are output wherever they are.
+_GENERATED = re.compile(
+    r"(^|/)(dist|vendor|node_modules|coverage|__pycache__|__generated__|__snapshots__)/|"
+    r"^(build|out|target|generated)/|"
+    r"\.(min\.(js|css)|map|snap|pb\.go)$|\.generated\.|_pb2(_grpc)?\.pyi?$")
+
+
+def holds_behaviour(path: str) -> bool:
+    """Whether a changed file may hold behaviour a spec would describe: not a spec, a document, a
+    test, a lockfile, a config file or a generated file."""
+    from cauce.adapters.livespec import is_test_path  # kept out of the hooks' import of this module
+
+    return not (path == OPENSPEC or path.startswith(OPENSPEC + "/") or path.startswith("docs/")
+                or path.lower().endswith((".md", ".mdx", ".rst", ".txt")) or is_test_path(path)
+                or path.rsplit("/", 1)[-1] == "conftest.py" or _LOCKFILE.search(path)
+                or _CONFIG_FILE.search(path) or _GENERATED.search(path))
+
+
 def coded(changed: Sequence[str]) -> list[str]:
-    """The files of a change that may hold behaviour: not a spec, not a document."""
-    return [p for p in changed if not (p == OPENSPEC or p.startswith(OPENSPEC + "/") or p.startswith("docs/")
-                                       or p.lower().endswith((".md", ".mdx", ".rst", ".txt")))]
+    """The files of a change that may hold behaviour (`holds_behaviour`)."""
+    return [p for p in changed if holds_behaviour(p)]
 
 
 def first(store: Any, key: str | None) -> bool:
@@ -149,6 +179,42 @@ def first_shape(paths: Sequence[str]) -> str:
     shown = ", ".join(paths[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
     return (f"{FIRST_SHAPE}: the change touches code ({shown}) and no file under `{OPENSPEC}/`; this repository "
             "accepts no change of behaviour without its spec")
+
+
+def structure_lines(result: Mapping[str, Any]) -> list[str]:
+    """What livespec's `validate_openspec` says of the specs' structure (every requirement a
+    scenario, a title, a body, normative words), one line a finding; the problems only."""
+    errors, warnings = int(result.get("error_count") or 0), int(result.get("warning_count") or 0)
+    if not errors and not warnings:
+        return ["structure: livespec's validate_openspec found no structural problem"]
+    found = [f for f in result.get("findings") or [] if isinstance(f, Mapping)]
+    lines = [f"structure: livespec's validate_openspec found {errors} error(s) and {warnings} warning(s)"]
+    for f in found[:FINDINGS_SHOWN]:
+        ids = ", ".join(str(x.get("spec_id")) for x in (f.get("sample") or [])[:3] if isinstance(x, Mapping))
+        lines.append(f"  - {f.get('severity', 'warning')}: {f.get('issue', '?')} ({f.get('count', '?')})"
+                     + (f" e.g. {ids}" if ids else ""))
+    if len(found) > FINDINGS_SHOWN:
+        lines.append(f"  - and {len(found) - FINDINGS_SHOWN} more kind(s) of finding")
+    return lines
+
+
+def structure(repo_dir: Path, adapter: Any = None) -> list[str]:
+    """The structure of the specs as livespec sees it, where livespec runs here: nothing when it
+    does not (off, or no way to run it), and one line saying so when it could not be asked. Run on
+    a temporary copy of `openspec/` (`Livespec.validate_openspec`): nothing is written in the
+    repository, its index included."""
+    from cauce import config
+    from cauce.adapters.livespec import Livespec, LivespecError
+
+    if not config.enabled("livespec", os.environ):
+        return []
+    adapter = adapter or Livespec()
+    if adapter.server() is None:
+        return []
+    try:
+        return structure_lines(adapter.validate_openspec(repo_dir))
+    except LivespecError as exc:
+        return [f"structure: livespec could not validate the specs ({exc})"]
 
 
 def brief_lines(found: Drift, *, first: bool = False) -> list[str]:

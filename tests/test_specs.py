@@ -1,7 +1,10 @@
 """A repository's OpenSpec specs against its code: how far behind, the brief, the ending."""
 from __future__ import annotations
 
+import pytest
+
 from cauce import hooks, repo, specs
+from cauce.adapters.livespec import LivespecError
 from cauce.cli import main
 from cauce.orchestrate import run
 
@@ -410,3 +413,99 @@ def test_links_are_expected_only_where_specs_and_a_livespec_index_are_both_there
     assert not specs.links_expected(git_repo, {"CAUCE_LIVESPEC": "off"})
     assert not specs.links_expected(tmp_path / "nowhere", {})
     assert not specs.links_expected(None, {})
+
+
+@pytest.mark.parametrize("path", [
+    "src/app.py", "lib/pay.ts", "main.go", "web/Cart.tsx", "src/lib.rs", "scripts/deploy.sh",
+    # below the root these are ordinary names
+    "src/build/compiler.py", "lib/out/render.ts", "internal/target/plan.go", "src/generated/x.py",
+])
+def test_files_that_hold_behaviour_owe_a_spec(path):
+    assert specs.holds_behaviour(path)
+
+
+@pytest.mark.parametrize("path", [
+    "tests/test_cart.py", "src/cart.test.ts", "src/__tests__/a.js", "conftest.py", "tests/conftest.py",  # tests
+    "package-lock.json", "web/yarn.lock", "poetry.lock", "uv.lock", "Cargo.lock", "go.sum", "pnpm-lock.yaml",  # locks
+    "pyproject.toml", "package.json", "tsconfig.json", ".eslintrc", ".github/workflows/ci.yml", "config/app.yaml",
+    "vite.config.ts", "jest.config.js", "Dockerfile", "Makefile", ".gitignore", "settings.ini",
+    ".env.example",  # config
+    "dist/app.js", "build/out.css", "web/app.min.js", "src/api_pb2.py", "src/__snapshots__/a.snap",
+    "node_modules/x/index.js", "src/types.generated.ts", "out/main.js", "target/classes/App.js",
+    "generated/x.py", "src/__generated__/schema.ts", "web/dist/app.js", "lib/vendor/x.go",
+    "pkg/coverage/lcov.info", "src/__pycache__/a.cpython-312.pyc",  # generated
+    "README.md", "docs/guide.html", "openspec/specs/a/spec.md", "notes.txt",  # documents and specs
+])
+def test_files_that_hold_no_behaviour_owe_no_spec(path):
+    assert not specs.holds_behaviour(path)
+
+
+def test_a_build_that_changed_only_tests_config_and_locks_owes_no_spec_but_one_with_code_does():
+    only = ["tests/test_a.py", "package-lock.json", "pyproject.toml", "dist/bundle.js", "generated/api.py"]
+    assert specs.owed("feature", only) == []
+    assert specs.owed("feature", [*only, "src/generated/x.py"]) == ["src/generated/x.py"]
+
+
+def test_spec_first_on_in_a_repository_with_no_openspec_says_nothing_is_enforced(git_repo, capsys):
+    assert main(["specs", "--repo", str(git_repo), "first", "on"]) == 0
+    out = capsys.readouterr().out
+    assert "spec-first is on" in out and "nothing is enforced" in out and "no `openspec/` here" in out
+    # Said on every look while it stands, not only the one that turned it on.
+    assert main(["specs", "--repo", str(git_repo)]) == 0
+    assert "nothing is enforced" in capsys.readouterr().out
+    # Off, or with the folder there, it says something else.
+    main(["specs", "--repo", str(git_repo), "first", "off"])
+    assert "nothing is enforced" not in capsys.readouterr().out
+    _behind(git_repo)
+    main(["specs", "--repo", str(git_repo), "first", "on"])
+    assert "nothing is enforced" not in capsys.readouterr().out
+
+
+def test_structure_lines_name_each_kind_of_problem_and_say_when_there_is_none():
+    clean = {"valid": True, "error_count": 0, "warning_count": 0, "findings": []}
+    assert specs.structure_lines(clean) == ["structure: livespec's validate_openspec found no structural problem"]
+    found = {"error_count": 1, "warning_count": 2, "findings": [
+        {"issue": "requirement has no scenario", "severity": "error", "count": 4,
+         "sample": [{"spec_id": "cart-1"}, {"spec_id": "cart-2"}]},
+        {"issue": "no normative keyword", "severity": "warning", "count": 2, "sample": []}]}
+    assert specs.structure_lines(found) == [
+        "structure: livespec's validate_openspec found 1 error(s) and 2 warning(s)",
+        "  - error: requirement has no scenario (4) e.g. cart-1, cart-2",
+        "  - warning: no normative keyword (2)"]
+    many = {"error_count": 0, "warning_count": 9, "findings": [{"issue": f"kind {n}", "count": 1} for n in range(10)]}
+    assert specs.structure_lines(many)[-1] == "  - and 2 more kind(s) of finding"
+
+
+class _Asked:
+    """A livespec that answers `validate_openspec` as scripted, or cannot be asked."""
+
+    def __init__(self, answer=None, error=None, server=True):
+        self.answer, self.error, self._server = answer, error, server
+
+    def server(self):
+        return {"command": "livespec"} if self._server else None
+
+    def validate_openspec(self, repo_dir):
+        if self.error:
+            raise LivespecError(self.error)
+        return self.answer
+
+
+def test_structure_asks_livespec_where_it_runs_and_says_when_it_could_not(git_repo, monkeypatch):
+    monkeypatch.setenv("CAUCE_LIVESPEC", "on")
+    answer = {"error_count": 0, "warning_count": 1, "findings": [{"issue": "no scenario", "count": 1}]}
+    assert specs.structure(git_repo, _Asked(answer)) == [
+        "structure: livespec's validate_openspec found 0 error(s) and 1 warning(s)", "  - warning: no scenario (1)"]
+    assert specs.structure(git_repo, _Asked(error="livespec index failed: x")) == [
+        "structure: livespec could not validate the specs (livespec index failed: x)"]
+    assert specs.structure(git_repo, _Asked(server=False)) == []  # nothing to ask: nothing said
+    monkeypatch.setenv("CAUCE_LIVESPEC", "off")
+    assert specs.structure(git_repo, _Asked(answer)) == []
+
+
+def test_cauce_specs_reports_the_structure_after_the_drift(git_repo, capsys, monkeypatch):
+    _behind(git_repo)
+    monkeypatch.setattr(specs, "structure", lambda where, adapter=None: ["structure: livespec says so"])
+    assert main(["specs", "--repo", str(git_repo)]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].startswith("specs: ") and out[-1] == "structure: livespec says so"

@@ -75,3 +75,28 @@ def test_the_guard_relays_a_real_server_and_answers_what_it_refuses(tmp_path):
 def test_main_refuses_what_it_does_not_know(capsys):
     assert mcp_guard.main(["nope", "--", "x"]) == 2 and "usage" in capsys.readouterr().err
     assert mcp_guard.main(["rastro", "x"]) == 2
+
+
+def test_livespec_policy_lets_only_the_reading_tools_through():
+    from cauce.adapters.livespec import TOOLS
+
+    for name in sorted(mcp_guard.LIVESPEC_READ):
+        assert mcp_guard.livespec(name, {"workspace": "/r"}) == (None, {"workspace": "/r"})
+    # Every tool cauce names to a worker reads, but the two that write the index (a worker's own
+    # index of a fresh repository, the sync of its specs).
+    assert {"index_project", "sync_openspec"} == TOOLS - mcp_guard.LIVESPEC_READ
+    for name in ("index_project", "sync_openspec", "export_openspec", "bulk_link_spec_symbols", "create_spec",
+                 "delete_spec", "import_specs_from_markdown", "record_track", "a_tool_added_next_year"):
+        why, _ = mcp_guard.livespec(name, {})
+        assert why and name in why
+
+
+def test_a_refused_livespec_call_never_reaches_the_server():
+    sent, answers = mcp_guard.screen(
+        {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "index_project", "arguments": {}}},
+        mcp_guard.POLICIES["livespec"])
+    assert sent is None and answers[0]["id"] == 7 and answers[0]["result"]["isError"]
+    sent, answers = mcp_guard.screen(
+        {"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {"name": "who_calls", "arguments": {}}},
+        mcp_guard.POLICIES["livespec"])
+    assert sent is not None and answers == []

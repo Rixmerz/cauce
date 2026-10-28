@@ -22,7 +22,7 @@ without a token and without an MCP call:
 The worker also gets livespec's MCP server, with a hint per kind of work that
 names the calls that kind needs and the ``workspace`` every call requires.
 
-Checked against livespec 0.32.0. Every tool named here exists in that release;
+Checked against livespec 0.34.0. Every tool named here exists in that release;
 `TOOLS` is the pinned list, and a test holds every hint to it.
 """
 from __future__ import annotations
@@ -34,9 +34,12 @@ import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 import tomllib
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -49,21 +52,22 @@ from cauce import repo
 from cauce.adapters import ABSENT, PRESENT, UNREADABLE, Briefing, Status
 from cauce.matrix import READ_ONLY_KINDS
 from cauce.store import home
-from cauce.text import words
+from cauce.text import clip, words
 
 MINIMUM_VERSION = (0, 32, 0)
 
-#: What cauce runs when no livespec is installed: the release this adapter was
-#: checked against, through `uvx`. livespec is part of cauce's base, so having
-#: `uv` is enough — there is no second plugin to install.
-PINNED = "0.32.0"
+#: What cauce runs through `uvx` when no livespec plugin entry and no `livespec` on PATH is used:
+#: the release this adapter was checked against, unless an installed plugin's own manifest names
+#: a newer one (`Livespec.pin`). livespec is part of cauce's base, so having `uv` is enough: there
+#: is no second plugin to install.
+PINNED = "0.34.0"
 
-#: The livespec tools cauce names to a worker. Verified to exist in 0.32.0.
+#: The livespec tools cauce names to a worker or calls itself. Verified to exist in 0.34.0.
 TOOLS = frozenset({
     "quick_orient", "find_symbol", "who_calls", "who_does_this_call", "analyze_impact",
     "git_diff_impact", "get_symbol_source", "get_spec_implementation", "list_specs",
     "audit_coverage", "find_orphan_tests", "find_dead_code", "search",
-    "read_unit", "search_similar", "index_project", "sync_openspec",
+    "read_unit", "search_similar", "index_project", "sync_openspec", "validate_openspec",
 })
 
 _HINTS: Mapping[str, str] = {
@@ -111,6 +115,28 @@ _IDENT = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\b")
 _TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|spec)/|(^|/)test_[^/]*$|_test\.[a-z]+$|\.(test|spec)\.[a-z]+$")
 
 Runner = Callable[..., subprocess.CompletedProcess]
+
+
+def _run_in_group(argv: Sequence[str], *, timeout: float, env: Mapping[str, str], capture_output: bool = True,
+                  text: bool = True, check: bool = False) -> subprocess.CompletedProcess[str]:
+    """`subprocess.run` for an index, with the child leading its own process group and the timeout
+    ending the whole group. `uvx` starts the `livespec index` that does the work as its child:
+    `subprocess.run` kills only `uvx` at the timeout, and that child goes on indexing with nobody
+    holding the lock, so `Livespec.indexing` says no and a second index starts beside it."""
+    pipe = subprocess.PIPE if capture_output else None
+    with subprocess.Popen(list(argv), stdout=pipe, stderr=pipe, text=text, env=dict(env),
+                          start_new_session=True) as proc:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except BaseException:  # the timeout, and an interrupt too, as `subprocess.run` treats both
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+            raise
+    done = subprocess.CompletedProcess(list(argv), proc.returncode, out, err)
+    if check:
+        done.check_returncode()
+    return done
 
 #: What `ensure_fresh` found of one repository's index when its task's worker was about to start.
 FRESH, BUILT, LATE, FAILED = "fresh", "built", "late", "failed"
@@ -192,13 +218,17 @@ def _version_tuple(text: str | None) -> tuple[int, ...] | None:
     return tuple(int(n) for n in found[:3]) if found else None
 
 
+class LivespecError(RuntimeError):
+    """livespec could not be asked: it did not start, did not answer in time, or answered with an error."""
+
+
 class Livespec:
     name = "livespec"
 
     def __init__(
         self,
         env: Mapping[str, str] | None = None,
-        runner: Runner = subprocess.run,
+        runner: Runner = _run_in_group,
         popen: Callable[..., Any] = subprocess.Popen,
     ) -> None:
         self.env = dict(os.environ) if env is None else dict(env)
@@ -207,9 +237,12 @@ class Livespec:
 
     # --- where livespec is ------------------------------------------------
 
+    def _config_root(self) -> Path:
+        return Path(self.env.get("CLAUDE_CONFIG_DIR") or Path(self.env.get("HOME", "~")).expanduser() / ".claude")
+
     def _plugin_config(self) -> tuple[dict[str, Any], str] | None:
         """The server entry of an installed livespec plugin, and its version."""
-        root = Path(self.env.get("CLAUDE_CONFIG_DIR") or Path(self.env.get("HOME", "~")).expanduser() / ".claude")
+        root = self._config_root()
         found = []
         for cfg in root.glob("plugins/cache/*/livespec/*/.mcp.json"):
             found.append((_version_tuple(cfg.parent.name) or (0,), cfg))
@@ -221,6 +254,25 @@ class Livespec:
             if isinstance(server, dict) and server.get("command"):
                 return server, cfg.parent.name
         return None
+
+    def _plugin_release(self) -> str | None:
+        """The release the newest installed livespec plugin declares in its own manifest
+        (`.claude-plugin/plugin.json`), unless uv found it missing from the registry."""
+        found = [(_version_tuple(m.parent.parent.name) or (0,), m)
+                 for m in self._config_root().glob("plugins/cache/*/livespec/*/.claude-plugin/plugin.json")]
+        for _, manifest in sorted(found, reverse=True):
+            try:
+                version = json.loads(manifest.read_text(encoding="utf-8"))["version"]
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if isinstance(version, str) and _version_tuple(version) and version not in self.unpublished():
+                return version
+        return None
+
+    def pin(self) -> str:
+        """The release `uvx` runs when no plugin entry and no `livespec` on PATH is used: the
+        installed plugin's own, else the one this adapter was built against."""
+        return self._plugin_release() or PINNED
 
     def _unpublished_path(self) -> Path:
         return home(self.env) / "work" / "livespec-unpublished.json"
@@ -249,13 +301,23 @@ class Livespec:
         if shutil.which("livespec", path=path):
             return {"command": "livespec", "args": []}
         if shutil.which("uvx", path=path):
-            return {"command": "uvx", "args": [f"livespec@{PINNED}"]}
+            return {"command": "uvx", "args": [f"livespec@{self.pin()}"]}
         if plugin and _uvx_release(plugin[0]) is not None and Path(str(plugin[0]["command"])).is_absolute():
             # The plugin's own `uvx` (a full path off the PATH) runs the pinned release instead.
             command = str(plugin[0]["command"])
             run = ["tool", "run"] if Path(command).name == "uv" else []
-            return {"command": command, "args": [*run, f"livespec@{PINNED}"]}
+            return {"command": command, "args": [*run, f"livespec@{self.pin()}"]}
         return plugin[0] if plugin else None
+
+    def read_only_server(self) -> Mapping[str, Any] | None:
+        """The same server behind `cauce.mcp_guard`'s `livespec` policy: calls that read the index
+        pass, everything that could change it is refused. For a worker that only checks work."""
+        server = self.server()
+        if server is None:
+            return None
+        from cauce.plugins import guarded
+
+        return guarded(server, "livespec")
 
     def _version(self) -> str | None:
         plugin = self._plugin_config()
@@ -442,7 +504,7 @@ class Livespec:
                 self._remember_unpublished(missing)
                 again = self._index_argv(repo_dir)
                 if again is not None and again != argv:
-                    fell_back = (f"livespec {missing} is not published, so the pinned {PINNED} ran instead "
+                    fell_back = (f"livespec {missing} is not published, so the pinned {self.pin()} ran instead "
                                  "(and will, until the plugin names a published release)")
                     try:
                         proc = self.runner(again, capture_output=True, text=True, timeout=INDEX_TIMEOUT_S,
@@ -557,6 +619,74 @@ class Livespec:
                 return False
             wait.pause(POLL_S)
         return True
+
+    # --- the specs' structure ---------------------------------------------
+
+    def call_tools(self, workspace: Path, calls: Sequence[tuple[str, Mapping[str, Any]]], *,
+                   env: Mapping[str, str] | None = None, timeout_s: float = 60.0) -> list[dict[str, Any]]:
+        """Tools livespec has no command line for (`validate_openspec`), asked of its own server as
+        any MCP client does: one session over stdio, run in `workspace` with each call's `workspace`
+        it, cut at `timeout_s`. Raises LivespecError; the answers are the tools' own JSON objects."""
+        server = self.server()
+        if server is None:
+            raise LivespecError("no livespec to ask")
+        argv = [str(server["command"]), *[str(a) for a in server.get("args", [])]]
+        env = {**(self.env if env is None else env),
+               **{str(k): str(v) for k, v in (server.get("env") or {}).items()}, "CAUCE_HOOKS_OFF": "1"}
+        try:
+            proc = self.popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              text=True, env=env, cwd=str(workspace))
+        except OSError as exc:
+            raise LivespecError(f"livespec did not start: {exc}") from exc
+        cut = threading.Timer(timeout_s, proc.kill)
+        cut.start()
+        try:
+            _ask(proc, 1, "initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
+                                         "clientInfo": {"name": "cauce", "version": "0"}})
+            proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+            proc.stdin.flush()
+            return [_tool_data(name, _ask(proc, n, "tools/call", {"name": name, "arguments": {
+                "workspace": str(workspace), **arguments}})) for n, (name, arguments) in enumerate(calls, start=2)]
+        except (OSError, ValueError) as exc:
+            raise LivespecError(f"livespec did not answer: {exc}") from exc
+        finally:
+            cut.cancel()
+            proc.kill()
+            proc.wait()
+
+    def validate_openspec(self, repo_dir: Path, *, strict: bool = False, timeout_s: float = 120.0) -> dict[str, Any]:
+        """The structural check of the repository's OpenSpec specs, by livespec's own
+        `validate_openspec`, run on a temporary copy of `openspec/` and nothing else: that tool
+        checks an index, and syncing the specs into the person's (or building one) would write in
+        their checkout. The copy gets its own index (livespec's CLI), its own `LIVESPEC_HOME` (so
+        livespec's registry of projects never lists it) and no `.livespec.toml` (whose `group_db`
+        would send the sync to a shared index), and is removed afterwards. Raises LivespecError."""
+        root = (repo.toplevel(repo_dir) or repo_dir).resolve()
+        specs = root / "openspec"
+        if not specs.is_dir():
+            raise LivespecError("there is no openspec/ here")
+        server = self.server()
+        if server is None:
+            raise LivespecError("no livespec to ask")
+        with tempfile.TemporaryDirectory(prefix="cauce-openspec-") as tmp:
+            where = Path(tmp).resolve() / "repo"
+            try:
+                shutil.copytree(specs, where / "openspec", symlinks=True)
+            except OSError as exc:
+                raise LivespecError(f"openspec/ could not be copied: {exc}") from exc
+            env = {**self.env, "LIVESPEC_HOME": str(Path(tmp).resolve() / "livespec-home"), "CAUCE_HOOKS_OFF": "1",
+                   **{str(k): str(v) for k, v in (server.get("env") or {}).items()}}
+            argv = [str(server["command"]), *[str(a) for a in server.get("args", [])], "index", str(where)]
+            try:
+                proc = self.runner(argv, capture_output=True, text=True, timeout=timeout_s, check=False, env=env)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise LivespecError(f"livespec index did not run: {exc}") from exc
+            if proc.returncode != 0:
+                said = (proc.stderr or proc.stdout or "").strip()
+                raise LivespecError(clip(f"livespec index failed: {said}", 300))
+            _, result = self.call_tools(where, [("sync_openspec", {}), ("validate_openspec", {"strict": strict})],
+                                        env=env, timeout_s=timeout_s)
+        return result
 
     # --- before the first attempt ------------------------------------------
 
@@ -748,6 +878,45 @@ def _lock(path: Path, *, wait_s: float, pause: Callable[[float], None] = time.sl
             yield True, waited
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _ask(proc: Any, ident: int, method: str, params: Mapping[str, Any]) -> Any:
+    """One JSON-RPC request to an MCP server on stdio (a message a line) and its answer."""
+    proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": ident, "method": method, "params": params}) + "\n")
+    proc.stdin.flush()
+    while True:
+        line = proc.stdout.readline()
+        if not line:
+            raise LivespecError(f"livespec closed before it answered {method}")
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue  # a log line on stdout, not a message
+        if isinstance(message, dict) and message.get("id") == ident:
+            if isinstance(message.get("error"), dict):
+                raise LivespecError(f"{method}: {message['error'].get('message') or message['error']}")
+            return message.get("result")
+
+
+def _tool_data(name: str, result: Any) -> dict[str, Any]:
+    """The JSON object a tool answered with (its `structuredContent`; older releases only wrap the
+    same object in a text item), or the error it said."""
+    if not isinstance(result, dict):
+        raise LivespecError(f"{name}: no answer")
+    content = result.get("content")
+    text = " ".join(str(c.get("text", "")) for c in content or [] if isinstance(c, dict))
+    data = result.get("structuredContent")
+    if not isinstance(data, dict):
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+    if result.get("isError") or not isinstance(data, dict) or data.get("error"):
+        fields = data if isinstance(data, dict) else {}
+        said = fields.get("error") or text or "an answer that is no object"
+        hint = f" ({fields['hint']})" if fields.get("hint") else ""
+        raise LivespecError(clip(f"{name}: {said}{hint}", 300))
+    return data
 
 
 def _connect(db: Path) -> sqlite3.Connection:

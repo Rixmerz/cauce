@@ -4,6 +4,19 @@
 
 ### Added
 
+- **`cauce specs` reports the specs' structure:** where livespec runs, it asks livespec's
+  `validate_openspec` (a tool with no command line, so over MCP on stdio) after `sync_openspec`,
+  and prints the problems (a requirement with no scenario, no normative keyword, no title) after
+  the drift, or says why it could not. Both run on a temporary copy of `openspec/` with its own
+  index and its own `LIVESPEC_HOME`, removed afterwards: nothing is written in the checkout, its
+  index or livespec's registry of projects.
+
+- **The independent check gets livespec's tools:** where the repository has an index, the check
+  (the late one too) is handed livespec's MCP server behind a new `livespec` policy of
+  `mcp_guard`, an allow-list of reading tools; anything that could change the index or the specs
+  is refused, whatever a tool's own read-only hint says (`export_openspec` carries it and writes
+  files). Before, it only read the reach as text.
+
 - **The independent check is told which tool measures each floor and anti-pattern.** 0.52.0 said
   so, but `cauce.tracer` added one generic paragraph. Now, where `docs/tracer/` exists and the check
   has layout-inspector, each line of `floors.md` and `anti-patterns.md` is listed beside the tool
@@ -36,6 +49,14 @@
 
 ### Changed
 
+- **`cauce specs first on` with no `openspec/` says so plainly:** spec-first is on but nothing is
+  enforced until `openspec/` exists, on the command that turns it on and on each look after it.
+
+- **livespec is pinned to 0.34.0, and follows the installed plugin:** 0.34.0 fixes a `group_db`
+  bug. When cauce runs livespec through `uvx` it now uses the release in the newest installed
+  livespec plugin's own manifest (`.claude-plugin/plugin.json`, skipping a release uv found
+  unpublished), else the one it was built against.
+
 - **The board no longer opens a browser tab for each task:** `/cauce:ui` now runs `cauce ui`
   (no tab; `--open` once, only when the person asks to see it), `/cauce` opens the board once,
   and the page shows every task of a session in itself: the Sessions screen lists the work a
@@ -47,6 +68,18 @@
   the eight-tab cap are gone (`POST /api/tab` takes their place).
 
 ### Fixed
+
+- **An index cut at its timeout no longer goes on indexing beside the next one:** `uvx` starts the
+  `livespec index` that does the work as its child, and the timeout killed only `uvx`; the child
+  went on with nobody holding the index lock, so the next refresh started a second index on the
+  same file. The run now leads its own process group and the timeout ends all of it.
+
+- **A change of tests, lockfiles, config or generated files no longer "owes a spec":** in a spec-first
+  repository, any file outside `docs/` that was not a document counted as code that owed its spec,
+  so a build that only touched `package-lock.json`, a CI file, a test or `dist/` was held back for a
+  spec it had nothing to write. Those files are left out. `build/`, `out/`, `target/` and
+  `generated/` count as generated only at the repository root: `src/build/compiler.py` and
+  `src/generated/x.py` are code and owe their spec.
 
 - **A check slower than its limit no longer burns a night of climbs** (tasks that ran 4+ hours
   with the repository's 15-minute check). The check failed on three tests that also fail at the

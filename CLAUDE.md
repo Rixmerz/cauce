@@ -25,7 +25,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/criteria.py` | a request's listed items as criteria `S1..Sn`, verbatim; a pass answers each |
 | `src/cauce/findings.py` | findings as records: where, what, `evidence_class`, `cause`; which block a change |
 | `src/cauce/ledger.py` | a review's findings as one frozen ledger `F1..Fn`: who decides each row (refuter, fix, re-check), two rounds, then the person |
-| `src/cauce/specs.py` | whether a repository's OpenSpec specs keep up with its code: days and code commits since `openspec/` changed, the writing brief's line and the ending's offer; git only, no model |
+| `src/cauce/specs.py` | whether a repository's OpenSpec specs keep up with its code: days and code commits since `openspec/` changed, the writing brief's line and the ending's offer, the files of a change that owe a spec, and livespec's `validate_openspec` for the specs' structure (`cauce specs`, on a temporary copy of `openspec/`); git and livespec, no model |
 | `src/cauce/tracer.py` | the TRACER method of a repository that keeps one (`docs/tracer/`): the method's files in a writing brief, and the CORRECT lines of the flows a request names, the anti-pattern catalogue and, with a measuring neighbour, each floor and anti-pattern beside the tool that measures it in the independent check's; read only |
 | `src/cauce/risk.py` | a change's tier (passive, medium, high) from its request, kind and files; only raised; no model |
 | `src/cauce/points.py` | a task's size on the Fibonacci scale, no model: the estimate when it is planned (criteria, kind, risk and its areas, files named, livespec's reach, length) and the realized size when it ends (files, lines, turns, wall time, attempts) |
@@ -392,7 +392,10 @@ yields the default kind, not a guess.
   independent verifier before it passes: another cell, read-only, given the
   request verbatim and the diff, never the worker's summary; it runs at high
   effort on the work's model (never Haiku), and keeps only the capabilities
-  that measure (`plugins.MEASURES`, `Capability.measures`), plus any its change touches. A correction round is earned by a blocker that
+  that measure (`plugins.MEASURES`, `Capability.measures`), plus any its change touches, and the
+  code index where one is present (`orchestrate._index_servers`): livespec behind `mcp_guard`'s
+  `livespec` policy, an allow-list of reading tools (`LIVESPEC_READ`; a tool's own `readOnlyHint`
+  is not trusted, `export_openspec` carries it and writes files), the late check's too. A correction round is earned by a blocker that
   persists or by progress (every blocker of the round before fixed and a new
   one a probe shows), at most `MAX_CORRECTIONS`; a new finding after progress
   that is only read from the code goes with the pass, recorded, never a
@@ -661,7 +664,7 @@ yields the default kind, not a guess.
   never started: the orchestrator decides.
 - A repository is spec-first only on the person's word (`cauce specs first on`, kept in the store's meta, never in a
   repository): there a build (`specs.FIRST_KINDS`) is told to write the spec before the code, and a pass whose
-  change touches code (`specs.coded`) and nothing under `openspec/` is held back (`spec_owed`): the first time it
+  change touches code (`specs.coded`: not tests, lockfiles, config or generated files, `holds_behaviour`) and nothing under `openspec/` is held back (`spec_owed`): the first time it
   goes back to the same cell, in its own session, told to write the spec (`specs.FIRST_PROMPT`, as a reshape); the
   second it stands as work with one point, a `decision` for the orchestrator, kept on its branch. Never a climb: a
   stronger model writes no spec a weaker one would not.
@@ -683,7 +686,9 @@ yields the default kind, not a guess.
   its own and never the folder (`Livespec.roots`; `_index_argv` refuses a folder that is no checkout).
   Past the wait the refresh is left running, never killed, and the task starts without the index (or on
   the stale one a repository already has, as it is) and says which; repositories sharing a `group_db`
-  are indexed one after another under its one lock; a refresh that failed at this commit is not tried
+  are indexed one after another under its one lock; an index run cauce waits on leads its own process
+  group (`adapters.livespec._run_in_group`), so its timeout ends `uvx` and the `livespec index` under
+  it together; a refresh that failed at this commit is not tried
   again until the checkout moves. With an
   index the brief opens with `Livespec.orient` (spec, code, symbol, file; writers also `search_similar`
   and `git_diff_impact`) before the code map. Where it has one and the repository keeps `openspec/`, a
@@ -716,6 +721,14 @@ yields the default kind, not a guess.
 - Every livespec tool a hint names is in `adapters/livespec.TOOLS`, checked
   against the release in `MINIMUM_VERSION`. Check a name against livespec
   before adding it, and bump `PINNED` only after checking the new release.
+  livespec's `validate_openspec` has no command line, so `cauce specs` asks it over MCP on stdio
+  (`Livespec.call_tools`, a minimal client cut at its timeout) after `sync_openspec`, both on a
+  temporary copy of `openspec/` alone, indexed there by livespec's CLI, with its own `LIVESPEC_HOME`
+  and no `.livespec.toml` (`Livespec.validate_openspec`): nothing is written in the person's
+  checkout, their index or livespec's registry of projects.
+  What `uvx` runs when no plugin entry and no `livespec` on PATH is used is `Livespec.pin()`: the
+  release in the newest installed livespec plugin's own manifest (`.claude-plugin/plugin.json`,
+  never one `unpublished()` holds), else `PINNED`.
 - Tests run with `CAUCE_LIVESPEC=off` and an empty `CLAUDE_CONFIG_DIR`; a
   test that wants livespec builds the fixture index in `tests/livespec_fixture.py`.
 - A dispatch decision fails closed: no answer from Haiku means the task

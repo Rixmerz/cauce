@@ -28,6 +28,13 @@ The `engram` policy keeps a worker to reading its own project's memory:
   project, every project, and personal scope (which reads across projects) are
   refused.
 
+The `livespec` policy keeps a worker to reading the code index:
+
+- only livespec's reading tools pass: indexing, linking, syncing or exporting specs, creating,
+  updating or deleting one never reaches the index (a tool's own `readOnlyHint` is not trusted:
+  `export_openspec` carries it and writes files), so the independent check that is handed the
+  index can look at the change and touch nothing.
+
 The `outbound` policy holds the tools that act on the world (a capability lists
 them under `outbound`) to the loop the worker's task is a round of
 (`cauce.loops`), read from the person's cauce home at each call:
@@ -122,6 +129,22 @@ def engram(name: str, arguments: Mapping[str, Any]) -> tuple[str | None, dict[st
     return None, args
 
 
+#: livespec's tools that only read the index (and the repository's files), by name: the list is
+#: the policy, so a tool livespec adds later is refused until it is read and added here.
+LIVESPEC_READ = frozenset({
+    "quick_orient", "find_symbol", "who_calls", "who_does_this_call", "analyze_impact", "git_diff_impact",
+    "get_symbol_source", "get_spec_implementation", "list_specs", "audit_coverage", "find_orphan_tests",
+    "find_dead_code", "search", "get_project_overview", "find_endpoints", "find_legacy_flows",
+    "grep_in_indexed_files", "validate_openspec", "list_spec_changes", "get_spec_change", "read_unit",
+    "resolve_location", "search_similar"})
+
+
+def livespec(name: str, arguments: Mapping[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    if name not in LIVESPEC_READ:
+        return f"{name} may change the index or the specs; this worker only reads them", dict(arguments)
+    return None, dict(arguments)
+
+
 def cauce_home(env: Mapping[str, str]) -> Path:
     """cauce's home as `cauce.store.home` reads it (this module imports nothing of cauce)."""
     if env.get("CAUCE_HOME"):
@@ -176,7 +199,7 @@ def outbound(name: str, arguments: Mapping[str, Any], env: Mapping[str, str] | N
 
 
 POLICIES: Mapping[str, Callable[[str, Mapping[str, Any]], tuple[str | None, dict[str, Any]]]] = {
-    "rastro": rastro, "engram": engram, "outbound": outbound}
+    "rastro": rastro, "engram": engram, "livespec": livespec, "outbound": outbound}
 
 
 def screen(message: Any, policy: Callable[[str, Mapping[str, Any]], tuple[str | None, dict[str, Any]]]
