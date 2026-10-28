@@ -34,6 +34,18 @@
   something changed, so a quiet task sends nothing. `progress.words` and `progress.warnings` are
   new beside `progress.line`, which says the same words as before.
 
+### Changed
+
+- **The board no longer opens a browser tab for each task:** `/cauce:ui` now runs `cauce ui`
+  (no tab; `--open` once, only when the person asks to see it), `/cauce` opens the board once,
+  and the page shows every task of a session in itself: the Sessions screen lists the work a
+  session sent and opens each task inside the same page, live. `cauce ui --tabs` stays as an
+  explicit opt-in, capped: with `--open` it opens one tab for the session
+  (`#session=<id>`), the server remembers the sessions that have theirs, and a later
+  `--tabs` for the same session says it has one instead of opening another. The thread that
+  followed a session and opened a tab for each piece of work it sent, `POST /api/follow` and
+  the eight-tab cap are gone (`POST /api/tab` takes their place).
+
 ### Fixed
 
 - **A check slower than its limit no longer burns a night of climbs** (tasks that ran 4+ hours

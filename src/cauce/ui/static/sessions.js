@@ -52,7 +52,8 @@ export async function openSession(id, ctx) {
   const d = await get(`/api/sessions/${encodeURIComponent(id)}`);
   const el = drawer();
   delete el.dataset.task;
-  const close = () => { el.hidden = true; el.replaceChildren(); };
+  el.dataset.session = id;
+  const close = () => { delete el.dataset.session; el.hidden = true; el.replaceChildren(); };
   const s = d.session;
   el.replaceChildren(
     h("header", {},

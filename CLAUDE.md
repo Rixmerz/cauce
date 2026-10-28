@@ -788,11 +788,13 @@ yields the default kind, not a guess.
   `kindChip`, `cellChip`), always beside their word. The kind hues keep their
   fixed order; a change to them is checked for colour-blind separation in
   both themes. The mod's text carries the same tones as emoji markers.
-- A tab per piece of work (`cauce ui --tabs`) is opened by the server's own
-  follow thread for the sessions it was given, never because a page asked: a GET
-  opens nothing, and a session is added only with the token (`/api/follow`).
-  Each piece of work gets one tab once; what is over `server.MAX_TABS` is left
-  to the board, never opened later.
+- The UI opens no browser tab by itself, and never one per piece of work (`/cauce:ui`
+  runs `cauce ui`; `--open` once, only when the person asks): a session's tasks are all in
+  its page (`#session=<id>`, the Sessions screen, each task opened inside it). `--tabs` is
+  the person's opt-in and gives a session one tab at most: the server holds the sessions
+  that have it (`UIServer.claim_tab`), a later run asks with the token (`/api/tab`) and is
+  told `claimed: false`, and a server handed over to a newer cauce passes the claims on.
+  A GET opens nothing.
 - A task page polls only while it shows a running task (`/api/tasks/N/live`,
   every 5 s; tool calls write no events), and what it shows of a worker's calls
   is what `phase.calls` keeps: when, the tool, its signature, whether it went

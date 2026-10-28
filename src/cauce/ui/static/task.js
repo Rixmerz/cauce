@@ -194,6 +194,7 @@ export async function openTask(id, quiet = false) {
   const t = d.task;
   const el = drawer();
   el.dataset.task = String(id);
+  delete el.dataset.session;
   const actions = [];
   if (t.status === "running" || t.status === "queued") {
     // Two steps: a stray click in the drawer must not stop a run. The second click

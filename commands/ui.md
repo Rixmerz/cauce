@@ -5,14 +5,17 @@ description: Open cauce's board — what needs you, what is running and what it 
 Start the board in the background and tell the user where it is:
 
 ```bash
-cauce ui --open --tabs
+cauce ui
 ```
 
-`--tabs` opens one more tab for each piece of work this session has going on
-(each workflow run, and each task queued or running outside a run, at most
-eight), and one for each it sends later while the board serves. Each tab shows
-its state in its title. Leave `--tabs` out when the user asks for the board
-alone.
+It opens no browser tab: the user opens the address when they want it, and the
+page shows every task of the session (its **Sessions** screen, one session's work
+with each task opened inside the page), so no piece of work needs a tab of its
+own. Add `--open` only when the user asks to see the board now, and only once;
+never open a tab for each task you send. `--tabs` is the user's explicit
+opt-in (`cauce ui --open --tabs`): one tab for this session, at most, which
+shows all its work inside and which a later run reuses instead of opening
+another. Do not pass it on your own.
 
 Run it with `run_in_background`, so the session stays usable; it serves until
 the session ends or the user stops it, and it follows plugin updates by itself.
@@ -20,7 +23,7 @@ It listens on `127.0.0.1:8790` only. If it says this same version already
 serves that port, the board is there: give the user that address. If it says
 an older cauce UI holds the port, tell the user: that server shows the old
 version's board until they stop it. Meanwhile, run
-`cauce ui --port <another> --open`. If another program holds the port, use
+`cauce ui --port <another>`. If another program holds the port, use
 another port too.
 When `cauce` alone is not found (exit 127), it is
 `${CLAUDE_PLUGIN_ROOT}/bin/cauce`; call it by that path.

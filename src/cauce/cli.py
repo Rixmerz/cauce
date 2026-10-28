@@ -2280,21 +2280,16 @@ def cmd_ui(args: argparse.Namespace) -> int:
         ui = server.serve(args.port)
     url = f"http://127.0.0.1:{ui.server_address[1]}/"
     print(f"cauce UI at {url} (Ctrl-C stops it)", flush=True)
-    if args.open:
+    sessions = _tabs_sessions(args)
+    if args.open and not sessions:
         import webbrowser
 
         webbrowser.open(url)
-    for i, session in enumerate(_tabs_sessions(args)):
-        # With --open, the work going on now gets its tabs at once; without (a server handed
-        # over to a newer cauce), only what starts from here.
-        store = Store.open()
-        try:
-            _say_tabs(server.open_tabs(store, url, session, ui.seen, ui.open_tab,
-                                       limit=server.MAX_TABS if args.open and not i else 0))
-        finally:
-            store.close()
-        ui.follow(session)
-        print(f"a tab opens for each piece of work session {session[:8]} starts from now", flush=True)
+    for session in sessions:
+        # One tab per session, which is the board narrowed to its work: opened with --open, else
+        # only claimed (a server handed over to a newer cauce holds the claims; the tabs are open).
+        if ui.claim_tab(session) and args.open:
+            _open_session_tab(url, session)
     try:
         ui.serve_forever()
     except KeyboardInterrupt:
@@ -2306,7 +2301,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
 
 
 def _tabs_sessions(args: argparse.Namespace) -> list[str]:
-    """The sessions whose work gets tabs: `--session`, else the one this command was typed in."""
+    """The sessions that get their one tab: `--session`, else the one this command was typed in."""
     if not args.tabs:
         return []
     sessions = args.session or [s for s in [os.environ.get("CAUCE_SESSION_ID")] if s]
@@ -2315,12 +2310,14 @@ def _tabs_sessions(args: argparse.Namespace) -> list[str]:
     return sessions
 
 
-def _say_tabs(result: tuple[list[dict], int]) -> None:
-    opened, left = result
-    for tab in opened:
-        print(f"  tab: {tab['title']}", flush=True)
-    if left:
-        print(f"  {left} more going on: the board lists them", flush=True)
+def _open_session_tab(url: str, session: str) -> None:
+    import webbrowser
+
+    from cauce.ui import api
+
+    tab = api.session_tab(session)
+    webbrowser.open_new_tab(f"{url}#{tab['fragment']}")
+    print(f"  tab: {tab['title']} (its work shows inside it; no more tabs open for it)", flush=True)
 
 
 def _ui_port_taken(args: argparse.Namespace) -> int:
@@ -2335,17 +2332,18 @@ def _ui_port_taken(args: argparse.Namespace) -> int:
         if args.open:
             import webbrowser
 
-            webbrowser.open(url)
-            for session in _tabs_sessions(args):
-                seen: set[str] = set()
-                store = Store.open()
-                try:
-                    _say_tabs(server.open_tabs(store, url, session, seen, webbrowser.open_new_tab))
-                finally:
-                    store.close()
-                if not server.follow_there(args.port, session, seen):
-                    print("that server could not be asked to open tabs for work this session starts later",
+            sessions = _tabs_sessions(args)
+            if not sessions:
+                webbrowser.open(url)
+            for session in sessions:
+                claimed = server.claim_tab_there(args.port, session)
+                if claimed:
+                    _open_session_tab(url, session)
+                elif claimed is None:
+                    print("that server could not be asked for this session's tab, so none was opened",
                           file=sys.stderr)
+                else:
+                    print(f"session {session[:8]} has its tab already: it shows all its work", flush=True)
         return 0
     if found and found["cauce"]:
         print(f"port {args.port} is held by a cauce UI {found['version'] or 'from before 0.4.1'}, started before "
@@ -2943,9 +2941,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=8790)
     p.add_argument("--open", action="store_true", help="open it in the browser")
     p.add_argument("--tabs", action="store_true",
-                   help="a tab for each piece of work the session sends (with --open, the work going on too)")
+                   help="with --open, one more tab for the session, showing all its work inside (at most one "
+                        "per session while the board serves); off by default")
     p.add_argument("--session", action="append",
-                   help="a session --tabs follows (default: the one this runs in); may repeat")
+                   help="a session --tabs opens a tab for (default: the one this runs in); may repeat")
     p.set_defaults(func=cmd_ui)
 
     p = sub.add_parser("link", help="put `cauce` on a terminal's PATH; survives plugin updates")

@@ -24,6 +24,12 @@ repeats the work you delegated, at the cost of this session's whole
 context. Open the diff only when the person asks, or when the verdict
 itself says something was not checked or not met.
 
+**The board never gets a tab per task.** `/cauce:ui` runs `cauce ui`, which
+opens nothing; the **Sessions** screen shows every task this session sent, each
+opened inside the same page. Open the browser (`--open`) once, only when the
+person asks to see it. `--tabs` is theirs to ask for: one tab for the session,
+at most, that a later run reuses.
+
 **Each request has its way.** cauce reads every request for the way it is
 best done, with no model, and tells you only when it is not you: a
 `cauce route:` line says a worker (with what each way would read: the
