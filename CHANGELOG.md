@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.59.0] - 2026-10-28
+
 ### Added
 
 - **Installed upstream skills come first:** a bundled skill whose authors publish it as a Claude
