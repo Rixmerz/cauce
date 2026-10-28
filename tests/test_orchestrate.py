@@ -632,7 +632,10 @@ def test_a_run_leaves_an_event_trail_a_watcher_can_follow(git_repo, store):
     assert events[1]["data"] == {"session": None, "dead_ends": 0, "areas": [],
                                  "context_chars": events[1]["data"]["context_chars"],
                                  # Which role it wore, and which version of its text (`roles.version`).
-                                 "role": "implementer", "role_version": events[1]["data"]["role_version"]}
+                                 "role": "implementer", "role_version": events[1]["data"]["role_version"],
+                                 # Where each of its skills was read from: bundled here, no plugin installed.
+                                 "skill_sources": events[1]["data"]["skill_sources"]}
+    assert set(events[1]["data"]["skill_sources"].values()) == {"bundled"}
     assert events[2]["data"]["since_start_s"] >= 0 and events[2]["data"]["brief_chars"] > 0
     assert {"wall_s", "duration_s", "check_s", "verifier_s", "input_tokens"} <= set(events[3]["data"])
     assert {"wall_s", "hold_s", "services_s", "worker_s", "check_s", "verifier_s"} <= set(events[-1]["data"])
