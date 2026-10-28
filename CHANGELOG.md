@@ -48,6 +48,13 @@
 
 ### Fixed
 
+- **A whole check that timed out after a claimed pass no longer climbs the model.** Only a check
+  whose failures were the test runners' own timeout lines was read as the machine's load; one that
+  ran past its own time as a whole (`VERIFY_TIMEOUT_S`) was `inconclusive`, so a busy machine
+  climbed sonnet to opus and ended in `replan` or `failed`. It is now `environment` with `load`:
+  the same cell again after each of `escalate.LOAD_WAITS`, no attempt counted, and a stop as
+  `load` with the work kept when it persists.
+
 - **A check slower than its limit no longer burns a night of climbs** (tasks that ran 4+ hours
   with the repository's 15-minute check). The check failed on three tests that also fail at the
   base, but the base's run timed out, so each attempt was charged `code_bug` and climbed

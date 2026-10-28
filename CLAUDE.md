@@ -883,7 +883,8 @@ yields the default kind, not a guess.
   three times in a row, or runs past `habits.SLOW_SECONDS`, turns itself off. Tests run
   with `CAUCE_HABIT_REVIEW=off` and `CAUCE_HABIT_AUTO=off`.
 - A check whose failures are mostly the test runners' own timeout lines
-  (`launch.check_timed_out`) after a claimed pass is `environment` with
+  (`launch.check_timed_out`) after a claimed pass, or that ran past its own
+  time as a whole (`VERIFY_TIMEOUT_S`), is `environment` with
   `load`: the level halves on it, the same cell goes again after each of
   `escalate.LOAD_WAITS`, and such a try counts toward no attempt ceiling and
   is no dead end; one that persists stops as `load`, its work kept.

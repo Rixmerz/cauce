@@ -3597,8 +3597,13 @@ def _verified(result: launch.WorkerResult, command: str, workdir: Path,
     code, full = _steady_check(command, workdir, baseline)
     output = full[-CHECK_OUTPUT_KEPT:]
     if code is None:
-        return dataclasses.replace(result, passed=False, failure=Failure.INCONCLUSIVE,
-                                   summary=f"`{command}` timed out after the claimed pass")
+        # The whole check ran past its own time after the worker's own run passed: the machine's
+        # load, as tests out of time are (`check_timed_out`), never an answer to climb from.
+        timed = f"the whole check ran past {VERIFY_TIMEOUT_S}s"
+        return dataclasses.replace(result, passed=False, failure=Failure.ENVIRONMENT, load=timed, starved="load",
+                                   evidence=output or timed,
+                                   summary=f"`{command}` timed out after the claimed pass ({timed}): "
+                                           f"{result.summary}")
     if code == 0:
         return result
     tail = _tail_of(full, workdir, baseline)

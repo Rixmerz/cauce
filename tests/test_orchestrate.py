@@ -1963,6 +1963,25 @@ def test_tests_that_keep_timing_out_under_load_stop_with_the_work_kept_and_no_at
     assert level.value == 2 and level.reason == "halved, a check's tests timed out under load"
 
 
+def test_a_whole_check_that_timed_out_after_a_claimed_pass_is_the_load_and_never_climbs(
+        git_repo, store, monkeypatch):
+    from cauce import orchestrate
+    from cauce.escalate import LOAD_WAITS
+
+    monkeypatch.setattr(orchestrate, "_sleep", lambda s: None)
+    monkeypatch.setattr(orchestrate, "_run_check", lambda command, workdir, timeout=None: (None, ""))
+    alone = orchestrate._verified(ok(), "npm test", git_repo)
+    assert alone.failure is Failure.ENVIRONMENT and alone.starved == "load" and alone.load
+    assert "timed out after the claimed pass" in alone.summary
+    tries = len(LOAD_WAITS) + 1
+    script = Script(*[ok("467/467 passed") for _ in range(tries)], write="app.py")
+    report = run("fix the cart total", git_repo, store, Options(max_attempts=2, verify="npm test"),
+                 registry={}, launcher=script, classifier=kind("implement"))
+    assert len(script.specs) == tries and {s.cell for s in script.specs} == {script.specs[0].cell}
+    assert report.status == "blocked" and report.stop.cause == "load" and report.branch
+    assert not store.dead_ends(limit=5)
+
+
 def test_a_task_that_changed_many_files_counts_them_all_on_its_ending(git_repo, store):
     def launcher(spec):
         for i in range(106):
