@@ -570,6 +570,18 @@ listens stops the task before any money is spent. A task that only mentions a
 dev server, and whose check (`--verify`) needs none (lint, tests, a build), is
 not told to start one.
 
+**A check that cannot start costs no worker.** Before the first attempt, cauce
+reads `--verify` in the directory it will run in, with the PATH it will run
+with (the project's Node first): every program it starts must be found there,
+every `npm|pnpm|yarn|bun run <script>` and `deno task <name>` must exist, and
+the Node the project declares must be installed. When one fails, the task stops
+as `preflight` with the exact fix (`write python3 in --verify`, `nvm install
+22`, the scripts package.json does have): nothing ran, no attempt is counted,
+and `cauce resume <id>` goes on once it is fixed. What it cannot tell (a
+substitution, a `cd`, a workspace flag, a script the request itself adds) is
+said and the task goes on; a `.venv` that imports the project's package from
+another directory is a warning.
+
 `cauce run` prints the task number at once, and each attempt as it starts
 and ends, on stderr; the report comes on stdout when the task stops. A
 livespec index that is missing or stale is built or refreshed before the worker

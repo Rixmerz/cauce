@@ -1204,7 +1204,8 @@ def test_a_dry_run_and_a_run_without_a_listener_say_nothing(git_repo, store, cap
     ("echo 'Node.js version v22.16.0 detected.'; "
      "echo 'The build tool requires a minimum Node.js version of v22.22.3.'; exit 3",
      "requires a minimum Node.js version"),
-    ("no-such-tool-anywhere --run", "exit 127"),
+    # a program the preflight cannot see (inside `sh -c`), so the check runs and exits 127
+    ("sh -c 'no-such-tool-anywhere --run'", "exit 127"),
 ])
 def test_a_check_that_cannot_run_is_the_environment_and_stops_the_work_it_let_run(git_repo, store, check, why):
     script = Script(WorkerResult(True, None, "upgraded the lockfile", "0 vulnerabilities", ("package-lock.json",),
