@@ -540,7 +540,7 @@ EOF
 cauce resume 12 --allow "Bash(node:*)"                         # a task that stopped, from its kept work
 cauce resume 12 --allow "Bash(node:*)" --keep                  # …and every task here gets the rule from now on
 cauce resume 12 --surface src/sync/clock.ts                    # …one its surfaces kept from the cause, with more
-cauce show 12                                                  # attempts, moves, each run and messages
+cauce show 12                                                  # attempts, moves, each run, failed check output, messages
 cauce tasks --all --workers                                    # only work a worker ran, by project
 cauce memory search "redirect query string"                    # dead ends, every repo
 cauce memory record --problem "redirect drops query" --fix "use url_for(_external)" --outcome failed --why "..."
@@ -1198,6 +1198,16 @@ See [`src/cauce/skills/README.md`](src/cauce/skills/README.md) and
 - **The repository's own check, with room to finish.** `--verify` runs the
   command your CI runs, and gets 30 minutes: a full suite on a machine busy
   with many workers measured 19 minutes, and a cut check reads as a failure.
+- **A red check is compared with the base.** A check that fails runs again at
+  the commit the work started from (each repository at its own commit for a
+  folder of several), given at least twice the time the work's own run took.
+  Failures that were there before fail no work. A base that cannot tell is read
+  against the last base run that could; when that does not settle it, the task
+  stops as `base_unknown` with its work kept, never a climb. A worker that says
+  its failure was there before is checked the same way, never taken at its word.
+  Two attempts that leave the same failing tests stop as `same_failures`
+  instead of climbing again. `cauce show <id>` keeps what the check printed for
+  each attempt that failed it, and the next attempt's brief gets it too.
 - **Criteria.** A request that lists items is checked item by item: `S1..Sn`,
   the person's own words, in every brief. A pass answers each one.
 - **Findings.** Reviews report records: where, what, how it is known
