@@ -1587,6 +1587,19 @@ def test_a_request_from_an_empty_stdin_is_refused_before_anything_starts(argv, g
         store.close()
 
 
+@pytest.mark.parametrize("text", ["", "   ", "#review", "  #fable #plan \n"])
+@pytest.mark.parametrize("argv", [["run", "--dry-run", "--no-model"], ["queue", "add"]])
+def test_a_request_with_no_task_in_it_is_refused_before_anything_starts(text, argv, git_repo, capsys):
+    """An empty or tag-only request is asked for again, never planned and climbed."""
+    assert cli.main([argv[0], *argv[1:2], text, *argv[2:], "--repo", str(git_repo)]) == 2
+    assert "holds no task" in capsys.readouterr().err
+    store = Store.open()
+    try:
+        assert store.list_tasks(limit=5) == []
+    finally:
+        store.close()
+
+
 def test_config_livespec_wait_takes_whole_seconds(capsys, monkeypatch):
     from cauce import config
 

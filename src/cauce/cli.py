@@ -105,16 +105,25 @@ def _text(value: str) -> str:
 
 def _request_from_stdin(args: argparse.Namespace) -> bool:
     """Reads the request of `cauce run -` / `cauce queue add -` once, into `args.text`; False,
-    said, when stdin held nothing. A quoted heredoc is the way to send text with backticks or `$(…)`
+    said, when stdin held nothing or the request is empty or only tags. A quoted heredoc is the
+    way to send text with backticks or `$(…)`
     in it: inside a double-quoted argument the shell runs them before cauce sees the request."""
-    if args.text != "-":
-        return True
-    args.text = sys.stdin.read()
-    if args.text.strip():
-        return True
-    print("cauce: the request read from stdin is empty; send it as `cauce run - <<'EOF'` … `EOF` "
-          "(a quoted heredoc keeps backticks and $(…) as text)", file=sys.stderr)
-    return False
+    if args.text == "-":
+        args.text = sys.stdin.read()
+        if not args.text.strip():
+            print("cauce: the request read from stdin is empty; send it as `cauce run - <<'EOF'` … `EOF` "
+                  "(a quoted heredoc keeps backticks and $(…) as text)", file=sys.stderr)
+            return False
+    if not _TAGS_ONLY.sub(" ", args.text).strip():
+        # Nothing to do is no shallow attempt: more effort on an empty request only pays again for nothing.
+        print("cauce: the request holds no task (it is empty, or only tags); nothing was started. Send "
+              "the task's full text — ask the person for it if it was cut off", file=sys.stderr)
+        return False
+    return True
+
+
+#: Tags (`#review`, `#fable`) and whitespace: a request of only these asks for nothing.
+_TAGS_ONLY = re.compile(r"#[A-Za-z][A-Za-z-]*\b|\s+")
 
 
 def _task_numbers(command: str, words: list[str]) -> list[int] | None:

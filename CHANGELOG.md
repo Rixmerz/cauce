@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A request with no task in it is refused, never climbed.** An empty request given as an argument,
+  or one of only whitespace or tags (`#review`), was planned and its inconclusive answer earned more
+  effort. `cauce run` and `cauce queue add` now refuse it before anything is recorded, exit 2, and say
+  to send the task's full text.
+
 ## [0.58.0] - 2026-10-28
 
 ### Added
