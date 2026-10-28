@@ -1216,7 +1216,8 @@ def run(
     # the tasks that read it (`notes.weigh`), never by a guess.
     worn: dict[str, Any] = {}
     if the_plan.role is not None:
-        worn = {"role": role_name, "role_version": roles.version(the_plan.role)}
+        worn = {"role": role_name, "role_version": roles.version(the_plan.role),
+                "skill_sources": roles.skill_sources(the_plan.role)}
         if revisions.enabled():
             lessons, given = revisions.for_brief(store, key, role_name, task["id"])
             worn.update(given)

@@ -121,6 +121,12 @@ class Skill:
     body: str
     folder: Path
     origin: str
+    #: The installed plugin version it was read from, for an upstream plugin's copy.
+    version: str = ""
+
+    @property
+    def source(self) -> str:
+        return f"{self.origin}@{self.version}" if self.version else self.origin
 
 
 @dataclass
@@ -430,17 +436,47 @@ def skill_folders(name: str, env: Mapping[str, str] | None = None) -> list[tuple
             ("claude", claude / "skills" / name)]
 
 
+#: Bundled skills whose upstream authors publish them as a Claude Code plugin:
+#: name -> (plugin, skill). When the person has that plugin installed, its own
+#: `SKILL.md` (newest version, read from the plugin cache, never a repository) takes
+#: the place of the vendored copy, which stays the fallback.
+UPSTREAM: dict[str, tuple[str, str]] = {"ponytail": ("ponytail", "ponytail")}
+
+
+def _read_skill(name: str, folder: Path, origin: str, version: str = "", *, strict: str = "") -> Skill | None:
+    """A skill's file read; with `strict`, one with no body or another `name` is none."""
+    path = folder / "SKILL.md"
+    try:
+        if not path.is_file():
+            return None
+        meta, body = split_frontmatter(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, RoleError):
+        return None
+    if strict and (not body.strip() or meta.get("name", strict) != strict):
+        return None
+    description = meta.get("description") if isinstance(meta.get("description"), str) else ""
+    return Skill(name, description, body, folder, origin, version)
+
+
+def upstream_skill(name: str, env: Mapping[str, str] | None = None) -> Skill | None:
+    """The installed upstream plugin's copy of a bundled skill, when it is there and
+    well formed (frontmatter that parses, a body, its `name` the skill's if given)."""
+    if name not in UPSTREAM:
+        return None
+    plugin, skill_name = UPSTREAM[name]
+    from cauce import plugins
+
+    for root in plugins.versions(os.environ if env is None else env, plugin)[:1]:
+        return _read_skill(name, root / "skills" / skill_name, "plugin", root.name, strict=skill_name)
+    return None
+
+
 def find_skill(name: str, env: Mapping[str, str] | None = None) -> Skill | None:
     for origin, folder in skill_folders(name, env):
-        path = folder / "SKILL.md"
-        if not path.is_file():
-            continue
-        try:
-            meta, body = split_frontmatter(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, RoleError):
-            continue
-        description = meta.get("description") if isinstance(meta.get("description"), str) else ""
-        return Skill(name, description, body, folder, origin)
+        if origin == "bundled" and (installed := upstream_skill(name, env)) is not None:
+            return installed
+        if (skill := _read_skill(name, folder, origin)) is not None:
+            return skill
     return None
 
 
@@ -466,19 +502,36 @@ class Briefing:
     read_dirs: tuple[Path, ...] = ()
     skills: tuple[str, ...] = ()
     missing: tuple[str, ...] = ()
+    #: Where each skill found came from: origin, and the plugin version for one
+    #: read from an installed upstream plugin (`ponytail` -> `plugin@5.3.2`).
+    sources: Mapping[str, str] = field(default_factory=dict)
 
 
 #: How many hex digits of its hash name a version of a role's text.
 VERSION_CHARS = 12
 
 
-def version(role: Role) -> str:
+def skill_sources(role: Role, env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Where each skill the role carries or offers is read from on this machine."""
+    out = {}
+    for name in dict.fromkeys((*role.skills, *role.on_demand)):
+        skill = find_skill(name, env)
+        out[name] = skill.source if skill is not None else "missing"
+    return out
+
+
+def version(role: Role, env: Mapping[str, str] | None = None) -> str:
     """Which version of its text a role is: a short hash of its resolved instructions (name,
     description, its own text after `extends`) and the names of the skills it carries and
     offers. A skill's text and where it lives on this machine are left out: the same role
-    copied to another machine is the same version."""
-    payload = json.dumps([role.name, role.description, role.prompt, list(role.skills), list(role.on_demand)],
-                         ensure_ascii=False)
+    copied to another machine is the same version. A skill read from an installed upstream
+    plugin is another text, so its plugin and version are in the hash (a role's trial then
+    compares like with like); with none, the hash is what it always was."""
+    fields: list[Any] = [role.name, role.description, role.prompt, list(role.skills), list(role.on_demand)]
+    upstream = {n: s for n, s in skill_sources(role, env).items() if s.startswith("plugin@") and n in UPSTREAM}
+    if upstream:
+        fields.append(sorted(upstream.items()))
+    payload = json.dumps(fields, ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:VERSION_CHARS]
 
 
@@ -489,11 +542,13 @@ def brief(role: Role, env: Mapping[str, str] | None = None) -> Briefing:
     if role.prompt:
         parts.append(role.prompt)
     carried, offered, missing, read_dirs = [], [], [], []
+    sources: dict[str, str] = {}
     for name in role.skills:
         skill = find_skill(name, env)
         if skill is None:
             missing.append(name)
             continue
+        sources[name] = skill.source
         read_dirs.append(skill.folder)
         if len(skill.body) > MAX_INLINE_CHARS:
             offered.append(skill)
@@ -510,6 +565,7 @@ def brief(role: Role, env: Mapping[str, str] | None = None) -> Briefing:
         if skill is None:
             missing.append(name)
             continue
+        sources[name] = skill.source
         read_dirs.append(skill.folder)
         offered.append(skill)
     if offered:
@@ -517,7 +573,7 @@ def brief(role: Role, env: Mapping[str, str] | None = None) -> Briefing:
                      + "\n".join(f"- `{s.name}`: {s.description or 'no description'} — {s.folder / 'SKILL.md'}"
                                  for s in offered))
     return Briefing(role, "\n\n".join(parts), tuple(dict.fromkeys(read_dirs)),
-                    tuple(s.name for s in carried), tuple(missing))
+                    tuple(s.name for s in carried), tuple(missing), sources)
 
 
 def read_rules(briefing: Briefing) -> tuple[str, ...]:

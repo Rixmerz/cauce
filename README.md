@@ -1130,7 +1130,10 @@ unless `replace_prompt: true`), and `match` makes a role a specialization:
 `match: [pyproject.toml]` makes `backend-python` the one picked over the
 general implementer in a Python project. A skill is found by name in your
 `<cauce home>/skills/`, then cauce's, then Claude Code's (`~/.claude/skills/`,
-and `plugin:skill` for an installed plugin's).
+and `plugin:skill` for an installed plugin's). A bundled skill whose authors
+publish it as a plugin (`ponytail`) is read from that plugin when you have it
+installed, newest version, and from cauce's copy otherwise; the brief records
+which.
 
 **Teams.** One machine runs sessions on several projects with different
 purposes, so you keep several teams and give each project one. A project's
