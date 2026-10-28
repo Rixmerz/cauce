@@ -102,6 +102,24 @@
   the next attempt's brief, a continued session's note and a resume start from it instead of the
   last 1500 characters of the raw output. Attempts recorded before this keep showing their
   evidence as they did. No schema change: the tail lives on the event.
+- **A check that already failed at the base was charged to the work in a folder of several
+  repositories:** 0.34.0 promised that a check failing at the base fails no work, but the
+  comparison needs the commit the work started from, and a folder that holds two repositories
+  has none, so the run had no comparison at all. One failing test the request never touched
+  cost three attempts (sonnet/medium, sonnet/high, opus/high) and a `replan`. The base of such a
+  run is now each repository inside the folder at its own commit, laid out as the folder is
+  (`cd web && npm test` reads the same paths), and the check runs there; the work ends as passed
+  with the failure it shares with the base, and the ending offers the `bugfix --after`. A run
+  sent from a folder inside a checkout runs the base's check in that folder's copy, not at the
+  checkout's root. What the folder holds outside those repositories is not copied to the base.
+- **A worker's word that the failure was already there is checked, not dropped:** a report that did
+  not pass (`code_bug`, `test_bug`, `inconclusive`, `environment`) and says its check's failure was
+  there before its work (a finding marked `pre-existing`, or words like "already fails at the base")
+  makes cauce run the check and compare it with the base. Every failing line at the base too, and
+  every criterion the request lists answered and met: the work passes. Otherwise the report stands,
+  with the comparison added for
+  the next attempt (the lines that are new). Tests cover a single checkout, a checkout with no
+  worktree, a folder inside a checkout and a folder of several repositories.
 
 ## [0.56.0] - 2026-10-27
 

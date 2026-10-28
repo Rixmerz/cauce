@@ -955,9 +955,11 @@ def verdict_lines(verdict: Mapping | None) -> list[str]:
     lines = []
     check = verdict.get("check")
     if isinstance(check, Mapping) and check.get("state"):
-        lines.append(f"  check: `{check['command']}` {check['state']}: it fails at the base commit "
-                     f"{str(check.get('base') or '')[:12]} too, with the same {check.get('failures')} failure(s), "
-                     "so the work stood; they were there before it")
+        from cauce import isolate
+
+        lines.append(f"  check: `{check['command']}` {check['state']}: it fails at the base "
+                     f"{isolate.base_label(str(check.get('base') or ''))} too, with the same {check.get('failures')} "
+                     "failure(s), so the work stood; they were there before it")
     elif isinstance(check, Mapping):
         runs = int(check.get("runs") or 1)
         lines.append(f"  check: `{check['command']}` passed, run by cauce in its worktree"
@@ -992,11 +994,13 @@ FOUND_BEFORE_SHOWN = 3
 def _failing_at_base(data: Mapping) -> dict[str, str]:
     """A `check_preexisting` event as a problem that was already there: where (the base) and
     what (the command and its first failing lines), for the bugfix an ending offers."""
+    from cauce import isolate
+
     failures = [str(x) for x in data.get("failures") or ()]
     more = int(data.get("n") or len(failures)) - 3
     what = f"`{data.get('command')}` fails at the base too: " + "; ".join(failures[:3]) + (
         f"; and {more} more" if more > 0 else "")
-    return {"where": f"base {str(data.get('base') or '')[:12]}", "what": what}
+    return {"where": f"base {isolate.base_label(str(data.get('base') or ''))}", "what": what}
 
 
 def _found_before(store: Store, ended: Mapping) -> list[str]:

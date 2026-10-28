@@ -1268,12 +1268,16 @@ def run(
     deciding = options.ledger if options.ledger and options.ledger.get("role") in ledger_mod.WORDS else None
     settled: ledger_mod.Outcome | None = None
     base_commit = workspace.base if workspace else _head(repo_dir)
+    # In a folder that is no checkout, the base is each repository inside it at its own commit.
+    base_places = _base_places(repo_dir) if workspace is None and base_commit is None else ()
     # A red check is compared with the same check at the commit the work started from:
     # what failed there too was not this work's doing (`_against_base`).
-    baseline = Baseline(store, task["id"], workspace.repo_dir if workspace else repo_dir, base_commit, home(),
+    baseline = Baseline(store, task["id"], workspace.repo_dir if workspace else repo_dir,
+                        base_commit or isolate.places_label(base_places), home(),
                         must_fix=the_plan.kind in _REPRODUCES,
-                        runs=flake_fix_runs(the_plan.kind, task.get("body") or task.get("title") or "")) \
-        if base_commit and options.verify else None
+                        runs=flake_fix_runs(the_plan.kind, task.get("body") or task.get("title") or ""),
+                        places=base_places) \
+        if (base_commit or base_places) and options.verify else None
     # Turns are the one room dial, and they have one ceiling: a number asked for from
     # outside (a resume, a model's tool call) never raises it.
     cell, turns = the_plan.start, min(options.max_turns or the_plan.turns or turns_for(the_plan.kind),
@@ -1480,6 +1484,8 @@ def run(
             if baseline is not None and not (raced is not None and raced.checked):
                 baseline.found = None
             ahead = None
+            # Whether cauce's own check already ran, and was compared with the base, on this attempt.
+            checked_here = bool(raced is not None and raced.checked)
             if (result.passed and options.verify and not (raced is not None and raced.checked)) or (
                     _settles(result, options.verify) and result.changed_paths):
                 # Where the attempt is now, for whoever watches it (`cauce.progress`): its worker is done.
@@ -1490,12 +1496,16 @@ def run(
                     text=text, spec=spec, workdir=workdir, base=base_commit, ledger=ledger, launcher=launcher,
                     registry=registry)
                 result = _verified(result, options.verify, workdir, baseline)
+                checked_here = True
             elif _settles(result, options.verify) and (
                     isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
+                checked_here = True
                 unchecked = "it was refused a command" if result.failure is Failure.PERMISSION else \
                     "it ran out of turns"
                 result = _settled(result, options.verify, workdir, baseline)
                 report.unchecked = unchecked if result.passed else ""
+            if not (result.passed or checked_here):
+                result = _weigh_base_claim(result, options.verify, workdir, baseline, workspace, spec.criteria)
             stands = ""
             if result.failure in REPLAN and not result.denied and (
                     isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
@@ -2554,6 +2564,16 @@ def _changed_places(repo_dir: Path, changed: Sequence[str]) -> list[str]:
     return [n for n in in_place_files(names, changed) if n != "(the folder)"]
 
 
+def _base_places(folder: Path) -> tuple[tuple[str, str], ...]:
+    """Each repository inside a folder that is no checkout, by its path from the folder, with the
+    commit it is at: what a check run from that folder is compared at. A repository with no commit
+    yet has no base to run at and is left out; () in a checkout, which has one commit."""
+    if repo.toplevel(folder) is not None:
+        return ()
+    found = ((c.relative_to(folder).as_posix(), _head(c)) for c in launch.nested_checkouts(folder))
+    return tuple((name, commit) for name, commit in found if commit)
+
+
 def _head(repo_dir: Path) -> str | None:
     try:
         return isolate.head(repo_dir, "HEAD")
@@ -3230,6 +3250,9 @@ class Baseline:
     check_s: float = 0.0
     #: Why the last check's failure could not be told from the base's, else "" (`_against_base`).
     unknown: str = ""
+    #: A run that started in a folder that is no checkout: each repository inside it and its commit
+    #: (`base` is then their line, `isolate.places_label`). Empty for a run in one checkout.
+    places: tuple[tuple[str, str], ...] = ()
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _owner: int = field(default_factory=threading.get_ident, repr=False)
 
@@ -3263,6 +3286,20 @@ class Baseline:
             return None
         return found if isinstance(found, dict) and found.get("base") else None
 
+    @contextlib.contextmanager
+    def _base_tree(self):
+        """(the base's copy, where the check runs in it): one detached worktree, or a folder of them
+        for a run that started in a folder of repositories. The check runs where the work's did: a
+        run sent from a folder inside a checkout runs it in that folder's copy, not the root's."""
+        if self.places:
+            with isolate.at_bases(self.repo_dir, self.places, self.root) as path:
+                yield path, path
+            return
+        with isolate.at_base(self.repo_dir, self.base, self.root) as path:
+            top = repo.toplevel(self.repo_dir)
+            inside = self.repo_dir.resolve().relative_to(top.resolve()) if top is not None else Path()
+            yield path, path / inside if (path / inside).is_dir() else path
+
     def at_base(self, command: str) -> dict[str, Any]:
         """The command's run at the base: {"code", "failures", "cannot"}, from the store's
         meta when it ran there in the last `BASE_RUN_KEPT_S`, else run now and kept. A run
@@ -3277,9 +3314,9 @@ class Baseline:
             if kept is not None and not _expired(kept):
                 return json.loads(kept)
             try:
-                with isolate.at_base(self.repo_dir, self.base, self.root) as path:
-                    code, output = _run_check(command, path, timeout=base_timeout_s(self.check_s))
-                    failures = launch.check_failures(output, roots=(path,))
+                with self._base_tree() as (path, where):
+                    code, output = _run_check(command, where, timeout=base_timeout_s(self.check_s))
+                    failures = launch.check_failures(output, roots=(where, path))
             except (isolate.IsolationError, OSError) as exc:
                 return {"code": None, "failures": [],
                         "cannot": clip(f"no worktree could be made at the base ({exc})", 300, one_line=True)}
@@ -3326,7 +3363,7 @@ def _against_base(baseline: Baseline | None, command: str, output: str, workdir:
         return False, ("cauce could not read which tests or files failed from its output, so it cannot tell "
                        "whether they failed before this work: the failure is read as this work's")
     at = baseline.at_base(command)
-    short = baseline.base[:12]
+    short = isolate.base_label(baseline.base)
     if at.get("cannot"):
         return _unsure(baseline, command, work, at, claim)
     if at.get("code") == 0:
@@ -3665,6 +3702,62 @@ def _settled(result: launch.WorkerResult, command: str, workdir: Path,
         result, passed=True, failure=None, evidence=output or f"`{command}` exited 0",
         summary=f"{result.summary} ({cause}; `{command}` passed in its place)",
     )
+
+
+#: What a worker says when the failure its check shows was there before its work: one pattern per
+#: way of saying it, each kept small enough to read.
+_BASE_CLAIM = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
+    r"pre-?existing|already (?:fail\w*|broken|red)",
+    r"(?:fail\w*|red) (?:at|on|in) the base",
+    r"(?:at|on) the base (?:commit|branch)",
+    r"before (?:my|this|the) (?:change|work)",
+    r"not (?:caused|introduced) by (?:my|this|the)",
+    r"unrelated to (?:my|this|the) (?:change|work|task)",
+))
+#: The failures a worker's own account may be of a failure that was already there: not a refusal, not a turn limit.
+_CLAIMS_BASE = frozenset({Failure.CODE_BUG, Failure.TEST_BUG, Failure.INCONCLUSIVE, Failure.ENVIRONMENT})
+
+
+def _claims_base(result: launch.WorkerResult) -> bool:
+    """Whether a worker's report that did not pass says the check's failure was there before its
+    work: a finding it marks `pre-existing`, or words that say so."""
+    if any(f.get("cause") == "pre-existing" for f in result.findings):
+        return True
+    said = f"{result.summary}\n{result.evidence}"
+    return any(pattern.search(said) for pattern in _BASE_CLAIM)
+
+
+def _weigh_base_claim(result: launch.WorkerResult, command: str | None, workdir: Path,
+                      baseline: Baseline | None, workspace: isolate.Workspace | None,
+                      expected: tuple[str, ...] = ()) -> launch.WorkerResult:
+    """A worker that wrote something and says the check fails as it did before its work: the claim is
+    checked, never taken or dropped. cauce runs the check and compares it with the base
+    (`_against_base`): when every failing line was there too and every criterion the request lists
+    (`expected`) is answered and met, the work passes; otherwise the worker's report stands as it was,
+    with the comparison added for the next attempt to read. A check that passes, or cannot run, leaves
+    the report alone, and so does an answer whose form failed (`shape`): with no single result block
+    there is no report to weigh."""
+    if not command or result.denied or result.shape or result.failure not in _CLAIMS_BASE \
+            or not _claims_base(result):
+        return result
+    if not (isolate.has_changes(workspace) if workspace else bool(result.changed_paths)):
+        return result
+    if baseline is not None:
+        baseline.found = None
+    code, full = _steady_check(command, workdir, baseline)
+    if not _ran_and_failed(code, full):
+        return result
+    before, compared = _against_base(baseline, command, full, workdir)
+    left_out, not_met = criteria_mod.unmet(expected, result.criteria)
+    if before and not left_out and not not_met and all(c.get("met") for c in result.criteria):
+        return dataclasses.replace(
+            result, passed=True, failure=None, verdict="pass", evidence=full[-CHECK_OUTPUT_KEPT:],
+            summary=f"{result.summary} (cauce: it said `{command}` failed before its work, and cauce's own run "
+                    "at the base shows the same failures, so the work passes as it stands)")
+    if not compared:
+        return result
+    return dataclasses.replace(result, evidence=f"{result.evidence}\n\nwhat the worker said of the base, checked "
+                                                f"by cauce: {compared}".strip())
 
 
 def _only_the_base(result: launch.WorkerResult, command: str | None, baseline: Baseline | None) -> bool:
