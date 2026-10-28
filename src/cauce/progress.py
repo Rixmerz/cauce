@@ -269,6 +269,8 @@ def of(store: Any, task: Mapping[str, Any], *, now: float | None = None, root: P
         last = _ts(calls[-1].get("ts")) if calls else _ts(started["ts"])
         if last is not None:
             out["quiet_s"] = round(now - last)
+        if calls and (said := words(str(calls[-1].get("sig") or ""))):
+            out["doing"] = said
     if (expected := estimate(store, task)) is not None:
         out["estimate"] = expected
     if items := asked(task):
@@ -283,6 +285,35 @@ def of(store: Any, task: Mapping[str, Any], *, now: float | None = None, root: P
 
 def _minutes(seconds: float) -> str:
     return f"{max(1, round(seconds / 60))}m" if seconds >= 60 else f"{round(seconds)}s"
+
+
+def words(sig: str) -> str:
+    """A tool call's signature in words, as `running npm test` or `editing a .py file`. A signature
+    never holds an argument, so it cannot name the file or the whole command: this says what it
+    keeps. "" for a call it cannot read."""
+    kind, _, rest = sig.partition(":")
+    if kind == "bash":
+        return f"running {rest.replace('-', ' ')}" if rest and rest != "unknown" else "running a command"
+    if kind in ("read", "edit", "write"):
+        what = f"a .{rest} file" if rest and rest != "noext" else "a file"
+        return {"read": "reading", "edit": "editing", "write": "writing"}[kind] + f" {what}"
+    if kind == "mcp":
+        return f"calling {rest}" if rest else "calling a tool"
+    if kind in ("grep", "glob"):
+        return "searching the code"
+    return f"using {kind}" if kind else ""
+
+
+def warnings(p: Mapping[str, Any]) -> list[str]:
+    """What a running task says is wrong with how long it takes: past 9 in 10 of its kind here, or no
+    tool call for `IDLE_S`. The same words `line` ends with."""
+    out = []
+    if (expected := p.get("estimate")) and (elapsed := p.get("elapsed_s")) is not None \
+            and elapsed > expected["p90_s"]:
+        out.append(f"past 9 in 10 of its kind here ({_minutes(expected['p90_s'])})")
+    if (quiet := p.get("quiet_s")) is not None and quiet >= IDLE_S:
+        out.append(f"no tool call for {_minutes(quiet)} (a long command, or stuck)")
+    return out
 
 
 def line(p: Mapping[str, Any]) -> str:
@@ -301,12 +332,7 @@ def line(p: Mapping[str, Any]) -> str:
                          f"+{written['added']} −{written['removed']}")
         else:
             parts.append("nothing written yet")
-    if (expected := p.get("estimate")) and (elapsed := p.get("elapsed_s")) is not None \
-            and elapsed > expected["p90_s"]:
-        parts.append(f"past 9 in 10 of its kind here ({_minutes(expected['p90_s'])})")
-    if (quiet := p.get("quiet_s")) is not None and quiet >= IDLE_S:
-        parts.append(f"no tool call for {_minutes(quiet)} (a long command, or stuck)")
-    return " · ".join(parts)
+    return " · ".join([*parts, *warnings(p)])
 
 
 #: The most file names one line says; the rest is said by count.

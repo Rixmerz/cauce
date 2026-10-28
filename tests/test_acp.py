@@ -136,6 +136,8 @@ class Client:
         self._lines: queue.Queue[str | None] = queue.Queue()
         serve_args.setdefault("grace", 30.0)
         serve_args.setdefault("diffs", lambda task, live: [])
+        serve_args.setdefault("look", lambda task, ended: acp.Look())
+        serve_args.setdefault("look_every", 0.01)
         self.thread = threading.Thread(
             target=acp.serve, args=(iter(self._lines.get, None), self.out, self.err),
             kwargs={"popen": self.spawner, "killpg": self.spawner.killpg, **serve_args})
@@ -238,7 +240,7 @@ def test_a_prompt_is_one_cauce_run_shown_as_a_tool_call_and_answered_with_its_re
     assert kwargs["start_new_session"] is True
     assert kwargs["stdout"] == kwargs["stderr"] == subprocess.PIPE
 
-    shown = c.updates(session)[1:]  # the first announced the commands
+    shown = [u for u in c.updates(session)[1:] if u["sessionUpdate"] != "plan"]  # the first announced the commands
     call_id = shown[0]["toolCallId"]
     assert shown == [
         {"sessionUpdate": "tool_call", "toolCallId": call_id, "title": "cauce run", "kind": "execute",
@@ -273,8 +275,9 @@ def test_the_request_s_items_are_the_plan_and_its_files_are_diffs(client):
     spawner.procs[0].release()
     c.answer(request)
     plans = [u["entries"] for u in c.updates(session) if u["sessionUpdate"] == "plan"]
-    assert [[e["status"] for e in p] for p in plans] == [["pending"] * 2, ["in_progress"] * 2, ["completed"] * 2]
-    assert [e["content"] for e in plans[0]] == ["a sub function", "a mul function"]
+    items = [[e["status"] for e in p[:2]] for p in plans]
+    assert items == [["pending"] * 2, ["in_progress"] * 2, ["completed"] * 2]
+    assert [e["content"] for e in plans[0]] == ["a sub function", "a mul function", *acp.STAGE_ENTRIES]
     final = next(u for u in c.updates(session) if u.get("status") == "completed")
     assert final["content"][-1] == kept and (7, True) in asked and (7, False) in asked
 
@@ -284,7 +287,7 @@ def test_a_run_short_of_a_pass_leaves_its_plan_unfinished(client):
     session = c.new_session()
     c.answer(c.prompt(session, "Do:\n- one\n- two"))
     plans = [u["entries"] for u in c.updates(session) if u["sessionUpdate"] == "plan"]
-    assert plans[-1][0]["status"] == "in_progress"
+    assert [e["status"] for e in plans[-1]] == ["in_progress"] * 2 + ["in_progress", "pending", "pending"]
 
 
 def test_a_tool_call_shows_the_last_forty_stderr_lines(client):
@@ -325,6 +328,151 @@ def test_a_text_that_only_starts_with_a_slash_command_is_a_request(client):
     session = c.new_session()
     c.answer(c.prompt(session, "/tasks now"))
     assert spawner.calls[0][0][3:] == ["run", "/tasks now"]
+
+
+class Looks:
+    """A fake `look`: what cauce would say of the task now, which a test changes; every read is counted and the
+    ones past `enough` set `plenty`."""
+
+    def __init__(self, running: acp.Look | None = None, ended: acp.Look | None = None, enough: int = 8) -> None:
+        self.running, self.ended = running or acp.Look(), ended or acp.Look()
+        self.reads: list[tuple[int, bool]] = []
+        self.plenty = threading.Event()
+        self._enough = enough
+
+    def __call__(self, task: int, ended: bool) -> acp.Look:
+        self.reads.append((task, ended))
+        if len(self.reads) >= self._enough:
+            self.plenty.set()
+        return self.ended if ended else self.running
+
+
+def said(m: dict[str, Any]) -> dict[str, Any]:
+    return m.get("params", {}).get("update", {})
+
+
+def statuses(m: dict[str, Any]) -> list[str] | None:
+    update = said(m)
+    return [e["status"] for e in update["entries"]] if update.get("sessionUpdate") == "plan" else None
+
+
+NOW = acp.Look(line="implementing · 3m of ≈5m · 5 files +126 −2", doing="running npm test", wrote="wrote a.py, b.py",
+               stage="worker", warnings=("no tool call for 5m (a long command, or stuck)",))
+
+
+def test_the_title_is_the_line_cauce_tasks_says_and_the_content_says_what_the_worker_does(client):
+    looks = Looks(NOW)
+    spawner = Spawner(stderr=[TASK_LINE], hold=True)
+    c = client(spawner, look=looks)
+    session = c.new_session()
+    request = c.prompt(session, "go")
+    live = c.out.wait_for(lambda m: said(m).get("title") == NOW.line)
+    assert said(live)["content"] == [
+        {"type": "content", "content": {"type": "text", "text": "now: running npm test\nwrote a.py, b.py\n"
+                                        "⚠ no tool call for 5m (a long command, or stuck)"}},
+        {"type": "content", "content": {"type": "text", "text": TASK_LINE}}]
+    # What the worker does next replaces the activity, and says nothing of the title that did not change.
+    looks.running = acp.Look(line=NOW.line, doing="editing a .py file", stage="worker")
+    again = c.out.wait_for(lambda m: "now: editing a .py file" in str(said(m).get("content")))
+    assert "title" not in said(again)
+    spawner.procs[0].release()
+    c.answer(request)
+    # Over, the progress line and the activity are gone: the last thing cauce said stands.
+    final = next(u for u in c.updates(session) if u.get("status") == "completed")
+    assert final["title"] == TASK_LINE
+    assert final["content"] == [{"type": "content", "content": {"type": "text", "text": TASK_LINE}}]
+
+
+def test_cauce_s_stages_follow_the_request_s_items_in_the_plan(client):
+    looks = Looks(acp.Look(stage="worker"), acp.Look(skipped=(acp.STAGE_ENTRIES[2],)))
+    spawner = Spawner(stderr=[TASK_LINE], hold=True)
+    c = client(spawner, look=looks)
+    session = c.new_session()
+    request = c.prompt(session, "Add two things:\n- one\n- two")
+    assert c.out.wait_for(lambda m: statuses(m) is not None)
+    first = c.out.wait_for(lambda m: statuses(m) == ["in_progress"] * 3 + ["pending"] * 2)
+    assert [e["content"] for e in said(first)["entries"]] == ["one", "two", *acp.STAGE_ENTRIES]
+    looks.running = acp.Look(stage=acp.STAGE_ENTRIES[1])
+    c.out.wait_for(lambda m: statuses(m) == ["in_progress"] * 2 + ["completed", "in_progress", "pending"])
+    looks.running = acp.Look(stage=acp.STAGE_ENTRIES[2])
+    c.out.wait_for(lambda m: statuses(m) == ["in_progress"] * 2 + ["completed", "completed", "in_progress"])
+    spawner.procs[0].release()
+    c.answer(request)
+    last = [u for u in c.updates(session) if u["sessionUpdate"] == "plan"][-1]["entries"]
+    assert [e["status"] for e in last] == ["completed"] * 5
+    assert last[-1]["content"] == "independent check (not run)"
+
+
+def test_a_stage_with_no_item_still_shows_where_the_task_is(client):
+    c = client(Spawner(stderr=[TASK_LINE]), look=Looks(acp.Look(stage=acp.STAGE_ENTRIES[1])))
+    session = c.new_session()
+    c.answer(c.prompt(session, "just do it"))
+    plans = [[e["content"] for e in u["entries"]] for u in c.updates(session) if u["sessionUpdate"] == "plan"]
+    assert plans[0] == list(acp.STAGE_ENTRIES)
+
+
+def test_a_task_that_shows_nothing_new_is_said_once_however_often_it_is_read(client):
+    looks = Looks(NOW, enough=12)
+    spawner = Spawner(stderr=[TASK_LINE], hold=True)
+    c = client(spawner, look=looks, diffs=lambda task, live: [{"type": "diff", "path": "/a", "oldText": None,
+                                                              "newText": "x"}])
+    session = c.new_session()
+    request = c.prompt(session, "go")
+    assert looks.plenty.wait(acp.PROGRESS_EVERY_S)
+    spawner.procs[0].release()
+    c.answer(request)
+    updates = c.updates(session)
+    assert len([u for u in updates if u.get("title") == NOW.line]) == 1
+    assert len([u for u in updates if "now: running npm test" in str(u.get("content"))]) == 1
+    assert len([u for u in updates if u["sessionUpdate"] == "plan"]) == 3  # pending, started, completed
+    assert len(updates) < 12
+
+
+def test_the_progress_of_a_run_is_read_only_while_it_is_a_request_and_has_a_task(client):
+    looks = Looks(NOW, enough=1)
+    c = client(Spawner(stderr=["cauce: #7 keeps its number here"], stdout="out\n"), look=looks)
+    session = c.new_session()
+    c.answer(c.prompt(session, "/tasks"))
+    assert looks.reads == []
+    c2 = client(Spawner(stdout="out\n"), look=looks)  # a request whose run never named a task
+    c2.answer(c2.prompt(c2.new_session(), "go"))
+    assert looks.reads == []
+
+
+def test_the_end_of_a_failed_check_stays_in_view(client):
+    failed = acp.Look(check="cauce's check failed: `npm test` exited 1\nthe end of its output:\nboom")
+    spawner = Spawner(stderr=[TASK_LINE], hold=True, code=1)
+    c = client(spawner, look=Looks(failed, failed))
+    session = c.new_session()
+    request = c.prompt(session, "go")
+    shown = c.out.wait_for(lambda m: "boom" in str(said(m).get("content")))
+    assert said(shown)["content"][-1] == {"type": "content", "content": {"type": "text", "text": failed.check}}
+    spawner.procs[0].release()
+    c.answer(request)
+    assert [u for u in c.updates(session) if "boom" in str(u.get("content"))]
+    assert next(u for u in c.updates(session) if u.get("status") == "failed")["sessionUpdate"] == "tool_call_update"
+
+
+def test_the_agent_message_leads_with_the_verdict_and_the_next_step_then_the_report(client):
+    ending = "cauce: task #7 passed.\nThe work is on branch cauce/task-7. Next: `cauce merge 7`."
+    c = client(Spawner(stderr=[TASK_LINE], stdout="the report\n"), look=Looks(ended=acp.Look(ending=ending)),
+               )
+    session = c.new_session(mcp=[{"name": "x"}])
+    c.answer(c.prompt(session, "go"))
+    message = c.updates(session)[-1]
+    assert message["sessionUpdate"] == "agent_message_chunk"
+    assert message["content"]["text"] == f"{acp.MCP_NOTICE}\n\n{ending}\n\nthe report\n"
+
+
+def test_a_look_that_cannot_be_read_costs_the_view_never_the_answer(client):
+    def broken(task: int, ended: bool) -> acp.Look:
+        raise RuntimeError("the store is locked")
+
+    c = client(Spawner(stderr=[TASK_LINE], stdout="the report\n"), look=broken)
+    session = c.new_session()
+    assert c.answer(c.prompt(session, "go"))["result"] == {"stopReason": "end_turn"}
+    assert c.updates(session)[-1]["content"]["text"] == "the report\n"
+    assert "the store is locked" in c.err.getvalue()
 
 
 def first_title(update_title: str):

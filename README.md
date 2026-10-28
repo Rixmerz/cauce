@@ -738,11 +738,19 @@ on PATH that `cauce link` puts there:
 }
 ```
 
-Each prompt is one `cauce run` in the project's folder: its progress (the lines
-cauce prints on stderr) shows as one tool call, and its report is the answer.
-The request's listed items are the agent's plan, completed when the task passes,
-and the files its worker writes show as diffs: from its worktree while it runs,
-from the branch it kept once it ends.
+Each prompt is one `cauce run` in the project's folder, shown as one tool call
+that tells a working task from a stuck one: its title is the line `cauce tasks`
+says (`implementing · 3m of ≈5m · 5 files +126 −2`, with the same warnings: past
+what its kind usually takes here, no tool call for five minutes), refreshed every
+few seconds, and its content says what the worker is doing now (`running npm
+test`, `editing a .py file`), the files it wrote, the lines cauce prints on stderr
+and, when cauce's check turned an attempt down, the end of the check's output.
+The request's listed items are the agent's plan, followed by cauce's own stages
+(worker, cauce's check, independent check) as they begin; the items are completed
+when the task passes. The files its worker writes show as diffs: from its worktree
+while it runs, from the branch it kept once it ends. The answer opens with the
+verdict and the next step (the branch, and `cauce merge N` or `cauce pr N`; for a
+task that stopped, why and the command that goes on), and then the report.
 `/tasks` and `/stats` run `cauce tasks` and `cauce stats`, and `/cancel 7` runs
 `cauce cancel 7`. Stopping a turn ends it at once, but not the task it started:
 an editor sends the same cancel before a new request in the same thread, so a
