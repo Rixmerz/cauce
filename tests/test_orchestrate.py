@@ -1623,11 +1623,15 @@ def test_servers_named_by_a_port_that_answers_need_no_warning():
     assert len(said) == 1 and "the worker starts them itself" in said[0]
     assert orchestrate._unmet("Fix the cart page; start the servers yourself and check it", {}, served=True) == []
     assert not orchestrate._START_SERVERS.search("Run the backend tests and fix the ones that fail")
-    # A host and port named as context, with a check that talks to no server, is no need.
-    context = "The API at localhost:8080 returns a 500 for /cart; fix the handler and its test"
+    # A host and port named as context, with a check that talks to no server, is no need. The port is
+    # one nothing listens on: a fixed 8080 answered when something on the host held it.
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        free = probe.getsockname()[1]
+    context = f"The API at localhost:{free} returns a 500 for /cart; fix the handler and its test"
     assert orchestrate._unmet(context, {}, verify="npm run lint && npm test && npm run build") == []
-    assert orchestrate._unmet(context, {}, verify="deno test -A --allow-net=localhost:8080") == []
-    assert orchestrate._unmet(context, {}, verify="curl -f localhost:8080/cart")
+    assert orchestrate._unmet(context, {}, verify=f"deno test -A --allow-net=localhost:{free}") == []
+    assert orchestrate._unmet(context, {}, verify=f"curl -f localhost:{free}/cart")
     assert orchestrate._unmet("the app runs with npm run dev", {}, verify="pytest tests/e2e_api")
 
 
