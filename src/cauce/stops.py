@@ -55,6 +55,8 @@ CAUSES = {
     "same_failures": ("blocked", "cauce"),
     "budget": ("blocked", "budget"),
     "missing_dir": ("blocked", "environment"),
+    # The preflight read that its check cannot start here: no worker ran, no attempt counted.
+    "preflight": ("blocked", "environment"),
     "approval": ("needs_approval", "cauce"),
     "spec": ("replan", "worker"),
     "turns": ("replan", "cauce"),
@@ -245,6 +247,8 @@ def what_to_do(stop: Stop) -> str:
         "permission": "allow what was refused for this run, or add --keep to keep it for every task here, "
                       "then resume",
         "environment": "fix what failed to run, then resume",
+        "preflight": "its check cannot start here, so no worker ran and no attempt was counted: apply the fix "
+                     "its reason names, then resume",
         "network": "the network dropped and stayed down through cauce's waits; its work is kept: resume it once "
                    "the network is back",
         "limit": "the account's usage limit stopped it; its work is kept: cauce resumes it once the limit "

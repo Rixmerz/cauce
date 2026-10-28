@@ -51,6 +51,7 @@ from cauce import (
     models,
     notes,
     plugins,
+    preflight,
     project,
     racing,
     repo,
@@ -1325,6 +1326,12 @@ def run(
             report.stop = stops.Stop("environment", f"its worktree could not be made: {no_worktree}"[:500],
                                      extra={"starved": "disk"} if launch.NO_SPACE.search(no_worktree or "") else {})
             report.status, report.summary = "blocked", report.stop.reason
+        elif options.verify and not (flight := _preflight(
+                options.verify, workdir, task, store, say,
+                installing=bool(workspace is not None and workspace.stale))).ok:
+            # The check could not start at all: no worker is spent to find that out.
+            report.stop = stops.Stop("preflight", flight.reason(), extra={"fixes": [b.fix for b in flight.blockers]})
+            report.status, report.summary, ready = "blocked", report.stop.reason, False
         elif options.services:
             mark = time.monotonic()
             try:
@@ -3220,6 +3227,21 @@ def base_timeout_s(took_s: float) -> float:
     """The time a check's run at the base is given, from how long the work's own run took (0 when
     none was seen): never under the limit the work's own run has, and above what it took."""
     return max(VERIFY_TIMEOUT_S, took_s * BASE_TIMEOUT_FACTOR + BASE_TIMEOUT_MARGIN_S)
+
+
+def _preflight(command: str, workdir: Path, task: Mapping[str, Any], store: Store, say: Callable[[str], None],
+               *, installing: bool = False) -> preflight.Result:
+    """`cauce.preflight` on the task's check, before any attempt of this run: what it could not tell and
+    what it warns of are said, what stops it too, and a `preflight` event keeps all of it."""
+    flight = preflight.check(command, workdir, asked=f"{task.get('title') or ''}\n{task.get('body') or ''}",
+                             installing=installing)
+    for line in flight.plan_lines():
+        say(f"cauce: #{task['id']} {line}")
+    store.add_event(task["id"], "preflight", ok=flight.ok, blockers=[b.line() for b in flight.blockers],
+                    unknown=flight.unknown, warnings=flight.warnings)
+    if not flight.ok:
+        say(f"cauce: #{task['id']} {flight.reason()}")
+    return flight
 
 
 def _run_check(command: str, workdir: Path, timeout: float | None = None) -> tuple[int | None, str]:

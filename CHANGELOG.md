@@ -17,6 +17,18 @@
   writing, the codebase's own helper first, a bug's root cause fixed once, edge-case correctness
   between equal options, the report ends with what was skipped). Compared against upstream
   `09c434a` (v5.3.2); `security-audit` was compared again and upstream is still at `c1c8a8c`.
+- **Environment preflight:** a task with `--verify` has its check read before the first attempt
+  (`cauce.preflight`, no model, no network): every program it starts, and every program the
+  scripts it names start, must resolve on the PATH the check runs with (`runtime.env_for`, with
+  `node_modules/.bin` for script bodies); every `npm|pnpm|yarn|bun run <script>`, `npm test` and
+  `deno task <name>` must exist in package.json or deno.json; and a Node the project declares must
+  be installed or on the PATH. One that fails stops the task as `preflight` (blocked, the
+  environment's) with the exact fix line, before any worker: nothing ran and no attempt is
+  counted. It fails open: a substitution, a `cd`, a workspace flag, a path or script the request
+  itself may add, dependencies the worker installs, or a preflight that breaks is said and the task
+  goes on. A `.venv` that imports the project's own package from another directory is a warning.
+  A `preflight` event keeps what it found. Ports stay `cauce.services`' (a port that answers is
+  left alone, one that never listens stops the task).
 
 ## [0.58.0] - 2026-10-28
 

@@ -64,6 +64,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
 | `src/cauce/grants.py` | what workers may do: the permission mode per model (auto; Haiku bypasses) and the rules a person keeps per repository with `cauce allow` |
 | `src/cauce/runtime.py` | the Node a project declares (`.nvmrc`, `.node-version`, `engines.node`), or its installed dependencies need when it declares none, found among nvm's and put first on a worker's PATH |
+| `src/cauce/preflight.py` | whether a task's check can start here, read before its first attempt: the programs it (and the scripts it names) starts on the PATH it runs with, the scripts and deno tasks it names, the Node the project declares, and a `.venv` importing the package from elsewhere (a warning); no model, fails open |
 | `src/cauce/allow.py` | a refused call → the `--allow` rules that let it through, one per program; suggestions only, nothing is granted |
 | `src/cauce/stops.py` | why a task stopped, who made the call, and the command that continues it; one account on its `finished` event; light, the hooks and the UI read it |
 | `src/cauce/orchestrator.py` | which session orchestrates a project (`.cauce/orchestrator.json`): claimed by sending work, handed on by a relay, a clear in its place or going quiet, with the work the old one sent; stdlib |
@@ -238,6 +239,13 @@ yields the default kind, not a guess.
   manifest, a tool's minimum Node) is `environment`, never a `code_bug`: its
   exit says nothing about the work, and it is no dead end. npm's EBADENGINE
   warning is not such a line. Dead ends reach a brief only on a strict match.
+- A check that cannot start is found before a worker is spent on it (`cauce.preflight`, before
+  every run's first attempt): a program missing from the PATH the check runs with, a script or
+  deno task its files lack, a declared Node nothing installed fits stops the task as `preflight`
+  (blocked, the environment's) with the fix line, no attempt counted, nothing ran. It fails open:
+  what it cannot tell (a substitution, a `cd`, a workspace flag, a path or script the request may
+  add, dependencies the worker installs, a dependency's tool in a script) is said, never a stop,
+  and a `.venv` importing the package from elsewhere is a warning. Ports stay `cauce.services`'.
 - A request that opens with a verb of change is never read as a read-only
   kind unless a tag or `--kind` says so, and is read as `test` only when its
   first change is about tests: a fix that asks for its own tests is the fix.
