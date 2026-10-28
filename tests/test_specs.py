@@ -1,6 +1,8 @@
 """A repository's OpenSpec specs against its code: how far behind, the brief, the ending."""
 from __future__ import annotations
 
+import pytest
+
 from cauce import hooks, repo, specs
 from cauce.cli import main
 from cauce.orchestrate import run
@@ -410,3 +412,34 @@ def test_links_are_expected_only_where_specs_and_a_livespec_index_are_both_there
     assert not specs.links_expected(git_repo, {"CAUCE_LIVESPEC": "off"})
     assert not specs.links_expected(tmp_path / "nowhere", {})
     assert not specs.links_expected(None, {})
+
+
+@pytest.mark.parametrize("path", [
+    "src/app.py", "lib/pay.ts", "main.go", "web/Cart.tsx", "src/lib.rs", "scripts/deploy.sh",
+    # below the root these are ordinary names
+    "src/build/compiler.py", "lib/out/render.ts", "internal/target/plan.go", "src/generated/x.py",
+])
+def test_files_that_hold_behaviour_owe_a_spec(path):
+    assert specs.holds_behaviour(path)
+
+
+@pytest.mark.parametrize("path", [
+    "tests/test_cart.py", "src/cart.test.ts", "src/__tests__/a.js", "conftest.py", "tests/conftest.py",  # tests
+    "package-lock.json", "web/yarn.lock", "poetry.lock", "uv.lock", "Cargo.lock", "go.sum", "pnpm-lock.yaml",  # locks
+    "pyproject.toml", "package.json", "tsconfig.json", ".eslintrc", ".github/workflows/ci.yml", "config/app.yaml",
+    "vite.config.ts", "jest.config.js", "Dockerfile", "Makefile", ".gitignore", "settings.ini",
+    ".env.example",  # config
+    "dist/app.js", "build/out.css", "web/app.min.js", "src/api_pb2.py", "src/__snapshots__/a.snap",
+    "node_modules/x/index.js", "src/types.generated.ts", "out/main.js", "target/classes/App.js",
+    "generated/x.py", "src/__generated__/schema.ts", "web/dist/app.js", "lib/vendor/x.go",
+    "pkg/coverage/lcov.info", "src/__pycache__/a.cpython-312.pyc",  # generated
+    "README.md", "docs/guide.html", "openspec/specs/a/spec.md", "notes.txt",  # documents and specs
+])
+def test_files_that_hold_no_behaviour_owe_no_spec(path):
+    assert not specs.holds_behaviour(path)
+
+
+def test_a_build_that_changed_only_tests_config_and_locks_owes_no_spec_but_one_with_code_does():
+    only = ["tests/test_a.py", "package-lock.json", "pyproject.toml", "dist/bundle.js", "generated/api.py"]
+    assert specs.owed("feature", only) == []
+    assert specs.owed("feature", [*only, "src/generated/x.py"]) == ["src/generated/x.py"]

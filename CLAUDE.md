@@ -664,7 +664,7 @@ yields the default kind, not a guess.
   never started: the orchestrator decides.
 - A repository is spec-first only on the person's word (`cauce specs first on`, kept in the store's meta, never in a
   repository): there a build (`specs.FIRST_KINDS`) is told to write the spec before the code, and a pass whose
-  change touches code (`specs.coded`) and nothing under `openspec/` is held back (`spec_owed`): the first time it
+  change touches code (`specs.coded`: not tests, lockfiles, config or generated files, `holds_behaviour`) and nothing under `openspec/` is held back (`spec_owed`): the first time it
   goes back to the same cell, in its own session, told to write the spec (`specs.FIRST_PROMPT`, as a reshape); the
   second it stands as work with one point, a `decision` for the orchestrator, kept on its branch. Never a climb: a
   stronger model writes no spec a weaker one would not.

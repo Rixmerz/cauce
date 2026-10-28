@@ -121,10 +121,36 @@ def touched(changed: Sequence[str]) -> bool:
     return any(p == OPENSPEC or p.startswith(OPENSPEC + "/") for p in changed)
 
 
+#: Files that hold no behaviour a spec describes, though they are not documents. A lockfile pins what
+#: a manifest already says; a config file sets a tool or a deploy up; a generated file is built from
+#: another; a test checks behaviour a spec states. A build that changes only these owes no spec.
+_LOCKFILE = re.compile(r"\.lockb?$|(^|/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|go\.sum)$")
+_CONFIG_FILE = re.compile(
+    r"\.(jsonc?|ya?ml|toml|ini|cfg|conf|properties|env)$|(^|/)\.[^/]+$|(^|/)(Dockerfile|Makefile|Procfile)$|"
+    r"\.config\.[cm]?[jt]s$|(^|/)(\.github|\.vscode|\.idea)/")
+#: `build`, `out`, `target` and `generated` are output only at the root, where the build tools put it:
+#: below it they are ordinary names (`src/build/compiler.py`, `lib/out/render.ts`,
+#: `internal/target/plan.go`, `src/generated/x.py`). The rest are output wherever they are.
+_GENERATED = re.compile(
+    r"(^|/)(dist|vendor|node_modules|coverage|__pycache__|__generated__|__snapshots__)/|"
+    r"^(build|out|target|generated)/|"
+    r"\.(min\.(js|css)|map|snap|pb\.go)$|\.generated\.|_pb2(_grpc)?\.pyi?$")
+
+
+def holds_behaviour(path: str) -> bool:
+    """Whether a changed file may hold behaviour a spec would describe: not a spec, a document, a
+    test, a lockfile, a config file or a generated file."""
+    from cauce.adapters.livespec import is_test_path  # kept out of the hooks' import of this module
+
+    return not (path == OPENSPEC or path.startswith(OPENSPEC + "/") or path.startswith("docs/")
+                or path.lower().endswith((".md", ".mdx", ".rst", ".txt")) or is_test_path(path)
+                or path.rsplit("/", 1)[-1] == "conftest.py" or _LOCKFILE.search(path)
+                or _CONFIG_FILE.search(path) or _GENERATED.search(path))
+
+
 def coded(changed: Sequence[str]) -> list[str]:
-    """The files of a change that may hold behaviour: not a spec, not a document."""
-    return [p for p in changed if not (p == OPENSPEC or p.startswith(OPENSPEC + "/") or p.startswith("docs/")
-                                       or p.lower().endswith((".md", ".mdx", ".rst", ".txt")))]
+    """The files of a change that may hold behaviour (`holds_behaviour`)."""
+    return [p for p in changed if holds_behaviour(p)]
 
 
 def first(store: Any, key: str | None) -> bool:

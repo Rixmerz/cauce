@@ -59,6 +59,13 @@
 
 ### Fixed
 
+- **A change of tests, lockfiles, config or generated files no longer "owes a spec":** in a spec-first
+  repository, any file outside `docs/` that was not a document counted as code that owed its spec,
+  so a build that only touched `package-lock.json`, a CI file, a test or `dist/` was held back for a
+  spec it had nothing to write. Those files are left out. `build/`, `out/`, `target/` and
+  `generated/` count as generated only at the repository root: `src/build/compiler.py` and
+  `src/generated/x.py` are code and owe their spec.
+
 - **A check slower than its limit no longer burns a night of climbs** (tasks that ran 4+ hours
   with the repository's 15-minute check). The check failed on three tests that also fail at the
   base, but the base's run timed out, so each attempt was charged `code_bug` and climbed
