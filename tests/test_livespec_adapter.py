@@ -131,6 +131,9 @@ def test_a_plugin_naming_an_unpublished_release_falls_back_to_the_pinned_one(tmp
     cfg = tmp_path / "cc" / "plugins" / "cache" / "rixmerz" / "livespec" / "0.33.0" / ".mcp.json"
     cfg.parent.mkdir(parents=True)
     cfg.write_text(json.dumps({"mcpServers": {"livespec": {"command": "uvx", "args": ["livespec@0.33.0"]}}}))
+    # A real plugin also declares the same release in its manifest, which `pin()` reads.
+    (cfg.parent / ".claude-plugin").mkdir()
+    (cfg.parent / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "livespec", "version": "0.33.0"}))
     calls = []
 
     def runner(argv, **kw):
@@ -291,6 +294,9 @@ def test_a_resolver_error_on_a_plugin_release_is_read_as_unpublished_never_as_a_
     cfg = tmp_path / "cc" / "plugins" / "cache" / "rixmerz" / "livespec" / "0.33.0" / ".mcp.json"
     cfg.parent.mkdir(parents=True)
     cfg.write_text(json.dumps({"mcpServers": {"livespec": {"command": "uvx", "args": ["livespec@0.33.0"]}}}))
+    # The manifest names the same release, as a real plugin's does: `pin()` must not take it for the pinned one.
+    (cfg.parent / ".claude-plugin").mkdir()
+    (cfg.parent / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "livespec", "version": "0.33.0"}))
     a = adapter(tmp_path, tool(tmp_path, "uvx"))
     a._remember_failure(git_repo, "× No solution found when resolving tool dependencies:\n  ╰─▶ Because there "
                                   "is no version of livespec==0.33.0 and you require livespec==0.33.0, we can ...")
@@ -636,3 +642,41 @@ def test_the_spec_links_brief_tells_a_shared_index_not_to_be_indexed_from_a_work
     assert "do not index the directory you work in" in shared
     assert "index_project" not in shared
     assert "sync_openspec" not in shared
+
+
+def plugin_manifest(tmp_path: Path, version: str, *, mcp: bool = False) -> None:
+    # Under the test's own CLAUDE_CONFIG_DIR (`adapter`'s `cc`), never this machine's plugin cache.
+    folder = tmp_path / "cc" / "plugins" / "cache" / "market" / "livespec" / version
+    (folder / ".claude-plugin").mkdir(parents=True)
+    (folder / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "livespec", "version": version}))
+    if mcp:
+        (folder / ".mcp.json").write_text(json.dumps(
+            {"mcpServers": {"livespec": {"command": "uvx", "args": [f"livespec@{version}"]}}}))
+
+
+def test_the_pin_follows_the_installed_plugins_own_manifest(tmp_path):
+    assert adapter(tmp_path).pin() == PINNED
+    plugin_manifest(tmp_path, "0.31.0")
+    plugin_manifest(tmp_path, "0.99.0")  # newest by version, not by name order
+    a = adapter(tmp_path, tool(tmp_path, "uvx"))
+    assert a.pin() == "0.99.0"
+    # No `.mcp.json` to run: the manifest's release is what `uvx` is given.
+    assert a.server() == {"command": "uvx", "args": ["livespec@0.99.0"]}
+
+
+def test_a_manifest_release_uv_found_unpublished_is_not_pinned(tmp_path):
+    plugin_manifest(tmp_path, "0.31.0")
+    plugin_manifest(tmp_path, "0.99.0", mcp=True)
+    a = adapter(tmp_path, tool(tmp_path, "uvx"))
+    a._remember_unpublished("0.99.0")
+    assert a.pin() == "0.31.0"  # the newest one not found unpublished
+    a._remember_unpublished("0.31.0")
+    assert a.pin() == PINNED
+    assert a.server() == {"command": "uvx", "args": [f"livespec@{PINNED}"]}
+
+
+def test_a_broken_manifest_leaves_the_built_in_pin(tmp_path):
+    folder = tmp_path / "cc" / "plugins" / "cache" / "market" / "livespec" / "0.40.0" / ".claude-plugin"
+    folder.mkdir(parents=True)
+    (folder / "plugin.json").write_text("{not json")
+    assert adapter(tmp_path).pin() == PINNED

@@ -36,6 +36,11 @@
 
 ### Changed
 
+- **livespec is pinned to 0.34.0, and follows the installed plugin:** 0.34.0 fixes a `group_db`
+  bug. When cauce runs livespec through `uvx` it now uses the release in the newest installed
+  livespec plugin's own manifest (`.claude-plugin/plugin.json`, skipping a release uv found
+  unpublished), else the one it was built against.
+
 - **The board no longer opens a browser tab for each task:** `/cauce:ui` now runs `cauce ui`
   (no tab; `--open` once, only when the person asks to see it), `/cauce` opens the board once,
   and the page shows every task of a session in itself: the Sessions screen lists the work a

@@ -22,7 +22,7 @@ without a token and without an MCP call:
 The worker also gets livespec's MCP server, with a hint per kind of work that
 names the calls that kind needs and the ``workspace`` every call requires.
 
-Checked against livespec 0.32.0. Every tool named here exists in that release;
+Checked against livespec 0.34.0. Every tool named here exists in that release;
 `TOOLS` is the pinned list, and a test holds every hint to it.
 """
 from __future__ import annotations
@@ -53,12 +53,13 @@ from cauce.text import words
 
 MINIMUM_VERSION = (0, 32, 0)
 
-#: What cauce runs when no livespec is installed: the release this adapter was
-#: checked against, through `uvx`. livespec is part of cauce's base, so having
-#: `uv` is enough — there is no second plugin to install.
-PINNED = "0.32.0"
+#: What cauce runs through `uvx` when no livespec plugin entry and no `livespec` on PATH is used:
+#: the release this adapter was checked against, unless an installed plugin's own manifest names
+#: a newer one (`Livespec.pin`). livespec is part of cauce's base, so having `uv` is enough: there
+#: is no second plugin to install.
+PINNED = "0.34.0"
 
-#: The livespec tools cauce names to a worker. Verified to exist in 0.32.0.
+#: The livespec tools cauce names to a worker or calls itself. Verified to exist in 0.34.0.
 TOOLS = frozenset({
     "quick_orient", "find_symbol", "who_calls", "who_does_this_call", "analyze_impact",
     "git_diff_impact", "get_symbol_source", "get_spec_implementation", "list_specs",
@@ -207,9 +208,12 @@ class Livespec:
 
     # --- where livespec is ------------------------------------------------
 
+    def _config_root(self) -> Path:
+        return Path(self.env.get("CLAUDE_CONFIG_DIR") or Path(self.env.get("HOME", "~")).expanduser() / ".claude")
+
     def _plugin_config(self) -> tuple[dict[str, Any], str] | None:
         """The server entry of an installed livespec plugin, and its version."""
-        root = Path(self.env.get("CLAUDE_CONFIG_DIR") or Path(self.env.get("HOME", "~")).expanduser() / ".claude")
+        root = self._config_root()
         found = []
         for cfg in root.glob("plugins/cache/*/livespec/*/.mcp.json"):
             found.append((_version_tuple(cfg.parent.name) or (0,), cfg))
@@ -221,6 +225,25 @@ class Livespec:
             if isinstance(server, dict) and server.get("command"):
                 return server, cfg.parent.name
         return None
+
+    def _plugin_release(self) -> str | None:
+        """The release the newest installed livespec plugin declares in its own manifest
+        (`.claude-plugin/plugin.json`), unless uv found it missing from the registry."""
+        found = [(_version_tuple(m.parent.parent.name) or (0,), m)
+                 for m in self._config_root().glob("plugins/cache/*/livespec/*/.claude-plugin/plugin.json")]
+        for _, manifest in sorted(found, reverse=True):
+            try:
+                version = json.loads(manifest.read_text(encoding="utf-8"))["version"]
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if isinstance(version, str) and _version_tuple(version) and version not in self.unpublished():
+                return version
+        return None
+
+    def pin(self) -> str:
+        """The release `uvx` runs when no plugin entry and no `livespec` on PATH is used: the
+        installed plugin's own, else the one this adapter was built against."""
+        return self._plugin_release() or PINNED
 
     def _unpublished_path(self) -> Path:
         return home(self.env) / "work" / "livespec-unpublished.json"
@@ -249,12 +272,12 @@ class Livespec:
         if shutil.which("livespec", path=path):
             return {"command": "livespec", "args": []}
         if shutil.which("uvx", path=path):
-            return {"command": "uvx", "args": [f"livespec@{PINNED}"]}
+            return {"command": "uvx", "args": [f"livespec@{self.pin()}"]}
         if plugin and _uvx_release(plugin[0]) is not None and Path(str(plugin[0]["command"])).is_absolute():
             # The plugin's own `uvx` (a full path off the PATH) runs the pinned release instead.
             command = str(plugin[0]["command"])
             run = ["tool", "run"] if Path(command).name == "uv" else []
-            return {"command": command, "args": [*run, f"livespec@{PINNED}"]}
+            return {"command": command, "args": [*run, f"livespec@{self.pin()}"]}
         return plugin[0] if plugin else None
 
     def _version(self) -> str | None:
@@ -442,7 +465,7 @@ class Livespec:
                 self._remember_unpublished(missing)
                 again = self._index_argv(repo_dir)
                 if again is not None and again != argv:
-                    fell_back = (f"livespec {missing} is not published, so the pinned {PINNED} ran instead "
+                    fell_back = (f"livespec {missing} is not published, so the pinned {self.pin()} ran instead "
                                  "(and will, until the plugin names a published release)")
                     try:
                         proc = self.runner(again, capture_output=True, text=True, timeout=INDEX_TIMEOUT_S,

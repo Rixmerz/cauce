@@ -716,6 +716,9 @@ yields the default kind, not a guess.
 - Every livespec tool a hint names is in `adapters/livespec.TOOLS`, checked
   against the release in `MINIMUM_VERSION`. Check a name against livespec
   before adding it, and bump `PINNED` only after checking the new release.
+  What `uvx` runs when no plugin entry and no `livespec` on PATH is used is `Livespec.pin()`: the
+  release in the newest installed livespec plugin's own manifest (`.claude-plugin/plugin.json`,
+  never one `unpublished()` holds), else `PINNED`.
 - Tests run with `CAUCE_LIVESPEC=off` and an empty `CLAUDE_CONFIG_DIR`; a
   test that wants livespec builds the fixture index in `tests/livespec_fixture.py`.
 - A dispatch decision fails closed: no answer from Haiku means the task
