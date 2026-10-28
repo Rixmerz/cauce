@@ -209,6 +209,22 @@ def _what(field: str, value: str | None) -> str:
     return value if field == "start_cell" else f"{value} turns"
 
 
+def _skip_line(change: Mapping[str, Any], verdict: Mapping[str, Any] | None, name: str, when: str,
+               tz: tzinfo | None) -> str:
+    """A skip of a rung as a sentence: which climb, onto where, because of what, and its verdict."""
+    if change["reverts"]:
+        source, _, target = (change["old_value"] or "").partition(">")
+        return f"{name}: climbs from {source} go to {target} again since {when}: {change['rule']}"
+    evidence = json.loads(change["evidence"]) if isinstance(change["evidence"], str) else change["evidence"]
+    head = (f"{name}: climbs from {evidence.get('from')} skip {evidence.get('to')} for {evidence.get('onto')} "
+            f"since {when} because {standards.because(change)}")
+    if verdict is None:
+        return f"{head}; judged after {standards.JUDGE_AFTER} climbs past it"
+    after = json.loads(verdict["window_after"])
+    how = "kept" if verdict["verdict"] == "kept" else f"reverted on {standards.day(verdict['at'], tz)}"
+    return f"{head}; the climbs since passed {_pct(after.get('pass_first'))}, {how}"
+
+
 def change_line(change: Mapping[str, Any], verdict: Mapping[str, Any] | None, under: Sequence[standards.Ended],
                 tz: tzinfo | None = None) -> str:
     """A change of a standard as a sentence: what it set, since when, because of what, and how
@@ -216,6 +232,8 @@ def change_line(change: Mapping[str, Any], verdict: Mapping[str, Any] | None, un
     of 8 passed first at sonnet/xhigh and 4 of 5 at opus/high; pass-first since then 80 %, kept"."""
     name = f"{change['kind']} in {_name(change['repo'])}, {standards.size(change['band'])}"
     when = standards.day(change["at"], tz)
+    if change["field"] == standards.SKIP:
+        return _skip_line(change, verdict, name, when, tz)
     if change["reverts"]:
         return f"{name}: back to {_what(change['field'], change['new_value'])} since {when}: {change['rule']}"
     value = _what(change["field"], change["new_value"])

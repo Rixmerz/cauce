@@ -479,3 +479,96 @@ def test_a_task_whose_time_was_never_measured_is_left_out_of_the_time_per_point(
 def test_time_per_point_is_none_when_no_task_was_timed(store):
     finished(store, ("sonnet/medium", True), wall=0)
     assert standards.metrics(standards.ended(store, repo="r"))["time_per_point_s"] is None
+
+
+# --- skipping a rung that rarely helps ------------------------------------------------------------
+
+#: A climb into sonnet/xhigh that did not pass there, and opus/high after it that did.
+WASTED = (("sonnet/high", False, "code_bug", "more_effort"), ("sonnet/xhigh", False, "code_bug", "next_model"),
+          ("opus/high", True))
+
+
+def skips_of(changes):
+    return [c for c in changes if c["field"] == standards.SKIP]
+
+
+def test_a_rung_its_climbs_rarely_pass_is_skipped_here(store):
+    many(store, standards.SKIP_MIN_MOVES, *WASTED)
+    [change] = skips_of(standards.calibrate(store, "r", now=NOW))
+    assert change["new_value"] == "sonnet/high>sonnet/xhigh" and change["band"] == standards.ANY_SIZE
+    assert change["version"] == __version__ and change["old_value"] is None
+    ev = change["evidence"]
+    assert ev["pooled"] is False and ev["passed"] == 0 and ev["climbs"] == 4 and ev["onto"] == "opus/high"
+    [(pair, skip)] = standards.active_skips(store, "r", "implement").items()
+    assert pair == ("sonnet/high", "sonnet/xhigh") and skip["onto"] == Cell("opus", "high")
+    assert skip["change"] == change["id"] and "0 of 4 more_effort climbs" in skip["because"]
+    # The climbs into opus/high passed: that rung stays. And another kind is untouched.
+    assert standards.active_skips(store, "r", "feature") == {}
+    # Not again while it waits for its verdict.
+    assert skips_of(standards.calibrate(store, "r", now=NOW)) == []
+
+
+def test_too_few_climbs_here_read_every_repository_and_say_so(store):
+    finished(store, *WASTED, repo="r")
+    many(store, standards.SKIP_MIN_MOVES, *WASTED, repo="o")
+    [change] = skips_of(standards.calibrate(store, "r", now=NOW))
+    assert change["evidence"]["pooled"] is True and change["evidence"]["repos"] == 2
+    assert "in every repository" in change["rule"] and "in 2 repositories" in standards.because(change)
+
+
+def test_a_climb_that_passes_often_enough_or_onto_the_last_rung_is_never_skipped(store):
+    many(store, 3, *WASTED)
+    many(store, 2, ("sonnet/high", False, "code_bug", "more_effort"), ("sonnet/xhigh", True))
+    # 2 of 5 passed: over the threshold. And sonnet/xhigh → opus/high failing: opus/high is the last rung.
+    many(store, 4, ("sonnet/xhigh", False, "approach", "next_model"), ("opus/high", False, "code_bug"),
+         status="failed")
+    assert skips_of(standards.calibrate(store, "r", now=NOW)) == []
+    assert standards.skip_onto(IMPLEMENT, "sonnet/xhigh", "opus/high") is None
+    assert standards.skip_onto(LADDERS["plan"], "opus/xhigh", "opus/max") is None  # onto fable: never
+
+
+def test_a_retry_or_more_turns_is_no_climb(store):
+    task = finished(store, ("sonnet/high", False, "environment", "retry"), ("sonnet/high", False,
+                    "turns_exhausted", "more_turns"), ("sonnet/high", True))
+    [t] = [t for t in standards.ended(store, repo="r") if t.id == task]
+    assert standards.climbs(t) == []
+
+
+def test_a_skip_is_judged_once_by_its_climbs_and_kept(store):
+    many(store, standards.SKIP_MIN_MOVES, *WASTED, wall=1800.0)
+    [change] = skips_of(standards.calibrate(store, "r", now=NOW))
+    later = NOW + timedelta(hours=1)
+    many(store, standards.JUDGE_AFTER, ("sonnet/high", False, "code_bug", "next_model"), ("opus/high", True),
+         at=later, wall=1200.0)
+    [verdict] = standards.judge(store, "r", now=later + timedelta(minutes=1))
+    assert verdict["change"] == change["id"] and verdict["verdict"] == "kept"
+    assert verdict["after"]["pass_first"] == 1.0 and verdict["before"]["pass_first"] == 0.0
+    assert standards.judge(store, "r", now=later + timedelta(minutes=2)) == []
+    assert standards.active_skips(store, "r", "implement")
+
+
+def test_a_skip_that_makes_passing_slower_is_reverted_as_its_own_change(store):
+    many(store, standards.SKIP_MIN_MOVES, *WASTED, wall=600.0)
+    [change] = skips_of(standards.calibrate(store, "r", now=NOW))
+    later = NOW + timedelta(hours=1)
+    many(store, standards.JUDGE_AFTER, ("sonnet/high", False, "code_bug", "next_model"), ("opus/high", True),
+         at=later, wall=600.0 * standards.SKIP_SLOWER * 2)
+    [verdict] = standards.judge(store, "r", now=later + timedelta(minutes=1))
+    assert verdict["verdict"] == "reverted"
+    revert = store.calibrations(repo="r")[-1]
+    assert revert["reverts"] == change["id"] and revert["field"] == standards.SKIP
+    assert revert["old_value"] == change["new_value"] and revert["new_value"] is None
+    assert standards.active_skips(store, "r", "implement") == {}
+    from cauce import evolution
+    assert "again since" in evolution.change_line(revert, None, [])
+    assert "skip sonnet/xhigh for opus/high" in evolution.change_line(
+        store.calibrations(repo="r")[-2], store.verdicts()[change["id"]], [])
+
+
+def test_a_skip_holds_no_start_cell_back(store):
+    many(store, standards.SKIP_MIN_MOVES, *WASTED)
+    standards.calibrate(store, "r", now=NOW)
+    # The skip waits for its verdict; the band's start cell still moves by its own rules.
+    many(store, standards.MIN_SAMPLES, ("opus/high", True))
+    changed = standards.calibrate(store, "r", now=NOW + timedelta(minutes=1))
+    assert any(c["field"] == "start_cell" for c in changed)

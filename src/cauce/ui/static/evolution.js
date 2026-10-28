@@ -64,6 +64,7 @@ function changeList(changes) {
   return h("ul", { class: "timeline" }, changes.map((c) => h("li", {},
     h("div", { class: "row" }, h("b", {}, `#${c.id}`), verdict(c), kindChip(c.kind),
       c.field === "start_cell" && c.new_value ? cellChip(c.new_value) : null,
+      c.field === "skip" ? h("span", { class: "muted" }, c.new_value ? `skips ${c.new_value.split(">")[1]} from ${c.new_value.split(">")[0]}` : "skip reverted") : null,
       h("span", { class: "muted" }, `cauce ${c.version}`)),
     h("div", { class: "text" }, c.line),
     h("div", { class: "meta" }, `rule: ${c.rule}`))));

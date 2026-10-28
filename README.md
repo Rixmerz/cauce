@@ -431,6 +431,11 @@ passes first at least 70% of at least five tries, and the start turns go toward
 what three passes in four needed. Every change is recorded with its evidence,
 judged after five tasks ran under it, and reverted when it made the first try
 pass less often. Money moves nothing; `--start` and `--max-turns` always win.
+A kind's ladder can also skip a rung: when the climbs into it (the same move,
+from the same rung) passed their next try under 25% of at least four, read
+here or from every repository when this one has too few, later climbs go to
+the rung after it. Never the last rung, never one that needs an approval;
+judged by its climbs and reverted when they pass less or take longer.
 
 ```bash
 cauce evolution                  # every repository, last 30 days

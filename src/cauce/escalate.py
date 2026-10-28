@@ -31,8 +31,8 @@ opinion of its own output is not evidence about the output.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from cauce import findings as findings_mod
@@ -163,6 +163,8 @@ class Decision:
     split: bool = False
     #: It stopped because two cells left the same failing tests: a third would repeat them.
     stuck: bool = False
+    #: The standard change whose skip it followed (`standards.calibrate_skips`), if any.
+    standard: int | None = None
 
     @property
     def continues(self) -> bool:
@@ -324,10 +326,24 @@ def decide(
     allow_approval: bool = False,
     reading: bool = False,
     several: str = "",
+    skips: Mapping[tuple[str, str], Skip] | None = None,
 ) -> Decision:
     """The move after the last attempt, with the evidence it rests on. `reading`
     is a task that only finds out: its answer is what it is for. `several` says why the
-    plan sized it as several workers' work: out of turns, it is split, never given more."""
+    plan sized it as several workers' work: out of turns, it is split, never given more.
+    `skips` are the standards' skips here: a climb they name goes past its rung."""
+    decision = _decide(ladder, attempts, allow_approval=allow_approval, reading=reading, several=several)
+    return _skipping(ladder, decision, attempts[-1].cell, skips or {}, allow_approval)
+
+
+def _decide(
+    ladder: Sequence[Cell],
+    attempts: Sequence[Attempt],
+    *,
+    allow_approval: bool,
+    reading: bool,
+    several: str,
+) -> Decision:
     if not attempts:
         raise ValueError("decide() needs at least one attempt")
     last = attempts[-1]
@@ -587,3 +603,33 @@ def _gated(move: Move, cell: Cell, turns: int, why: str, allow_approval: bool,
                                            "resume with --allow-approval, or tag the task #fable"),
                         skipped=skipped)
     return Decision(move, cell, turns, why, because=because, skipped=skipped)
+
+
+@dataclass(frozen=True)
+class Skip:
+    """A standard's skip (`standards.active_skips`): a climb into a rung goes to `onto` instead."""
+
+    onto: Cell
+    change: int
+    because: str = ""
+
+
+def _skipping(ladder: Sequence[Cell], decision: Decision, source: Cell,
+              skips: Mapping[tuple[str, str], Skip], allow_approval: bool) -> Decision:
+    """The climb `decision` made, past its rung when a standard skips it: on to the rung after,
+    as more effort when that rung is the same model's, else as a new model. Only a climb, never
+    onto a rung that needs an approval or off the ladder."""
+    if decision.move not in (Move.MORE_EFFORT, Move.NEXT_MODEL) or decision.cell is None:
+        return decision
+    skip = skips.get((source.label, decision.cell.label))
+    if skip is None or skip.onto not in ladder or skip.onto.needs_approval or decision.cell.needs_approval:
+        return decision
+    move = Move.MORE_EFFORT if skip.onto.model == source.model else Move.NEXT_MODEL
+    said = (f"standard change #{skip.change} skips {decision.cell.label} on climbs from {source.label}"
+            + (f": {skip.because}" if skip.because else ""))
+    because = (*decision.because[:-1], said, _arrives(skip.onto))
+    skipped = (*decision.skipped, f"{decision.cell.label}: skipped by standard change #{skip.change}",
+               *_skipped(ladder, decision.cell, skip.onto))
+    reason = f"{decision.reason}; {decision.cell.label} skipped by standard change #{skip.change}"
+    return replace(_gated(move, skip.onto, decision.max_turns, reason, allow_approval, because, skipped),
+                   standard=skip.change)

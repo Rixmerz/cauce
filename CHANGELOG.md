@@ -49,6 +49,18 @@
   and retried it. A session flagged so whose result holds the one result block, and names no usage
   limit or dropped network, is now read as its answer; one with no block, a limit, or another
   subtype stays errored.
+- **A ladder can skip a rung that rarely helps:** a calibration now records a `skip` change per
+  repository and kind (band 0, any size) when the climbs from one rung to the next, of the same
+  move (`more_effort` or `next_model`), passed their next try under `standards.SKIP_PASS_BELOW`
+  (25%) over at least `SKIP_MIN_MOVES` (4) of them. Later climbs from that rung go to the rung
+  after (`escalate.decide`'s `skips`); `Decision.skipped` names the rung and `Decision.standard`
+  the change, kept on the `moved` event. The climbs are read in the repository, or from every
+  repository when it has too few, and the evidence says which. Never the last rung, a rung that
+  needs an approval, a retry, more turns, a network or load wait, and never by cost. Judged once
+  after `JUDGE_AFTER` climbs past the rung against the climbs into it before (pass rate, median
+  time to pass), and reverted as its own change when they pass less by more than
+  `REVERT_MARGIN` or take more than `SKIP_SLOWER` (1.25×) as long. `cauce evolution` and the
+  Evolution screen show it with the other changes.
 
 ## [0.58.0] - 2026-10-28
 
