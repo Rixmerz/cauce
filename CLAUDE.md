@@ -149,7 +149,8 @@ The coverage floor lives in one place, `[tool.coverage.report] fail_under` in
 `hooks.main` swallows everything — and writes it to `hook-errors.log`, which
 the next `SessionStart` reports. Failing open is not failing silently.
 
-**Verdicts fail closed.** A worker with no result block, two blocks, or a pass
+**Verdicts fail closed.** A worker with no result block, two blocks that differ
+(the same block repeated is one verdict, `launch.result_block`), or a pass
 without evidence is `inconclusive`, never a pass. A pass the independent check
 reads late (`late_verifier`) is a pass on cauce's own check until that check shows a blocker; then
 it is reopened as `review`, never left standing. Changed files come from git,

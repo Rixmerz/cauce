@@ -128,8 +128,13 @@ def test_a_block_whose_strings_hold_a_fence_or_a_tab_is_still_read():
     raw = '{"verdict": "pass", "summary": "done", "evidence": ' + json.dumps(evidence).replace("\\t", "\t") + "}"
     block = result_block(f"Done.\n```cauce-result\n{raw}\n```\n")
     assert block["verdict"] == "pass" and "3 passed" in block["evidence"] and "\t" in block["evidence"]
-    # Two blocks are still no verdict, and a block that never closes is read as far as its JSON goes.
-    assert result_block(f"```cauce-result\n{raw}\n```\n```cauce-result\n{raw}\n```") is None
+    # The same block repeated is one verdict; two that differ in anything are none, and a block that
+    # never closes is read as far as its JSON goes.
+    twice = result_block(f"```cauce-result\n{raw}\n```\nAgain:\n```cauce-result\n{raw}\n```")
+    assert twice is not None and twice["summary"] == "done"
+    other = raw.replace('"done"', '"done."')
+    assert result_block(f"```cauce-result\n{raw}\n```\n```cauce-result\n{other}\n```") is None
+    assert result_block(f"```cauce-result\n{raw}\n```\n```cauce-result\n{{bad\n```") is None
     assert result_block(f"```cauce-result\n{raw}")["summary"] == "done"
     # Two verdicts in one block, or anything after its JSON, are no verdict either.
     failing = '{"verdict": "fail", "failure": "code_bug", "summary": "no"}'

@@ -1171,12 +1171,17 @@ def report_block(text: str) -> dict[str, Any] | None:
 
 
 def result_block(text: str) -> dict[str, Any] | None:
-    """The one result block, or None — two verdicts are no verdict."""
+    """The one result block, or None — two verdicts are no verdict. A worker that repeated
+    the very same block (the same JSON, every time) gave one verdict, and it is read; blocks
+    that differ in anything, or one that cannot be read, are none (fail closed)."""
     opened = list(_OPEN_RE.finditer(text or ""))
-    if len(opened) != 1:
+    if not opened:
         return None
-    value = _decoded(text, opened[0].end(), closed=True)
-    return value if isinstance(value, dict) else None
+    values = [_decoded(text, at.end(), closed=True) for at in opened]
+    first = values[0]
+    if not isinstance(first, dict) or any(value != first for value in values[1:]):
+        return None
+    return first
 
 
 #: Where a failure lives is worth reading even from an `inconclusive` verdict: a

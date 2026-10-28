@@ -36,6 +36,11 @@
 
 ### Changed
 
+- **A worker that repeats its result block word for word is read.** Attempts failed with "did not
+  answer with exactly one result block" when the worker had written the same `cauce-result` block
+  twice. Blocks whose JSON is identical are now one verdict; blocks that differ in anything, or one
+  that cannot be read, are still `inconclusive` (fail closed).
+
 - **The board no longer opens a browser tab for each task:** `/cauce:ui` now runs `cauce ui`
   (no tab; `--open` once, only when the person asks to see it), `/cauce` opens the board once,
   and the page shows every task of a session in itself: the Sessions screen lists the work a
