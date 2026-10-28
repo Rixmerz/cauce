@@ -88,9 +88,40 @@ def installed(env: Mapping[str, str]) -> list[tuple[tuple[int, ...], Path]]:
     return sorted(found)
 
 
-#: The version a command was forwarded from (`forward_to`): the plugin the session that typed
-#: it loaded, whose skills and hooks it still reads. None when it was not forwarded.
+#: The version a command was forwarded from (`forward_to`): the launcher on the PATH of the
+#: session that typed it. That PATH is fixed when the session starts, so after `/reload-plugins`
+#: it still names the old plugin while the session's skills and hooks are the new one's: only a
+#: hint, which `session_loaded` overrides. None when it was not forwarded.
 LOADED: str | None = None
+
+#: What each session's hooks last ran as, kept in the cauce home's `work/`; the newest only.
+LOADED_BY_HOOKS, LOADED_KEPT = "loaded-plugin.json", 200
+
+
+def _read_loaded(path: Path) -> dict[str, str]:
+    try:
+        seen = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in seen.items() if isinstance(v, str)} if isinstance(seen, dict) else {}
+
+
+def record_loaded(root: Path, session_id: str, version: str) -> None:
+    """A hook runs the plugin its session has loaded now (Claude Code re-reads the hooks on
+    `/reload-plugins`), so the version it runs is what the session's text is."""
+    path = root / "work" / LOADED_BY_HOOKS
+    seen = _read_loaded(path)
+    if seen.get(session_id) == version:
+        return
+    seen.pop(session_id, None)
+    seen[session_id] = version
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(dict(list(seen.items())[-LOADED_KEPT:])))
+
+
+def session_loaded(root: Path, session_id: str | None) -> str | None:
+    """The version the session's hooks last ran as, or None when none has run since."""
+    return _read_loaded(root / "work" / LOADED_BY_HOOKS).get(session_id or "")
 
 
 def forward_to(argv: list[str], env: Mapping[str, str], own: str, version: str) -> Path | None:

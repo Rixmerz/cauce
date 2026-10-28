@@ -78,6 +78,12 @@ def test_rastro_runs_without_its_saved_routines_from_a_plugin_or_from_path(tmp_p
     assert plugins.find(plugins.KNOWN[1], {"PATH": "", "CLAUDE_CONFIG_DIR": str(tmp_path / "none")}) is None
 
 
+def _rastro_in(directory: Path) -> Path:
+    (directory / "rastro").write_text("#!/bin/sh\n")
+    (directory / "rastro").chmod(0o755)
+    return directory
+
+
 def test_a_server_entry_inline_broken_or_outside_the_plugin_is_read_or_left_out():
     root = install("layout-inspector", "1.0.0", manifest={"mcpServers": LAYOUT["mcpServers"]})
     assert plugins.installed()["layout-inspector"].root == root

@@ -553,7 +553,8 @@ def test_a_session_hears_once_that_a_newer_cauce_is_installed(tmp_path):
     _plugin(config, "999.0.0")
     said = hooks._newer_plugin(tmp_path, "s", env)
     assert said.startswith(f"cauce: cauce 999.0.0 is installed, and this session loaded {__version__}")
-    assert "/reload-plugins" in said and "/cauce:relay" in said
+    assert "/reload-plugins --force" in said
+    assert "/cauce:relay" in said
     assert hooks._newer_plugin(tmp_path, "s", env) is None  # once
     assert hooks._newer_plugin(tmp_path, "t", env) is not None  # each session hears it
     _plugin(config, "999.1.0")
@@ -644,3 +645,13 @@ def test_problems_already_there_in_files_changed_since_are_not_offered(store: St
     store.add_event(task["id"], "finished", status="done", findings=[old], changed=["tests/t.ts"], base=base)
     assert hooks._found_before(store, store.get_task(task["id"]))[0] == (
         "  it found 1 problem(s) that were already there: nothing left to offer")
+
+
+def test_a_session_start_and_a_prompt_keep_the_version_the_session_s_hooks_run(store, tmp_path):
+    from cauce import __version__, link
+
+    hooks.session_start({"session_id": "s1"}, store, tmp_path / "h", {"CAUCE_HOME": str(tmp_path / "h")}, adapters=[])
+    assert link.session_loaded(tmp_path / "h", "s1") == __version__
+    link.record_loaded(store.path.parent, "s2", "0.1.0")
+    hooks.user_prompt_submit({"session_id": "s2", "prompt": "hola", "prompt_id": "p"}, store)
+    assert link.session_loaded(store.path.parent, "s2") == __version__

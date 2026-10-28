@@ -66,6 +66,17 @@
   `Capability:` lines and its first heading, two words or more, all in the request), and by a
   capability named in `docs/tracer/capabilities.md` (its headings, list entries and table rows) whose
   words all lie in the flow's name or title. A title of one word, or a generic one, names nothing.
+- **The "this session loaded cauce X" hint went on after `/reload-plugins`:** it took the version
+  the session loaded from the `cauce` launcher a command was forwarded from, and a session's PATH
+  keeps the launcher it started with however many times its plugins reload, so the hint named the
+  old version even once the session's skills and hooks were the new one's. Every session's hooks
+  (SessionStart and each prompt) now keep the version they run (`work/loaded-plugin.json` in the
+  cauce home, the newest 200 sessions), Claude Code re-reads the hooks on a reload, and `cauce run`
+  reads that for its session before the launcher's: the hint shows only while the session's hooks
+  still run the old plugin, and from the first prompt after a reload it is gone. The launcher's
+  version stays the answer for a session with no hook record yet. The hint (and the once-a-session
+  note a prompt gives) now says `/reload-plugins --force`: Claude Code 2.1 holds back a plain reload
+  that would rewrite the prompt cache and prints "Run /reload-plugins --force to apply".
 
 ## [0.56.0] - 2026-10-27
 

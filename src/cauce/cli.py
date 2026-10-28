@@ -140,18 +140,24 @@ def _behind(env: dict[str, str] | None = None) -> str | None:
     every fix an update brought until it reloads."""
     from cauce import link
 
-    loaded = link.parse_version(link.LOADED or "")
+    # The launcher on the session's PATH is the version it started with, even after a reload;
+    # what its hooks last ran as is what it has loaded now.
+    environ = os.environ if env is None else env
+    session = environ.get("CAUCE_SESSION_ID")
+    ran = link.session_loaded(home(env), session) if session else None
+    said = ran or link.LOADED
+    loaded = link.parse_version(said or "")
     mine = link.parse_version(__version__)
     if loaded and mine and loaded < mine:
         # Forwarded here: the command runs this version, the session's skills and hooks do not.
-        return (f"cauce: this session loaded cauce {link.LOADED}; the commands it types run {__version__}, but its "
-                f"skills, hooks and /cauce:* text are still {link.LOADED}'s. Run /reload-plugins, or `/cauce:relay` "
-                "then /clear, so its instructions are this version's too")
-    newest = max((version for version, _ in link.installed(os.environ if env is None else env)), default=None)
+        return (f"cauce: this session loaded cauce {said}; the commands it types run {__version__}, but its "
+                f"skills, hooks and /cauce:* text are still {said}'s. Run /reload-plugins --force (a plain one can "
+                "hold the load back), or `/cauce:relay` then /clear, so its instructions are this version's too")
+    newest = max((version for version, _ in link.installed(environ)), default=None)
     if not mine or not newest or newest <= mine:
         return None
     return (f"cauce: this session runs cauce {__version__}, but {'.'.join(map(str, newest))} is installed: "
-            "it started before the update. Run /reload-plugins (or restart the session) so its runs get it")
+            "it started before the update. Run /reload-plugins --force (or restart the session) so its runs get it")
 
 
 def _warn_behind() -> None:
