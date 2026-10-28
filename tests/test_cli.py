@@ -1596,3 +1596,26 @@ def test_config_livespec_wait_takes_whole_seconds(capsys, monkeypatch):
     assert cli.main(["config", "livespec_wait", "soon"]) == 1
     assert "whole seconds" in capsys.readouterr().err
     assert config.livespec_wait(os.environ) == 20
+
+
+def test_dismissing_a_task_whose_run_died_keeps_its_worktree_work_on_its_branch(git_repo, store, capsys):
+    from cauce import isolate
+    from cauce.store import home
+
+    from .conftest import git
+
+    task = store.create_task("fix the cart total", status="interrupted", source="cauce", cwd=str(git_repo))
+    ws = isolate.prepare(git_repo, task["id"], home(), fresh=True)
+    (ws.path / "app.py").write_text("print('fixed')\n")  # the run died before it committed this
+    (ws.path / "new.py").write_text("x = 1\n")
+    assert cli.main(["dismiss", str(task["id"])]) == 0
+    assert "kept what its worktree held on cauce/task-" in capsys.readouterr().out
+    branch = isolate.branch_for(task["id"])
+    assert git(git_repo, "show", f"{branch}:app.py") == "print('fixed')"
+    assert git(git_repo, "show", f"{branch}:new.py") == "x = 1"
+    assert isolate.UNVERIFIED in git(git_repo, "log", "-1", "--format=%B", branch)
+    assert not ws.path.exists() and store.events_of(task["id"], "branch_kept")
+    # Nothing left there: a dismissal of a task with no worktree keeps nothing and says nothing.
+    other = store.create_task("another", status="blocked", source="cauce", cwd=str(git_repo))
+    assert cli.main(["dismiss", str(other["id"])]) == 0
+    assert "kept what" not in capsys.readouterr().out and not isolate.kept(git_repo, other["id"])

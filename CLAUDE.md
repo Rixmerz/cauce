@@ -273,7 +273,10 @@ yields the default kind, not a guess.
   dismissal (`cauce dismiss`, a button they press), or by a later task with
   the same text that passed (`superseded`); each records its `stops.Stop` and
   is marked reported, never handed to a session as an ending. A dismissed
-  task resumes as what it was: one found wrong is still rewritten.
+  task resumes as what it was: one found wrong is still rewritten. A dismissal
+  never loses work: a worktree a dead run left behind is committed on the
+  task's branch, unverified, and removed (`isolate.keep_left`, a `branch_kept`
+  event), as a blocked stop keeps its work.
 - Work a session sent is reported to it once when it ends: by the report a
   `cauce run` prints, else by the Stop hook (which blocks the turn's end once
   with the endings) or the next prompt.

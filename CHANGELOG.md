@@ -48,6 +48,12 @@
 
 ### Fixed
 
+- **`cauce dismiss` never loses a task's work.** A task whose run died (`interrupted`) left
+  its worktree with changes no commit held; dismissing it left them there, outside any branch, for
+  the next cleanup to lose. The dismissal now commits them on the task's branch, unverified, and
+  removes the worktree, as a blocked stop does (`isolate.keep_left`, a `branch_kept` event); `cauce
+  resume N` goes on from that branch.
+
 - **A whole check that timed out after a claimed pass no longer climbs the model.** Only a check
   whose failures were the test runners' own timeout lines was read as the machine's load; one that
   ran past its own time as a whole (`VERIFY_TIMEOUT_S`) was `inconclusive`, so a busy machine
