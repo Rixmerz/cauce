@@ -443,3 +443,18 @@ def test_a_build_that_changed_only_tests_config_and_locks_owes_no_spec_but_one_w
     only = ["tests/test_a.py", "package-lock.json", "pyproject.toml", "dist/bundle.js", "generated/api.py"]
     assert specs.owed("feature", only) == []
     assert specs.owed("feature", [*only, "src/generated/x.py"]) == ["src/generated/x.py"]
+
+
+def test_spec_first_on_in_a_repository_with_no_openspec_says_nothing_is_enforced(git_repo, capsys):
+    assert main(["specs", "--repo", str(git_repo), "first", "on"]) == 0
+    out = capsys.readouterr().out
+    assert "spec-first is on" in out and "nothing is enforced" in out and "no `openspec/` here" in out
+    # Said on every look while it stands, not only the one that turned it on.
+    assert main(["specs", "--repo", str(git_repo)]) == 0
+    assert "nothing is enforced" in capsys.readouterr().out
+    # Off, or with the folder there, it says something else.
+    main(["specs", "--repo", str(git_repo), "first", "off"])
+    assert "nothing is enforced" not in capsys.readouterr().out
+    _behind(git_repo)
+    main(["specs", "--repo", str(git_repo), "first", "on"])
+    assert "nothing is enforced" not in capsys.readouterr().out

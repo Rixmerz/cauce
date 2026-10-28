@@ -42,6 +42,9 @@
 
 ### Changed
 
+- **`cauce specs first on` with no `openspec/` says so plainly:** spec-first is on but nothing is
+  enforced until `openspec/` exists, on the command that turns it on and on each look after it.
+
 - **livespec is pinned to 0.34.0, and follows the installed plugin:** 0.34.0 fixes a `group_db`
   bug. When cauce runs livespec through `uvx` it now uses the release in the newest installed
   livespec plugin's own manifest (`.claude-plugin/plugin.json`, skipping a release uv found
