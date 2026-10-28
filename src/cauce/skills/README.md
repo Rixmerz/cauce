@@ -31,17 +31,30 @@ license; where cauce changed the text, the change is listed.
   - `ponytail`: the visual-design exception gained its prototype case — a
     request for a prototype is functional work, with neutral styles marked
     `ponytail: prototype styles` instead of a stop for a missing brief.
+  - `ponytail`, compared with DietrichGebert/ponytail v5 (`skills/ponytail/SKILL.md`
+    at commit `09c434a`, v5.3.2 and after): it gained the ideas v5 adds that fit
+    in a short text — lazy about the solution, never the change; scope listed
+    before writing (callers, tests, fixtures, config, exports); a vague request
+    gets the smallest core version; the codebase's own helper before the
+    standard library; a bug fix's root cause fixed once in the shared code;
+    moved code keeps its error handling; equal size goes to edge-case
+    correctness; hardware calibration is never cut; the report ends with what
+    was skipped and any risk. The text stays vise's and cauce's own.
 
 vise's `ponytail` is its own shorter text of an idea that
 [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail) (MIT)
 made known as the lazy senior developer. That fuller plugin, with its review,
 audit and debt skills, installs for Claude Code on its own, and a role can name
-its skills (`ponytail:ponytail-review`) once it is installed.
+its skills (`ponytail:ponytail-review`) once it is installed. When it is,
+a role's `ponytail` is read from the installed plugin's own `SKILL.md`
+(`roles.UPSTREAM`), and this copy is the fallback.
 
 ## From Cloudflare
 
 - **Source:** [cloudflare/security-audit-skill](https://github.com/cloudflare/security-audit-skill),
-  `skills/security-audit/` at commit `c1c8a8c`.
+  `skills/security-audit/` at commit `c1c8a8c`, still upstream's latest
+  when compared again for 0.59; no Claude Code plugin publishes it, so the
+  copy here is the only source.
 - **License:** MIT, Copyright (c) 2025-2026 Cloudflare, Inc. The full text is
   in [`security-audit/LICENSE`](security-audit/LICENSE).
 - **Skill:** `security-audit`: `SKILL.md`, the companion guides, the report
