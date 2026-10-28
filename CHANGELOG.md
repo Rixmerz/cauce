@@ -20,6 +20,20 @@
   - **The same failing tests never earn a second climb.** When two attempts leave exactly the
     same failing tests, the task ends blocked as `same_failures`, its work kept, instead of
     climbing again.
+- **The independent check got the wrong CORRECT lines from a real TRACER flow:** it kept every line
+  that contained the word "CORRECT". TRACER's critical-flow template writes the failure paths as a
+  table whose header row (`| Failure | WORKS (…) | CORRECT (…) |`) is the only one that says it, so the
+  check was handed that header as a criterion and every failure path's CORRECT cell was dropped; a
+  `CORRECT:` item that goes on over several lines (or lists its lines under it) was cut at its first.
+  The flow is now read as the template defines it: the `CORRECT:` items of the success path with the
+  lines under them, and the CORRECT column of each table found by its header, led by the row's first
+  cell. The test fixture is now the template's own shape (it had written `CORRECT:` inside a cell,
+  which the template never does).
+- **A request that did not repeat a flow's file name reached none of its flows:** flows were matched
+  by the words of the file name alone. A flow is now also reached by its own title (its `Flow:` and
+  `Capability:` lines and its first heading, two words or more, all in the request), and by a
+  capability named in `docs/tracer/capabilities.md` (its headings, list entries and table rows) whose
+  words all lie in the flow's name or title. A title of one word, or a generic one, names nothing.
 
 ## [0.56.0] - 2026-10-27
 
