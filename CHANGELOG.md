@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Installed upstream skills come first:** a bundled skill whose authors publish it as a Claude
+  Code plugin (`roles.UPSTREAM`: `ponytail`) is read from that plugin's own `SKILL.md` when the
+  person installed it (newest version, never a half-done `temp_*` clone, never a repository); the
+  vendored copy is the fallback when it is absent, unreadable or malformed. The `briefed` event
+  keeps each skill's source (`skill_sources`), and a plugin's copy and version change
+  `roles.version`, so a role's trial compares like with like.
+
+### Changed
+
+- **ponytail:** cauce's short text gained the ideas ponytail v5 adds that fit (scope listed before
+  writing, the codebase's own helper first, a bug's root cause fixed once, edge-case correctness
+  between equal options, the report ends with what was skipped). Compared against upstream
+  `09c434a` (v5.3.2); `security-audit` was compared again and upstream is still at `c1c8a8c`.
+
 ## [0.58.0] - 2026-10-28
 
 ### Added

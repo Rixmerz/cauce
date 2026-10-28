@@ -236,6 +236,45 @@ def test_skills_are_found_nearest_first_and_in_installed_plugins(tmp_path, monke
     assert roles.claude_dir({"HOME": str(tmp_path)}) == tmp_path / ".claude"
 
 
+def test_an_installed_upstream_plugin_s_skill_takes_the_vendored_copy_s_place_and_its_version():
+    role = roles.Role("r", "does r", ("implement",), "Be r.", skills=("ponytail",))
+    vendored = roles.version(role)
+    assert roles.find_skill("ponytail").origin == "bundled"
+    assert roles.brief(role).sources == {"ponytail": "bundled"}
+    cache = Path(roles.claude_dir()) / "plugins" / "cache"
+
+    def install(market: str, version: str, text: str) -> Path:
+        folder = cache / market / "ponytail" / version / "skills" / "ponytail"
+        folder.mkdir(parents=True)
+        (folder / "SKILL.md").write_text(text, encoding="utf-8")
+        return folder
+
+    install("temp_github_1", "9.0.0", "---\nname: ponytail\n---\nhalf a clone\n")
+    assert roles.find_skill("ponytail").origin == "bundled"
+    install("market", "5.0.0", "---\nname: ponytail\n---\nUpstream five.\n")
+    newest = install("market", "5.3.2", "---\nname: ponytail\ndescription: up\n---\nUpstream newest.\n")
+    found = roles.find_skill("ponytail")
+    assert found.origin == "plugin" and found.version == "5.3.2" and found.body == "Upstream newest."
+    briefing = roles.brief(role)
+    assert "Upstream newest." in briefing.system_prompt and briefing.sources == {"ponytail": "plugin@5.3.2"}
+    assert newest in briefing.read_dirs
+    assert roles.skill_sources(role) == {"ponytail": "plugin@5.3.2"}
+    upstream = roles.version(role)
+    assert upstream != vendored
+    # malformed, empty or another skill's file: the vendored copy again, and its version
+    for text in ("---\nbroken\n---\n", "---\nname: ponytail\n---\n\n", "---\nname: other\n---\nx\n"):
+        (newest / "SKILL.md").write_text(text, encoding="utf-8")
+        assert roles.find_skill("ponytail").origin == "bundled" and roles.version(role) == vendored
+    (newest / "SKILL.md").unlink()
+    assert roles.find_skill("ponytail").origin == "bundled"
+    # the person's own copy still wins, and a skill with no upstream never looks in the cache
+    mine = home() / "skills" / "ponytail"
+    mine.mkdir(parents=True)
+    (mine / "SKILL.md").write_text("---\nname: ponytail\n---\nMine.\n", encoding="utf-8")
+    assert roles.find_skill("ponytail").origin == "user"
+    assert roles.upstream_skill("security-audit") is None
+
+
 def test_a_brief_carries_skills_offers_the_rest_by_path_and_names_what_is_missing(monkeypatch):
     role = roles.Role("r", "does r", ("implement",), "Be r.", skills=("ponytail", "ghost", "engineering-baseline"),
                       on_demand=("python-rules", "nope"))

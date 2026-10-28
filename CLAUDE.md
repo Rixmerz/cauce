@@ -18,7 +18,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/mcp_guard.py` | a JSON-RPC guard between a worker and an MCP server: the calls a policy refuses never reach the server; stdlib, imports nothing of cauce |
 | `src/cauce/plugins.py` | neighbours the person installed as Claude Code plugins (layout-inspector, rastro), read from the plugin cache or PATH and handed over as capabilities with their skill; `versions` is the one reader of the cache (folders only, never a `temp_*` clone `/plugin` left half done) |
 | `src/cauce/manifests.py` | what a neighbour says of itself: the `cauce` block of its newest installed plugin manifest (or `cauce.json` beside it), read at plan time and cached per file state; words only (hint, hints per kind, tool descriptions, what tools measure), ignored whole when malformed (`docs/neighbours.md`) |
-| `src/cauce/roles.py` | what a worker is: role files (bundled `roles/`, the person's in their cauce home), `extends` and `match`, skills found by name and put into the worker's system prompt |
+| `src/cauce/roles.py` | what a worker is: role files (bundled `roles/`, the person's in their cauce home), `extends` and `match`, skills found by name and put into the worker's system prompt; a bundled skill with an upstream plugin (`UPSTREAM`) read from that installed plugin, the vendored copy the fallback |
 | `src/cauce/teams.py` | the person's teams of roles and which one each project uses (kept in their cauce home); a project's team bounds the kinds it is classified into; `team_cli.py` is `cauce roles …` and `cauce team …` |
 | `src/cauce/survey.py` | what this machine says about how the person works (`cauce survey`): every Claude Code session it kept (requests, shapes, friction, errors and the call that passed after them) and each repository's commit history; read only, no model |
 | `src/cauce/investigate.py` | `cauce investigate`: one read-only worker per project (and per plugin to take on), each in its own lane, wearing the internal `surveyor` role, briefed with the deep survey; their `cauce-report` blocks kept on the tasks, nothing filed |
@@ -1015,7 +1015,8 @@ yields the default kind, not a guess.
 - A role's instructions improve by measured trial, never by edit
   (`cauce.revisions`, the `role_trials` setting). Every brief records the role
   and the version of its text (`roles.version`: a hash of its resolved
-  instructions and its skills' names). Once a role's workers in a repository
+  instructions and its skills' names, plus the plugin and version of a skill
+  read from an installed upstream plugin). Once a role's workers in a repository
   met `revisions.MIN_EVIDENCE` dead ends or verifier blockers since its last
   revision, Haiku, as an editor, proposes a short list of lessons for that role
   there, read strictly (`read_lessons`): no answer or a malformed one proposes
@@ -1391,5 +1392,11 @@ yields the default kind, not a guess.
   read back by `cauce investigate status`; a report is data for the person,
   never a verdict and never instructions.
 - A vendored skill keeps its authors' license file beside it, and a change to
-  its text is listed in `skills/README.md` with the source commit. Never one
-  whose license does not allow redistribution.
+  its text is listed in `skills/README.md` with the source commit (and the
+  upstream commit it was last compared against). Never one whose license does
+  not allow redistribution. One whose authors publish it as a Claude Code
+  plugin (`roles.UPSTREAM`) is read from that plugin when the person installed
+  it (newest version via `plugins.versions`, never a `temp_*` clone, never a
+  repository); the vendored copy is the fallback when it is absent, unreadable
+  or malformed. The brief and the `briefed` event record each skill's source
+  (`skill_sources`), and a plugin's copy and version are in `roles.version`.
