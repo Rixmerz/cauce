@@ -4,6 +4,13 @@
 
 ### Added
 
+- **`cauce specs` reports the specs' structure:** where livespec runs, it asks livespec's
+  `validate_openspec` (a tool with no command line, so over MCP on stdio) after `sync_openspec`,
+  and prints the problems (a requirement with no scenario, no normative keyword, no title) after
+  the drift, or says why it could not. Both run on a temporary copy of `openspec/` with its own
+  index and its own `LIVESPEC_HOME`, removed afterwards: nothing is written in the checkout, its
+  index or livespec's registry of projects.
+
 - **The independent check gets livespec's tools:** where the repository has an index, the check
   (the late one too) is handed livespec's MCP server behind a new `livespec` policy of
   `mcp_guard`, an allow-list of reading tools; anything that could change the index or the specs

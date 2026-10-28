@@ -38,6 +38,8 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 import tomllib
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -50,7 +52,7 @@ from cauce import repo
 from cauce.adapters import ABSENT, PRESENT, UNREADABLE, Briefing, Status
 from cauce.matrix import READ_ONLY_KINDS
 from cauce.store import home
-from cauce.text import words
+from cauce.text import clip, words
 
 MINIMUM_VERSION = (0, 32, 0)
 
@@ -65,7 +67,7 @@ TOOLS = frozenset({
     "quick_orient", "find_symbol", "who_calls", "who_does_this_call", "analyze_impact",
     "git_diff_impact", "get_symbol_source", "get_spec_implementation", "list_specs",
     "audit_coverage", "find_orphan_tests", "find_dead_code", "search",
-    "read_unit", "search_similar", "index_project", "sync_openspec",
+    "read_unit", "search_similar", "index_project", "sync_openspec", "validate_openspec",
 })
 
 _HINTS: Mapping[str, str] = {
@@ -214,6 +216,10 @@ def _version_tuple(text: str | None) -> tuple[int, ...] | None:
         return None
     found = re.findall(r"\d+", text)
     return tuple(int(n) for n in found[:3]) if found else None
+
+
+class LivespecError(RuntimeError):
+    """livespec could not be asked: it did not start, did not answer in time, or answered with an error."""
 
 
 class Livespec:
@@ -614,6 +620,74 @@ class Livespec:
             wait.pause(POLL_S)
         return True
 
+    # --- the specs' structure ---------------------------------------------
+
+    def call_tools(self, workspace: Path, calls: Sequence[tuple[str, Mapping[str, Any]]], *,
+                   env: Mapping[str, str] | None = None, timeout_s: float = 60.0) -> list[dict[str, Any]]:
+        """Tools livespec has no command line for (`validate_openspec`), asked of its own server as
+        any MCP client does: one session over stdio, run in `workspace` with each call's `workspace`
+        it, cut at `timeout_s`. Raises LivespecError; the answers are the tools' own JSON objects."""
+        server = self.server()
+        if server is None:
+            raise LivespecError("no livespec to ask")
+        argv = [str(server["command"]), *[str(a) for a in server.get("args", [])]]
+        env = {**(self.env if env is None else env),
+               **{str(k): str(v) for k, v in (server.get("env") or {}).items()}, "CAUCE_HOOKS_OFF": "1"}
+        try:
+            proc = self.popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              text=True, env=env, cwd=str(workspace))
+        except OSError as exc:
+            raise LivespecError(f"livespec did not start: {exc}") from exc
+        cut = threading.Timer(timeout_s, proc.kill)
+        cut.start()
+        try:
+            _ask(proc, 1, "initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
+                                         "clientInfo": {"name": "cauce", "version": "0"}})
+            proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+            proc.stdin.flush()
+            return [_tool_data(name, _ask(proc, n, "tools/call", {"name": name, "arguments": {
+                "workspace": str(workspace), **arguments}})) for n, (name, arguments) in enumerate(calls, start=2)]
+        except (OSError, ValueError) as exc:
+            raise LivespecError(f"livespec did not answer: {exc}") from exc
+        finally:
+            cut.cancel()
+            proc.kill()
+            proc.wait()
+
+    def validate_openspec(self, repo_dir: Path, *, strict: bool = False, timeout_s: float = 120.0) -> dict[str, Any]:
+        """The structural check of the repository's OpenSpec specs, by livespec's own
+        `validate_openspec`, run on a temporary copy of `openspec/` and nothing else: that tool
+        checks an index, and syncing the specs into the person's (or building one) would write in
+        their checkout. The copy gets its own index (livespec's CLI), its own `LIVESPEC_HOME` (so
+        livespec's registry of projects never lists it) and no `.livespec.toml` (whose `group_db`
+        would send the sync to a shared index), and is removed afterwards. Raises LivespecError."""
+        root = (repo.toplevel(repo_dir) or repo_dir).resolve()
+        specs = root / "openspec"
+        if not specs.is_dir():
+            raise LivespecError("there is no openspec/ here")
+        server = self.server()
+        if server is None:
+            raise LivespecError("no livespec to ask")
+        with tempfile.TemporaryDirectory(prefix="cauce-openspec-") as tmp:
+            where = Path(tmp).resolve() / "repo"
+            try:
+                shutil.copytree(specs, where / "openspec", symlinks=True)
+            except OSError as exc:
+                raise LivespecError(f"openspec/ could not be copied: {exc}") from exc
+            env = {**self.env, "LIVESPEC_HOME": str(Path(tmp).resolve() / "livespec-home"), "CAUCE_HOOKS_OFF": "1",
+                   **{str(k): str(v) for k, v in (server.get("env") or {}).items()}}
+            argv = [str(server["command"]), *[str(a) for a in server.get("args", [])], "index", str(where)]
+            try:
+                proc = self.runner(argv, capture_output=True, text=True, timeout=timeout_s, check=False, env=env)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise LivespecError(f"livespec index did not run: {exc}") from exc
+            if proc.returncode != 0:
+                said = (proc.stderr or proc.stdout or "").strip()
+                raise LivespecError(clip(f"livespec index failed: {said}", 300))
+            _, result = self.call_tools(where, [("sync_openspec", {}), ("validate_openspec", {"strict": strict})],
+                                        env=env, timeout_s=timeout_s)
+        return result
+
     # --- before the first attempt ------------------------------------------
 
     def orient(self, kind: str, status: Status) -> tuple[str, ...]:
@@ -804,6 +878,45 @@ def _lock(path: Path, *, wait_s: float, pause: Callable[[float], None] = time.sl
             yield True, waited
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _ask(proc: Any, ident: int, method: str, params: Mapping[str, Any]) -> Any:
+    """One JSON-RPC request to an MCP server on stdio (a message a line) and its answer."""
+    proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": ident, "method": method, "params": params}) + "\n")
+    proc.stdin.flush()
+    while True:
+        line = proc.stdout.readline()
+        if not line:
+            raise LivespecError(f"livespec closed before it answered {method}")
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue  # a log line on stdout, not a message
+        if isinstance(message, dict) and message.get("id") == ident:
+            if isinstance(message.get("error"), dict):
+                raise LivespecError(f"{method}: {message['error'].get('message') or message['error']}")
+            return message.get("result")
+
+
+def _tool_data(name: str, result: Any) -> dict[str, Any]:
+    """The JSON object a tool answered with (its `structuredContent`; older releases only wrap the
+    same object in a text item), or the error it said."""
+    if not isinstance(result, dict):
+        raise LivespecError(f"{name}: no answer")
+    content = result.get("content")
+    text = " ".join(str(c.get("text", "")) for c in content or [] if isinstance(c, dict))
+    data = result.get("structuredContent")
+    if not isinstance(data, dict):
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+    if result.get("isError") or not isinstance(data, dict) or data.get("error"):
+        fields = data if isinstance(data, dict) else {}
+        said = fields.get("error") or text or "an answer that is no object"
+        hint = f" ({fields['hint']})" if fields.get("hint") else ""
+        raise LivespecError(clip(f"{name}: {said}{hint}", 300))
+    return data
 
 
 def _connect(db: Path) -> sqlite3.Connection:

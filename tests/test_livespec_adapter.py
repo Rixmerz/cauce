@@ -10,6 +10,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import pytest
+
 from cauce.adapters import ABSENT, PRESENT, UNREADABLE, Status
 from cauce.adapters import livespec as livespec_mod
 from cauce.adapters.livespec import _HINTS, PINNED, TOOLS, Livespec, is_test_path
@@ -721,3 +723,107 @@ def test_an_index_that_times_out_ends_the_whole_group_not_only_uvx(tmp_path, git
         if pidfile.exists():
             with contextlib.suppress(ProcessLookupError):
                 os.kill(int(pidfile.read_text()), signal.SIGKILL)
+
+
+FAKE_SERVER = '''#!{python}
+import json, os, sys
+mode = {mode!r}
+for line in sys.stdin:
+    message = json.loads(line)
+    if "id" not in message:
+        continue
+    message["cwd"], message["livespec_home"] = os.getcwd(), os.environ.get("LIVESPEC_HOME")
+    message["openspec"] = sorted(os.listdir("openspec")) if os.path.isdir("openspec") else None
+    open({log!r}, "a").write(json.dumps(message) + "\\n")
+    if mode == "hang":
+        continue
+    if message["method"] == "initialize":
+        reply = {{"protocolVersion": "2024-11-05", "capabilities": {{}}}}
+    elif mode == "die" and message["params"]["name"] == "validate_openspec":
+        sys.exit(0)
+    elif mode == "error":
+        reply = {{"content": [{{"type": "text", "text": "boom"}}], "isError": True}}
+    elif message["params"]["name"] == "sync_openspec":
+        print("a log line that is no message", flush=True)
+        reply = {{"content": [{{"type": "text", "text": json.dumps({{"synced": 1}})}}]}}
+    else:
+        data = {{"valid": True, "error_count": 0, "warning_count": 1, "findings": []}}
+        reply = {{"content": [{{"type": "text", "text": "[]"}}], "structuredContent": data}}
+    print(json.dumps({{"jsonrpc": "2.0", "id": message["id"], "result": reply}}), flush=True)
+'''
+
+
+def fake_livespec(tmp_path: Path, mode: str = "ok", runner=None) -> tuple[Livespec, Path]:
+    import sys
+
+    log = tmp_path / "asked.log"
+    exe = tmp_path / "bin" / "livespec"
+    exe.parent.mkdir(exist_ok=True)
+    exe.write_text(FAKE_SERVER.format(python=sys.executable, mode=mode, log=str(log)))
+    exe.chmod(0o755)
+    runner = runner or (lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "{}", ""))
+    return adapter(tmp_path, str(exe.parent), runner=runner), log
+
+
+def _with_specs(git_repo: Path) -> None:
+    (git_repo / "openspec" / "specs" / "cart").mkdir(parents=True)
+    (git_repo / "openspec" / "specs" / "cart" / "spec.md").write_text("# cart\n")
+    (git_repo / ".livespec.toml").write_text('[workspace]\ngroup_db = "/elsewhere/docs.db"\n')
+    git(git_repo, "add", "-A")
+    git(git_repo, "commit", "-qm", "specs")
+
+
+def test_validate_openspec_runs_on_a_temporary_copy_and_writes_nothing_in_the_checkout(tmp_path, git_repo):
+    _with_specs(git_repo)
+    indexed = []
+
+    def runner(argv, **kw):
+        indexed.append((argv, kw["env"].get("LIVESPEC_HOME")))
+        return subprocess.CompletedProcess(argv, 0, "{}", "")
+
+    a, log = fake_livespec(tmp_path, runner=runner)
+    assert a.validate_openspec(git_repo) == {"valid": True, "error_count": 0, "warning_count": 1, "findings": []}
+    asked = [json.loads(line) for line in log.read_text().splitlines()]
+    assert [m["method"] for m in asked] == ["initialize", "tools/call", "tools/call"]
+    assert [m["params"]["name"] for m in asked[1:]] == ["sync_openspec", "validate_openspec"]
+    (argv, home_dir), = indexed
+    copy = Path(argv[-1])
+    assert argv[:2] == ["livespec", "index"] and not copy.is_relative_to(git_repo.resolve())
+    assert all(m["params"]["arguments"]["workspace"] == str(copy) for m in asked[1:])
+    assert all(m["cwd"] == str(copy) and m["openspec"] == ["specs"] for m in asked)
+    # livespec's registry of projects is the copy's own, never the person's.
+    assert home_dir and all(m["livespec_home"] == home_dir for m in asked)
+    assert not Path(home_dir).is_relative_to(git_repo.resolve())
+    assert not copy.exists() and not Path(home_dir).exists()  # removed afterwards
+    assert not (copy / ".livespec.toml").exists()
+    assert git(git_repo, "status", "--porcelain", "--ignored") == ""
+
+
+def test_validate_openspec_says_why_it_could_not(tmp_path, git_repo):
+    a, log = fake_livespec(tmp_path)
+    with pytest.raises(livespec_mod.LivespecError, match="no openspec"):
+        a.validate_openspec(git_repo)
+    _with_specs(git_repo)
+    broken, _ = fake_livespec(tmp_path, runner=lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", "nope"))
+    with pytest.raises(livespec_mod.LivespecError, match="index failed: nope"):
+        broken.validate_openspec(git_repo)
+    assert not log.exists()
+
+
+@pytest.mark.parametrize(("mode", "said"), [("error", "boom"), ("die", "closed before it answered"),
+                                            ("hang", "closed before it answered")])
+def test_a_livespec_that_errors_dies_or_hangs_is_an_error_not_a_hang(tmp_path, git_repo, mode, said):
+    a, _ = fake_livespec(tmp_path, mode)
+    with pytest.raises(livespec_mod.LivespecError, match=said):
+        a.call_tools(tmp_path, [("validate_openspec", {})], timeout_s=2)
+
+
+def test_nothing_to_ask_or_a_server_that_does_not_start_is_an_error(tmp_path, git_repo):
+    with pytest.raises(livespec_mod.LivespecError, match="no livespec"):
+        adapter(tmp_path).call_tools(tmp_path, [("validate_openspec", {})])
+
+    def broken(*a, **kw):
+        raise OSError("no such file")
+
+    with pytest.raises(livespec_mod.LivespecError, match="did not start"):
+        adapter(tmp_path, tool(tmp_path, "livespec"), popen=broken).call_tools(tmp_path, [("search", {})])

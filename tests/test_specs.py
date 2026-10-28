@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from cauce import hooks, repo, specs
+from cauce.adapters.livespec import LivespecError
 from cauce.cli import main
 from cauce.orchestrate import run
 
@@ -458,3 +459,53 @@ def test_spec_first_on_in_a_repository_with_no_openspec_says_nothing_is_enforced
     _behind(git_repo)
     main(["specs", "--repo", str(git_repo), "first", "on"])
     assert "nothing is enforced" not in capsys.readouterr().out
+
+
+def test_structure_lines_name_each_kind_of_problem_and_say_when_there_is_none():
+    clean = {"valid": True, "error_count": 0, "warning_count": 0, "findings": []}
+    assert specs.structure_lines(clean) == ["structure: livespec's validate_openspec found no structural problem"]
+    found = {"error_count": 1, "warning_count": 2, "findings": [
+        {"issue": "requirement has no scenario", "severity": "error", "count": 4,
+         "sample": [{"spec_id": "cart-1"}, {"spec_id": "cart-2"}]},
+        {"issue": "no normative keyword", "severity": "warning", "count": 2, "sample": []}]}
+    assert specs.structure_lines(found) == [
+        "structure: livespec's validate_openspec found 1 error(s) and 2 warning(s)",
+        "  - error: requirement has no scenario (4) e.g. cart-1, cart-2",
+        "  - warning: no normative keyword (2)"]
+    many = {"error_count": 0, "warning_count": 9, "findings": [{"issue": f"kind {n}", "count": 1} for n in range(10)]}
+    assert specs.structure_lines(many)[-1] == "  - and 2 more kind(s) of finding"
+
+
+class _Asked:
+    """A livespec that answers `validate_openspec` as scripted, or cannot be asked."""
+
+    def __init__(self, answer=None, error=None, server=True):
+        self.answer, self.error, self._server = answer, error, server
+
+    def server(self):
+        return {"command": "livespec"} if self._server else None
+
+    def validate_openspec(self, repo_dir):
+        if self.error:
+            raise LivespecError(self.error)
+        return self.answer
+
+
+def test_structure_asks_livespec_where_it_runs_and_says_when_it_could_not(git_repo, monkeypatch):
+    monkeypatch.setenv("CAUCE_LIVESPEC", "on")
+    answer = {"error_count": 0, "warning_count": 1, "findings": [{"issue": "no scenario", "count": 1}]}
+    assert specs.structure(git_repo, _Asked(answer)) == [
+        "structure: livespec's validate_openspec found 0 error(s) and 1 warning(s)", "  - warning: no scenario (1)"]
+    assert specs.structure(git_repo, _Asked(error="livespec index failed: x")) == [
+        "structure: livespec could not validate the specs (livespec index failed: x)"]
+    assert specs.structure(git_repo, _Asked(server=False)) == []  # nothing to ask: nothing said
+    monkeypatch.setenv("CAUCE_LIVESPEC", "off")
+    assert specs.structure(git_repo, _Asked(answer)) == []
+
+
+def test_cauce_specs_reports_the_structure_after_the_drift(git_repo, capsys, monkeypatch):
+    _behind(git_repo)
+    monkeypatch.setattr(specs, "structure", lambda where, adapter=None: ["structure: livespec says so"])
+    assert main(["specs", "--repo", str(git_repo)]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].startswith("specs: ") and out[-1] == "structure: livespec says so"

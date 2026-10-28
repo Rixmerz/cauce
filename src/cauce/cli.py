@@ -760,6 +760,8 @@ def cmd_specs(args: argparse.Namespace) -> int:
     print(f"specs: {found.text()}" + (" — behind" if found.behind else ""))
     print("spec-first: " + ("on (a build that writes no spec is not accepted)" if first
                             else "off (`cauce specs first on` makes builds here owe their spec)"))
+    for line in specs.structure(where):
+        print(line)
     return 0
 
 

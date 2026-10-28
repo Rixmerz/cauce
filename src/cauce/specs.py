@@ -4,10 +4,12 @@ A repository that keeps its behaviour in OpenSpec (`openspec/`) and lets its cod
 it ends up with specs that describe a product it no longer is. cauce reads those specs to brief
 and assess, so it is the one place that sees every change land; this module says how far the
 specs are behind, tells a writing worker the repository keeps them, and gives the ending the
-line that would bring them up to date. It starts nothing and writes nothing.
+line that would bring them up to date. It writes nothing in the repository. Only `structure`
+starts anything: livespec, on a temporary copy of `openspec/`, never on the person's checkout.
 """
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import subprocess
@@ -21,6 +23,8 @@ from typing import Any, NamedTuple
 OPENSPEC = "openspec"
 #: Code commits since the specs last changed from which they are said to be behind.
 BEHIND_COMMITS = 5
+#: Kinds of structural finding `structure_lines` names; the rest are counted.
+FINDINGS_SHOWN = 8
 #: The repositories a person made spec-first (`cauce specs first on`), kept per repository key in
 #: the store's meta: the person's cauce home, never a repository, which cannot make its own workers
 #: answer to a rule by committing a file.
@@ -175,6 +179,42 @@ def first_shape(paths: Sequence[str]) -> str:
     shown = ", ".join(paths[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
     return (f"{FIRST_SHAPE}: the change touches code ({shown}) and no file under `{OPENSPEC}/`; this repository "
             "accepts no change of behaviour without its spec")
+
+
+def structure_lines(result: Mapping[str, Any]) -> list[str]:
+    """What livespec's `validate_openspec` says of the specs' structure (every requirement a
+    scenario, a title, a body, normative words), one line a finding; the problems only."""
+    errors, warnings = int(result.get("error_count") or 0), int(result.get("warning_count") or 0)
+    if not errors and not warnings:
+        return ["structure: livespec's validate_openspec found no structural problem"]
+    found = [f for f in result.get("findings") or [] if isinstance(f, Mapping)]
+    lines = [f"structure: livespec's validate_openspec found {errors} error(s) and {warnings} warning(s)"]
+    for f in found[:FINDINGS_SHOWN]:
+        ids = ", ".join(str(x.get("spec_id")) for x in (f.get("sample") or [])[:3] if isinstance(x, Mapping))
+        lines.append(f"  - {f.get('severity', 'warning')}: {f.get('issue', '?')} ({f.get('count', '?')})"
+                     + (f" e.g. {ids}" if ids else ""))
+    if len(found) > FINDINGS_SHOWN:
+        lines.append(f"  - and {len(found) - FINDINGS_SHOWN} more kind(s) of finding")
+    return lines
+
+
+def structure(repo_dir: Path, adapter: Any = None) -> list[str]:
+    """The structure of the specs as livespec sees it, where livespec runs here: nothing when it
+    does not (off, or no way to run it), and one line saying so when it could not be asked. Run on
+    a temporary copy of `openspec/` (`Livespec.validate_openspec`): nothing is written in the
+    repository, its index included."""
+    from cauce import config
+    from cauce.adapters.livespec import Livespec, LivespecError
+
+    if not config.enabled("livespec", os.environ):
+        return []
+    adapter = adapter or Livespec()
+    if adapter.server() is None:
+        return []
+    try:
+        return structure_lines(adapter.validate_openspec(repo_dir))
+    except LivespecError as exc:
+        return [f"structure: livespec could not validate the specs ({exc})"]
 
 
 def brief_lines(found: Drift, *, first: bool = False) -> list[str]:

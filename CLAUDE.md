@@ -25,7 +25,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/criteria.py` | a request's listed items as criteria `S1..Sn`, verbatim; a pass answers each |
 | `src/cauce/findings.py` | findings as records: where, what, `evidence_class`, `cause`; which block a change |
 | `src/cauce/ledger.py` | a review's findings as one frozen ledger `F1..Fn`: who decides each row (refuter, fix, re-check), two rounds, then the person |
-| `src/cauce/specs.py` | whether a repository's OpenSpec specs keep up with its code: days and code commits since `openspec/` changed, the writing brief's line and the ending's offer; git only, no model |
+| `src/cauce/specs.py` | whether a repository's OpenSpec specs keep up with its code: days and code commits since `openspec/` changed, the writing brief's line and the ending's offer, the files of a change that owe a spec, and livespec's `validate_openspec` for the specs' structure (`cauce specs`, on a temporary copy of `openspec/`); git and livespec, no model |
 | `src/cauce/tracer.py` | the TRACER method of a repository that keeps one (`docs/tracer/`): the method's files in a writing brief, and the CORRECT lines of the flows a request names, the anti-pattern catalogue and, with a measuring neighbour, each floor and anti-pattern beside the tool that measures it in the independent check's; read only |
 | `src/cauce/risk.py` | a change's tier (passive, medium, high) from its request, kind and files; only raised; no model |
 | `src/cauce/points.py` | a task's size on the Fibonacci scale, no model: the estimate when it is planned (criteria, kind, risk and its areas, files named, livespec's reach, length) and the realized size when it ends (files, lines, turns, wall time, attempts) |
@@ -721,6 +721,11 @@ yields the default kind, not a guess.
 - Every livespec tool a hint names is in `adapters/livespec.TOOLS`, checked
   against the release in `MINIMUM_VERSION`. Check a name against livespec
   before adding it, and bump `PINNED` only after checking the new release.
+  livespec's `validate_openspec` has no command line, so `cauce specs` asks it over MCP on stdio
+  (`Livespec.call_tools`, a minimal client cut at its timeout) after `sync_openspec`, both on a
+  temporary copy of `openspec/` alone, indexed there by livespec's CLI, with its own `LIVESPEC_HOME`
+  and no `.livespec.toml` (`Livespec.validate_openspec`): nothing is written in the person's
+  checkout, their index or livespec's registry of projects.
   What `uvx` runs when no plugin entry and no `livespec` on PATH is used is `Livespec.pin()`: the
   release in the newest installed livespec plugin's own manifest (`.claude-plugin/plugin.json`,
   never one `unpublished()` holds), else `PINNED`.
