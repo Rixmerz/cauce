@@ -10,13 +10,11 @@
   the drift, or says why it could not. Both run on a temporary copy of `openspec/` with its own
   index and its own `LIVESPEC_HOME`, removed afterwards: nothing is written in the checkout, its
   index or livespec's registry of projects.
-
 - **The independent check gets livespec's tools:** where the repository has an index, the check
   (the late one too) is handed livespec's MCP server behind a new `livespec` policy of
   `mcp_guard`, an allow-list of reading tools; anything that could change the index or the specs
   is refused, whatever a tool's own read-only hint says (`export_openspec` carries it and writes
   files). Before, it only read the reach as text.
-
 - **The independent check is told which tool measures each floor and anti-pattern.** 0.52.0 said
   so, but `cauce.tracer` added one generic paragraph. Now, where `docs/tracer/` exists and the check
   has layout-inspector, each line of `floors.md` and `anti-patterns.md` is listed beside the tool
@@ -51,12 +49,19 @@
 
 - **`cauce specs first on` with no `openspec/` says so plainly:** spec-first is on but nothing is
   enforced until `openspec/` exists, on the command that turns it on and on each look after it.
-
 - **livespec is pinned to 0.34.0, and follows the installed plugin:** 0.34.0 fixes a `group_db`
   bug. When cauce runs livespec through `uvx` it now uses the release in the newest installed
   livespec plugin's own manifest (`.claude-plugin/plugin.json`, skipping a release uv found
   unpublished), else the one it was built against.
-
+- **A resume that grants is the person's to run.** `cauce resume N --allow …` started by the
+  orchestrating agent was refused by Claude Code's own permission check as the agent changing its
+  own permissions. `commands/orchestration.md` and `cauce guide endings` now say the person runs a
+  resume with `--allow`, `--allow-approval` or `--keep` (in a terminal, or after `!` in the prompt),
+  and the agent gives them the line.
+- **A worker that repeats its result block word for word is read.** Attempts failed with "did not
+  answer with exactly one result block" when the worker had written the same `cauce-result` block
+  twice. Blocks whose JSON is identical are now one verdict; blocks that differ in anything, or one
+  that cannot be read, are still `inconclusive` (fail closed).
 - **The board no longer opens a browser tab for each task:** `/cauce:ui` now runs `cauce ui`
   (no tab; `--open` once, only when the person asks to see it), `/cauce` opens the board once,
   and the page shows every task of a session in itself: the Sessions screen lists the work a
@@ -73,14 +78,23 @@
   `livespec index` that does the work as its child, and the timeout killed only `uvx`; the child
   went on with nobody holding the index lock, so the next refresh started a second index on the
   same file. The run now leads its own process group and the timeout ends all of it.
-
 - **A change of tests, lockfiles, config or generated files no longer "owes a spec":** in a spec-first
   repository, any file outside `docs/` that was not a document counted as code that owed its spec,
   so a build that only touched `package-lock.json`, a CI file, a test or `dist/` was held back for a
   spec it had nothing to write. Those files are left out. `build/`, `out/`, `target/` and
   `generated/` count as generated only at the repository root: `src/build/compiler.py` and
   `src/generated/x.py` are code and owe their spec.
-
+- **`cauce dismiss` never loses a task's work.** A task whose run died (`interrupted`) left
+  its worktree with changes no commit held; dismissing it left them there, outside any branch, for
+  the next cleanup to lose. The dismissal now commits them on the task's branch, unverified, and
+  removes the worktree, as a blocked stop does (`isolate.keep_left`, a `branch_kept` event); `cauce
+  resume N` goes on from that branch.
+- **A whole check that timed out after a claimed pass no longer climbs the model.** Only a check
+  whose failures were the test runners' own timeout lines was read as the machine's load; one that
+  ran past its own time as a whole (`VERIFY_TIMEOUT_S`) was `inconclusive`, so a busy machine
+  climbed sonnet to opus and ended in `replan` or `failed`. It is now `environment` with `load`:
+  the same cell again after each of `escalate.LOAD_WAITS`, no attempt counted, and a stop as
+  `load` with the work kept when it persists.
 - **A check slower than its limit no longer burns a night of climbs** (tasks that ran 4+ hours
   with the repository's 15-minute check). The check failed on three tests that also fail at the
   base, but the base's run timed out, so each attempt was charged `code_bug` and climbed

@@ -149,7 +149,8 @@ The coverage floor lives in one place, `[tool.coverage.report] fail_under` in
 `hooks.main` swallows everything — and writes it to `hook-errors.log`, which
 the next `SessionStart` reports. Failing open is not failing silently.
 
-**Verdicts fail closed.** A worker with no result block, two blocks, or a pass
+**Verdicts fail closed.** A worker with no result block, two blocks that differ
+(the same block repeated is one verdict, `launch.result_block`), or a pass
 without evidence is `inconclusive`, never a pass. A pass the independent check
 reads late (`late_verifier`) is a pass on cauce's own check until that check shows a blocker; then
 it is reopened as `review`, never left standing. Changed files come from git,
@@ -273,7 +274,10 @@ yields the default kind, not a guess.
   dismissal (`cauce dismiss`, a button they press), or by a later task with
   the same text that passed (`superseded`); each records its `stops.Stop` and
   is marked reported, never handed to a session as an ending. A dismissed
-  task resumes as what it was: one found wrong is still rewritten.
+  task resumes as what it was: one found wrong is still rewritten. A dismissal
+  never loses work: a worktree a dead run left behind is committed on the
+  task's branch, unverified, and removed (`isolate.keep_left`, a `branch_kept`
+  event), as a blocked stop keeps its work.
 - Work a session sent is reported to it once when it ends: by the report a
   `cauce run` prints, else by the Stop hook (which blocks the turn's end once
   with the endings) or the next prompt.
@@ -511,7 +515,9 @@ yields the default kind, not a guess.
   person's for the run they approved: a resume nobody approved (`--unattended`)
   never uses one an earlier run stored, nor starts on a cell that needs one (a
   `#fable` task's tag is its approval). A resume a session starts on its own
-  carries `--unattended` (`commands/orchestration.md`).
+  carries `--unattended` (`commands/orchestration.md`); one that grants
+  (`--allow`, `--allow-approval`, `--keep`) is the person's to type, and the
+  guidance gives them the line instead of running it.
 - A worker gets a model alias unless a person pinned it (`cauce config model`).
   cauce never hard-codes a model id; the model that served an attempt is read
   from the CLI's `modelUsage`, never assumed from the alias.
@@ -896,7 +902,8 @@ yields the default kind, not a guess.
   three times in a row, or runs past `habits.SLOW_SECONDS`, turns itself off. Tests run
   with `CAUCE_HABIT_REVIEW=off` and `CAUCE_HABIT_AUTO=off`.
 - A check whose failures are mostly the test runners' own timeout lines
-  (`launch.check_timed_out`) after a claimed pass is `environment` with
+  (`launch.check_timed_out`) after a claimed pass, or that ran past its own
+  time as a whole (`VERIFY_TIMEOUT_S`), is `environment` with
   `load`: the level halves on it, the same cell goes again after each of
   `escalate.LOAD_WAITS`, and such a try counts toward no attempt ceiling and
   is no dead end; one that persists stops as `load`, its work kept.

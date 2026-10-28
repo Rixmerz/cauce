@@ -79,19 +79,23 @@ that run in rounds), `notes` (and compacting), `memory`, `relay`.
    | `replan`, `split` | it is several pieces and kept its work: `cauce split N`, then `--queue` |
    | `replan`, turns | outgrew its turns as one piece: cauce resumed it once; again, split what is left |
    | `replan`, wrong task | rewrite or split it from the reason; never rerun it as is (its surfaces kept it from the cause: run the `cauce resume N --surface …` its ending gives) |
-   | `blocked`, permission | ask for the rule; on yes, the line it gives (`--keep` for every task here) |
+   | `blocked`, permission | ask for the rule; on yes, the person runs the line it gives (`--keep` for every task here) |
    | `blocked`, `decision` (exit 4) | the work is done and kept; tell the person the point, then act on it |
    | `blocked`, `review` | read the blockers (`cauce show N`); resume `--unattended`, or dismiss with why |
    | `blocked`, environment or network | fix or wait, then `cauce resume N --unattended` |
    | `blocked`, `limit` | nothing: cauce resumes it after the account's limit resets |
-   | `needs_approval` | ask; `--allow-approval` only on a yes |
+   | `needs_approval` | ask; on a yes, the person runs the resume with `--allow-approval` |
    | `failed` | report what each attempt found (`cauce show N`); never redo it by hand |
    | other work changes the same files | merge one first, then the other; `cauce merge N M --pr` does both as one draft |
    | problems that were already there | start the bugfix it offers `--after`, if worth it |
    | flaky tests | nothing to do; it is said, kept per repository and named in later briefs |
    | a CI job known not to apply | `cauce ci quiet <job>`, once, on the person's word |
 
-   A resume you start on your own carries `--unattended`. A task that stops
+   A resume you start on your own carries `--unattended`. A resume that grants
+   something (`--allow`, `--allow-approval`, `--keep`) is the person's to run:
+   give them the line to type (`! cauce resume N --allow "…"` in this prompt,
+   or a terminal). Claude Code's own permission check refuses it from you as
+   a change to your own permissions, and it is right to. A task that stops
    pauses its lane: deal with it, and `cauce lanes --unpause <repo>` when the
    queued work does not depend on it; a queued task that waits for work it
    does not touch starts with `cauce lanes --beside N`. What waits `--after` a task you dismiss

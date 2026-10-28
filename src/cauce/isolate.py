@@ -633,6 +633,30 @@ def finish(ws: Workspace, *, keep: bool, message: str) -> str | None:
     return kept_branch
 
 
+def keep_left(repo_dir: Path, task_id: int, root: Path, *, message: str) -> str | None:
+    """A task's worktree left behind (a run that died, then a dismissal): what it holds is
+    committed on the task's branch, unverified as `message` says, and the worktree removed,
+    as a stop that waits on a person keeps its work (`finish`). The branch kept, or None when
+    no worktree of the task is here or it holds nothing."""
+    try:
+        top = Path(_git(repo_dir, "rev-parse", "--show-toplevel"))
+    except (IsolationError, OSError):
+        return None
+    branch, path = branch_for(task_id), root / "worktrees" / f"task-{task_id}"
+    if not path.is_dir() or not _attached(top, path, branch):
+        return None
+    head = _git(top, "rev-parse", "HEAD")
+    base = _git(top, "merge-base", head, branch, check=False) or head
+    links = tuple(rel for rel in (*(e.rstrip("/") for e in _git(
+        top, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z",
+        check=False, strip=False).split("\0") if e.endswith("/")), LOCAL_SETTINGS)
+        if rel and ((rel == LOCAL_SETTINGS and (path / rel).is_file()) or (path / rel).is_symlink()))
+    ws = Workspace(top, path, branch, base, links)
+    if not has_changes(ws):
+        return None  # nothing of its own to keep: the worktree is left as it is
+    return finish(ws, keep=True, message=message)
+
+
 def _unverified(message: str) -> bool:
     return UNVERIFIED in message or UNVERIFIED_BEFORE in message.split("\n", 1)[0]
 

@@ -908,6 +908,8 @@ def cmd_dismiss(args: argparse.Namespace) -> int:
                 return 1
             print(f"took task #{task_id} off the queue (it {waited})" if waited
                   else f"dismissed task #{task_id}; `cauce resume {task_id}` brings it back")
+            if kept := _keep_left(store, task):
+                print(f"kept what its worktree held on {kept}, unverified")
             if along := stop.extra.get("took_along"):
                 print(f"and took {', '.join(f'#{n}' for n in along)} off the queue: queued after #{task_id}, "
                       "they would never start; each is reported as an ending, and `cauce resume N` starts one "
@@ -916,6 +918,26 @@ def cmd_dismiss(args: argparse.Namespace) -> int:
     finally:
         store.close()
     return 0
+
+
+def _keep_left(store: Store, task: dict) -> str | None:
+    """A dismissed task's worktree that a run left behind (one that died) holds work no
+    branch has: it is committed on the task's branch, unverified, as a blocked stop's is,
+    so a dismissal never loses it and `cauce resume N` goes on from it. Never fails the
+    dismissal."""
+    from cauce import isolate, orchestrate
+
+    where = Path(task["cwd"]) if task.get("cwd") else None
+    if where is None or not where.is_dir():
+        return None
+    try:
+        branch = isolate.keep_left(where, int(task["id"]), home(), message=isolate.message(
+            int(task["id"]), title=orchestrate.commit_title(task), status="dismissed"))
+    except (isolate.IsolationError, OSError):
+        return None
+    if branch:
+        store.add_event(task["id"], "branch_kept", branch=branch, why="dismissed with its worktree left")
+    return branch
 
 
 def cmd_events(args: argparse.Namespace) -> int:
