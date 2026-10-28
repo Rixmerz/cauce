@@ -1107,6 +1107,47 @@ def test_a_check_that_fails_drops_what_ran_beside_it_and_keeps_its_cost(git_repo
     assert store.attempts(report.task_id)[0]["cost_usd"] == pytest.approx(0.15)
 
 
+def test_the_independent_check_is_handed_the_code_index_read_only_where_the_repository_has_one(
+        git_repo, store, tmp_path, verifier_on):
+    from .livespec_fixture import build
+    from .test_orchestrate import _livespec
+
+    build(git_repo)
+    script = Script(passing(), check("pass"), write="app.py")
+    run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+        adapters=[_livespec(tmp_path)])
+    worker, verifier = script.specs
+    assert worker.mcp_servers["livespec"]["command"] == "uvx"
+    server = verifier.mcp_servers["livespec"]
+    assert server["command"] == sys.executable and server["args"][:4] == ["-m", "cauce.mcp_guard", "livespec", "--"]
+    assert "mcp__livespec" in verifier.allowed_tools
+    assert "Read-only: a call that would change the index is refused" in verifier.append_system_prompt
+    assert f'workspace="{git_repo.resolve()}"' in verifier.append_system_prompt
+
+
+def test_the_independent_check_gets_no_code_index_where_there_is_none(git_repo, store, tmp_path, verifier_on):
+    from .test_orchestrate import _livespec
+
+    script = Script(passing(), check("pass"), write="app.py")
+    run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
+        adapters=[_livespec(tmp_path)])
+    assert "livespec" not in script.specs[1].mcp_servers and "mcp__livespec" not in script.specs[1].allowed_tools
+
+
+def test_a_late_independent_check_is_handed_the_index_too(git_repo, store, tmp_path, late):
+    from .livespec_fixture import build
+    from .test_orchestrate import _livespec
+
+    build(git_repo)
+    script = Script(passing(), check("pass"), write="app.py")
+    run("fix the cart total", git_repo, store, Options(verify="true"), registry={}, launcher=script,
+        classifier=kind("implement"), adapters=[_livespec(tmp_path)])
+    verifier = script.specs[1]
+    assert verifier.mcp_servers["livespec"]["args"][2] == "livespec" and "mcp__livespec" in verifier.allowed_tools
+
+
+
+
 # --- the late independent check -------------------------------------------------------
 
 

@@ -1566,6 +1566,7 @@ def run(
                 if so_far and risk_mod.needs_verifier(the_plan.risk, cheap=_cheap(cell)) and late:
                     deferred = {"cell": cell, "spec": spec, "changed": so_far, "nth": nth,
                                 "impact": _impact(the_plan, so_far, repo_dir, workdir=workdir, base=base_commit),
+                                "index": _index_servers(the_plan, repo_dir, workdir),
                                 "rules": [n for n in the_plan.notes if n.get("kind") == notes.CONSTRAINT]}
                     store.add_event(task["id"], "verifier_deferred", seq=nth, risk=the_plan.risk.tier)
                     say(f"cauce: #{task['id']} attempt {nth} passed; risk {the_plan.risk.tier}: its independent "
@@ -1579,7 +1580,8 @@ def run(
                         say=say, outgrew=outgrew, registry=registry,
                         rules=[n for n in the_plan.notes if n.get("kind") == notes.CONSTRAINT],
                         rows=_fixing(options), ahead=_tolerating(ahead, report.check_output),
-                        impact=_impact(the_plan, so_far, repo_dir, workdir=workdir, base=base_commit))
+                        impact=_impact(the_plan, so_far, repo_dir, workdir=workdir, base=base_commit),
+                        index=_index_servers(the_plan, repo_dir, workdir))
                     ahead = None
             if ahead is not None:
                 # cauce's check failed (or the change needs no check now): what ran beside it is dropped.
@@ -2770,7 +2772,7 @@ def _late_check(store: Store, task_id: int, *, text: str, kind: str, risk: risk_
             check, vcell = _check_spec(text=text, kind=kind, cell=deferred["cell"], spec=spec, workdir=where,
                                        base=base, changed=deferred["changed"], risk=risk, ledger={},
                                        registry=registry, rules=deferred["rules"], rows=(),
-                                       impact=deferred.get("impact") or ())
+                                       impact=deferred.get("impact") or (), index=deferred.get("index") or None)
             mark = time.monotonic()
             verdict = launcher(check)
             wall_s = time.monotonic() - mark
@@ -2857,6 +2859,20 @@ def _fixing(options: Options) -> list[str]:
     return list(held.get("ids") or ()) if held.get("role") == "fix" else []
 
 
+def _index_servers(plan: Plan, repo_dir: Path, workdir: Path) -> dict[str, tuple[Mapping[str, Any], str]]:
+    """The code index the independent check is handed: an adopted neighbour whose index is present
+    and that runs a read-only server (livespec, behind its guard), with the hint for reviewing.
+    What a check reports it measures, and it may not change what it reads."""
+    out: dict[str, tuple[Mapping[str, Any], str]] = {}
+    for adapter, _ in plan.active:
+        server = getattr(adapter, "read_only_server", lambda: None)()
+        if server is not None:
+            kind = "review-critical" if plan.risk.tier == "high" else "review-routine"
+            out[adapter.name] = (server, f"{adapter.hint(kind, repo_dir, workdir)} Read-only: a call that would "
+                                         "change the index is refused.")
+    return out
+
+
 def _ahead(result: launch.WorkerResult, *, options: Options, verifying: bool,
            workspace: isolate.Workspace | None, cell: Cell, plan: Plan, text: str, spec: launch.LaunchSpec,
            workdir: Path, base: str | None, ledger: dict[str, Mapping[str, str]], launcher: Launcher,
@@ -2875,7 +2891,8 @@ def _ahead(result: launch.WorkerResult, *, options: Options, verifying: bool,
                            changed=so_far, risk=plan.risk, ledger=ledger, registry=registry,
                            rules=[n for n in plan.notes if n.get("kind") == notes.CONSTRAINT],
                            rows=_fixing(options), running=options.verify,
-                           impact=_impact(plan, so_far, workspace.repo_dir, workdir=workdir, base=base))
+                           impact=_impact(plan, so_far, workspace.repo_dir, workdir=workdir, base=base),
+                           index=_index_servers(plan, workspace.repo_dir, workdir))
     return Ahead(launcher, check, so_far, options.verify)
 
 
@@ -2928,7 +2945,8 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
                        task_id: int, nth: int, say: Callable[[str], None], outgrew: bool = False,
                        registry: Mapping[str, caps.Capability] | None = None,
                        rules: Sequence[Mapping[str, Any]] = (), rows: Sequence[str] = (),
-                       ahead: Ahead | None = None, impact: Sequence[str] = ()
+                       ahead: Ahead | None = None, impact: Sequence[str] = (),
+                       index: Mapping[str, tuple[Mapping[str, Any], str]] | None = None
                        ) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int,
                                   tuple[dict[str, str], ...]]:
     """A pass checked again by a worker that verifies the request, not the work.
@@ -2944,7 +2962,7 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     attempt gets more turns on the same cell, never a stronger model."""
     check, vcell = _check_spec(text=text, kind=kind, cell=cell, spec=spec, workdir=workdir, base=base,
                                changed=changed, risk=risk, ledger=ledger, registry=registry, rules=rules, rows=rows,
-                               running=ahead.running if ahead is not None else "", impact=impact)
+                               running=ahead.running if ahead is not None else "", impact=impact, index=index)
     say(f"cauce: #{task_id} attempt {nth} passed; risk {risk.tier}: an independent check at {vcell.label}"
         + (" (it ran beside cauce's check)" if ahead is not None else ""))
     mark = time.monotonic()
@@ -2967,8 +2985,10 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
 def _check_spec(*, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec, workdir: Path, base: str | None,
                 changed: Sequence[str], risk: risk_mod.Risk, ledger: Mapping[str, Mapping[str, str]],
                 registry: Mapping[str, caps.Capability] | None, rules: Sequence[Mapping[str, Any]],
-                rows: Sequence[str], running: str = "", impact: Sequence[str] = ()) -> tuple[launch.LaunchSpec, Cell]:
-    """The independent check's launch: its cell, its brief and the capabilities that measure."""
+                rows: Sequence[str], running: str = "", impact: Sequence[str] = (),
+                index: Mapping[str, tuple[Mapping[str, Any], str]] | None = None) -> tuple[launch.LaunchSpec, Cell]:
+    """The independent check's launch: its cell, its brief and the capabilities that measure, and
+    the code index (`index`: name -> read-only server and its hint) where the repository has one."""
     role = roles.internal("verifier")
     vcell = verify_cell(cell)
     # It keeps only the capabilities that measure, the work's and any the change touches: what it reports,
@@ -2981,6 +3001,8 @@ def _check_spec(*, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec, wo
                           paths=changed, reading=True)
     measuring.update(touched.servers)
     hints = {name: hints[name] for name in measuring}
+    for name, (server, hint) in (index or {}).items():
+        measuring[name], hints[name] = server, hint
     fixing = tuple(rows)
     check = dataclasses.replace(
         spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values()), risk.reasons,
@@ -2999,7 +3021,7 @@ def _check_spec(*, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec, wo
         mcp_servers=measuring,
         allowed_tools=tuple(r for r in spec.allowed_tools
                             if not r.startswith("mcp__") or r.removeprefix("mcp__") in measuring)
-        + tuple(f"mcp__{name}" for name in touched.servers))
+        + tuple(f"mcp__{name}" for name in [*touched.servers, *(index or {})]))
     return check, vcell
 
 

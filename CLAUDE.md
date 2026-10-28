@@ -392,7 +392,10 @@ yields the default kind, not a guess.
   independent verifier before it passes: another cell, read-only, given the
   request verbatim and the diff, never the worker's summary; it runs at high
   effort on the work's model (never Haiku), and keeps only the capabilities
-  that measure (`plugins.MEASURES`, `Capability.measures`), plus any its change touches. A correction round is earned by a blocker that
+  that measure (`plugins.MEASURES`, `Capability.measures`), plus any its change touches, and the
+  code index where one is present (`orchestrate._index_servers`): livespec behind `mcp_guard`'s
+  `livespec` policy, an allow-list of reading tools (`LIVESPEC_READ`; a tool's own `readOnlyHint`
+  is not trusted, `export_openspec` carries it and writes files), the late check's too. A correction round is earned by a blocker that
   persists or by progress (every blocker of the round before fixed and a new
   one a probe shows), at most `MAX_CORRECTIONS`; a new finding after progress
   that is only read from the code goes with the pass, recorded, never a

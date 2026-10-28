@@ -4,6 +4,12 @@
 
 ### Added
 
+- **The independent check gets livespec's tools:** where the repository has an index, the check
+  (the late one too) is handed livespec's MCP server behind a new `livespec` policy of
+  `mcp_guard`, an allow-list of reading tools; anything that could change the index or the specs
+  is refused, whatever a tool's own read-only hint says (`export_openspec` carries it and writes
+  files). Before, it only read the reach as text.
+
 - **The independent check is told which tool measures each floor and anti-pattern.** 0.52.0 said
   so, but `cauce.tracer` added one generic paragraph. Now, where `docs/tracer/` exists and the check
   has layout-inspector, each line of `floors.md` and `anti-patterns.md` is listed beside the tool

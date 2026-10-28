@@ -280,6 +280,16 @@ class Livespec:
             return {"command": command, "args": [*run, f"livespec@{self.pin()}"]}
         return plugin[0] if plugin else None
 
+    def read_only_server(self) -> Mapping[str, Any] | None:
+        """The same server behind `cauce.mcp_guard`'s `livespec` policy: calls that read the index
+        pass, everything that could change it is refused. For a worker that only checks work."""
+        server = self.server()
+        if server is None:
+            return None
+        from cauce.plugins import guarded
+
+        return guarded(server, "livespec")
+
     def _version(self) -> str | None:
         plugin = self._plugin_config()
         if plugin and _uvx_release(plugin[0]) not in self.unpublished():
