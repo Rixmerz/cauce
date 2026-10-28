@@ -526,7 +526,8 @@ yields the default kind, not a guess.
   `skips`, `Decision.skipped` and `standard`, kept on the `moved` event). Read in the
   repository, and from every repository only when it has fewer (the ladder is code, one per
   kind), the evidence saying which (`pooled`). Never the last rung, never onto or past a rung
-  that needs an approval, never a retry, more turns or a wait, never by cost; one per kind per
+  that needs an approval, never a retry, more turns or a wait, never by cost, and never more
+  effort onto another model (the dials stay apart: such a climb is left as it was); one per kind per
   calibration, and none while another of the kind waits for its verdict; it holds no start
   cell back. It is appended and judged once like any change, by its climbs: after
   `JUDGE_AFTER` climbs past the rung against those into it before, reverted as its own change

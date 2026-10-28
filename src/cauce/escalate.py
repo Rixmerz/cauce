@@ -617,12 +617,17 @@ class Skip:
 def _skipping(ladder: Sequence[Cell], decision: Decision, source: Cell,
               skips: Mapping[tuple[str, str], Skip], allow_approval: bool) -> Decision:
     """The climb `decision` made, past its rung when a standard skips it: on to the rung after,
-    as more effort when that rung is the same model's, else as a new model. Only a climb, never
+    as more effort when that rung is the same model's, else as a new model; more effort is never
+    skipped onto another model (effort and model are different dials). Only a climb, never
     onto a rung that needs an approval or off the ladder."""
     if decision.move not in (Move.MORE_EFFORT, Move.NEXT_MODEL) or decision.cell is None:
         return decision
     skip = skips.get((source.label, decision.cell.label))
     if skip is None or skip.onto not in ladder or skip.onto.needs_approval or decision.cell.needs_approval:
+        return decision
+    if decision.move is Move.MORE_EFFORT and skip.onto.model != source.model:
+        # Effort and model are different dials: shallow work climbs effort, and a skip never turns
+        # it into another model. The climb stays as it was.
         return decision
     move = Move.MORE_EFFORT if skip.onto.model == source.model else Move.NEXT_MODEL
     said = (f"standard change #{skip.change} skips {decision.cell.label} on climbs from {source.label}"

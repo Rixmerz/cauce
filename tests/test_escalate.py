@@ -385,15 +385,24 @@ def test_a_check_that_could_not_be_compared_with_its_base_blocks_without_a_climb
 # --- a standard's skip of a rung ------------------------------------------------------------------
 
 def test_a_standard_skip_sends_the_climb_past_its_rung_and_names_the_change():
+    feature = LADDERS["feature"]  # sonnet/high, sonnet/xhigh, opus/high, opus/xhigh
+    skips = {("sonnet/xhigh", "opus/high"): Skip(Cell("opus", "xhigh"), 7, "0 of 4 passed")}
+    d = decide(feature, [fail("sonnet/xhigh", Failure.APPROACH)], skips=skips)
+    # A new model was due anyway; the skip sends it one rung further, fresh.
+    assert d.move is Move.NEXT_MODEL and d.cell == Cell("opus", "xhigh") and d.standard == 7
+    assert any("opus/high: skipped by standard change #7" in s for s in d.skipped)
+    assert any("standard change #7" in b for b in d.because) and d.because[-1].startswith("next: opus/xhigh")
+    # A climb the skip does not name is left as it was.
+    other = decide(feature, [fail("sonnet/high", Failure.CODE_BUG)], skips=skips)
+    assert other.cell == Cell("sonnet", "xhigh") and other.standard is None
+
+
+def test_a_skip_never_turns_more_effort_into_another_model():
+    # Effort and model are different dials: shallow work past sonnet's last effort stays the climb
+    # it was, whatever a skip says.
     skips = {("sonnet/high", "sonnet/xhigh"): Skip(Cell("opus", "high"), 7, "0 of 4 passed")}
     d = decide(IMPLEMENT, [fail("sonnet/high", Failure.CODE_BUG)], skips=skips)
-    # Past sonnet's last effort the rung after is another model: a new model, fresh.
-    assert d.move is Move.NEXT_MODEL and d.cell == Cell("opus", "high") and d.standard == 7
-    assert any("sonnet/xhigh: skipped by standard change #7" in s for s in d.skipped)
-    assert any("standard change #7" in b for b in d.because) and d.because[-1].startswith("next: opus/high")
-    # A climb the skip does not name is left as it was.
-    other = decide(IMPLEMENT, [fail("sonnet/medium", Failure.CODE_BUG)], skips=skips)
-    assert other.cell == Cell("sonnet", "high") and other.standard is None
+    assert d.move is Move.MORE_EFFORT and d.cell == Cell("sonnet", "xhigh") and d.standard is None
 
 
 def test_a_skip_that_stays_on_the_model_is_more_effort():
