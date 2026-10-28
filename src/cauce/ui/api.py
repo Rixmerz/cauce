@@ -415,6 +415,10 @@ def evolution_view(store: Store, days: int = 30, repo_key: str | None = None) ->
     return evolution.report(store, days=days, repo=repo_key or None)
 
 
+#: What Routing says passed where no worker ran.
+NO_WORKER = "no worker"
+
+
 def routing(store: Store, days: int = 0) -> list[dict[str, Any]]:
     """`days` keeps the last few days only (0: everything): a rule fixed last
     week should not keep showing as a rung that fails."""
@@ -429,7 +433,9 @@ def routing(store: Store, days: int = 0) -> list[dict[str, Any]]:
         kind["starts"][row["start_cell"]] += 1
         if row["status"] == "done":
             kind["passed"] += 1
-            kind["passes"][row["final_cell"]] += 1
+            # A workflow step that passed with no worker (a clean join, a ledger the verifier decided)
+            # has no cell: said so, never shown as a cell named "null".
+            kind["passes"][row["final_cell"] or NO_WORKER] += 1
         if row["attempts"] > 1:
             kind["climbed"] += 1
     moves: dict[str, Counter] = defaultdict(Counter)

@@ -16,6 +16,17 @@
   does not list is dropped. The plan says once a day whose words came from a manifest. Schema
   and drafts for livespec and layout-inspector in `docs/neighbours.md` and `docs/neighbours/`.
 
+### Fixed
+
+- **A task whose time was never measured no longer makes a kind look fast.** Its attempts kept no
+  wall time, and it counted as 0 s: Evolution showed "time per point 0s" beside a real cost, a
+  velocity in the hundreds of points an hour, and the calibration judged a standard on those
+  numbers. The time per point and the velocity are now over the tasks whose time was measured, and
+  say nothing when none was.
+- **Routing no longer says a kind passed at `null`.** A workflow step that passes with no worker (a
+  clean join of its parts, a ledger the verifier decided) has no cell; it is now counted as "no
+  worker".
+
 ## [0.57.0] - 2026-10-28
 
 ### Added

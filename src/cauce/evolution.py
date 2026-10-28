@@ -49,11 +49,15 @@ def _row(tasks: Sequence[standards.Ended]) -> dict[str, Any]:
     done = sum(t.band or 0 for t in sized if t.passed)
     both = [t for t in sized if t.realized]
     hours = sum(t.wall_s for t in sized) / 3600
+    # Velocity is over the tasks whose time was measured: an unmeasured one adds points and no hours.
+    timed = [t for t in sized if t.wall_s > 0]
+    timed_hours = sum(t.wall_s for t in timed) / 3600
+    timed_done = sum(t.band or 0 for t in timed if t.passed)
     measured = standards.metrics(tasks)
     return {"tasks": len(tasks), "done": sum(t.passed for t in tasks), "points_done": done,
             "points_estimated": sum(t.band or 0 for t in both), "points_realized": sum(t.realized or 0 for t in both),
             "hours": round(hours, 3), "cost_usd": round(sum(t.cost_usd for t in tasks), 4),
-            "velocity": round(done / hours, 2) if hours else None,
+            "velocity": round(timed_done / timed_hours, 2) if timed_hours else None,
             "cost_per_point": measured["cost_per_point"], "time_per_point_s": measured["time_per_point_s"],
             "pass_first": measured["pass_first"],
             "climbed": round(sum(len(t.attempts) > 1 for t in tasks) / len(tasks), 3) if tasks else None}

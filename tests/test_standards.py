@@ -464,3 +464,18 @@ def test_an_estimate_is_raised_a_step_where_the_kind_turned_out_bigger(store):
     assert points.corrected(points.Score(3), "feature", ratio, 4).points == 3
     assert points.corrected(points.Score(3), "feature", 1.2, 9).points == 3
     assert points.corrected(points.Score(13), "feature", 3.0, 9).points == 13
+
+
+def test_a_task_whose_time_was_never_measured_is_left_out_of_the_time_per_point(store):
+    # Two 3-point passes, one of 600 s and one whose attempts kept no wall time: the unmeasured one
+    # used to count as 0 s and halve the time per point (and double the velocity).
+    finished(store, ("sonnet/medium", True), wall=600.0)
+    finished(store, ("sonnet/medium", True), wall=0)
+    measured = standards.metrics(standards.ended(store, repo="r"))
+    assert measured["time_per_point_s"] == 200.0
+    assert measured["cost_per_point"] == round(2.0 / 6, 4)
+
+
+def test_time_per_point_is_none_when_no_task_was_timed(store):
+    finished(store, ("sonnet/medium", True), wall=0)
+    assert standards.metrics(standards.ended(store, repo="r"))["time_per_point_s"] is None

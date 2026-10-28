@@ -592,6 +592,18 @@ def test_routing_keeps_a_period_and_says_why_a_move_has_no_next_attempt(store: S
     assert everything["tasks"] == 2
 
 
+def test_routing_says_a_pass_with_no_worker_ran_instead_of_a_null_cell(store: Store):
+    joined = store.create_task("join the parts", status="done", source="cauce", repo="r", kind="implement")
+    store.update_task(joined["id"], start_cell="sonnet/medium", final_cell=None)
+    built = store.create_task("build it", status="done", source="cauce", repo="r", kind="implement")
+    store.add_attempt(built["id"], cell="sonnet/medium", max_turns=30, passed=1)
+    store.update_task(built["id"], start_cell="sonnet/medium", final_cell="sonnet/medium")
+    implement = next(r for r in api.routing(store) if r["kind"] == "implement")
+    assert None not in implement["passes"]
+    assert implement["passes"].get("sonnet/medium") == 1
+    assert implement["passes"][api.NO_WORKER] == 1
+
+
 def test_resume_from_the_ui_runs_the_rules_cauce_suggested_never_the_requests(ui, monkeypatch):
     import subprocess
 

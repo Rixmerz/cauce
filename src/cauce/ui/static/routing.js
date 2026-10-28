@@ -7,7 +7,7 @@ const passRate = (a, b) => h("td", { class: `num ${!b ? "" : a / b >= 0.8 ? "rat
   pct(a, b));
 const cells = (counts) => {
   const found = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  return found.length ? h("span", { class: "row" }, found.map(([c, n]) => [cellChip(c), ` ×${n}`])) : "—";
+  return found.length ? h("span", { class: "row" }, found.map(([c, n]) => [c === "no worker" ? c : cellChip(c), ` ×${n}`])) : "—";
 };
 const ladder = (labels) => h("span", { class: "row" }, labels.map((c, i) => [i ? "→" : null, cellChip(c)]));
 

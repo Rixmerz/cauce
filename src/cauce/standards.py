@@ -195,13 +195,17 @@ def metrics(tasks: Sequence[Ended]) -> dict[str, Any]:
     did not pass included."""
     sized = [t for t in tasks if t.band]
     points = sum(t.band or 0 for t in sized if t.passed)
+    # A task whose attempts kept no wall time took no time we know of, not zero: its points
+    # stay out of the time per point instead of making it look faster.
+    timed = [t for t in sized if t.wall_s > 0]
+    timed_points = sum(t.band or 0 for t in timed if t.passed)
     first = [f for f in (t.first for t in tasks) if f is not None]
     return {
         "tasks": len(tasks), "passed": sum(t.passed for t in tasks),
         "pass_first": round(sum(first) / len(first), 3) if first else None,
         "attempts": round(sum(len(t.attempts) for t in tasks) / len(tasks), 2) if tasks else None,
         "cost_per_point": round(sum(t.cost_usd for t in sized) / points, 4) if points else None,
-        "time_per_point_s": round(sum(t.wall_s for t in sized) / points, 1) if points else None,
+        "time_per_point_s": round(sum(t.wall_s for t in timed) / timed_points, 1) if timed_points else None,
     }
 
 
