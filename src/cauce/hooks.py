@@ -757,6 +757,34 @@ def _endings(store: Store, session_id: str, *, via: str, mark: bool = True) -> s
     return f"{told}\n\n{loop_text}" if told else loop_text
 
 
+#: The pauses a session was told of, kept in the store's meta per session and lane.
+PAUSED_TOLD = "paused-told:"
+
+
+def _paused_lanes(store: Store, session_id: str, *, said: Sequence[int] = ()) -> str | None:
+    """The lanes paused with work this session queued, each told once per pause: a
+    pause outlives the ending that caused it, and work queued into a paused lane
+    later (a workflow's next step, another run) would otherwise wait unseen. A pause
+    on a task whose ending (`said`) is told with it counts as told: that ending says it."""
+    lines = []
+    for lane in store.paused_with_work(session_id):
+        key = f"{PAUSED_TOLD}{session_id}:{lane['repo']}"
+        # Keyed on the reason, never the time: a sweep that pauses the lane again on the
+        # same stop is no new pause, and a turn blocked on each would be noise.
+        if store.meta(key) == lane["reason"]:
+            continue
+        store.set_meta(key, str(lane["reason"]))
+        if any(re.match(rf"task #{n}\b", str(lane["reason"] or "")) for n in said):
+            continue
+        lines.append(f"  {lane['repo']}: {lane['queued']} queued task(s) of yours wait, paused since "
+                     f"{lane['updated_at']}: {clip(str(lane['reason'] or ''), 200, one_line=True)}")
+    if not lines:
+        return None
+    return ("cauce: a lane holding work you queued is paused, so nothing in it starts. Tell the person; settle "
+            "the task it paused on (resume or dismiss it), or, when the queued work does not depend on it, run "
+            "`cauce lanes --unpause <repo>`:\n" + "\n".join(lines))
+
+
 def habit_lines(task: Mapping[str, Any], store: Store | None = None) -> list[str]:
     """A habits review's outcome (`habits.queue_review`): what cauce installed after its own
     check (`habits.apply_reviews`) and what it refused, each with why; else the install lines,
@@ -808,8 +836,9 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
     covers. With `claim`, they are marked delivered by that route as they are
     read, atomically; without, only read."""
     ended = store.claim_unreported(session_id, via=claim) if claim else store.unreported(session_id)
+    paused = _paused_lanes(store, str(session_id), said=[t["id"] for t in ended]) if claim else None
     if not ended:
-        return None, []
+        return paused, []
     lines = [ENDINGS_HEADER + " Act on each now: tell the person what happened. Every stop is yours to carry: "
              "one only the person can grant (a refused command's rule, a cell's approval) you ask them for here, "
              "and on their yes you run its line; any other you decide as its line says: resume it, rewrite it, "
@@ -836,7 +865,7 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
         lines += _went_past(store, t)
         lines += _behind(store, t)
         lines += _found_before(store, t)
-        lines += specs.ending_lines(t, changed, data.get("specs"),
+        lines += specs.ending_lines(t, changed, data.get("specs"), touched_elsewhere=_run_touched_specs(store, t),
                                     after=f"run:{t['workflow_run']}" if t.get("workflow_run") else f"task:{t['id']}")
         lines += _overlaps(store, t)
         lines += habit_lines(t, store)
@@ -904,6 +933,8 @@ def endings(store: Store, session_id: str, *, claim: str | None = None) -> tuple
             lines.append(f"  its lane is paused on it: {waiting} queued task(s) wait. Dismissing or resuming it "
                          "opens the lane; when the queued work does not depend on it, tell the person and "
                          f"run `cauce lanes --unpause {t.get('repo')}` to let them start now")
+    if paused:
+        lines += ["", paused]
     return "\n".join(lines), [t["id"] for t in ended]
 
 
@@ -1162,6 +1193,20 @@ def _behind(store: Store, ended: Mapping) -> list[str]:
         if said:
             lines.append(f"  step {step['workflow_step']} (#{step['id']}): {said}")
     return lines
+
+
+def _run_touched_specs(store: Store, ended: Mapping) -> bool:
+    """Whether a step of the ended task's workflow run changed a spec: the run caught its
+    specs up, so no step of it is told they are behind."""
+    from cauce import specs
+
+    if not ended.get("workflow_run"):
+        return False
+    for step in store.run_tasks(int(ended["workflow_run"])):
+        finished = store.last_event(step["id"], "finished")
+        if finished and specs.touched((finished.get("data") or {}).get("changed") or ()):
+            return True
+    return False
 
 
 def _warned(store: Store, task_id: int) -> list[str]:

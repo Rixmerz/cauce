@@ -112,6 +112,26 @@ def test_a_worker_killed_mid_attempt_is_resumed_by_the_dispatcher_and_the_lane_g
     world.healthy()
 
 
+def test_a_folder_a_cancel_left_where_a_task_s_worktree_goes_does_not_stop_it(world):
+    """A cancel left a task's folder with a build cache, and its resume failed until the
+    person deleted it by hand."""
+    stray = world.home / "worktrees" / "task-1" / ".angular"
+    stray.mkdir(parents=True)
+    (stray / "cache").write_text("x")
+    world.script([{"match": "make the greeting", "do": [{"pass": True, "write": {"hi.txt": "hi\n"}}]}])
+    world.cauce("queue", "add", "--kind", "implement", "make the greeting file for the app")
+    ended = world.wait(_task(("done", "failed", "blocked", "review", "replan", "interrupted")), "the task")
+    assert ended["id"] == 1 and ended["status"] == "done"
+    [moved] = (world.home / "worktrees" / "stray").iterdir()
+    assert (moved / ".angular" / "cache").read_text() == "x"
+    store = Store(world.home / "cauce.db")
+    try:
+        assert store.events_of(1, "stray_moved")
+    finally:
+        store.close()
+    world.healthy()
+
+
 def test_more_turns_continue_the_worker_s_own_session(world):
     world.script([{"match": "write the long report", "do": [
         {"turns": True, "write": {"report.md": "part one\n"}},

@@ -2331,6 +2331,8 @@ def test_lines_a_repository_hears_on_every_task_are_said_once_a_day(git_repo, st
     assert orchestrate.said_today(store, "other", lines, today="2026-10-24") == frozenset()
     assert orchestrate.said_today(store, "r", lines, today="2026-10-25") == frozenset()
     assert orchestrate.repeats("role ui: capability browser is not in your registry or an adopted neighbour here")
+    # Every step of a workflow that reaches a sibling repository planned it again.
+    assert orchestrate.repeats("this task spans 2 repositories (api, web): tracked apart, each keeps its own notes")
 
     from cauce.classify import Classification
 

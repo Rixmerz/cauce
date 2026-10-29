@@ -80,6 +80,8 @@ def test_the_line_says_time_against_the_usual_and_past_it():
          "estimate": {"p50_s": 420, "p90_s": 600, "samples": 5, "by": "its kind"},
          "changes": {"files": 3, "added": 120, "removed": 8}}
     assert progress.line(p) == "implementing · 4m of ≈7m · 3 files +120 −8"
+    past = {**p, "elapsed_s": 540}
+    assert progress.line(past) == "implementing · 9m, past the usual ≈7m (9 in 10 end within 10m) · 3 files +120 −8"
     late = {**p, "elapsed_s": 900, "changes": {"files": 0, "added": 0, "removed": 0}}
     assert progress.line(late) == ("implementing · 15m of ≈7m · nothing written yet · past 9 in 10 of its kind "
                                    "here (10m)")

@@ -325,7 +325,17 @@ def line(p: Mapping[str, Any]) -> str:
         parts.append(str(doing))
     if (elapsed := p.get("elapsed_s")) is not None:
         expected = p.get("estimate")
-        parts.append(f"{_minutes(elapsed)} of ≈{_minutes(expected['p50_s'])}" if expected else _minutes(elapsed))
+        if not expected:
+            parts.append(_minutes(elapsed))
+        elif elapsed <= expected["p50_s"]:
+            parts.append(f"{_minutes(elapsed)} of ≈{_minutes(expected['p50_s'])}")
+        elif elapsed <= expected["p90_s"]:
+            # The usual is a median: half the tasks like it go past it, so past it is said with
+            # the range, never as a task late against a promise.
+            parts.append(f"{_minutes(elapsed)}, past the usual ≈{_minutes(expected['p50_s'])} "
+                         f"(9 in 10 end within {_minutes(expected['p90_s'])})")
+        else:
+            parts.append(f"{_minutes(elapsed)} of ≈{_minutes(expected['p50_s'])}")  # `warnings` says the rest
     if written := p.get("changes"):
         if written["files"]:
             parts.append(f"{written['files']} file{'s' if written['files'] != 1 else ''} "

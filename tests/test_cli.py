@@ -1632,3 +1632,19 @@ def test_dismissing_a_task_whose_run_died_keeps_its_worktree_work_on_its_branch(
     other = store.create_task("another", status="blocked", source="cauce", cwd=str(git_repo))
     assert cli.main(["dismiss", str(other["id"])]) == 0
     assert "kept what" not in capsys.readouterr().out and not isolate.kept(git_repo, other["id"])
+
+
+def test_show_never_says_a_running_task_cost_nothing(capsys, monkeypatch):
+    """`cauce show` printed `cost $0.00 ... final None` for a task 58 minutes into its attempt."""
+    from cauce import usage
+
+    store = Store.open()
+    t = store.create_task("long work", status="running", source="cauce", repo="r", kind="feature")
+    store.add_event(t["id"], "attempt_started", seq=1, cell="sonnet/high")
+    store.close()
+    monkeypatch.setattr(usage, "running_cost", lambda *a, **k: 2.5)
+    assert cli.main(["show", str(t["id"])]) == 0
+    assert "cost $2.50 so far" in (out := capsys.readouterr().out) and "final (running)" in out
+    monkeypatch.setattr(usage, "running_cost", lambda *a, **k: None)
+    assert cli.main(["show", str(t["id"])]) == 0
+    assert "$0.00 + the running attempt's, not read yet" in capsys.readouterr().out

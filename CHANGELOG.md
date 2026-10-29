@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A paused lane is told to the session whose work waits in it:** every ending and
+  prompt checks the lanes paused with queued work this session sent, and says each once
+  per pause (a sweep pausing it again on the same stop is no new one) with the command that
+  opens it. Pausing a lane touches the pulse, so the mod wakes an idle session with it too
+  (its toast: "a lane holding your queued work is paused"). Work queued into a lane after
+  the ending that paused it (a workflow's next step, another run) no longer waits unseen.
+  `Store.lane_paused_on` also reads a pause written as `task #N: …` (a process that
+  exited, a directory gone), so that ending names the work that waits too.
+- **A task folder a cancel left behind no longer breaks its resume:** what
+  `git worktree remove` leaves (a dev server's cache written while it went) is removed
+  with it, and a task's folder git no longer knows is moved aside under
+  `worktrees/stray/`, never deleted, before its worktree is added again; the run says
+  where it went and keeps a `stray_moved` event.
+- **An answer a background notice pushed off the end is read:** a worker that gave its
+  result block and then answered a monitor's or a background command's notice ("the
+  result stands") ended on that reply, and the attempt was read as inconclusive and asked
+  again; 7 of 7 unreadable answers on one machine were this. `launch.answered_before_notices`
+  reads the newest block from the worker's transcript when only notices opened the turns
+  after it; anything else after it (a prompt) still reads nothing. The result contract also
+  tells workers to run their check in the foreground and to end every reply with the block.
+- **`cauce show` never says a running task cost $0.00:** it shows what the running attempt
+  cost so far, read live (`usage.so_far`, as the board and the `tasks` tool already did), or
+  says it is not read yet; `final (running)` replaces `final None`.
+- **Past the usual time, the range is said:** a running task past its kind's median reads
+  `9m, past the usual ≈7m (9 in 10 end within 10m)` instead of `9m of ≈7m`, since half
+  the tasks like it go past a median.
+- **Fewer repeated notices:** "this task spans N repositories" is said once a day per
+  repository, not on every step of a workflow; a step whose run changed a spec is no
+  longer told its specs are behind.
+
+### Added
+
+- **A starting point far behind the trunk is said:** a writing task that starts from a
+  branch `isolate.TRUNK_BEHIND` (10) or more commits behind the branch work lands on
+  (the remote's HEAD, else main, master or develop) warns with both names and the
+  count. Nothing is rebased or switched: which base to build on is the person's.
+
 ## [0.59.1] - 2026-10-29
 
 ### Changed

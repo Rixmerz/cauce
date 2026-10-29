@@ -841,6 +841,7 @@ class Store:
             "INSERT INTO lanes (repo, paused, reason, updated_at) VALUES (?, 1, ?, ?) "
             "ON CONFLICT(repo) DO UPDATE SET paused = 1, reason = excluded.reason, updated_at = excluded.updated_at",
             (repo or "", reason, now()))
+        self.pulse()  # a session whose work waits in the lane hears of it (`hooks.endings`)
 
     def unpause_lane(self, repo: str | None) -> None:
         self._conn.execute(
@@ -861,9 +862,18 @@ class Store:
         """How many tasks wait behind a lane paused on this task; 0 when it is not."""
         row = self._conn.execute(
             "SELECT (SELECT count(*) FROM tasks q WHERE q.repo IS l.repo AND q.status = 'queued') AS queued "
-            "FROM lanes l WHERE l.repo IS ? AND l.paused = 1 AND l.reason LIKE ?",
-            (repo, f"task #{task_id} %")).fetchone()
+            "FROM lanes l WHERE l.repo IS ? AND l.paused = 1 AND (l.reason LIKE ? OR l.reason LIKE ?)",
+            (repo, f"task #{task_id} %", f"task #{task_id}:%")).fetchone()
         return int(row["queued"]) if row else 0
+
+    def paused_with_work(self, session_id: str) -> list[dict]:
+        """The paused lanes that hold queued work this session sent: work that waits
+        on nobody's word unless the session hears of it."""
+        rows = self._conn.execute(
+            "SELECT l.repo, l.reason, l.updated_at, count(q.id) AS queued FROM lanes l "
+            "JOIN tasks q ON q.repo IS l.repo AND q.status = 'queued' AND q.session_id = ? "
+            "WHERE l.paused = 1 GROUP BY l.repo ORDER BY l.repo", (session_id,)).fetchall()
+        return [dict(r) for r in rows]
 
     def lanes(self) -> list[dict]:
         """Every repository with queued work or a lane record, and its state."""

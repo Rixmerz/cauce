@@ -71,6 +71,9 @@ class Workspace:
     #: A branch of the task's name that held none of its work, renamed to this
     #: before the task started (`prepare(fresh=True)`); None when there was none.
     set_aside: str | None = None
+    #: The task's folder git no longer knew (a cancel's removal stopped half way), moved
+    #: here before the worktree was added again (`_move_stray`); None when there was none.
+    stray: Path | None = None
 
 
 def _git(cwd: Path, *args: str, check: bool = True, strip: bool = True) -> str:
@@ -120,6 +123,32 @@ def _attached(top: Path, path: Path, branch: str) -> bool:
     return False
 
 
+def _clear(path: Path) -> None:
+    """What `git worktree remove` left of a worktree it was told to remove: files a process
+    still wrote into while it went (a dev server's cache), or that it could not delete. Its
+    links are gone by then, so this never reaches into the checkout."""
+    if path.exists() and not (path / ".git").exists():
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _registered(top: Path, path: Path) -> bool:
+    """Whether `path` is a worktree git knows of, on any branch."""
+    listing = _git(top, "worktree", "list", "--porcelain", check=False) or ""
+    return any(line in (f"worktree {path}", f"worktree {path.resolve()}") for line in listing.splitlines())
+
+
+def _move_stray(top: Path, path: Path) -> Path | None:
+    """A task's folder that is no worktree of its repository any more (a cancel whose
+    removal stopped half way): moved aside under `worktrees/stray/`, never deleted, since
+    it may hold files nobody kept, so the worktree can be added again. Where it went."""
+    if not path.exists() or path.is_symlink() or _registered(top, path):
+        return None
+    aside = path.parent / "stray" / f"{path.name}-{time.time_ns()}"
+    aside.parent.mkdir(parents=True, exist_ok=True)
+    path.rename(aside)
+    return aside
+
+
 def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None,
             fresh: bool = False) -> Workspace:
     """The task's worktree, on its own branch: from HEAD, or from `base` (a
@@ -139,6 +168,7 @@ def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None
     path = root / "worktrees" / f"task-{task_id}"
     path.parent.mkdir(parents=True, exist_ok=True)
     _git(top, "worktree", "prune", check=False)  # a run that died left its entry behind
+    stray = _move_stray(top, path)
     aside = None
     if fresh and not _attached(top, path, branch) and kept(top, task_id):
         aside = _set_aside(top, task_id)
@@ -156,7 +186,7 @@ def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None
         base = head
     shared = _shared(top, path)
     stale = tuple(rel for rel in shared if _stale(top, path, rel))
-    ws = Workspace(top, path, branch, base, tuple(rel for rel in shared if rel not in stale), stale, aside)
+    ws = Workspace(top, path, branch, base, tuple(rel for rel in shared if rel not in stale), stale, aside, stray)
     link(ws)
     return ws
 
@@ -458,6 +488,7 @@ def drop(ws: Workspace) -> None:
     """Remove a worktree and its branch, keeping nothing: a race's lane once it is decided."""
     unlink(ws)
     _git(ws.repo_dir, "worktree", "remove", "--force", str(ws.path), check=False)
+    _clear(ws.path)
     _git(ws.repo_dir, "branch", "-D", ws.branch, check=False)
 
 
@@ -627,6 +658,7 @@ def finish(ws: Workspace, *, keep: bool, message: str) -> str | None:
             _commit(ws, message, "--allow-empty")
         kept_branch = ws.branch
     _git(ws.repo_dir, "worktree", "remove", "--force", str(ws.path), check=False)
+    _clear(ws.path)
     if kept_branch is None:
         _git(ws.repo_dir, "branch", "-D", ws.branch, check=False)
         drop_aside(ws)
@@ -836,6 +868,31 @@ def _synced(repo_dir: Path, fork: str, tip: str, now: str) -> tuple[str, str]:
         if tree in on_tip:
             return on_tip[tree], sha
     return fork, fork
+
+
+#: Commits behind the branch work lands on from which a task's starting point is said to be old.
+TRUNK_BEHIND = 10
+
+
+def behind_trunk(repo_dir: Path) -> str | None:
+    """A task that starts from a checkout whose branch is not the one work lands on, and is
+    `TRUNK_BEHIND` or more commits behind it: said, never changed, since which base to build
+    on is the person's (a branch of their own may be behind on purpose). None when it is not."""
+    from cauce import survey
+
+    try:
+        top = Path(_git(repo_dir, "rev-parse", "--show-toplevel"))
+    except (IsolationError, OSError):
+        return None
+    trunk = survey.default_branch(top)
+    here = current_branch(top)
+    if trunk == "HEAD" or here is None or here == trunk or trunk.split("/", 1)[-1] == here:
+        return None
+    count = _git(top, "rev-list", "--count", f"HEAD..{trunk}", check=False)
+    if not count or not count.isdigit() or int(count) < TRUNK_BEHIND:
+        return None
+    return (f"base: this starts from {here}, {count} commits behind {trunk}, where work lands; its change may "
+            f"conflict there. To build on {trunk} instead, switch the checkout (or rebase {here}) before it runs")
 
 
 def behind_text(found: Mapping[str, Any]) -> str | None:

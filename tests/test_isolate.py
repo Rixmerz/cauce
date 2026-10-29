@@ -317,3 +317,42 @@ def test_a_task_that_never_ran_sets_aside_a_branch_of_its_name_and_starts_on_its
     assert len(isolate.kept_branches(git_repo)) == 1
     # a fresh task with no such branch sets nothing aside
     assert isolate.prepare(git_repo, 22, tmp_path / "home", fresh=True).set_aside is None
+
+
+def test_a_task_folder_git_no_longer_knows_is_moved_aside_and_the_resume_adds_its_worktree(git_repo, tmp_path):
+    """A cancel left a task's folder holding a build cache, and the resume failed to add
+    its worktree until the person deleted it by hand."""
+    home = tmp_path / "home"
+    stray = home / "worktrees" / "task-11"
+    (stray / ".angular" / "cache").mkdir(parents=True)
+    (stray / ".angular" / "cache" / "blob").write_text("x")
+    ws = isolate.prepare(git_repo, 11, home)
+    assert ws.path == stray and (ws.path / "app.py").is_file() and not (ws.path / ".angular").exists()
+    moved = list((home / "worktrees" / "stray").iterdir())
+    assert ws.stray == moved[0]
+    assert len(moved) == 1 and (moved[0] / ".angular" / "cache" / "blob").is_file()  # never deleted
+
+
+def test_finishing_removes_what_git_left_of_the_worktree(git_repo, tmp_path):
+    ws = isolate.prepare(git_repo, 12, tmp_path / "home")
+    (ws.path / ".angular").mkdir()
+    (ws.path / ".angular" / "blob").write_text("x")
+    git(git_repo, "worktree", "remove", "--force", str(ws.path))
+    (ws.path / ".angular").mkdir(parents=True)  # a dev server wrote again while it went
+    isolate.finish(ws, keep=False, message="cauce task #12")
+    assert not ws.path.exists()
+
+
+def test_a_branch_far_behind_the_one_work_lands_on_is_said_and_one_close_to_it_is_not(git_repo):
+    """A workflow run started from a feature branch 27 commits behind the trunk and nobody said so."""
+    trunk = git(git_repo, "symbolic-ref", "--short", "HEAD")
+    git(git_repo, "checkout", "-q", "-b", "feature/specs")
+    git(git_repo, "checkout", "-q", trunk)
+    for n in range(isolate.TRUNK_BEHIND):
+        git(git_repo, "commit", "-q", "--allow-empty", "-m", f"trunk {n}")
+    assert isolate.behind_trunk(git_repo) is None  # on the trunk itself
+    git(git_repo, "checkout", "-q", "feature/specs")
+    said = isolate.behind_trunk(git_repo)
+    assert said.startswith("base: ") and f"{isolate.TRUNK_BEHIND} commits behind {trunk}" in said
+    git(git_repo, "reset", "-q", "--hard", f"{trunk}~1")
+    assert isolate.behind_trunk(git_repo) is None

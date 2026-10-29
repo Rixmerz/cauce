@@ -370,3 +370,40 @@ def test_a_stop_that_waits_on_a_comparison_the_orchestrator_makes_resumes_with_a
     assert stops.what_to_do(stop) != "read the attempts"
     assert not stops.for_person(stop)
     assert cause not in stops.PERSON_ONLY
+
+
+def test_a_paused_lane_holding_work_the_session_queued_is_told_once_per_pause(store):
+    """A workflow run waited behind a lane a replan had paused, and the session that
+    queued it was never told: the ending came before the run's step was queued."""
+    from cauce import hooks
+
+    stopped = store.create_task("wrong task", status="replan", source="cauce", repo="r", cwd="/x")
+    store.pause_lane("r", f"task #{stopped['id']}: its process exited unexpectedly")
+    assert hooks._paused_lanes(store, "s") is None  # nothing of this session waits
+    store.create_task("step", status="queued", source="cauce", repo="r", cwd="/x", session_id="s")
+    assert store.lane_paused_on("r", stopped["id"]) == 1  # the colon form is a pause on it too
+    text = hooks._paused_lanes(store, "s")
+    assert "r: 1 queued task(s) of yours wait" in text and "cauce lanes --unpause" in text
+    assert hooks._paused_lanes(store, "s") is None  # told once
+    store.pause_lane("r", f"task #{stopped['id']}: its process exited unexpectedly")
+    assert hooks._paused_lanes(store, "s") is None  # the sweep pausing it again is no new pause
+    store.pause_lane("r", f"task #{stopped['id']} ended replan: again")
+    assert hooks._paused_lanes(store, "s") is not None  # a new pause is told again
+    store.pause_lane("r", f"task #{stopped['id']} ended replan: once more")
+    assert hooks._paused_lanes(store, "s", said=[stopped["id"]]) is None  # its ending says it
+    # The route the mod wakes an idle session by: `cauce endings`, with nothing ended.
+    store.pause_lane("r", f"task #{stopped['id']} ended replan: last")
+    text, ids = hooks.endings(store, "s", claim="mod")
+    assert ids == [] and "nothing in it starts" in text
+    assert hooks.endings(store, "s", claim="mod") == (None, [])
+
+
+def test_a_step_whose_run_changed_a_spec_is_not_told_the_specs_are_behind(store):
+    from cauce import hooks
+
+    run_id = 7
+    spec = store.create_task("specs", status="done", source="cauce", repo="r", cwd="/x", session_id="s")
+    store._conn.execute("UPDATE tasks SET workflow_run = ? WHERE id = ?", (run_id, spec["id"]))
+    store.add_event(spec["id"], "finished", status="done", changed=["openspec/specs/a/spec.md"])
+    assert hooks._run_touched_specs(store, {**spec, "workflow_run": run_id})
+    assert not hooks._run_touched_specs(store, {**spec, "workflow_run": None})

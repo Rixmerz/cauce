@@ -1115,7 +1115,13 @@ def cmd_show(args: argparse.Namespace) -> int:
             return 0
         print(f"#{task['id']} [{task['status']}] {task['title']}")
         print(f"repo {task['repo']}  kind {task['kind']} ({task['class_source']}: {task['class_reason']})")
-        print(f"cost ${task['cost_usd']:.2f}  start {task['start_cell']}  final {task['final_cell']}")
+        spent = usage.so_far(store, task)
+        # A running attempt's cost is read live (`usage.so_far`), never shown as $0.00.
+        cost = f"${spent['cost_usd']:.2f}" + (" so far" if spent.get("cost_live") else
+                                              " + the running attempt's, not read yet" if spent.get("cost_running")
+                                              else "")
+        final = task["final_cell"] or ("(running)" if task["status"] == "running" else "-")
+        print(f"cost {cost}  start {task['start_cell']}  final {final}")
         if task.get("points"):
             print(f"points {task['points']}: {task.get('points_why') or 'nothing says it is bigger'}")
         ended = (store.final_event(args.id) or {}).get("data") or {}

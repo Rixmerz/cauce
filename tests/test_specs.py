@@ -61,6 +61,9 @@ def test_a_change_that_wrote_a_spec_or_a_reading_task_hears_nothing(git_repo, st
     found = specs.drift(git_repo).data()
     assert specs.ending_lines({"id": 1}, ["openspec/specs/login/spec.md", "app.py"], found, after="task:1") == []
     assert specs.ending_lines({"id": 1}, ["app.py"], None, after="task:1") == []
+    # A workflow run whose other step caught the specs up: no step of it hears they are behind.
+    assert specs.ending_lines({"id": 1}, ["app.py"], found, after="run:1")
+    assert specs.ending_lines({"id": 1}, ["app.py"], found, after="run:1", touched_elsewhere=True) == []
     script = Script(ok("read it"))
     run("where is the login handled", git_repo, store, registry={}, launcher=script, classifier=kind("explore"))
     assert "OpenSpec" not in script.specs[0].prompt

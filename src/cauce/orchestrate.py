@@ -675,6 +675,8 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
         neighbour_notes.append(bypass)
     if spans := _spans(repo_dir, options.add_dirs):
         neighbour_notes.append(spans)
+    if not options.base and kind not in READ_ONLY_KINDS and (old := isolate.behind_trunk(repo_dir)):
+        reasons.append(old)
     for lag in models.lagging(store):
         neighbour_notes.append(f"workers last ran {lag['workers']} for `{lag['alias']}` while your sessions use "
                                f"{lag['sessions']}: the installed Claude Code's alias is older. Pin it with "
@@ -961,7 +963,7 @@ def turns_from_history(runs: Sequence[Sequence[tuple[int, bool, str | None]]], k
 #: How the plan's reasons a person should hear before the work starts begin: what
 #: the task needs and workers lack, and what stopped workers here before.
 WARNINGS = ("this task needs", "this task mentions", "this task spans", "workers here were refused before", "task #",
-            "CI also runs", "this task's check")
+            "CI also runs", "this task's check", "base: ")
 
 
 def warnings(reasons: Sequence[str]) -> list[str]:
@@ -970,7 +972,7 @@ def warnings(reasons: Sequence[str]) -> list[str]:
 
 #: Plan lines that read the same task after task in a repository: said once a day there.
 _REPEATED = ("CI also runs", "CI: ", "engram: ", "layout-inspector: ", "livespec: ", "specs: ", "tracer: ",
-             manifests.PREFIX)
+             "this task spans ", "base: ", manifests.PREFIX)
 SAID_META = "said:"
 
 
@@ -1183,6 +1185,10 @@ def run(
                 say(f"a branch {workspace.branch} was already in this checkout with none of this task's work "
                     f"(another cauce store's): kept as {workspace.set_aside}, and this task starts on its base")
                 store.add_event(task["id"], "branch_set_aside", branch=workspace.branch, to=workspace.set_aside)
+            if workspace.stray:
+                say(f"this task's folder {workspace.path} was left by a run whose removal stopped half way, and "
+                    f"git no longer knew it: moved to {workspace.stray} (delete it once nothing in it is wanted)")
+                store.add_event(task["id"], "stray_moved", path=str(workspace.path), to=str(workspace.stray))
             if resumed:
                 context.append("This task was stopped before and is resumed: what its earlier attempts wrote is "
                                "already here. Check it, and finish it rather than starting over.")

@@ -56,6 +56,8 @@ const ENDED: Record<string, string> = {
 
 /** The toast for work that ended: each task with how it ended, when cauce said. */
 export function endedToast(ids: number[], statuses?: Record<string, string | null>): string {
+  // Nothing ended, yet there is a notice: a lane holding this session's work paused.
+  if (ids.length === 0) return 'cauce: a lane holding your queued work is paused'
   const each = ids.map(id => {
     const how = statuses?.[String(id)]
     return how && ENDED[how] ? `#${id} ${ENDED[how]}` : `#${id} ended`

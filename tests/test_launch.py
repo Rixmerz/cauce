@@ -601,3 +601,53 @@ def test_the_rules_a_failing_check_taught_are_read_from_the_block(tmp_path):
     assert parse(proc(envelope(block(verdict="pass", summary="ok", evidence="1 passed"))), spec(tmp_path)).constraints \
         == ()
     assert '"constraints"' in launch.RESULT_INSTRUCTIONS
+
+
+def _transcript(tmp_path: Path, turns: list[tuple[str, str]]) -> dict[str, str]:
+    """A worker's session as Claude Code keeps it: each (prompt, answer) a turn."""
+    folder = tmp_path / "cfg" / "projects" / "worktree"
+    folder.mkdir(parents=True)
+    lines = []
+    for prompt, answer in turns:
+        lines.append({"type": "user", "message": {"content": prompt}})
+        lines.append({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash"}]}})
+        lines.append({"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}})
+        lines.append({"type": "assistant", "message": {"content": [{"type": "text", "text": answer}]}})
+    (folder / "s1.jsonl").write_text("\n".join(json.dumps(line) for line in lines) + "\n")
+    return {"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")}
+
+
+def _answer(verdict: str) -> str:
+    return f"Done.\n\n```{launch.RESULT_FENCE}\n" + json.dumps({"verdict": verdict, "summary": "s"}) + "\n```"
+
+
+NOTICE = "<task-notification> <summary>Monitor event: suite finished</summary></task-notification>"
+
+
+def test_an_answer_followed_only_by_background_notices_is_read(tmp_path):
+    """7 of 7 unreadable answers here: the block was given, then a monitor's notice came and
+    the worker's reply to it ("the result stands") became the last message."""
+    env = _transcript(tmp_path, [("the task", _answer("pass")), (NOTICE, "The result stands."),
+                                 (NOTICE, "Still the same.")])
+    assert launch.result_block(launch.answered_before_notices("s1", env))["verdict"] == "pass"
+
+
+def test_a_worker_that_changed_its_answer_on_a_notice_is_read_by_its_latest_block(tmp_path):
+    env = _transcript(tmp_path, [("the task", _answer("pass")), (NOTICE, _answer("fail")), (NOTICE, "done")])
+    assert launch.result_block(launch.answered_before_notices("s1", env))["verdict"] == "fail"
+
+
+@pytest.mark.parametrize("turns", [
+    [("the task", "Waiting for the monitor."), (NOTICE, "Still waiting.")],  # no block was ever given
+    [("the task", _answer("fail")), ("Look deeper.", "Fixed it.")],  # a prompt came after it
+])
+def test_anything_but_notices_after_the_answer_reads_nothing(tmp_path, turns):
+    assert launch.answered_before_notices("s1", _transcript(tmp_path, turns)) is None
+    assert launch.answered_before_notices("missing", {"CLAUDE_CONFIG_DIR": str(tmp_path / "none")}) is None
+
+
+def test_parse_reads_the_answer_a_background_notice_pushed_off_the_end(tmp_path, monkeypatch):
+    env = _transcript(tmp_path, [("the task", _answer("inconclusive")), (NOTICE, "The result stands.")])
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", env["CLAUDE_CONFIG_DIR"])
+    out = parse(proc(envelope("The result stands.", session_id="s1")), spec(tmp_path))
+    assert out.summary == "s" and not out.shape

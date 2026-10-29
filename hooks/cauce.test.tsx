@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { statusLine } from './cauce-cli'
+import { endedToast, statusLine } from './cauce-cli'
 
 type Run = { exitCode: number; stdout: string; stderr?: string }
 type Answer = Run | ((argv: readonly string[]) => Run)
@@ -707,4 +707,8 @@ test('the status line tells each of a few running tasks how far it got, and coun
     .toBe('cauce · 🔵 1 running (#7 implementing · 4m of ≈7m · 2 files +40 −3)')
   const many = [1, 2, 3].map(id => ({ id, phase: 'exploring', progress_line: 'exploring · 1m' }))
   expect(statusLine({ ...counts, running: 3 }, many)).toContain('3 running (exploring)')
+})
+
+test('a notice with nothing ended is a paused lane, and its toast says so', () => {
+  expect(endedToast([])).toBe('cauce: a lane holding your queued work is paused')
 })

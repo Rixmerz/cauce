@@ -242,10 +242,12 @@ def ask(found: Drift) -> str:
             f"Change no code.")
 
 
-def ending_lines(task: Mapping, changed: Sequence[str], found: Mapping | None, *, after: str) -> list[str]:
+def ending_lines(task: Mapping, changed: Sequence[str], found: Mapping | None, *, after: str,
+                 touched_elsewhere: bool = False) -> list[str]:
     """What an ending says about specs: a writing pass that changed code and no spec, in a
-    repository whose specs are behind, with the task that would catch them up; nothing started."""
-    if not found or not changed or touched(changed):
+    repository whose specs are behind, with the task that would catch them up; nothing started.
+    `touched_elsewhere`: another step of its workflow run changed a spec, so nothing is said."""
+    if not found or not changed or touched_elsewhere or touched(changed):
         return []
     behind = Drift(str(found.get("folder") or OPENSPEC), found.get("last"), found.get("days"),
                    int(found.get("code_commits") or 0))

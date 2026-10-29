@@ -203,6 +203,10 @@ When you are done, end your reply with exactly one fenced block:
   runs in: start it in the background and stop it before you finish. You have
   no browser unless your tools include one; without it, answer `fail` with
   `environment` and say so, never describe a page you did not open.
+- Run your check in the foreground and wait for it. Anything you start in the
+  background tells you when it ends, after you answered, and your reply to that
+  is the one read: every reply you end, that one too, ends with the whole
+  result block again.
 - A check that fails the same way without your change (tests, lint or coverage
   of code you did not touch, or were told not to) is not yours to fix and no
   reason to stop: when your own work is done, answer `pass`, and name those
@@ -703,6 +707,8 @@ def parse(
                             network=network_trouble(text, flaky=True), limited=limited, retry_after_s=wait,
                             starved="disk" if NO_SPACE.search(text) else "", **common)
     block = result_block(text)
+    if block is None and (earlier := answered_before_notices(common["session_id"])):
+        text, block = earlier, result_block(earlier)
     if block is None:
         return WorkerResult(False, _refused(Failure.INCONCLUSIVE, denied),
                             "the worker did not answer with exactly one result block", raw=text,
@@ -1178,6 +1184,55 @@ def report_block(text: str) -> dict[str, Any] | None:
     found = _REPORT_RE.findall(text[opened[-1].start():])
     body = (found[0] if found else text[opened[-1].end():])[:REPORT_CHARS]
     return {"unparsed": body}
+
+
+#: What Claude Code puts in a session when a background command or monitor it started ends.
+_NOTICE = "<task-notification>"
+
+
+def answered_before_notices(session_id: str, env: Mapping[str, str] | None = None) -> str | None:
+    """The worker's answer that held its one result block, when every turn after it only
+    answered background notices: a monitor or a background command ended after the answer,
+    and the worker's reply to that (often "the result stands") became the session's last
+    message. None when a turn after it was opened by anything else (a prompt), when no turn
+    held a readable block, or when the transcript is not there."""
+    from cauce import usage
+
+    path = usage.transcript_of(session_id, env) if session_id else None
+    if path is None:
+        return None
+    answers: list[tuple[str, bool]] = []  # (the turn's last text, whether a notice opened it)
+    opened_by_notice, last = False, ""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        content = (entry.get("message") or {}).get("content")
+        if entry.get("type") == "user":
+            parts = [content] if isinstance(content, str) else [
+                c.get("text", "") for c in content or () if isinstance(c, dict) and c.get("type") == "text"]
+            if not any(parts) or any(isinstance(c, dict) and c.get("type") == "tool_result" for c in
+                                     (content if isinstance(content, list) else ())):
+                continue  # a tool's result is no new turn
+            answers.append((last, opened_by_notice))
+            opened_by_notice, last = any(_NOTICE in part for part in parts), ""
+        elif entry.get("type") == "assistant":
+            for c in content or ():
+                if isinstance(c, dict) and c.get("type") == "text" and c.get("text"):
+                    last = c["text"]
+    answers.append((last, opened_by_notice))
+    # From the last turn back: the newest block wins, as long as only notices opened the turns after it.
+    for text, by_notice in reversed(answers):
+        if result_block(text) is not None:
+            return text
+        if not by_notice:
+            return None
+    return None
 
 
 def result_block(text: str) -> dict[str, Any] | None:
