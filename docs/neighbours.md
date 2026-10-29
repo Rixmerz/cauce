@@ -72,8 +72,8 @@ manifests: layout-inspector 0.5.0, livespec 0.35.0 told cauce how to use them (t
 
 ## Examples
 
-Drafts built from cauce's current built-in data, ready to copy into each
-plugin's `.claude-plugin/plugin.json`:
+Shipped in livespec 0.35.0 and layout-inspector 0.5.0; these copies are the
+reference for each plugin's `.claude-plugin/plugin.json`:
 
 - livespec: [`neighbours/livespec.json`](neighbours/livespec.json) (`tools` and `hints`)
 - layout-inspector: [`neighbours/layout-inspector.json`](neighbours/layout-inspector.json) (`tools`, `hint` and `measures`)

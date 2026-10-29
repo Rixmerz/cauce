@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.59.1] - 2026-10-29
+
+### Changed
+
+- livespec 0.35.0 and layout-inspector 0.5.0 ship the `cauce` manifest
+  block, so cauce now takes their tools, hints and measures from the
+  installed plugin; `docs/neighbours.md` says so.
+
 ## [0.59.0] - 2026-10-28
 
 ### Added
