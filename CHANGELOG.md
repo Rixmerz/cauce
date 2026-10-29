@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.60.0] - 2026-10-29
+
 ### Fixed
 
 - **A paused lane is told to the session whose work waits in it:** every ending and
