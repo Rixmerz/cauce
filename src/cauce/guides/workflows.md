@@ -19,7 +19,11 @@ not pass results along yourself: that is what the run does without you.
 You hear of the run once, when it ends or when a step waits on the person.
 `cauce workflow status <run>` shows where it is. A step that stopped is
 continued with `cauce resume <task> --unattended` or `cauce workflow retry <run> <step>`,
-and the run goes on from there.
+and the run goes on from there. A step that asks the person (`ask`) waits for their answer:
+put the question to them in your conversation and run `cauce workflow answer <run> <step>
+<option>` with what they chose, never an answer of your own. A step that runs another workflow
+goes on by that run's steps (`cauce workflow status` names it). `cauce workflow render <name>
+--markdown` draws a workflow as a Mermaid graph to show the person before a run.
 
 **A step can start where a reading step left off.** A step given a `trunk`
 (an `explore` or `plan` step before it) starts as a fork of that step's

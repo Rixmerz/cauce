@@ -829,6 +829,9 @@ cauce workflow new release-notes --from review-fix    # start from an existing o
 cauce workflow step add release-notes publish --prompt "..." --kind docs --after fix
 cauce workflow step set release-notes fix --verify "npm test"
 cauce workflow retry 3 build                          # a stopped step again; the run goes on
+cauce workflow answer 3 how flag                      # the person's answer to a question step
+cauce workflow render feature --markdown              # the graph as Mermaid, for a README or a PR
+cauce workflow render --run 3                         # a run's graph, each step's state on its node
 cauce workflow cancel 3
 ```
 
@@ -853,13 +856,30 @@ Definitions are JSON files:
 
 A definition holds steps (`id`, `prompt` with `{input}` names, `needs`,
 `kind`, `verify`, `start`, `max_turns`, `memory`, `surfaces`, `ledger`,
-`fanout`, `integrate`, `trunk`) and never a permission rule,
+`fanout`, `integrate`, `trunk`, `when`; or `ask` and `options`; or `workflow`
+and `with`) and never a permission rule,
 an approval, a capability or a dollar limit. Rules, approvals and a run-wide
 check (`--verify`, for every step that writes and names none) are the person's
 flags on `run`. A step's `memory` topic with no note yet is said, never a
 reason not to start; a note that cannot be read is. A `budget_usd` an older
 definition holds is read and
 ignored.
+
+Steps can choose, ask and delegate, always on cauce's records:
+
+- `when` runs a step only if a step it needs ended a certain way: `findings`
+  or `clean`, `changed` or `unchanged`, or the answer to a question. A step
+  whose condition does not hold is skipped with no worker, so two steps with
+  opposite conditions make an if/else.
+- `ask` with `options` makes a step that asks the person and runs no worker.
+  The run waits until `cauce workflow answer` gives one of the options.
+- `workflow` with `with` runs another saved workflow as one step, on the work
+  before it. The run goes on from the branch that workflow kept. The
+  workflows a run calls are checked and frozen when it starts.
+
+`cauce workflow show` prints a definition's revision. A change made with
+`--expect <revision>` is refused if someone else changed it since, so two
+sessions editing one workflow never overwrite each other unseen.
 
 A workflow in the user scope is global: one definition that several projects
 reuse, each run's state kept with its own project. A run never changes under
@@ -940,7 +960,7 @@ and refuses anything else passed with it.
 
 ### The UI
 
-`cauce ui` (or `/cauce:ui` in a session) serves a local page (`http://127.0.0.1:8790/`; it opens no tab by itself, `--open` opens it once)
+`cauce ui` (or `/cauce:ui` in a session) serves a local page (`http://127.0.0.1:8790/`; it opens no tab by itself, `--open` opens it once; `--idle-exit 30` stops it 30 seconds after its last tab closes)
 for someone running many tasks across many repositories. It answers, in order:
 what needs me, what is running and what it costs, and whether the router is
 choosing well. It shows one project at a time, picked at the top: never every

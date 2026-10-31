@@ -22,6 +22,8 @@ from cauce.text import clip
 
 NOW_HELP = ("write the change at once even while runs use the workflow (they go on with the copy they started "
             "with); without it the change waits for them")
+EXPECT_HELP = ("the revision you read (`cauce workflow show` prints it): the change is refused when another "
+               "landed since")
 STEP_FLAGS = (("title", str), ("prompt", str), ("kind", str), ("role", str), ("verify", str), ("start", str),
               ("max_turns", int), ("ledger", str), ("fanout", str), ("trunk", str))
 
@@ -58,7 +60,8 @@ def _say_saved(where: str, path: Path | workflows.Saved) -> None:
 
 
 def _print_definition(defn: dict[str, Any]) -> None:
-    print(f"{defn['name']} v{defn['version']} ({defn['scope']}: {defn['path']})")
+    print(f"{defn['name']} v{defn['version']} ({defn['scope']}: {defn['path']})"
+          + (f" · revision {defn['revision']}" if defn.get("revision") else ""))
     if defn.get("held_by"):
         print(f"  in use by run {', '.join(f'#{r}' for r in defn['held_by'])}: a change waits for them to end")
     if defn.get("pending"):
@@ -70,8 +73,16 @@ def _print_definition(defn: dict[str, Any]) -> None:
         after = f" after {', '.join(step['needs'])}" if step["needs"] else " (first)"
         extra = ", ".join(f"{k} {step[k]}" for k in ("kind", "start", "verify", "max_turns", "fanout", "trunk")
                           if step.get(k) is not None) + (", integrate" if step.get("integrate") else "")
-        print(f"\n  {step['id']} — {step['title']}{after}" + (f" [{extra}]" if extra else ""))
-        for line in step["prompt"].splitlines():
+        when = ", ".join(f"{k} is {v}" for k, v in (step.get("when") or {}).items())
+        print(f"\n  {step['id']} — {step['title']}{after}" + (f" [{extra}]" if extra else "")
+              + (f" when {when}" if when else ""))
+        if step.get("ask") is not None:
+            print(f"      asks the person: {step['ask']}")
+            print(f"      answers: {', '.join(step['options'])}")
+        elif step.get("workflow"):
+            given = ", ".join(f"{k}={v}" for k, v in (step.get("with") or {}).items())
+            print(f"      runs the workflow {step['workflow']}" + (f" with {given}" if given else ""))
+        for line in str(step.get("prompt") or "").splitlines():
             print(f"      {line}")
         if step.get("memory"):
             print(f"      + memory: {', '.join(step['memory'])}")
@@ -164,6 +175,14 @@ def _compact_step(step: dict[str, Any]) -> str:
         parts.append(f"stopped: {_clip(step['stopped'], 120)}")
     if step.get("behind"):
         parts.append(step["behind"])
+    if step.get("subrun"):
+        parts.append(f"runs run #{step['subrun']} (`cauce workflow status {step['subrun']}`)")
+    if step.get("answer"):
+        parts.append(f"answered {step['answer']}")
+    elif step.get("options") and step["state"] == "blocked":
+        parts.append(f"asks you: {' | '.join(step['options'])}")
+    if step.get("skipped"):
+        parts.append(_clip(step["skipped"], 120))
     return " · ".join(parts)
 
 
@@ -223,11 +242,14 @@ def cmd_workflow(args: argparse.Namespace) -> int:
                 waiting = workflows.pending_path(Path(defn["path"]))
                 defn.update(held_by=workflows.in_use(defn["path"]),
                             pending=str(waiting) if waiting.is_file() else None)
+            defn["revision"] = workflows.revision(defn["path"])
             if args.json:
                 print(json.dumps(defn, ensure_ascii=False, indent=2))
             else:
                 _print_definition(defn)
             return 0
+        if what == "render":
+            return _render(args)
         if what == "new":
             if args.copy_from:
                 path = workflows.copy_to(args.copy_from, args.name, _cwd(args), scope=args.scope)
@@ -248,7 +270,8 @@ def cmd_workflow(args: argparse.Namespace) -> int:
                 raise workflows.WorkflowError(f"not JSON: {exc}") from exc
             if args.name:
                 defn["name"] = args.name
-            _say_saved(args.scope, workflows.save(defn, _cwd(args), args.scope, replace=args.replace, now=args.now))
+            _say_saved(args.scope, workflows.save(defn, _cwd(args), args.scope, replace=args.replace, now=args.now,
+                                                  expect=args.expect))
             return 0
         if what == "edit":
             return _edit_in_editor(args)
@@ -293,6 +316,11 @@ def cmd_workflow(args: argparse.Namespace) -> int:
                 print(f"run #{args.run} cancelled" + (f"; stopping {', '.join(f'#{t}' for t in stopped)}"
                                                       if stopped else ""))
                 return 0
+            if what == "answer":
+                done = workflows.answer(store, args.run, args.step, args.option)
+                print(f"run #{args.run}: {args.step} answered {done['answer']}"
+                      + (f"; queued {', '.join(f'#{t}' for t in done['queued'])}" if done["queued"] else ""))
+                return 0
             if what == "retry":
                 task = workflows.retry(store, args.run, args.step)
                 if task.get("parts_retried"):
@@ -327,8 +355,30 @@ def _step(args: argparse.Namespace) -> int:
     else:
         def change(defn: dict[str, Any]) -> None:
             workflows.remove_step(defn, args.step_id)
-    saved = workflows.edit(args.name, _cwd(args), change, args.scope, now=args.now)
+    saved = workflows.edit(args.name, _cwd(args), change, args.scope, now=args.now, expect=args.expect)
     _say_saved(saved.scope, saved)
+    return 0
+
+
+def _render(args: argparse.Namespace) -> int:
+    """A workflow as a Mermaid graph (`--markdown`: fenced, with its steps listed); with `--run`,
+    the run's own copy, each step's state on its node."""
+    status = None
+    if args.run is not None:
+        store = Store.open()
+        try:
+            run = store.get_run(args.run)
+            if run is None:
+                raise workflows.WorkflowError(f"no workflow run #{args.run}")
+            defn = workflows.normalize(json.loads(run["definition"]))
+            status = workflows.status(store, args.run)
+        finally:
+            store.close()
+    elif args.name:
+        defn = workflows.load(args.name, _cwd(args), args.scope)
+    else:
+        raise workflows.WorkflowError("name a workflow, or a run with --run")
+    sys.stdout.write(workflows.render_markdown(defn, status) if args.markdown else workflows.render(defn, status))
     return 0
 
 
@@ -346,12 +396,14 @@ def _edit_in_editor(args: argparse.Namespace) -> int:
     source = waiting if where == defn["scope"] and waiting.is_file() else Path(defn["path"])
     draft = Path(tempfile.mkdtemp(prefix="cauce-workflow-")) / f"{args.name}.json"
     draft.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    # What the editor opened: a change saved by someone else meanwhile refuses this one.
+    read = workflows.revision(defn["path"]) if where == defn["scope"] else None
     subprocess.run([*shlex.split(editor), str(draft)], check=False)
     try:
         changed = workflows.normalize(json.loads(draft.read_text(encoding="utf-8")), args.name)
     except (ValueError, workflows.WorkflowError) as exc:
         raise workflows.WorkflowError(f"not kept, nothing changed: {exc} (your edit is in {draft})") from exc
-    _say_saved(where, workflows.save(changed, _cwd(args), where, replace=True, now=args.now))
+    _say_saved(where, workflows.save(changed, _cwd(args), where, replace=True, now=args.now, expect=read))
     return 0
 
 
@@ -541,9 +593,14 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p = wsub.add_parser("list", help="every workflow, nearest scope first")
     p.add_argument("--repo")
     p.add_argument("--json", action="store_true")
-    p = wsub.add_parser("show", help="one workflow's steps")
+    p = wsub.add_parser("show", help="one workflow's steps, and the revision a change with --expect builds on")
     p.add_argument("name")
     p.add_argument("--json", action="store_true")
+    scoped(p)
+    p = wsub.add_parser("render", help="a workflow as a Mermaid graph; --run N colours a run's steps by state")
+    p.add_argument("name", nargs="?")
+    p.add_argument("--run", type=int, help="a run's own copy, each step's state on its node")
+    p.add_argument("--markdown", action="store_true", help="fenced, for a README or a pull request, its steps listed")
     scoped(p)
     p = wsub.add_parser("new", help="a new workflow: one step to start from, or a copy (--from)")
     p.add_argument("name")
@@ -560,6 +617,7 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--name", help="save it under this name")
     p.add_argument("--replace", action="store_true", help="overwrite one of the same name in that scope")
     p.add_argument("--now", action="store_true", help=NOW_HELP)
+    p.add_argument("--expect", metavar="REVISION", help=EXPECT_HELP)
     scoped(p, workflows.DEFAULT_SCOPE)
     p = wsub.add_parser("edit", help="open it in $EDITOR; kept only if it is still valid")
     p.add_argument("name")
@@ -584,6 +642,7 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         p.add_argument("name")
         p.add_argument("step_id", metavar="STEP")
         p.add_argument("--now", action="store_true", help=NOW_HELP)
+        p.add_argument("--expect", metavar="REVISION", help=EXPECT_HELP)
         scoped(p)
         if verb == "rm":
             continue
@@ -648,6 +707,10 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--json", action="store_true")
     p = wsub.add_parser("cancel", help="stop a run: no further step starts")
     p.add_argument("run", type=int)
+    p = wsub.add_parser("answer", help="answer a question step of a run; the steps whose `when` names it go on")
+    p.add_argument("run", type=int)
+    p.add_argument("step")
+    p.add_argument("option", help="one of the step's options")
     p = wsub.add_parser("retry", help="queue a stopped step again; the run goes on from there")
     p.add_argument("run", type=int)
     p.add_argument("step")

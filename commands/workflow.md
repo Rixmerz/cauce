@@ -54,6 +54,18 @@ To rewrite a whole definition, get it with `cauce workflow show <name> --json`,
 change the JSON, and write it back with `cauce workflow save <file> --replace`.
 `cauce workflow edit <name>` opens it in the person's editor.
 
+`cauce workflow show` prints the definition's revision. Pass it back with
+`--expect <revision>` on `save`, `step add|set|rm` and `edit`: the change is
+refused if someone else changed the workflow since you read it. Read it again
+and make the change on what is there.
+
+Show the person the graph before a run, or put it in a pull request:
+
+```bash
+cauce workflow render <name> [--markdown]       # a Mermaid flowchart (fenced, its steps listed)
+cauce workflow render --run <run> [--markdown]  # a run's copy, each step's state on its node
+```
+
 How to write the steps:
 
 - **Prompts:** write each one so a stranger could do it. `{goal}` and any
@@ -93,6 +105,26 @@ How to write the steps:
   `panel` are built this way.
 - **Checks:** give a writing step a `verify` command when the repository has
   one. cauce runs it itself.
+- **Conditions:** `when` maps a step it needs to an outcome that step's ending
+  records. The outcomes are `findings` or `clean` (did the work it judged have
+  problems the change caused), `changed` or `unchanged` (did it change files),
+  or one of a question's options. A step whose `when` does not hold is
+  skipped: it passes with no worker, and the steps after it start from the
+  work before it. For if/else, give two steps opposite `when`s and let a later
+  step need both. The engine decides from cauce's records, never from a
+  worker's words.
+- **Questions:** a step with `ask` (the question, `{inputs}` allowed) and
+  `options` (2 to 6 short answers) runs no worker. It waits on the person, and
+  the session hears of it as a step waiting on them. Ask the person in your
+  conversation, then run their answer with `cauce workflow answer <run> <step>
+  <option>`. Never answer for them. A question is answered, never resumed.
+- **Another workflow as a step:** a step with `workflow: <name>` and `with:
+  {input: "text with {goal}"}` runs that saved workflow on the work before it,
+  as a run of its own. It passes with the branch that run's last step kept,
+  and the run goes on from there. The workflows it calls are checked and
+  frozen when the run starts: one that is missing, lacks an input, calls
+  itself, or nests deeper than three levels is refused before anything is
+  queued. Cancelling the run cancels the run it started.
 - **Memory:** a step can carry cauce memory into its brief, for considerations
   that step must keep:
   - `--memory note:<id>` (or a bare id) for one project note
@@ -189,6 +221,11 @@ When a step stopped:
   itself once the step passes. Leave `--unattended` off only for a resume that
   carries what the person just granted (`--allow`, `--allow-approval`, `--keep`).
 - **Should stop:** `cauce workflow cancel <run>`. No further step starts.
+- **Asks the person:** `cauce workflow answer <run> <step> <option>`, with the
+  answer they gave in the conversation.
+- **Runs another workflow:** that run goes on by its own steps (`cauce workflow
+  status <its run>`). A step of it that stopped is resumed or retried there,
+  and its end passes the step here.
 
 Some things only the person may clear: a refused command, an approval, a
 branch to merge. Tell them; do not clear it for them.

@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Added
+
+- **A workflow step can choose by what the step before it ended with** (`when`): `findings` or
+  `clean` (the blocking findings it passed with), `changed` or `unchanged`, or a question's
+  option. A step whose condition does not hold is skipped with no worker, and what follows starts
+  from the work before it, so two steps with opposite conditions are an if/else.
+- **A workflow step can ask the person** (`ask`, `options`): no worker runs, the step waits on the
+  person (`stops.PERSON_ONLY`, cause `question`), the session hears of it with the line that
+  answers it, and `cauce workflow answer <run> <step> <option>` passes it and goes on. A question
+  is answered, never resumed.
+- **A workflow step can run another workflow** (`workflow`, `with`): a run of it starts on the
+  work before the step, and its end passes the step with the branch it kept. The workflows a run
+  calls are checked and frozen when it starts; one that is missing, lacks an input, calls itself
+  or nests past three levels is refused before anything is queued. Cancelling the run cancels the
+  run it started.
+- **`cauce workflow render`**: a workflow, or a run with each step's state, as a Mermaid
+  flowchart (`--markdown` fences it for a README or a pull request).
+- **`--expect <revision>`** on `cauce workflow save`, `step add|set|rm` and `edit`: a change made on
+  a revision that is no longer the one it builds on is refused; `cauce workflow show` prints it.
+- **`cauce ui --idle-exit SECONDS`**: the board stops once no tab was open for that long, counted
+  after the first one came.
+
 ## [0.61.0] - 2026-10-31
 
 ### Added

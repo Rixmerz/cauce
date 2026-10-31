@@ -17,8 +17,10 @@ from pathlib import Path
 
 import pytest
 
-from cauce import doctor
+from cauce import doctor, workflows
 from cauce.store import Store
+
+from .conftest import git
 
 FAKE = Path(__file__).parent / "scenarios" / "fake_claude.py"
 SRC = Path(__file__).resolve().parents[1] / "src"
@@ -349,6 +351,47 @@ def test_a_step_forks_the_session_of_the_step_that_read_for_it(world, tmp_path):
     assert kept and make["rule"] == 0
     assert make["argv"][make["argv"].index("--resume") + 1] == kept and "--fork-session" in make["argv"]
     assert make["cwd"] != look["cwd"] and briefed["trunk_arm"] == "fork"
+    world.healthy()
+
+
+def test_a_question_answered_chooses_a_branch_that_runs_another_workflow_to_its_end(world, tmp_path):
+    """A run asks the person, waits with no worker on the question, and their answer chooses the
+    step that runs another workflow; that run's end passes the step, the run goes on from its
+    branch, and the step the answer did not choose is skipped."""
+    (tmp_path / "inner.json").write_text(json.dumps({"name": "inner", "inputs": ["bug"], "steps": [
+        {"id": "repair", "prompt": "INNER-STEP: fix {bug}", "kind": "implement"}]}))
+    (tmp_path / "outer.json").write_text(json.dumps({"name": "outer", "inputs": ["goal"], "steps": [
+        {"id": "how", "ask": "Repair {goal} with the inner workflow?", "options": ["inner", "skip"]},
+        {"id": "repair", "workflow": "inner", "with": {"bug": "{goal}"}, "when": {"how": "inner"}},
+        {"id": "other", "prompt": "OTHER-STEP: {goal}", "kind": "implement", "needs": ["how"],
+         "when": {"how": "skip"}},
+        {"id": "ship", "prompt": "SHIP-STEP: ship {goal}", "kind": "implement", "needs": ["repair", "other"]}]}))
+    for name in ("inner", "outer"):
+        world.cauce("workflow", "save", str(tmp_path / f"{name}.json"), "--scope", "user")
+    world.script([{"match": "INNER-STEP", "do": [{"pass": True, "write": {"fixed.txt": "fixed\n"}}]},
+                  {"match": "SHIP-STEP", "do": [{"pass": True, "write": {"shipped.txt": "shipped\n"}}]}])
+    world.cauce("workflow", "run", "outer", "the greeting")
+    asked = world.wait(_task(("blocked",)), "the question to wait on the person")
+    assert world.calls() == []  # no worker ran the question
+    run_id = asked["workflow_run"]
+    world.cauce("workflow", "answer", str(run_id), "how", "inner")
+
+    def outer_ended(store):
+        run = store.get_run(run_id)
+        return run if run["status"] not in ("running", "active") else None
+
+    ended = world.wait(outer_ended, "the outer run to end")
+    assert ended["status"] == "done", ended
+    assert [c["rule"] for c in world.calls()] == [0, 1]
+    store = Store(world.home / "cauce.db")
+    try:
+        steps = {s["id"]: s for s in workflows.status(store, run_id)["steps"]}
+        inner = workflows.status(store, steps["repair"]["subrun"])
+    finally:
+        store.close()
+    assert inner["state"] == "done" and steps["other"].get("skipped") and steps["how"]["answer"] == "inner"
+    # The last step started from the inner run's branch: its worker saw the fix.
+    assert git(world.repo, "show", f"{steps['ship']['branch']}:fixed.txt") == "fixed"
     world.healthy()
 
 

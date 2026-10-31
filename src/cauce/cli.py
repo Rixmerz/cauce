@@ -338,6 +338,20 @@ def _resume_pressed(args: argparse.Namespace) -> int:
     return main(pressed)
 
 
+def _not_resumable(task: dict) -> str | None:
+    """Why a workflow step that runs no worker of its own is never resumed, and what goes on with
+    it instead: a question is answered, a sub-workflow's step goes on by its run (or a retry)."""
+    own = json.loads(task.get("options") or "{}")
+    run, step = task.get("workflow_run"), task.get("workflow_step")
+    if own.get("question"):
+        options = "|".join(own["question"].get("options") or ())
+        return f"is a question of workflow run #{run}: answer it with `cauce workflow answer {run} {step} <{options}>`"
+    if own.get("subflow"):
+        return (f"runs workflow run #{own['subflow'].get('run')} as step {step!r} of run #{run}: that run goes on by "
+                f"its own steps, or `cauce workflow retry {run} {step}` starts it again")
+    return None
+
+
 def cmd_resume(args: argparse.Namespace) -> int:
     """A task that stopped, run again under its own id: on the branch its work was
     kept on, from the cell it stopped at, its earlier attempts in the brief."""
@@ -352,6 +366,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
         # left the board) resumes too: it runs here, from the base, as it would have.
         if task is None or task["source"] not in ("cauce", "queue") or not task["cwd"]:
             print(f"no task #{args.id} that cauce ran", file=sys.stderr)
+            return 1
+        if (refused := _not_resumable(task)) is not None:
+            print(f"cauce: #{args.id} {refused}", file=sys.stderr)
             return 1
         if task["status"] == "running" and not flow.alive(task["pid"]):
             # A restart (or a crash) left it running under a process that is gone: the sweep
@@ -2346,7 +2363,13 @@ def cmd_ui(args: argparse.Namespace) -> int:
               f"(pid {stopped}): it served that version's board", flush=True)
         ui = server.serve(args.port)
     url = f"http://127.0.0.1:{ui.server_address[1]}/"
-    print(f"cauce UI at {url} (Ctrl-C stops it)", flush=True)
+    idle = getattr(args, "idle_exit", None)
+    print(f"cauce UI at {url} (Ctrl-C stops it"
+          + (f"; it stops {idle:g}s after its last tab closes" if idle else "") + ")", flush=True)
+    if idle:
+        import threading
+
+        threading.Thread(target=ui.exit_when_idle, args=(idle,), daemon=True).start()
     sessions = _tabs_sessions(args)
     if args.open and not sessions:
         import webbrowser
@@ -3019,6 +3042,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "per session while the board serves); off by default")
     p.add_argument("--session", action="append",
                    help="a session --tabs opens a tab for (default: the one this runs in); may repeat")
+    p.add_argument("--idle-exit", type=float, metavar="SECONDS",
+                   help="stop once no tab was open for SECONDS, counted from the first one (off by default: the "
+                        "board stays up)")
     p.set_defaults(func=cmd_ui)
 
     p = sub.add_parser("link", help="put `cauce` on a terminal's PATH; survives plugin updates")
@@ -3165,7 +3191,7 @@ def _starts_work(args: argparse.Namespace) -> bool:
         return True
     return command in ("run", "resume", "work", "limit-wait", "loop-runner") or (
         command, getattr(args, f"{command}_command", None)) in {
-        ("queue", "add"), ("workflow", "run"), ("workflow", "retry"), ("investigate", "start"),
+        ("queue", "add"), ("workflow", "run"), ("workflow", "retry"), ("workflow", "answer"), ("investigate", "start"),
         ("loop", "add"), ("loop", "start"), ("loop", "act"), ("loop", "rm"),
         ("habits", "review"), ("habits", "install")}
 

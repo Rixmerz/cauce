@@ -79,7 +79,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
 | `src/cauce/loops.py` | goals that run in rounds (`cauce loop`): a definition, a diary and a state per loop in the person's cauce home, each round a workflow run, the metric measured by cauce, stops on evidence, strategies tried in arms; `loop_cli.py` is `cauce loop …` and the detached `loop-runner` |
 | `src/cauce/trunks.py` | a workflow step whose first try forks the session of a reading step before it (`trunk`): what it forks, the note that marks the role it takes from there, and the trial (`fork` against `fresh`) that keeps forking only where it paid; no model |
-| `src/cauce/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; a step that fans out over a plan's parts, one that joins their branches, a large change's review by area; `workflow_cli.py` is `cauce workflow …` |
+| `src/cauce/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; a step that fans out over a plan's parts, one that joins their branches, a large change's review by area; steps that choose (`when`), ask the person (`ask`) or run another workflow (`workflow`); the graph as Mermaid (`render`); a change refused on a stale revision (`expect`); `workflow_cli.py` is `cauce workflow …` |
 | `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
 | `src/cauce/services.py` | the servers a task needs up (`--service 'cmd@port'`): started in the task's directory, waited for, stopped with their process group when the run ends |
 | `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified; `at_base`, a temporary worktree at a task's base for comparing its check |
@@ -888,7 +888,9 @@ yields the default kind, not a guess.
   the person's opt-in and gives a session one tab at most: the server holds the sessions
   that have it (`UIServer.claim_tab`), a later run asks with the token (`/api/tab`) and is
   told `claimed: false`, and a server handed over to a newer cauce passes the claims on.
-  A GET opens nothing.
+  A GET opens nothing. `cauce ui --idle-exit N` is the person's opt-in to stop the board once no
+  tab was open for N seconds (`UIServer.exit_when_idle`: an open stream is a viewer), counted only
+  after one came; without it the board stays up.
 - A task page polls only while it shows a running task (`/api/tasks/N/live`,
   every 5 s; tool calls write no events), and what it shows of a worker's calls
   is what `phase.calls` keeps: when, the tool, its signature, whether it went
@@ -983,7 +985,7 @@ yields the default kind, not a guess.
   adopts what quiet sessions left in its own project only. A worker and a
   terminal never take it. A stop waits on the person only for what only they
   clear (`stops.PERSON_ONLY`: a refused command's rule, an approval, a gone
-  directory; or past `stops.UNATTENDED_ATTEMPTS`) and a branch to merge;
+  directory, a workflow's question; or past `stops.UNATTENDED_ATTEMPTS`) and a branch to merge;
   every other stop is the orchestrator's to decide. Nothing shows as waiting on
   the person: the status line counts every wait as the orchestrator's (the
   session's own first, `board --session`, and the rest of the project's apart), the
@@ -1346,12 +1348,36 @@ yields the default kind, not a guess.
   a loop and writes nothing, and starts no worker, before the person agrees; it never
   writes the registry, a settings file or a credential.
 - A worker never starts cauce work (`run`, `resume`, `work`, `queue add`,
-  `workflow run|retry`, `investigate start`, `loop add|start|act|rm` and the
+  `workflow run|retry|answer`, `investigate start`, `loop add|start|act|rm` and the
   `loop-runner` refuse under `CAUCE_WORKER_TASK`),
   and forks are off inside it (`CLAUDE_CODE_FORK_SUBAGENT=0`): what is left
   goes in its result. The main session does what fits in what it holds, sends
   to cauce what earns a worker, and a judgment that needs the conversation to
   Claude Code's own fork, never to cauce (`commands/orchestration.md`).
+- A step chooses, asks or delegates only on records, never on a worker's words. `when` maps a
+  step it needs to an outcome its ending records (`workflows.OUTCOMES`: `findings` or `clean`,
+  from the blocking findings it passed with; `changed` or `unchanged`, from its changed files; or a
+  question's option, `outcome`); one that does not hold skips the step (`_skip`): it passes with
+  no worker, a `finished` event with `skipped` and `when_unmet`, reported, and what waits on it
+  starts from the work before it. A question step (`ask`, `options`) runs no worker: its task is
+  blocked from the moment it exists, its stop is `question` (`stops.PERSON_ONLY`, by `workflow`),
+  its line `cauce workflow answer <run> <step> <option>`; it is answered, never resumed (`cauce
+  resume` refuses it, a board's press offers none), and the answer (`workflows.answer`, an
+  `answered` event, `finished.answer`) passes it and advances the run. A sub-workflow step
+  (`workflow`, `with`) starts a run of the workflow it names on the commit the step would start
+  from, with this run's flags, and waits for it as work held `--after` that run does: the
+  dispatcher never starts it, the child's end passes it with the branch its last step kept and
+  its cost (`_finish_parent`, before anything held is released), and the child's endings are
+  reported, so the session hears of the run that holds it. A child that stops stops the run
+  there; cancelling the run cancels the child, and a cancelled child cancels the step. The
+  workflows a run calls are read and frozen in its options when it starts (`subflows`): one
+  missing, lacking an input a check does not fill, calling itself, or nesting past
+  `SUBFLOW_DEPTH` refuses the run before anything is queued.
+- `cauce workflow render` draws a definition (or a run's own copy, each step's state beside its
+  tone) as a Mermaid flowchart, text only; `--markdown` fences it for a README or a pull request.
+  `cauce workflow show` prints a definition's revision (`workflows.revision`: what a change builds
+  on, the pending revision while one waits), and a change passed `--expect` it is refused once
+  another landed since (`_expected`); the editor's change carries the revision it opened.
 - A run runs the copy of its definition it started with, never the file. A
   definition an active run uses (in any project) is held: a change becomes a
   pending revision that applies when the last such run ends or is cancelled,

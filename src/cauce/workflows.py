@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import json
 import os
 import re
@@ -56,7 +57,22 @@ TOP_KEYS = frozenset({"name", "description", "inputs", "steps", "version"})
 #: What a step may say. Nothing here widens what a worker may do: rules,
 #: approvals and capabilities are the person's flags on `run`, never a file's.
 STEP_KEYS = frozenset({"id", "title", "prompt", "kind", "needs", "verify", "start", "max_turns",
-                       "memory", "role", "surfaces", "ledger", "fanout", "integrate", "trunk"})
+                       "memory", "role", "surfaces", "ledger", "fanout", "integrate", "trunk",
+                       "when", "ask", "options", "workflow", "with"})
+#: A question step (`ask`) waits on the person and a sub-workflow step (`workflow`) runs another
+#: saved workflow: neither runs a worker of its own, so neither takes a worker's fields.
+ASK_KEYS = frozenset({"id", "title", "needs", "when", "ask", "options"})
+SUB_KEYS = frozenset({"id", "title", "needs", "when", "workflow", "with"})
+#: What a step's `when` may ask of a step it needs, read from that step's ending, never from a
+#: worker's words: whether the work it judged had findings the change caused (`findings`, `clean`),
+#: whether it changed files (`changed`, `unchanged`), or, of a question step, the option chosen.
+OUTCOMES = ("findings", "clean", "changed", "unchanged")
+#: A question's options: two to `ASK_OPTIONS`, each a short lowercase word or phrase.
+ASK_OPTIONS = 6
+OPTION = re.compile(r"^[a-z0-9][a-z0-9 ._-]{0,39}$")
+#: How deep sub-workflows nest in one run; a definition that goes deeper, or calls itself, is
+#: refused when its run is checked (`subflows`).
+SUBFLOW_DEPTH = 3
 #: Keys an older cauce took in a step and nothing reads any more: a definition or
 #: a run's frozen copy that still holds one loads, and the key is dropped. A step
 #: has no dollar limit: its room is its turns.
@@ -271,15 +287,22 @@ def normalize(defn: Mapping[str, Any], name: str | None = None) -> dict[str, Any
         elif sid in ids:
             errors.append(f"step id {sid!r} is used twice")
         where = f"step {sid!r}"
-        prompt = step.get("prompt")
-        if not isinstance(prompt, str) or not prompt.strip():
-            errors.append(f"{where} needs a prompt: the task its worker is given")
-        elif len(prompt) > PROMPT_CHARS:
-            errors.append(f"{where}'s prompt is over {PROMPT_CHARS} characters")
+        if step.get("ask") is not None and step.get("workflow") is not None:
+            errors.append(f"{where} asks the person or runs a workflow, not both")
+        elif step.get("ask") is not None:
+            errors += _ask_problems(step, where, data["inputs"])
+        elif step.get("workflow") is not None:
+            errors += _sub_problems(step, where, data["inputs"])
         else:
-            for used in INPUT.findall(prompt):
-                if used not in data["inputs"]:
-                    errors.append(f"{where} uses {{{used}}}, which is not among the inputs {data['inputs']}")
+            prompt = step.get("prompt")
+            if not isinstance(prompt, str) or not prompt.strip():
+                errors.append(f"{where} needs a prompt: the task its worker is given")
+            elif len(prompt) > PROMPT_CHARS:
+                errors.append(f"{where}'s prompt is over {PROMPT_CHARS} characters")
+            else:
+                for used in INPUT.findall(prompt):
+                    if used not in data["inputs"]:
+                        errors.append(f"{where} uses {{{used}}}, which is not among the inputs {data['inputs']}")
         if step.get("kind") is not None and step["kind"] not in KINDS:
             errors.append(f"{where}: no kind {step['kind']!r}; one of {', '.join(KINDS)}")
         if step.get("start") is not None:
@@ -337,6 +360,9 @@ def normalize(defn: Mapping[str, Any], name: str | None = None) -> dict[str, Any
         for dep in step["needs"]:
             if dep not in ids:
                 errors.append(f"{where} needs {dep!r}, which is not a step before it")
+        if step.get("when") is not None:
+            errors += _when_problems(step, where, {s["id"]: s for s in steps[:n]
+                                                   if isinstance(s, dict) and isinstance(s.get("id"), str)})
         step["title"] = str(step.get("title") or sid)
         ids.append(sid)
     errors += _parts_problems([s for s in steps if isinstance(s, dict)], ids)
@@ -345,6 +371,66 @@ def normalize(defn: Mapping[str, Any], name: str | None = None) -> dict[str, Any
         raise WorkflowError("; ".join(errors))
     data["steps"] = steps
     return data
+
+
+def _ask_problems(step: Mapping[str, Any], where: str, inputs: Sequence[str]) -> list[str]:
+    """What is wrong with a question step: its question, its options, and fields it does not take."""
+    out = []
+    if extra := sorted(set(step) - ASK_KEYS):
+        out.append(f"{where} asks the person, so it runs no worker: it takes no {', '.join(extra)}")
+    question = step.get("ask")
+    if not isinstance(question, str) or not question.strip():
+        out.append(f"{where}: ask is the question, as text")
+    elif len(question) > PROMPT_CHARS:
+        out.append(f"{where}'s question is over {PROMPT_CHARS} characters")
+    else:
+        out += [f"{where} uses {{{used}}}, which is not among the inputs {list(inputs)}"
+                for used in INPUT.findall(question) if used not in inputs]
+    options = step.get("options")
+    if not isinstance(options, list) or not 2 <= len(options) <= ASK_OPTIONS or not all(
+            isinstance(o, str) and OPTION.match(o) for o in options) or len(set(options)) != len(options):
+        out.append(f"{where}: options are 2 to {ASK_OPTIONS} different answers, each a short lowercase word or "
+                   "phrase (letters, digits, spaces, '.', '_', '-')")
+    return out
+
+
+def _sub_problems(step: Mapping[str, Any], where: str, inputs: Sequence[str]) -> list[str]:
+    """What is wrong with a sub-workflow step, from its own fields: the workflow it names is
+    read when its run is checked (`subflows`), where it is found."""
+    out = []
+    if extra := sorted(set(step) - SUB_KEYS):
+        out.append(f"{where} runs another workflow, whose steps run its workers: it takes no {', '.join(extra)}")
+    if not isinstance(step.get("workflow"), str) or not NAME.match(step["workflow"]):
+        out.append(f"{where}: workflow is the name of a saved workflow")
+    given = step.get("with", {})
+    if not isinstance(given, dict) or not all(isinstance(k, str) and INPUT.fullmatch("{" + k + "}")
+                                              and isinstance(v, str) for k, v in given.items()):
+        out.append(f"{where}: with maps the inputs of the workflow it runs to text ({{input}} names this "
+                   "workflow's inputs)")
+    else:
+        out += [f"{where} uses {{{used}}}, which is not among the inputs {list(inputs)}"
+                for value in given.values() for used in INPUT.findall(value) if used not in inputs]
+    return out
+
+
+def _when_problems(step: Mapping[str, Any], where: str, before: Mapping[str, Mapping[str, Any]]) -> list[str]:
+    """What is wrong with a step's `when`: each condition names a step it waits on directly and an
+    outcome that step's ending can say (`OUTCOMES`, or a question's options)."""
+    when = step["when"]
+    if not isinstance(when, dict) or not when:
+        return [f"{where}: when maps steps it needs to an outcome ({', '.join(OUTCOMES)}, or a question's option)"]
+    out = []
+    for dep, outcome in when.items():
+        if dep not in step.get("needs") or ():
+            out.append(f"{where}: when names {dep!r}, which it does not need: add it to its needs")
+            continue
+        asked = (before.get(dep) or {}).get("options")
+        if asked is not None and (before.get(dep) or {}).get("ask") is not None:
+            if outcome not in asked:
+                out.append(f"{where}: {dep!r} asks the person; when takes one of its options {asked}, not {outcome!r}")
+        elif outcome not in OUTCOMES:
+            out.append(f"{where}: when {dep!r} is one of {', '.join(OUTCOMES)}, not {outcome!r}")
+    return out
 
 
 def _parts_problems(steps: list[dict[str, Any]], ids: list[str]) -> list[str]:
@@ -537,8 +623,31 @@ def _write(path: Path, data: Mapping[str, Any]) -> None:
     tmp.replace(path)
 
 
+def revision(path: Path | str) -> str:
+    """What a change builds on, as a short hash of its file (`sha256:` and 16 hex digits): the
+    pending revision while one waits, else the definition; `none` for one not written yet. A
+    change made with the revision its author read (`expect`) is refused once another landed
+    since, so two sessions editing one workflow never overwrite each other unseen."""
+    path = Path(path)
+    source = pending_path(path) if pending_path(path).is_file() else path
+    if not source.is_file():
+        return "none"
+    return "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest()[:16]
+
+
+def _expected(path: Path | str, expect: str | None) -> None:
+    """Refuse a change made on a revision that is no longer the one it builds on."""
+    if expect is None:
+        return
+    now = revision(path)
+    if expect.strip() != now:
+        raise WorkflowError(f"it changed since you read it: you read {expect.strip()}, it is {now} now. Read it "
+                            "again (`cauce workflow show`), then make the change on what is there")
+
+
 def save(defn: Mapping[str, Any], cwd: str | Path | None, scope: str = DEFAULT_SCOPE, *,
-         replace: bool = False, now: bool = False, store: Store | None = None) -> Saved:
+         replace: bool = False, now: bool = False, store: Store | None = None,
+         expect: str | None = None) -> Saved:
     """Write a definition, checked first, one version on from the one it replaces.
     While an active run (of any project) uses it, the change is kept as its
     pending revision and applied when the last such run ends; `now` writes it
@@ -552,6 +661,7 @@ def save(defn: Mapping[str, Any], cwd: str | Path | None, scope: str = DEFAULT_S
         raise WorkflowError("this directory is in no enrolled project (a .cauce/ folder): save it in the user scope, "
                             "or `cauce init` the project first")
     path = folder / f"{checked['name']}.json"
+    _expected(path, expect)
     if path.exists() and not replace:
         raise WorkflowError(f"{checked['name']!r} exists in the {scope} scope; edit it, or remove it first")
     if not path.exists():
@@ -605,11 +715,12 @@ def remove(name: str, cwd: str | Path | None, scope: str, *, force: bool = False
 
 
 def edit(name: str, cwd: str | Path | None, change: Callable[[dict[str, Any]], None],
-         scope: str | None = None, *, now: bool = False) -> Saved:
+         scope: str | None = None, *, now: bool = False, expect: str | None = None) -> Saved:
     """Load, change, check, write back where it was. A bundled template is copied
     to the user scope first: the change is the person's, the template stays.
     While runs use it, changes build on its pending revision (see `save`)."""
     defn = load(name, cwd, scope)
+    _expected(defn["path"], expect)
     where = defn["scope"] if defn["scope"] != "bundled" else DEFAULT_SCOPE
     if where == defn["scope"]:
         promote(defn["path"])
@@ -697,6 +808,94 @@ def _index(defn: Mapping[str, Any], step_id: str) -> int:
     raise WorkflowError(f"no step {step_id!r}; the steps are {[s.get('id') for s in defn['steps']]}")
 
 
+# --- the graph, as text --------------------------------------------------------------
+
+#: How a step's state colours its node in a run's graph: each tone beside its word, never alone.
+STATE_CLASSES = {"done": "fill:#d7f0dc,stroke:#2f7d43", "running": "fill:#d6e6fb,stroke:#2d5f9e",
+                 "queued": "fill:#eef1f5,stroke:#6b7a8c", "pending": "fill:#ffffff,stroke:#9aa5b1",
+                 "skipped": "fill:#f2f2f2,stroke:#9aa5b1,stroke-dasharray:4 3",
+                 "stopped": "fill:#fbe0dc,stroke:#b03a2e"}
+
+
+def _label(text: str) -> str:
+    """Text inside a Mermaid label: its quotes and angle brackets as Mermaid's entities."""
+    return text.replace('"', "#quot;").replace("<", "#lt;").replace(">", "#gt;")
+
+
+def _what(step: Mapping[str, Any]) -> str:
+    """A step's kind of work, in the words its node carries."""
+    if step.get("ask") is not None:
+        return "asks: " + " / ".join(step.get("options") or ())
+    if step.get("workflow"):
+        return f"runs {step['workflow']}"
+    if step.get("ledger"):
+        return f"{step['ledger']} (ledger)"
+    if step.get("fanout"):
+        return f"parts of {step['fanout']}"
+    if step.get("integrate"):
+        return "joins the parts"
+    return str(step.get("kind") or "classified when it runs")
+
+
+def render(defn: Mapping[str, Any], run: Mapping[str, Any] | None = None) -> str:
+    """A definition as a Mermaid flowchart: a node per step, shaped by what it does (a question a
+    rhombus, a sub-workflow a subroutine, a ledger step a hexagon, a reading step a stadium), an
+    edge per need, labelled with the outcome a `when` waits for. With a run's `status`, each node
+    says its state and task, and is coloured by it."""
+    states = {s["id"]: s for s in (run or {}).get("steps") or ()}
+    ids = {step["id"]: f"s{n}" for n, step in enumerate(defn["steps"])}
+    lines = ["flowchart TD"]
+    classes: dict[str, list[str]] = {}
+    for step in defn["steps"]:
+        text = _label(clip(step["title"], 60, one_line=True)) + "<br/><i>" + _label(_what(step)) + "</i>"
+        state = states.get(step["id"])
+        if state is not None:
+            word = "skipped" if state.get("skipped") else str(state["state"])
+            said = word + (f" #{state['task']}" if state.get("task") else "")
+            if state.get("answer"):
+                said += f": {state['answer']}"
+            if state.get("subrun"):
+                said += f" (run #{state['subrun']})"
+            text += "<br/>" + _label(said)
+            tone = word if word in STATE_CLASSES else "stopped"
+            classes.setdefault(tone, []).append(ids[step["id"]])
+        node = ids[step["id"]]
+        if step.get("ask") is not None:
+            lines.append(f'    {node}{{"{text}"}}')
+        elif step.get("workflow"):
+            lines.append(f'    {node}[["{text}"]]')
+        elif step.get("ledger"):
+            lines.append(f'    {node}{{{{"{text}"}}}}')
+        elif step.get("kind") in READ_ONLY_KINDS:
+            lines.append(f'    {node}(["{text}"])')
+        else:
+            lines.append(f'    {node}["{text}"]')
+    for step in defn["steps"]:
+        when = dict(step.get("when") or {})
+        for dep in step["needs"]:
+            arrow = f'-->|"{_label(str(when[dep]))}"|' if dep in when else "-->"
+            lines.append(f"    {ids[dep]} {arrow} {ids[step['id']]}")
+    for tone, nodes in classes.items():
+        lines.append(f"    classDef {tone} {STATE_CLASSES[tone]}")
+        lines.append(f"    class {','.join(nodes)} {tone}")
+    return "\n".join(lines) + "\n"
+
+
+def render_markdown(defn: Mapping[str, Any], run: Mapping[str, Any] | None = None) -> str:
+    """The graph in a fenced block, then each step on a line: what it is given or asks."""
+    head = f"## {defn['name']}" + (f" — run #{run['id']}, {run['state']}" if run else "")
+    out = [head, ""]
+    if defn.get("description"):
+        out += [str(defn["description"]), ""]
+    out += ["```mermaid", render(defn, run).rstrip("\n"), "```", ""]
+    for step in defn["steps"]:
+        said = step.get("ask") or (f"runs `{step['workflow']}`" if step.get("workflow") else step.get("prompt") or "")
+        when = ", ".join(f"{k} is {v}" for k, v in dict(step.get("when") or {}).items())
+        out.append(f"- **{step['id']}** ({_what(step)}{'; when ' + when if when else ''}): "
+                   + clip(str(said), 200, one_line=True))
+    return "\n".join(out) + "\n"
+
+
 # --- runs ----------------------------------------------------------------------------
 
 Kick = Callable[[str, str | None], object]
@@ -722,7 +921,9 @@ def check_inputs(defn: Mapping[str, Any]) -> list[str]:
     """The inputs only a step's own `verify` uses (no prompt names them): the run's
     `--verify` fills them when they are not given by name (`fill_checks`)."""
     steps = defn.get("steps") or ()
-    in_prompts = {used for step in steps for used in INPUT.findall(str(step.get("prompt") or ""))}
+    in_prompts = {used for step in steps for text in (step.get("prompt"), step.get("ask"),
+                                                      *dict(step.get("with") or {}).values())
+                  for used in INPUT.findall(str(text or ""))}
     in_checks = {used for step in steps for used in CHECK_INPUT.findall(str(step.get("verify") or ""))}
     return [i for i in defn.get("inputs") or () if i in in_checks and i not in in_prompts]
 
@@ -770,7 +971,14 @@ def prepare(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] 
     if extra:
         problems.append(f"{name} takes no input {', '.join(extra)}; it takes {defn['inputs'] or 'none'}")
     key = repo.key(where)
-    unreadable = [f"step {s['id']!r}: {why}" for s in defn["steps"]
+    # The workflows its sub-workflow steps run, read now and frozen with the run (`subflows`).
+    flows: dict[str, dict[str, Any]] = {}
+    try:
+        flows = subflows(defn, where)
+    except WorkflowError as exc:
+        problems.append(str(exc))
+    every = [*defn["steps"], *(step for flow in flows.values() for step in flow["steps"])]
+    unreadable = [f"step {s['id']!r}: {why}" for s in every
                   for why in memory_problems(store, key, s.get("memory") or [])]
     if unreadable:
         problems.append("its memory cannot be read here: " + "; ".join(unreadable))
@@ -778,8 +986,8 @@ def prepare(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] 
         problems += unfilled_checks(defn, given)
     if problems:
         raise WorkflowError("; ".join(problems))
-    gaps = [f"step {s['id']!r}: {gap}" for s in defn["steps"] for gap in memory_gaps(store, key, s.get("memory") or [])]
-    return {"defn": defn, "where": where, "given": given, "key": key, "gaps": gaps}
+    gaps = [f"step {s['id']!r}: {gap}" for s in every for gap in memory_gaps(store, key, s.get("memory") or [])]
+    return {"defn": defn, "where": where, "given": given, "key": key, "gaps": gaps, "subflows": flows}
 
 
 def start(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] | None = None, *,
@@ -801,6 +1009,8 @@ def start(store: Store, name: str, cwd: str | Path, inputs: Mapping[str, str] | 
             options = {**dict(options or {}), "origin_branch": branch}
     if held is not None:
         options = {**dict(options or {}), after.KEY: held}
+    if ready["subflows"]:
+        options = {**dict(options or {}), "subflows": ready["subflows"]}
     run = store.create_run(name=defn["name"], scope=defn["scope"], source=defn["path"],
                            definition=json.dumps(_stored(defn), ensure_ascii=False),
                            inputs=json.dumps(given, ensure_ascii=False), options=json.dumps(dict(options or {})),
@@ -874,15 +1084,224 @@ def _queue_ready(store: Store, run: Mapping[str, Any]) -> list[int]:
         if not ready:
             return queued
         for step in ready:
-            fanned = _fan(store, run, defn, step, inputs, options, latest)
-            if fanned == []:
+            tasks = _queue_one(store, run, defn, step, inputs, options, latest)
+            if not tasks:
                 return queued  # the plan's pass was taken back: the run stops there
-            tasks = fanned or [_queue_step(store, run, defn, step, inputs, options, latest)]
             latest[step["id"]] = _together(tasks) if _part(tasks[0]) else tasks[0]
             queued += [t["id"] for t in tasks if t["status"] == "queued"]
         # A ledger step with nothing to decide passed at once: what waits on it may be ready now.
         if all(latest[s["id"]]["status"] == "queued" for s in ready):
             return queued
+
+
+def _queue_one(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Mapping[str, Any],
+               inputs: Mapping[str, str], options: Mapping[str, Any], latest: Mapping[str, dict]) -> list[dict]:
+    """A step made ready, as its tasks: skipped when its `when` does not hold, in parts when it
+    fans out, else whole (a question waits on the person, a sub-workflow starts its run). []
+    when the plan it fans out over had its pass taken back."""
+    holds, why = _holds(store, step, latest)
+    if not holds:
+        return [_skip(store, run, defn, step, inputs, why)]
+    fanned = _fan(store, run, defn, step, inputs, options, latest)
+    if fanned == []:
+        return []
+    return fanned or [_queue_step(store, run, defn, step, inputs, options, latest)]
+
+
+def outcome(store: Store, task: Mapping[str, Any] | None) -> dict[str, Any]:
+    """What a step's ending says for a `when`, from cauce's records alone: the option a question
+    was answered with, whether the work it judged had findings the change caused, and whether
+    it changed files (each part of a step run in parts counted)."""
+    if not task:
+        return {}
+    ended = [((store.final_event(t["id"]) or {}).get("data") or {}) for t in _tasks_of(task)]
+    found = findings_mod.blocking(findings_mod.read({"findings": _findings_of(store, task)}))
+    return {"answer": next((e["answer"] for e in ended if e.get("answer")), None), "findings": len(found),
+            "changed": sum(len(e.get("changed") or ()) for e in ended)}
+
+
+def _holds(store: Store, step: Mapping[str, Any], latest: Mapping[str, dict]) -> tuple[bool, str]:
+    """Whether a step's `when` holds, and when it does not, why: every condition must."""
+    for dep, wanted in dict(step.get("when") or {}).items():
+        said = outcome(store, latest.get(dep))
+        if wanted in ("findings", "clean"):
+            got = "findings" if said.get("findings") else "clean"
+        elif wanted in ("changed", "unchanged"):
+            got = "changed" if said.get("changed") else "unchanged"
+        else:
+            got = str(said.get("answer") or "unanswered")
+        if got != wanted:
+            return False, f"its condition {dep} is {wanted!r} did not hold: {dep} was {got!r}"
+    return True, ""
+
+
+def _skip(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Mapping[str, Any],
+          inputs: Mapping[str, str], why: str) -> dict:
+    """A step whose `when` did not hold: it passes with no worker and no change, said, and what
+    waits on it goes on from the steps before it (`_base` looks past a step that kept no branch)."""
+    task = store.create_task(f"(skipped) {step['title']}: {why}", status="done", source="queue", author="workflow",
+                             repo=run["repo"], cwd=run["cwd"], session_id=run["session_id"],
+                             options=json.dumps({"skipped": why}),
+                             title=f"[{defn['name']}#{run['id']} {step['id']}] skipped: "
+                                   f"{_headline(inputs) or step['title']}"[:200],
+                             workflow_run=run["id"], workflow_step=step["id"])
+    store.update_task(task["id"], result=f"skipped: {why}")
+    store.add_event(task["id"], "finished", status="done", final_cell=None, cost_usd=0, branch=None, changed=[],
+                    stop=None, findings=[], skipped=True, when_unmet=why, at=time.time())
+    store.add_event(task["id"], "reported", via="workflow")
+    return store.get_task(task["id"]) or task
+
+
+def _question(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Mapping[str, Any],
+              inputs: Mapping[str, str]) -> dict:
+    """A question step made ready: it waits on the person (`stops.PERSON_ONLY`), and its session
+    hears of it as an ending with the line that answers it (`answer`). No worker runs."""
+    from cauce import stops
+
+    question = _render(step["ask"], inputs)
+    options = list(step["options"])
+    asks = clip(question, 120, one_line=True)
+    # Blocked from the start: no dispatcher may take a question for work, even for a moment.
+    task = store.create_task(question + "\n\nAnswer with one of: " + ", ".join(options), status="blocked",
+                             source="queue", author="workflow", repo=run["repo"], cwd=run["cwd"],
+                             session_id=run["session_id"], options=json.dumps({"question": {"options": options}}),
+                             title=f"[{defn['name']}#{run['id']} {step['id']}] asks: {asks}"[:200],
+                             workflow_run=run["id"], workflow_step=step["id"])
+    line = f"cauce workflow answer {run['id']} {step['id']} <{'|'.join(options)}>"
+    stops.record(store, task["id"], stops.Stop("question", clip(question, 2000), by="workflow",
+                                               extra={"options": options, "answer": line}))
+    return store.get_task(task["id"]) or task
+
+
+def answer(store: Store, run_id: int, step_id: str, option: str, *, via: str = "cli",
+           kick: Kick | None = None) -> dict[str, Any]:
+    """The person's answer to a question step: it passes with that option, the steps whose `when`
+    names it are chosen, and the run goes on (`advance`). Refused unless the step is waiting."""
+    from cauce import stops
+
+    run = store.get_run(run_id)
+    if run is None:
+        raise WorkflowError(f"no workflow run #{run_id}")
+    if run["status"] != "active":
+        raise WorkflowError(f"run #{run_id} is {run['status']}")
+    defn = _definition(run)
+    step = defn["steps"][_index(defn, step_id)]
+    if step.get("ask") is None:
+        raise WorkflowError(f"step {step_id!r} asks nothing: it runs a worker")
+    task = _latest(store, run_id).get(step_id)
+    stop = stops.of(store, task) if task else None
+    if task is None or task["status"] != "blocked" or stop is None or stop.cause != "question":
+        state = "not reached yet" if task is None else f"{task['status']} (task #{task['id']})"
+        raise WorkflowError(f"step {step_id!r} waits for no answer: it is {state}")
+    chosen = " ".join(option.split()).lower()
+    if chosen not in step["options"]:
+        raise WorkflowError(f"{option!r} is no answer to {step_id!r}: one of {', '.join(step['options'])}")
+    with store.immediate():
+        store.update_task(task["id"], status="done", result=f"answered: {chosen}")
+        store.add_event(task["id"], "answered", option=chosen, via=via)
+        store.add_event(task["id"], "finished", status="done", final_cell=None, cost_usd=0, branch=None, changed=[],
+                        stop=None, findings=[], answer=chosen, at=time.time())
+        # Its question was an ending; answered, it is nothing to tell.
+        store.mark_reported([task["id"]], via="answer")
+    queued = advance(store, store.get_task(task["id"]), kick=kick)
+    return {"task": task["id"], "answer": chosen, "queued": queued}
+
+
+def subflows(defn: Mapping[str, Any], cwd: str | Path, *, depth: int = 1,
+             seen: tuple[str, ...] = ()) -> dict[str, dict[str, Any]]:
+    """The workflows a definition's sub-workflow steps run, read where they are found from `cwd`
+    (the nearest scope), and theirs: frozen with the run, so a change to one never reaches a run
+    already started. Raises when one is missing, calls itself, nests past `SUBFLOW_DEPTH`, or is
+    not given every input it takes but a check's (the run's `--verify` gives those)."""
+    out: dict[str, dict[str, Any]] = {}
+    chain = (*seen, defn["name"])
+    for step in defn["steps"]:
+        name = step.get("workflow")
+        if not name:
+            continue
+        where = f"step {step['id']!r} of {defn['name']}"
+        if name in chain:
+            raise WorkflowError(f"{where} runs {name}, which is already running it ({' → '.join((*chain, name))})")
+        if depth > SUBFLOW_DEPTH:
+            raise WorkflowError(f"{where} runs {name} {depth} levels deep: sub-workflows nest {SUBFLOW_DEPTH} at most")
+        child = load(name, cwd)
+        given = set(dict(step.get("with") or {}))
+        if missing := [i for i in child["inputs"] if i not in given and i not in check_inputs(child)]:
+            raise WorkflowError(f"{where} runs {name} without {', '.join(missing)}: give each in its `with`")
+        if extra := sorted(given - set(child["inputs"])):
+            raise WorkflowError(f"{where} gives {name} {', '.join(extra)}, which it does not take "
+                                f"({', '.join(child['inputs']) or 'no input'})")
+        out[name] = {**_stored(child), "scope": child["scope"], "path": str(child["path"])}
+        out.update(subflows(child, cwd, depth=depth + 1, seen=chain))
+    return out
+
+
+def _subrun(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], step: Mapping[str, Any],
+            inputs: Mapping[str, str], options: Mapping[str, Any], latest: Mapping[str, dict]) -> dict:
+    """A sub-workflow step made ready: a run of the workflow it names starts from the commit this
+    step would (its frozen copy, the person's flags of this run), and the step waits for it as
+    work queued after a run does (`cauce.after`): the dispatcher never starts it, and the child's
+    end passes it with the branch the child kept (`_finish_parent`). A child that stops stops this
+    run there; one that is cancelled cancels the step."""
+    flows = dict(options.get("subflows") or {})
+    frozen = flows.get(step["workflow"])
+    if frozen is None:
+        raise WorkflowError(f"step {step['id']!r}: {step['workflow']} was not frozen with run #{run['id']}")
+    child_defn = normalize(frozen)
+    given = fill_checks(child_defn, {k: _render(v, inputs) for k, v in dict(step.get("with") or {}).items()},
+                        options.get("verify"))
+    base = _base(store, run, defn, step["id"], latest)
+    kept = {k: options[k] for k in ("allow_tools", "allow_approval", "verify", "add_dirs", "origin_branch", "loop")
+            if options.get(k)}
+    child = store.create_run(name=child_defn["name"], scope=str(frozen.get("scope") or run["scope"]),
+                             source=str(frozen.get("path") or run["source"]),
+                             definition=json.dumps(_stored(child_defn), ensure_ascii=False),
+                             inputs=json.dumps(given, ensure_ascii=False),
+                             options=json.dumps({**kept, "subflows": flows,
+                                                 **({"origin": base or options.get("origin")}
+                                                    if base or options.get("origin") else {}),
+                                                 **({"base": base} if base else {})}),
+                             repo=run["repo"], cwd=run["cwd"], session_id=run["session_id"])
+    task = store.create_task(f"Run the workflow {child_defn['name']} as step {step['id']!r} (run #{child['id']})",
+                             status="queued", source="queue", author="workflow", repo=run["repo"], cwd=run["cwd"],
+                             session_id=run["session_id"],
+                             options=json.dumps({"subflow": {"run": child["id"], "workflow": child_defn["name"]},
+                                                 after.KEY: {"run": child["id"]}}),
+                             title=f"[{defn['name']}#{run['id']} {step['id']}] runs {child_defn['name']} "
+                                   f"#{child['id']}"[:200], workflow_run=run["id"], workflow_step=step["id"])
+    store.update_run(child["id"], options=json.dumps({**json.loads(child["options"]),
+                                                      "parent": {"run": run["id"], "step": step["id"],
+                                                                 "task": task["id"]}}))
+    _queue_ready(store, store.get_run(child["id"]) or child)
+    return store.get_task(task["id"]) or task
+
+
+def _finish_parent(store: Store, child: Mapping[str, Any], kick: Kick | None) -> list[int]:
+    """A sub-workflow's run passed: the step that started it passes with the branch its last step
+    kept, its cost the child's, and its run goes on (`advance`). The child's own end is no ending
+    of its own: the session hears of the run that holds it."""
+    parent = json.loads(child.get("options") or "{}").get("parent") or {}
+    task = store.get_task(int(parent["task"])) if parent.get("task") else None
+    if task is None or task["status"] != "queued":
+        return []
+    branch, paths, _, _ = after._kept(store, {"run": int(child["id"])})
+    tip = None
+    if branch and child["cwd"] and Path(child["cwd"]).is_dir():
+        with contextlib.suppress(isolate.IsolationError):
+            tip = isolate.head(Path(child["cwd"]), f"refs/heads/{branch}")
+    steps = store.run_tasks(int(child["id"]))
+    cost = round(sum(float(t.get("cost_usd") or 0) for t in steps), 4)
+    with store.immediate():
+        options = json.loads(task.get("options") or "{}")
+        options.pop(after.KEY, None)
+        store.update_task(task["id"], status="done", options=json.dumps(options), cost_usd=cost,
+                          result=f"run #{child['id']} of {child['name']} passed"
+                                 + (f"; its work is on {branch}" if branch else ", changing nothing"))
+        store.add_event(task["id"], "finished", status="done", final_cell=None, cost_usd=cost, branch=branch, tip=tip,
+                        changed=list(paths)[:200], changed_n=len(paths), stop=None, findings=[],
+                        subrun=int(child["id"]), at=time.time())
+        store.mark_reported([t["id"] for t in steps], via="workflow")
+    return advance(store, store.get_task(task["id"]), kick=kick)
 
 
 def _rerun(step: Mapping[str, Any], latest: Mapping[str, dict]) -> bool:
@@ -1116,6 +1535,10 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
                 inputs: Mapping[str, str], options: Mapping[str, Any], latest: Mapping[str, dict], *,
                 part: Mapping[str, Any] | None = None) -> dict:
     """Queue one step (or one `part` of it) as a task."""
+    if step.get("ask") is not None:
+        return _question(store, run, defn, step, inputs)
+    if step.get("workflow") is not None:
+        return _subrun(store, run, defn, step, inputs, options, latest)
     split = part is not None and int(part.get("of") or 1) > 1 and "spec" not in part
     area = part if part is not None and "spec" in part else None
     joining = _joining(store, run, defn, step, latest) if step.get("integrate") else None
@@ -1576,6 +1999,8 @@ def advance(store: Store, task: Mapping[str, Any] | None, env: Mapping[str, str]
         store.update_run(run["id"], status="done")
         _drift_at_end(store, run)
         promote(run["source"], store)
+        # A sub-workflow's run passes the step of the run that started it, before anything is released.
+        released += _finish_parent(store, store.get_run(run["id"]) or run, kick)
         released += _release(store, kick, run=store.get_run(run["id"]))
     else:
         # A step that passed while a sibling still runs: the engine went past it, and the session is not told.
@@ -1692,7 +2117,8 @@ def status(store: Store, run_id: int, *, detail: bool = False) -> dict[str, Any]
     states = {s["state"] for s in steps}
     # Queued after other work (`cauce.after`): every step that is open waits for that work to pass.
     holding = [s for s in steps if s["state"] in ("queued", "running")]
-    holding = holding if holding and all(after.held(latest[s["id"]]) for s in holding) else []
+    holding = holding if holding and all(after.held(latest[s["id"]]) and not s.get("subrun")
+                                         for s in holding) else []
     if run["status"] == "cancelled":
         state = "cancelled"
     elif run["status"] == "done" or states == {"done"}:
@@ -1732,6 +2158,16 @@ def _task_entry(store: Store, run: Mapping[str, Any], task: Mapping[str, Any], d
         **usage.so_far(store, task), points=task.get("points"), result=task.get("result"),
         branch=(finished or {}).get("data", {}).get("branch") if task["status"] == "done" else None,
         tries=tries, waits=dispatch.waiting(store, task))
+    own = json.loads(task.get("options") or "{}")
+    if (own.get("subflow") or {}).get("run"):
+        # A sub-workflow step: the run it started, which `cauce workflow status` shows step by step.
+        entry["subrun"] = int(own["subflow"]["run"])
+    if own.get("question"):
+        entry["options"] = list(own["question"].get("options") or ())
+        if answered := outcome(store, task).get("answer"):
+            entry["answer"] = answered
+    if own.get("skipped"):
+        entry["skipped"] = own["skipped"]
     if task["status"] not in ("queued", "running", "done"):
         from cauce import stops
 
@@ -1775,6 +2211,11 @@ def cancel(store: Store, run_id: int, *, via: str = "cli") -> list[int]:
             stopped.append(task["id"])
     # Work queued after this run will never be released by it: it leaves the queue too.
     after.abandon(store, {"run": run_id}, f"it waited for run #{run_id} to pass, which was cancelled {via}")
+    for task in (t for entry in _latest(store, run_id).values() for t in _tasks_of(entry)):
+        # A sub-workflow's run started by this one stops with it.
+        child = json.loads(task.get("options") or "{}").get("subflow") or {}
+        if child.get("run") and (store.get_run(int(child["run"])) or {}).get("status") == "active":
+            stopped += cancel(store, int(child["run"]), via=via)
     return stopped
 
 
@@ -1807,10 +2248,10 @@ def retry(store: Store, run_id: int, step_id: str, kick: Kick | None = None) -> 
             store.release_lane(run["repo"], t["id"])
         (kick or _kick)(run["cwd"], run["repo"])
         return {**tasks[0], "parts_retried": [(_part(t)["id"], t["id"]) for t in tasks]}
-    fanned = _fan(store, run, defn, step, inputs, options, latest)
-    if fanned == []:
+    tasks = _queue_one(store, run, defn, step, inputs, options, latest)
+    if not tasks:
         raise WorkflowError(f"step {step_id!r}: the plan it fans out over was taken back; retry the plan")
-    task = fanned[0] if fanned else _queue_step(store, run, defn, step, inputs, options, latest)
+    task = tasks[0]
     if last is not None:
         # The try that stopped is superseded by this one, and paused the lane; a retry is the person saying go on.
         stops.retried(store, last, task["id"])
