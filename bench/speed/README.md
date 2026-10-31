@@ -490,3 +490,21 @@ there: `matrix.PROBATION` now holds Haiku below `refactor` and `test` as it did 
 `implement`, so each repository tries it in turns with the first rung, and it starts there only
 where its first tries pass as often. Three runs per cell are a small sample; the trial, not this
 table, decides.
+
+## T: the diagnosis method on an unclear bug (`methods.py`, 0.63)
+
+Real Haiku workers (haiku/high), four runs per arm, on fresh copies of the pricing engine with one
+planted bug, half-even rounding where the engine rounds half up, told only by its symptom: "some
+order totals come out a cent off, but only sometimes". The arms are the same request with and
+without the diagnosis protocol cauce briefs `debug-unclear` workers with. A run is right when the
+suite passes, the prices are the engine's, and no test was touched.
+
+| arm | right | wall p50 | turns p50 | $ p50 |
+|---|---|---|---|---|
+| with the diagnosis | 4/4 | 100 s | 22.5 | 0.026 |
+| without | 2/4 | 76 s | 27 | 0.020 |
+
+Both misses without it claimed a pass: they changed something and stopped, the cause still in
+place. With it every worker reproduced the failure first and fixed the rounding mode. Four runs a
+side is a small sample, so the method stays on trial per repository (`methods.arm`); this is why
+it starts in its trial instead of being left out until one proves it.

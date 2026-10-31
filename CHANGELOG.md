@@ -27,6 +27,8 @@
   same crash again says so and is never resumed on its own: it is cauce's failure, and a resume
   repeats it.
 - **The Analysis screen shows the order of a brief's notes and the notes workers relied on.**
+- **`bench/speed/methods.py`**: on a planted bug told only by its symptom, Haiku with the diagnosis
+  method was right 4 of 4 times, without it 2 of 4 (both misses claimed a pass).
 
 ### Changed
 
