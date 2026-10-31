@@ -269,6 +269,11 @@ code.anchor { font-family: var(--mono); font-size: 12px; margin-right: 6px; over
 .wf-sub { font: 11.5px var(--sans); fill: var(--muted); }
 .wf-edge { fill: none; stroke: var(--line); stroke-width: 1.5; }
 .wf-edge.done { stroke: var(--ok); }
+.wf-node.skipped rect { stroke-dasharray: 2 4; fill: var(--panel); stroke: var(--muted); }
+.wf-node.skipped .wf-title { fill: var(--muted); }
+.wf-node rect.wf-inner { fill: none; stroke: var(--line); stroke-width: 1; }
+.wf-node.asks rect { stroke-width: 2; }
+.wf-cond { font: 10.5px var(--sans); fill: var(--muted); text-anchor: start; }
 .progress { position: relative; height: 8px; border-radius: 4px; background: var(--sunk); margin: 10px 0 2px; max-width: 420px; }
 .progress span { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: var(--ok); }
 .progress em { position: absolute; left: calc(100% + 8px); top: -5px; font-style: normal; font-size: 12px; color: var(--muted); }

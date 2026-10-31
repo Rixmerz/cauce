@@ -177,8 +177,11 @@ def ladder_for(kind: str) -> tuple[Cell, ...]:
 #: the ladder's first rung already passes its first tries here, and a start only by the standards'
 #: own rule (`standards.calibrate`). On bench/memory's builds Haiku passed every hidden test of the
 #: readable tasks cold, and of the one that turned on a policy no file states once it was briefed as
-#: a constraint, at a sixth of Sonnet's cost; no other kind was measured, so no other has one.
-PROBATION: dict[str, Cell] = {"implement": Cell("haiku", "high")}
+#: a constraint, at a sixth of Sonnet's cost. On bench/speed/kinds.py it was as right as the first
+#: rung of `refactor` and `test` (every layout check and price kept; every mutant killed, 3 of 3
+#: each) at a fifth of the cost per right answer, though about five times the wall time. No other
+#: kind was measured, so no other has one.
+PROBATION: dict[str, Cell] = {kind: Cell("haiku", "high") for kind in ("implement", "refactor", "test")}
 
 
 def reach(kind: str) -> tuple[Cell, ...]:

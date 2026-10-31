@@ -210,8 +210,12 @@ def _print_run(run: dict[str, Any], *, full: bool = False) -> None:
             print(f"    {MARK.get(part['state'], '!')} {part['id']:<12} {_compact_step(part)}")
             if full and (more := _detail(part)):
                 print(f"    {'':<14} {more}")
-    if run["waiting"]:
-        print(f"  waits on the orchestrator: {', '.join(run['waiting'])} — `cauce show <task>`, then "
+    asked = {s["id"]: s["asks"] for s in run["steps"] if s.get("asks") and s["id"] in run["waiting"]}
+    for name, options in asked.items():
+        # A question is answered, never resumed: `cauce resume` refuses it.
+        print(f"  asks the person: {name} — `cauce workflow answer {run['id']} {name} <{'|'.join(options)}>`")
+    if others := [w for w in run["waiting"] if w not in asked]:
+        print(f"  waits on the orchestrator: {', '.join(others)} — `cauce show <task>`, then "
               f"`cauce resume <task>` or `cauce workflow retry {run['id']} <step>`")
     if run["branch"]:
         print(f"  work so far: branch {run['branch']}")

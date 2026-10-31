@@ -28,23 +28,40 @@ function layout(steps) {
   return { at, width, height };
 }
 
+// What a step is, in words its node carries: a question and its answer, another workflow's run, a skip.
+function what(step) {
+  if (step.skipped) return "skipped";
+  if (step.asks) return step.answer ? `answered ${step.answer}` : `asks: ${step.asks.join(" / ")}`;
+  if (step.runs) return `runs ${step.runs}${step.subrun ? ` #${step.subrun}` : ""}`;
+  return null;
+}
+
 function graph(run, ctx) {
   const { at, width, height } = layout(run.steps);
-  const edges = run.steps.flatMap((step) => step.needs.map((need) => s("path", {
-    class: `wf-edge ${stateClass(run.steps.find((x) => x.id === need)?.state)}`,
-    d: curve(at[need].x + W, at[need].y + BOX / 2, at[step.id].x, at[step.id].y + BOX / 2),
-  })));
+  const edges = run.steps.flatMap((step) => step.needs.map((need) => {
+    const x1 = at[need].x + W, y1 = at[need].y + BOX / 2, x2 = at[step.id].x, y2 = at[step.id].y + BOX / 2;
+    const cond = (step.when || {})[need];
+    return [s("path", { class: `wf-edge ${stateClass(run.steps.find((x) => x.id === need)?.state)}`,
+                        d: curve(x1, y1, x2, y2) }),
+      // The outcome a step's `when` waits for, on the edge it reads.
+      // Over the step's box, where the gap between two boxes is too narrow for its words.
+      cond ? label(`when ${cond}`, 24, { x: x2 + 4, y: y2 - BOX / 2 - 3, class: "wf-cond" }) : []];
+  }));
   const nodes = run.steps.map((step) => {
     const { x, y } = at[step.id];
     const open = step.task ? () => ctx.openTask(step.task) : null;
-    const sub = [step.state, step.parts ? `${step.parts.length} parts` : step.cell,
+    const sub = [what(step) || step.state, step.parts ? `${step.parts.length} parts` : step.cell,
       step.tries > 1 ? `try ${step.tries}` : null].filter(Boolean).join(" · ");
+    const kind = step.skipped ? " skipped" : step.asks ? " asks" : step.runs ? " runs" : "";
     return s("g", {
-      class: `wf-node ${stateClass(step.state)}${open ? " link" : ""}`, transform: `translate(${x},${y})`,
+      class: `wf-node ${stateClass(step.state)}${kind}${open ? " link" : ""}`, transform: `translate(${x},${y})`,
       tabindex: open ? 0 : null, role: open ? "button" : null, onclick: open,
       onkeydown: open ? (e) => { if (e.key === "Enter") open(); } : null,
-    }, s("title", {}, `${step.id}: ${step.title}\n${sub}${step.result ? `\n\n${step.result}` : ""}`),
-    s("rect", { width: W, height: BOX, rx: 8 }),
+    }, s("title", {}, `${step.id}: ${step.title}\n${sub}${step.skipped ? `\n\n${step.skipped}` : ""}`
+                      + `${step.result ? `\n\n${step.result}` : ""}`),
+    s("rect", { width: W, height: BOX, rx: step.asks ? BOX / 2 : 8 }),
+    // Another workflow's run: a box inside the box, as a subroutine is drawn.
+    step.runs ? s("rect", { class: "wf-inner", x: 4, y: 4, width: W - 8, height: BOX - 8, rx: 6 }) : [],
     label(step.title || step.id, 24, { x: 10, y: 19, class: "wf-title" }),
     label(sub, 30, { x: 10, y: 36, class: "wf-sub" }));
   });

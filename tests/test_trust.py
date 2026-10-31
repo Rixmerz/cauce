@@ -124,8 +124,9 @@ def test_the_report_counts_repeated_blockers_new_findings_on_re_checks_and_cost_
 
 # --- the probation rung ----------------------------------------------------------------------------
 
-def test_the_probation_cell_lies_below_the_implement_ladder_only():
+def test_the_probation_cell_lies_below_the_measured_ladders_only():
     assert reach("implement")[0] == PROBATION["implement"] == HAIKU
+    assert reach("refactor")[0] == reach("test")[0] == HAIKU
     assert reach("implement")[1:] == standards.ladder_for("implement")
     assert reach("feature") == standards.ladder_for("feature")
 

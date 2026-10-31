@@ -36,6 +36,39 @@ const money = (v) => (v === null || v === undefined ? "—" : usd(v));
 const num = (v) => h("td", { class: "num" }, v ?? "—");
 const head = (...cols) => h("tr", {}, cols.map((c) => (Array.isArray(c) ? h("th", { class: "num" }, c[0]) : h("th", {}, c))));
 
+// The independent check's record per repository, kind and worker cell (`cauce.trust`).
+function trustSection(rows) {
+  if (!rows.length) return [];
+  return [h("h2", { class: "section" }, "The independent check's record"),
+    h("p", { class: "empty" }, "Each task's first independent check, per cell. Ten clean in a row and a medium change a "
+      + "cheap cell made is checked one pass in two, then one in four; one blocker returns it to every pass."),
+    h("table", {}, head("project", "kind", "cell", ["checks"], ["clean"], "checking", ["unchecked"], ["repeated blockers"],
+      ["re-checks finding new"], ["first try"], ["per point"]),
+      rows.map((x) => h("tr", {}, h("td", {}, repoName(x.repo)), h("td", {}, kindChip(x.kind)), h("td", {}, cellChip(x.cell)),
+        num(x.checks), rate(x.clean_rate), h("td", {}, x.every === 1 ? `every pass (${x.run}/${x.qualify} clean)` : `1 in ${x.every}`),
+        num(x.sampled), num(`${x.repeated}/${x.blockers}`), num(`${x.rechecks_new}/${x.rechecks}`), rate(x.pass_first),
+        num(money(x.cost_per_point)))))];
+}
+
+// Each capability workers were handed, and whether they called it (observed, never a trial).
+function capabilitiesSection(rows) {
+  if (!rows.length) return [];
+  return [h("h2", { class: "section" }, "Capabilities handed to workers"),
+    h("p", { class: "empty" }, "Attempts that had each one, called it, and had a call go through; attempts passed when "
+      + "called against when not. Observed, not a trial."),
+    h("table", {}, head("capability", ["handed"], ["called"], ["went through"], ["never called"], ["passed called"], ["passed silent"]),
+      rows.map((x) => h("tr", {}, h("td", {}, x.capability), num(x.handed), num(`${x.called} (${pct(x.called_rate)})`),
+        num(x.through), num(x.never_called), rate(x.pass_when_called), rate(x.pass_when_silent))))];
+}
+
+// A trial in two arms: what each arm measured, and where it stands now.
+function armsSection(title, about, arms, names, said, now) {
+  if (!arms || !names.some((n) => (arms[n] || {}).tasks)) return [];
+  return [h("h2", { class: "section" }, title), h("p", { class: "empty" }, about),
+    h("table", {}, head("arm", "measured"), names.map((n) => h("tr", {}, h("td", {}, n), h("td", {}, said(arms[n]))))),
+    now ? h("p", { class: "empty" }, `Now: ${now}`) : []];
+}
+
 const tokens = (v) => (v === null || v === undefined ? "—" : v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`);
 const change = (v) => (v === null || v === undefined ? "—" : `${v > 0 ? "+" : ""}${Math.round(v * 100)}%`);
 
@@ -192,6 +225,15 @@ export async function renderAnalysis(ctx) {
             h("td", {}, c ? `#${c.id} (${c.lessons.length} lessons, ${c.trial} first tries each)` : "—"),
             h("td", {}, c ? arm(c.arms.candidate) : "—"), h("td", {}, c ? arm(c.arms.current) : "—"));
         }))] : [],
+    trustSection(r.trust || []),
+    capabilitiesSection(r.capabilities || []),
+    armsSection("Holding work to evidence", "A worker handed layout-inspector for a UI change, or rastro, has to show a "
+      + "call of that tool that went through before its pass counts. Tried in turns with free work; kept where its passes "
+      + "drew fewer blockers from the independent check.", r.evidence, ["gate", "free"],
+      (a) => `${a.tasks} tasks · ${a.blocked}/${a.read} blocked (${pct(a.blocked_rate)})`, r.evidence_now),
+    Object.entries(r.methods || {}).map(([name, arms]) => armsSection(`The ${name} method`,
+      "A method its kind's workers are briefed to follow, tried in turns against its absence.", arms, ["with", "without"],
+      (a) => `${a.tasks} tasks · ${a.passed}/${a.tries} first tries (${pct(a.rate)})`, (r.methods_now || {})[name])),
     h("h2", { class: "section" }, "By day"),
     r.daily.length ? h("table", {}, head("day", ["turns"], ["runs"], ["passed"], ["hours"], ["cost"]),
       r.daily.map((d) => h("tr", {}, h("td", {}, d.day), num(d.turns), num(d.runs), num(d.passed), num(d.hours), num(usd(d.cost_usd)))))

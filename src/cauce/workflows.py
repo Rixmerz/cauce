@@ -2097,7 +2097,11 @@ def status(store: Store, run_id: int, *, detail: bool = False) -> dict[str, Any]
     for step in defn["steps"]:
         task = latest.get(step["id"])
         state = "pending" if task is None else task["status"]
-        entry: dict[str, Any] = {"id": step["id"], "title": step["title"], "needs": step["needs"], "state": state}
+        entry: dict[str, Any] = {"id": step["id"], "title": step["title"], "needs": step["needs"], "state": state,
+                                 # What the step is, for a graph: a question, another workflow, a condition.
+                                 **({"asks": list(step.get("options") or ())} if step.get("ask") is not None else {}),
+                                 **({"runs": step["workflow"]} if step.get("workflow") else {}),
+                                 **({"when": dict(step["when"])} if step.get("when") else {})}
         if task and task.get("parts"):
             # A step run in parts: each part under it, the step's state theirs together.
             parts = [{"id": _part(t)["id"], "state": t["status"],

@@ -334,6 +334,11 @@ note, a cheap model skipped such a rule; framed as a constraint, it met it every
 (`bench/memory`). A note written on work not merged where a task starts is marked so in that
 task's brief.
 
+A worker's note starts as a candidate and earns its place against its absence: the tasks it
+is recalled for take turns carrying it and going without it, and it becomes current only
+where the ones that carried it passed their first try no less often (the `note_trials`
+setting). A later attempt also reads the notes anchored to the files the work changed so far.
+
 And read back in four places: every worker's brief gets the project's notes
 that match its task (one link away); a prompt that matches notes gets them in
 context; a session that starts, resumes or compacts gets the project's index of
@@ -486,6 +491,15 @@ dead end there is, because it looked solved. `cauce memory invalidate <fix>
 --why "..."` does the same by hand. A problem that was never the work's (the
 environment, two runs in one checkout) leaves memory with `cauce memory forget
 <id>`, or the Forget button in the UI's Memory view.
+
+### Methods, tried before they stay
+
+Some kinds get a method in their brief: a diagnosis for an unclear bug (reproduce it, mark
+where it fails and where it does not, show a cause before the fix) and a pre-mortem for a
+plan (a `Risks:` section, handed to the independent check of the steps after it as where to
+probe). Neither is assumed to help: each repository tries a method in turns with its absence
+and keeps it only where its arm passed first tries no less often. `cauce stats` shows each
+trial; the `methods` setting turns them off.
 
 ### Habits
 

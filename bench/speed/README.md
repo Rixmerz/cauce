@@ -467,3 +467,26 @@ in real use was not measured (see the summary's "never measured").
 The first measurement of this lost every late check: the detached work was a `fork` of the run,
 whose SQLite connection does not survive one, and the child's writes vanished when it closed. It
 is a fresh process now; the bench caught what the unit tests, which run it in-process, could not.
+
+## S: a cheaper cell for `refactor` and `test` (`kinds.py`, 0.62)
+
+Real workers, three runs per cell, on fresh copies of the memory bench's pricing engine
+(`bench/memory/hard`). `refactor` renames the rule methods and moves each rule module by its
+stage: right only when all five checks hold (the new layout, the old names gone, and a set of
+carts priced exactly as the untouched engine prices them). `test` writes tests for the money and
+line helpers: right only when they pass, no source changed, and they kill all eight mutants. On
+the untouched engine the judges give 2/5 and 2/8.
+
+| kind | cell | right | held | wall p50 | turns p50 | $ per right |
+|---|---|---|---|---|---|---|
+| refactor | haiku/high | 3/3 | 15/15 | 113 s | 24 | 0.020 |
+| refactor | sonnet/medium | 3/3 | 15/15 | 21 s | 6 | 0.104 |
+| test | haiku/high | 3/3 | 24/24 | 134 s | 25 | 0.030 |
+| test | sonnet/medium | 3/3 | 24/24 | 27 s | 8 | 0.110 |
+
+Haiku was as right as the first rung of both ladders, at a fifth of the cost per right answer,
+and about five times slower: four times the turns. That is enough to *try* it, not to start
+there: `matrix.PROBATION` now holds Haiku below `refactor` and `test` as it did below
+`implement`, so each repository tries it in turns with the first rung, and it starts there only
+where its first tries pass as often. Three runs per cell are a small sample; the trial, not this
+table, decides.
