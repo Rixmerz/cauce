@@ -311,15 +311,30 @@ def measured_by(name: str) -> str | None:
     return f"{MEASURED_BY[name]}\nWhat each tool measures, as {own.plugin} {own.version} says:\n{tools}"
 
 
+def criteria(repo_dir: Path, text: str) -> tuple[list[tuple[str, str]], int]:
+    """The CORRECT lines of the flows a request names as the independent check's criteria, `C1..Cn`
+    in order (`flow: line`), as many as fit in half of `BRIEF_CHARS`, and how many more there are: a
+    line that does not fit is said by count and asked of no one, never dropped unsaid."""
+    if not present(repo_dir):
+        return [], 0
+    lines = [f"{path.stem}: {line}" for path in flows_for(repo_dir, text) for line in correct_lines(_read(path))]
+    listed: list[tuple[str, str]] = []
+    room = BRIEF_CHARS // 2
+    for line in lines:
+        if len(line) + 6 > room:
+            break
+        listed.append((f"C{len(listed) + 1}", line))
+        room -= len(line) + 6
+    return listed, len(lines) - len(listed)
+
+
 def verifier_lines(repo_dir: Path, text: str, measures: tuple[str, ...] = ()) -> list[str]:
     """What the independent check must hold the change to: the CORRECT lines of the flows the
     request names and the anti-pattern catalogue, judged as the audience would; with a measuring
     neighbour it has (`measures`), how to measure them."""
     if not present(repo_dir):
         return []
-    correct = []
-    for path in flows_for(repo_dir, text):
-        correct += [f"- {path.stem}: {line}" for line in correct_lines(_read(path))]
+    correct, more = criteria(repo_dir, text)
     catalogue = _read(repo_dir / FOLDER / "anti-patterns.md")
     if not correct and not catalogue and not (measures and _requirement_lines(repo_dir)):
         return []
@@ -327,7 +342,12 @@ def verifier_lines(repo_dir: Path, text: str, measures: tuple[str, ...] = ()) ->
            f"`{FOLDER.as_posix()}/audiences.md` would. A CORRECT line below that does not hold, or an anti-pattern "
            "of the catalogue the change shows, is a finding, shown with the step or the rendered text that proves it."]
     if correct:
-        out.append("CORRECT lines of the flows this request names:\n" + clip("\n".join(correct), BRIEF_CHARS // 2))
+        out.append("CORRECT lines of the flows this request names. Each is a criterion: answer every one in "
+                   "`criteria` by its id, whether the change meets it, and what shows it (the step you took, the "
+                   "probe, the rendered text). One you leave out leaves the check undecided:\n"
+                   + "\n".join(f"{cid}: {line}" for cid, line in correct)
+                   + (f"\n({more} more CORRECT line(s) did not fit here; judge them with the flows' files)"
+                      if more else ""))
     if catalogue:
         out.append("Anti-pattern catalogue:\n" + clip(catalogue, BRIEF_CHARS // 2))
     for name in measures:

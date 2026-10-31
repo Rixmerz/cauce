@@ -173,6 +173,20 @@ def ladder_for(kind: str) -> tuple[Cell, ...]:
     return LADDERS.get(kind, LADDERS[DEFAULT_KIND])
 
 
+#: A cheaper cell below a writing kind's ladder, tried only on trial (`trust.probation_arm`) where
+#: the ladder's first rung already passes its first tries here, and a start only by the standards'
+#: own rule (`standards.calibrate`). On bench/memory's builds Haiku passed every hidden test of the
+#: readable tasks cold, and of the one that turned on a policy no file states once it was briefed as
+#: a constraint, at a sixth of Sonnet's cost; no other kind was measured, so no other has one.
+PROBATION: dict[str, Cell] = {"implement": Cell("haiku", "high")}
+
+
+def reach(kind: str) -> tuple[Cell, ...]:
+    """The rungs a standard may start a kind on: its probation cell, when it has one, then its ladder."""
+    below = PROBATION.get(kind)
+    return ((below,) if below is not None else ()) + ladder_for(kind)
+
+
 def estimate_usd(cell: Cell, input_tokens: int, output_tokens: int) -> float:
     model = MODELS[cell.model]
     return (

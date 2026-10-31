@@ -26,21 +26,25 @@ change of its own. Every change and verdict is appended to the store with its ru
 its evidence and cauce's version. A calibration may also skip a rung of a kind's ladder
 whose climbs rarely pass their next try (`calibrate_skips`), judged by those climbs and
 reverted the same way (`_judge_skip`). No model decides any of it, and money moves
-nothing: a point's cost is measured and shown, never a rule's input.
+nothing but one thing: a start the calibration moved onto a kind's probation cell, below its
+ladder (`matrix.PROBATION`, tried on trial by `trust.probation_arm`), is reverted when a point
+that passed costs more on it than on the rung it replaced (`PROBATION_COSTLIER`): a cheaper cell
+that climbs is cheaper only in name. Moving onto it is the start-cell rule's alone.
 """
 from __future__ import annotations
 
 import json
 import math
+import os
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, tzinfo
 from typing import Any
 
-from cauce import __version__
+from cauce import __version__, config
 from cauce.escalate import MAX_TURNS_CEILING
-from cauce.matrix import Cell, ladder_for, turns_for
+from cauce.matrix import PROBATION, Cell, ladder_for, reach, turns_for
 from cauce.store import Store
 
 #: The finished tasks of a band its measure reads, newest last.
@@ -58,6 +62,9 @@ TURNS_STEP = 10
 #: before it is reverted.
 JUDGE_AFTER = 5
 REVERT_MARGIN = 0.2
+#: How much more a passed point may cost on a probation start than on the rung it replaced before
+#: the start is reverted: nothing more. The cheaper cell is there to cost less for the same work.
+PROBATION_COSTLIER = 1.0
 #: Failures that say nothing of the work: an attempt that ended only so is no first try.
 NO_VERDICT = frozenset({"environment", "permission"})
 #: The moves after which an attempt goes on with the same cell's try: room, or a launch that broke.
@@ -254,10 +261,11 @@ def _position(rungs: Sequence[Cell], cell: Cell | None) -> int:
     return below[-1] if below else 0
 
 
-def start_cell(ladder: Sequence[Cell], current: Cell | None,
-               measured: Mapping[str, Sequence[int]]) -> tuple[Cell | None, dict[str, Any]]:
+def start_cell(ladder: Sequence[Cell], current: Cell | None, measured: Mapping[str, Sequence[int]],
+               home: Cell | None = None) -> tuple[Cell | None, dict[str, Any]]:
     """Where the start cell moves (None: it stays), and the evidence. `current` None is
-    cauce's own rules, which start at the ladder's first rung."""
+    cauce's own rules, which start at `home`, the kind's ladder's first rung (the first of
+    `ladder` when none is given: a reach that holds a probation cell starts above it)."""
     rungs = [c for c in ladder if not c.needs_approval]
     cells = {c.label: list(measured[c.label]) for c in rungs if c.label in measured}
     evidence: dict[str, Any] = {"cells": cells, "rates": {k: round(p / n, 3) for k, (p, n) in cells.items() if n},
@@ -266,11 +274,17 @@ def start_cell(ladder: Sequence[Cell], current: Cell | None,
                  and cells[c.label][0] / cells[c.label][1] >= PASS_FIRST]
     if not qualified:
         return None, evidence
-    target, at = qualified[0], _position(rungs, current)
+    target, at = qualified[0], _position(rungs, current if current is not None else home)
     evidence["target"] = rungs[target].label
     if target == at:
         return None, evidence
     return rungs[at + (1 if target > at else -1)], evidence
+
+
+def rungs_of(kind: str) -> tuple[Cell, ...]:
+    """The cells a standard may start a kind on: its reach (`matrix.reach`), a probation cell
+    below its ladder included, while the `probation` setting is on; else its ladder."""
+    return reach(kind) if config.enabled("probation", os.environ) else ladder_for(kind)
 
 
 def _rank(values: Sequence[int], q: float) -> int:
@@ -336,11 +350,12 @@ def calibrate(store: Store, repo: str, *, now: datetime | None = None) -> list[d
         store.set_standard(repo, kind, band, measured={**metrics(window), "cells": cells})
         if (kind, band) in waiting:
             continue
-        moved, evidence = start_cell(ladder_for(kind), _cell(row.get("start_cell")), cells)
+        moved, evidence = start_cell(rungs_of(kind), _cell(row.get("start_cell")), cells, ladder_for(kind)[0])
         if moved is not None:
             target = evidence["target"]
             rule = (f"the cheapest rung of the {kind} ladder whose first tries passed at least {PASS_FIRST:.0%} of "
-                    f"{MIN_SAMPLES} or more is {target}" + ("" if moved.label == target else "; one rung toward it"))
+                    f"{MIN_SAMPLES} or more is {target}" + ("" if moved.label == target else "; one rung toward it")
+                    + (" (its probation cell, below the ladder)" if PROBATION.get(kind) == moved else ""))
             changes.append(_record(store, at=at, repo=repo, kind=kind, band=band, field="start_cell",
                                    old_value=row.get("start_cell"), new_value=moved.label, rule=rule,
                                    evidence={**evidence, "tasks": len(window)}))
@@ -540,6 +555,23 @@ def _judge_skip(store: Store, repo: str, change: Mapping[str, Any], at: str) -> 
     return {"change": change["id"], "repo": repo, "verdict": verdict, "before": was, "after": then}
 
 
+def _onto_probation(change: Mapping[str, Any]) -> bool:
+    """A start-cell change that moved a kind onto its probation cell, below its ladder."""
+    below = PROBATION.get(change["kind"])
+    return change["field"] == "start_cell" and below is not None and change["new_value"] == below.label
+
+
+def _costlier(change: Mapping[str, Any], before: Mapping[str, Any], then: Mapping[str, Any]) -> bool:
+    """Whether a probation start made a passed point dearer than the window before it: the one
+    place money moves a standard, and only back up the ladder."""
+    return _onto_probation(change) and before["cost_per_point"] is not None and \
+        then["cost_per_point"] is not None and then["cost_per_point"] > before["cost_per_point"] * PROBATION_COSTLIER
+
+
+def _usd(value: float | None) -> str:
+    return "—" if value is None else f"${value:.3f}"
+
+
 def _secs(value: float | None) -> str:
     return "—" if value is None else f"{value / 60:.0f} min"
 
@@ -605,18 +637,23 @@ def judge(store: Store, repo: str, *, now: datetime | None = None) -> list[dict[
         if len(after) < JUDGE_AFTER:
             continue
         before, then = metrics([t for t in band if t.ended_at < change["at"]][-WINDOW:]), metrics(after)
-        worse = before["pass_first"] is not None and then["pass_first"] is not None and \
+        fell = before["pass_first"] is not None and then["pass_first"] is not None and \
             round(before["pass_first"] - then["pass_first"], 6) > REVERT_MARGIN
+        worse = fell or _costlier(change, before, then)
         verdict = "reverted" if worse else "kept"
         reason = (f"pass-first {_pct(before['pass_first'])} in the {before['tasks']} tasks before, "
-                  f"{_pct(then['pass_first'])} in the {then['tasks']} after")
+                  f"{_pct(then['pass_first'])} in the {then['tasks']} after"
+                  + (f"; a passed point cost {_usd(before['cost_per_point'])} before, "
+                     f"{_usd(then['cost_per_point'])} after" if _onto_probation(change) else ""))
         store.add_verdict(at=at, change_id=change["id"], verdict=verdict, window_before=before, window_after=then,
                           reason=reason, version=__version__)
         if worse:
             _record(store, at=at, repo=repo, kind=change["kind"], band=change["band"], field=change["field"],
                     old_value=change["new_value"], new_value=change["old_value"], reverts=change["id"],
-                    rule=f"revert #{change['id']}: it made pass-first worse by more than {REVERT_MARGIN:.0%} "
-                         f"({reason})",
+                    rule=f"revert #{change['id']}: " + (
+                        f"it made pass-first worse by more than {REVERT_MARGIN:.0%}" if fell else
+                        "a passed point costs more on the probation cell than on the rung it replaced")
+                    + f" ({reason})",
                     evidence={"before": before, "after": then, "margin": REVERT_MARGIN})
             value = change["old_value"]
             store.set_standard(repo, change["kind"], change["band"], **{change["field"]: (
@@ -734,7 +771,7 @@ def for_plan(store: Store, repo: str, kind: str, band: int, *, pinned: bool, exp
                                if c["kind"] == kind and c["band"] == ANY_SIZE and c["field"] == "start_cell"}}
         name = f"{kind} here (every size: {size(band)} has too few tasks)"
     cell = _cell(row.get("start_cell"))
-    if cell is not None and (cell not in ladder_for(kind) or cell.needs_approval):
+    if cell is not None and (cell not in rungs_of(kind) or cell.needs_approval):
         reasons.append(f"the standard for {name} says {cell.label}, which the {kind} ladder no longer holds: "
                        "cauce's rules choose")
         cell = None

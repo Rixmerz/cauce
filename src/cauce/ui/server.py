@@ -100,9 +100,38 @@ class UIServer(ThreadingHTTPServer):
         self.streams = threading.BoundedSemaphore(MAX_STREAMS)
         self.local = threading.local()
         self.stop_event = threading.Event()
+        #: When a viewer was last heard (a request began or a stream ended), and the streams open
+        #: now: the board is idle when none is open and none was heard for `idle_exit_s`.
+        self.last_seen: float | None = None
+        self.viewers = 0
+        self._seen_lock = threading.Lock()
         super().__init__(("127.0.0.1", port), Handler)
         self.allowed_hosts = {f"127.0.0.1:{self.server_address[1]}", f"localhost:{self.server_address[1]}"}
         ensure_token(root)
+
+    def seen(self, opened: int = 0) -> None:
+        """A viewer was heard: a request began (`opened` 0), a stream opened (1) or ended (-1)."""
+        with self._seen_lock:
+            self.viewers += opened
+            self.last_seen = time.monotonic()
+
+    def idle_for(self) -> float | None:
+        """How long no viewer has been here: None while a stream is open, or before any viewer came
+        (a browser that never opened the page leaves the board up)."""
+        with self._seen_lock:
+            if self.viewers > 0 or self.last_seen is None:
+                return None
+            return time.monotonic() - self.last_seen
+
+    def exit_when_idle(self, seconds: float, *, every: float = 1.0) -> None:
+        """Stop serving once no viewer was here for `seconds` (`cauce ui --idle-exit`): a board
+        opened for one look does not stay up after its last tab closes."""
+        while not self.stop_event.wait(every):
+            idle = self.idle_for()
+            if idle is not None and idle >= seconds:
+                self.stop_event.set()
+                self.shutdown()
+                return
 
     def store(self) -> Store:
         """One connection per thread: sqlite3 objects never cross threads."""
@@ -251,6 +280,7 @@ class Handler(BaseHTTPRequestHandler):
         self._handle(self._post)
 
     def _handle(self, method) -> None:
+        self.server.seen()
         try:
             if self._guard():
                 method()
@@ -358,6 +388,7 @@ class Handler(BaseHTTPRequestHandler):
         last id it saw. Bounded, so open tabs cannot exhaust the threads."""
         if not self.server.streams.acquire(blocking=False):
             return self._error(HTTPStatus.SERVICE_UNAVAILABLE, "too many streams; poll /api/events")
+        self.server.seen(1)
         try:
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/event-stream")
@@ -374,6 +405,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 self.server.stop_event.wait(1)
         finally:
+            self.server.seen(-1)
             self.server.streams.release()
 
     # --- writes ----------------------------------------------------------------------

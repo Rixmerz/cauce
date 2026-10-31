@@ -36,6 +36,7 @@ WHO = {
     "cauce": "cauce's rules",
     "outside": "a signal from outside cauce",
     "orchestrator": "the orchestrating session",
+    "workflow": "the workflow's question",
     "unknown": "not recorded",
 }
 
@@ -82,6 +83,8 @@ CAUSES = {
     "parts": ("replan", "cauce"),
     # Held behind work (`--after`) that left the board without passing: it never started.
     after.ABANDONED: ("cancelled", "cauce"),
+    # A workflow's question step: it waits for the person's answer (`workflows.answer`); no worker ran.
+    "question": ("blocked", "workflow"),
 }
 
 #: Endings a person may dismiss: they wait on someone, and nothing else takes
@@ -96,7 +99,7 @@ DISMISSABLE = ("failed", "blocked", "replan", "needs_approval", "interrupted")
 #: queued work starts before then (`flow.pick`), since every session meets it.
 LIMIT_META = "usage_limit_until"
 
-PERSON_ONLY = ("permission", "approval", "missing_dir")
+PERSON_ONLY = ("permission", "approval", "missing_dir", "question")
 
 #: The attempts after which a resume nobody approved is refused: two runs' worth
 #: (`orchestrate.Options.max_attempts`, kept equal by a test). `cli` refuses it.
@@ -191,6 +194,9 @@ def next_step(task_id: int, stop: Stop, *, resumable: bool = True) -> str | None
     if resumable and (widen := stop.extra.get("widen")) and stop.cause in ("spec", "decision"):
         # Its point was its surfaces: the resume adds the paths it needs and keeps its diagnosis.
         return f"cauce resume {task_id}" + "".join(f" --surface {shlex.quote(str(p))}" for p in widen)
+    if stop.cause == "question":
+        # A question is answered, never resumed: no worker runs it.
+        return str(stop.extra.get("answer") or "") or None
     if not resumable or stop.cause in ("spec", "ladder", "missing_dir", "converged", "decision", "landed"):
         return None
     if stop.cause == "superseded" and stop.extra.get("retry"):
@@ -262,6 +268,8 @@ def what_to_do(stop: Stop) -> str:
                          "read those tests (they may fail here whatever the work does), then resume or rewrite it",
         "budget": "an older cauce stopped it on a dollar budget, which no longer exists: resume it",
         "missing_dir": "the task's directory is gone: restore it, or queue the task again where it now lives",
+        "question": "its workflow asks the person (the question is its reason): answer with one of its options "
+                    + "(" + ", ".join(str(o) for o in stop.extra.get("options") or ()) + ")",
         "approval": "approve the next cell by resuming with --allow-approval",
         "spec": "the task as written cannot be done: rewrite or split it as a new task",
         "turns": "the work outgrew a worker's turns, not the task: resume it with more turns (what it did "
@@ -497,8 +505,8 @@ def resume_args(task_id: int, shown: dict[str, Any] | None, *, keep: bool = Fals
     """The `cauce resume` a person's press runs for a stopped task, from cauce's
     own account, never from what a page or a model sends: the rules a refusal
     suggests, or an approval. None when no press continues it."""
-    if not shown or not shown.get("next"):
-        return None
+    if not shown or not shown.get("next") or shown.get("cause") == "question":
+        return None  # a question is answered with its line, never resumed by a press
     base = ["resume", str(task_id), "--detach"]
     cause = shown.get("cause")
     if cause == "permission":

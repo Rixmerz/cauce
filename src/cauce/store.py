@@ -1102,6 +1102,30 @@ class Store:
                        duration_s=float(first[2] or 0) if first else 0.0, calls_before_edit=edit)
         return [r for r in out.values() if r["input_tokens"] or r["passed_first"]]
 
+    def verifier_record(self, repo: str | None) -> list[dict]:
+        """Every independent check (`verified`) and every pass its sampling let through unchecked
+        (`verifier_sampled`) of a repository (None: of every one), oldest first: the task, its kind
+        and repository, the event and its data, and the cell of the attempt it read (`attempt_cell`,
+        for events written before they named it themselves)."""
+        rows = self._conn.execute(
+            "SELECT e.id, e.task_id, e.ts, e.kind AS event, e.data, t.kind, t.repo, a.cell AS attempt_cell "
+            "FROM events e JOIN tasks t ON t.id = e.task_id LEFT JOIN attempts a ON a.task_id = e.task_id "
+            "AND a.seq = json_extract(e.data, '$.seq') WHERE e.kind IN ('verified', 'verifier_sampled') "
+            "AND (? IS NULL OR t.repo = ?) ORDER BY e.id", (repo, repo)).fetchall()
+        return [{**dict(r), "data": json.loads(r["data"])} for r in rows]
+
+    def probation_arms(self, repo: str, kind: str, band: int, *, since: str = "") -> dict[str, int]:
+        """How many tasks of a kind and size here were planned in each arm of a probation trial
+        (`planned.probation.arm`) since `since`: running ones count, so arms alternate as they start."""
+        rows = self._conn.execute(
+            "SELECT json_extract(e.data, '$.probation.arm'), count(DISTINCT e.task_id) FROM events e "
+            "JOIN tasks t ON t.id = e.task_id WHERE e.kind = 'planned' AND t.repo = ? AND t.kind = ? "
+            "AND t.points = ? AND e.ts >= ? AND json_extract(e.data, '$.probation.arm') IS NOT NULL "
+            "GROUP BY 1", (repo, kind, band, since)).fetchall()
+        counts = {"probation": 0, "ladder": 0}
+        counts.update({str(arm): int(n) for arm, n in rows})
+        return counts
+
     def capability_use(self, name: str, *, since: str = "", repo: str | None = None) -> list[dict]:
         """Every attempt that was handed the capability `name` (its `attempt_started` event lists
         it): how many of the worker's calls went to its tools, and whether the attempt passed."""
@@ -1123,12 +1147,13 @@ class Store:
             out.append({"task_id": task_id, "seq": seq, "calls": int(calls), "passed": bool(done and done[0])})
         return out
 
-    def tool_counts(self, task_id: int, attempt: int, prefix: str) -> dict[str, int]:
+    def tool_counts(self, task_id: int, attempt: int, prefix: str, *, ok_only: bool = False) -> dict[str, int]:
         """How many times an attempt's worker called each tool whose name starts with `prefix`
-        (`mcp__livespec__`), by the name after it."""
+        (`mcp__livespec__`), by the name after it; `ok_only`, only the calls that went through."""
         rows = self._conn.execute(
             "SELECT tool, COUNT(*) FROM tool_events WHERE task_id = ? AND attempt = ? "
-            "AND substr(tool, 1, ?) = ? GROUP BY tool ORDER BY tool", (task_id, attempt, len(prefix), prefix))
+            "AND substr(tool, 1, ?) = ? AND (? = 0 OR ok = 1) GROUP BY tool ORDER BY tool",
+            (task_id, attempt, len(prefix), prefix, int(ok_only)))
         return {str(tool)[len(prefix):]: int(n) for tool, n in rows}
 
     def briefs(self, repo: str) -> list[dict]:

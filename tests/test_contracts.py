@@ -185,3 +185,61 @@ def test_the_rows_a_fix_s_check_answers_are_in_the_words_its_re_check_reads():
     assert ledger.WORDS["recheck"][0] == "fixed" and 'ledger_mod.WORDS["recheck"]' in orchestrate_src
     assert '"verdicts": list(answered.values())' in orchestrate_src
     assert 'checked.get("verdicts")' in workflows_src and '== "fixed"' in workflows_src
+
+
+def test_the_cell_a_check_or_a_sampled_pass_names_is_the_one_trust_reads_back(git_repo, store, monkeypatch):
+    """`orchestrate` keeps on `verified` and `verifier_sampled` the worker's cell (`worker`); `trust`
+    reads a cell's record, and with it its sampling, from that field."""
+    from cauce import trust
+    from cauce.orchestrate import run
+
+    from .test_checking import check, passing
+    from .test_orchestrate import Script, kind
+
+    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    haiku = Cell("haiku", "high")
+    report = run("rename the helper in notes", git_repo, store, Options(start=haiku), registry={},
+                 launcher=Script(passing(), check("pass"), write="notes.txt"), classifier=kind("implement"),
+                 adapters=[])
+    found, = trust.inspections(store, None)
+    assert (found.task, found.cell, found.outcome) == (report.task_id, "haiku/high", "clean")
+    store.add_event(report.task_id, "verifier_sampled", seq=1, worker="haiku/high", every=2)
+    assert [i.outcome for i in trust.inspections(store, None)] == ["clean", "sampled"]
+
+
+def test_the_snapshot_a_check_keeps_is_the_one_the_next_round_reads_from(git_repo, store, monkeypatch):
+    """`_judged` keeps `read_at` and the worker's cell on `verified`; `_read_before` reads them back."""
+    from cauce import orchestrate
+    from cauce.orchestrate import run
+
+    from .test_checking import BUG, check, passing
+    from .test_orchestrate import Script, kind
+
+    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    report = run("fix the cart total", git_repo, store, registry={}, classifier=kind("implement"),
+                 launcher=Script(passing(), check("fail", [BUG]), passing("fixed"), check("pass"), write="app.py"))
+    first = store.events_of(report.task_id, "verified")[0]["data"]
+    assert first["worker"] == "sonnet/medium" and first["read_at"]
+    task = store.create_task("t", status="running", source="cauce", repo="r", kind="implement")
+    store.add_event(task["id"], "verified", **first)
+    since = orchestrate._read_before(store, task["id"], Cell("sonnet", "high"), 1, git_repo)
+    assert since is not None and since[0] == first["read_at"]
+
+
+def test_the_evidence_arm_a_brief_keeps_is_the_one_its_trial_reads_back(git_repo, store, monkeypatch):
+    """`orchestrate` keeps a task's arm on `briefed` (`evidence.KEY`); `evidence.trial` counts arms from it."""
+    from cauce import capabilities as caps
+    from cauce import evidence
+    from cauce.orchestrate import run
+
+    from .test_checking import passing
+    from .test_orchestrate import Script, kind
+
+    monkeypatch.setenv("CAUCE_EVIDENCE", "on")
+    monkeypatch.setattr(evidence, "arm", lambda store, repo, task_id: ("free", "free for the test"))
+    registry = {"rastro": caps.Capability("rastro", {"command": "rastro"}, hint="drive the app")}
+    report = run("Rename the helper in notes", git_repo, store, registry=registry,
+                 launcher=Script(passing(), write="notes.txt"), classifier=kind("implement"))
+    task = store.get_task(report.task_id)
+    found = evidence.trial(store, task["repo"])
+    assert found["free"]["tasks"] == 1 and found["gate"]["tasks"] == 0

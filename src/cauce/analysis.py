@@ -26,7 +26,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cauce import cells as cells_mod
-from cauce import launch, racing, revisions, trunks, usage, workflows
+from cauce import evidence as evidence_mod
+from cauce import launch, racing, revisions, trunks, trust, usage, workflows
 from cauce.store import Store
 
 #: The phases of a run, in the order they happen. The first four come before its own wall
@@ -329,6 +330,32 @@ def _grouped(found: Sequence[Mapping[str, Any]], key: str) -> list[dict[str, Any
                   key=lambda row: (-row["runs"], row[key]))
 
 
+def capabilities_used(events: Sequence[Mapping[str, Any]], task_ids: set[int]) -> list[dict[str, Any]]:
+    """Per capability a worker was handed (`attempt_finished.capability_calls`): the attempts that had
+    it, the ones that called it at all and the ones whose calls went through, and how often the
+    attempts that called it passed against the ones that did not. Observed, never a trial."""
+    rows: dict[str, dict[str, int]] = defaultdict(lambda: {"handed": 0, "called": 0, "through": 0,
+                                                           "called_passed": 0, "silent_passed": 0})
+    for e in events:
+        if e["kind"] != "attempt_finished" or int(e["task_id"]) not in task_ids:
+            continue
+        for name, made in (e["data"].get("capability_calls") or {}).items():
+            row = rows[str(name)]
+            row["handed"] += 1
+            called = int((made or {}).get("calls") or 0) > 0
+            row["called"] += int(called)
+            row["through"] += int(int((made or {}).get("ok") or 0) > 0)
+            row["called_passed" if called else "silent_passed"] += int(bool(e["data"].get("passed")))
+    out = []
+    for name, row in sorted(rows.items()):
+        silent = row["handed"] - row["called"]
+        out.append({"capability": name, **row, "never_called": silent,
+                    "called_rate": _share(row["called"], row["handed"]),
+                    "pass_when_called": _share(row["called_passed"], row["called"]),
+                    "pass_when_silent": _share(row["silent_passed"], silent)})
+    return out
+
+
 def cells(events: Sequence[Mapping[str, Any]], task_ids: set[int]) -> list[dict[str, Any]]:
     """Every attempt by the cell it ran at: how often it passed, its time, turns, its own
     cost (its independent check's apart) and how much of its input the cache served."""
@@ -514,6 +541,12 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "races": racing.table(store, repo),
         # What each blind review of a two-review ledger added that no other saw (`workflows.reviewer_yield`).
         "reviewers": workflows.reviewer_yield(store, repo),
+        # What the independent check's record says of each cell, and where its sampling stands (`cauce.trust`).
+        "trust": trust.report(store, repo),
+        # Each capability workers were handed and whether they called it (observed), and the evidence trial.
+        "capabilities": capabilities_used(events, {r["task"] for r in found}),
+        "evidence": evidence_mod.trial(store, repo),
+        "evidence_now": evidence_mod.arm(store, repo, 0)[1] if repo else None,
         "expensive": expensive(found),
     }
     if keep_runs is None:
@@ -714,6 +747,26 @@ def text(report: Mapping[str, Any]) -> str:
                              f"{row['rows']:>4}  alone {row['alone']:>3}  kept {row['alone_kept']:>3}"
                              + ("  added nothing the others missed" if row["runs"] >= 3 and not row["alone_kept"]
                                 else ""))
+        if report.get("capabilities"):
+            lines += ["", "capabilities handed to workers (attempts that had each, called it, had a call go through; "
+                      "attempts passed when called against when not, observed):"]
+            for row in report["capabilities"]:
+                lines.append(f"  {row['capability']:<18} handed {row['handed']:>4}  called {row['called']:>4} "
+                             f"({_rate(row['called_rate'])})  through {row['through']:>4}  never called "
+                             f"{row['never_called']:>4}  passed called {_rate(row['pass_when_called'])} / silent "
+                             f"{_rate(row['pass_when_silent'])}")
+        held = report.get("evidence") or {}
+        if any(arm.get("tasks") for arm in held.values()):
+            lines += ["", "holding work to evidence (its trial; tasks, read by the independent check, blocked):"]
+            for arm, row in held.items():
+                lines.append(f"  {arm:<6} tasks {row['tasks']:>4}  read {row['read']:>4}  blocked {row['blocked']:>4} "
+                             f"({_rate(row['blocked_rate'])})")
+            if report.get("evidence_now"):
+                lines.append(f"  now: {report['evidence_now']}")
+        if report.get("trust"):
+            lines += ["", "the independent check's record by cell (its sampling, repeated blockers, re-checks finding "
+                      "something new, and the work that started there):"]
+            lines += ["  " + line for line in trust.text(report["trust"])]
         if report["stops"]:
             lines += ["", "stopped by: " + ", ".join(f"{k} {v}" for k, v in report["stops"].items())]
     t = report["turns"]["turns"]

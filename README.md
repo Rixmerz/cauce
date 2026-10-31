@@ -437,6 +437,39 @@ here or from every repository when this one has too few, later climbs go to
 the rung after it. Never the last rung, never one that needs an approval;
 judged by its climbs and reverted when they pass less or take longer.
 
+The calibration can go below the ladder too, but only on evidence. Where
+`implement` work already passes its first rung's first tries here, Haiku is
+tried in turns with that rung, every Haiku pass read by the independent check.
+It becomes the start only by the same rule (70% of at least five first tries),
+and it is reverted when it passes less or when a passed point costs more than
+before: a cheap cell that keeps climbing is cheap only in name. That revert is
+the one place money moves a standard.
+
+The independent check earns trust the same way. Each task's first check is an
+inspection of its cell (repository, kind, the worker's cell). After ten clean
+inspections in a row (skip-lot sampling, as in ISO 2859-3), a medium change
+made by a cheap cell is checked one pass in two, then one in four, never
+fewer. One blocker returns the cell to checking every pass. High risk is always
+checked, and cauce's own check always runs. A correction's re-check reads what
+the correction changed since the last check's snapshot, not the whole change
+again. `cauce trust` shows each cell's record: clean checks, where its sampling
+stands, blockers that repeat an earlier task's, re-checks that found something
+new, and pass-first and cost per point by the cell work started on.
+
+What a worker is given, it is made to use, not only told of. Where cauce can do
+the work itself, it does: the livespec index is built before the worker
+starts, and what the files a request names reach (the specs they implement,
+who calls them, the tests) is in its brief. Notes are found by the code the
+task touches as well as by its words. Where the worker must do it, the pass
+is gated on evidence cauce reads from its own log of the worker's calls,
+never from what the worker writes. A UI change handed layout-inspector, or
+work handed rastro, does not pass without a call of that tool that went
+through. The first time, the worker goes on to measure; the second time, the
+work waits on the orchestrator. Each repository tries that gate in turns with
+free work and keeps it only where it caught more. Each TRACER CORRECT line is
+a criterion the independent check must answer. `cauce stats` shows every
+capability workers were handed, and how often they never called it.
+
 ```bash
 cauce evolution                  # every repository, last 30 days
 cauce evolution --repo . --days 7
@@ -810,6 +843,9 @@ cauce workflow new release-notes --from review-fix    # start from an existing o
 cauce workflow step add release-notes publish --prompt "..." --kind docs --after fix
 cauce workflow step set release-notes fix --verify "npm test"
 cauce workflow retry 3 build                          # a stopped step again; the run goes on
+cauce workflow answer 3 how flag                      # the person's answer to a question step
+cauce workflow render feature --markdown              # the graph as Mermaid, for a README or a PR
+cauce workflow render --run 3                         # a run's graph, each step's state on its node
 cauce workflow cancel 3
 ```
 
@@ -834,13 +870,30 @@ Definitions are JSON files:
 
 A definition holds steps (`id`, `prompt` with `{input}` names, `needs`,
 `kind`, `verify`, `start`, `max_turns`, `memory`, `surfaces`, `ledger`,
-`fanout`, `integrate`, `trunk`) and never a permission rule,
+`fanout`, `integrate`, `trunk`, `when`; or `ask` and `options`; or `workflow`
+and `with`) and never a permission rule,
 an approval, a capability or a dollar limit. Rules, approvals and a run-wide
 check (`--verify`, for every step that writes and names none) are the person's
 flags on `run`. A step's `memory` topic with no note yet is said, never a
 reason not to start; a note that cannot be read is. A `budget_usd` an older
 definition holds is read and
 ignored.
+
+Steps can choose, ask and delegate, always on cauce's records:
+
+- `when` runs a step only if a step it needs ended a certain way: `findings`
+  or `clean`, `changed` or `unchanged`, or the answer to a question. A step
+  whose condition does not hold is skipped with no worker, so two steps with
+  opposite conditions make an if/else.
+- `ask` with `options` makes a step that asks the person and runs no worker.
+  The run waits until `cauce workflow answer` gives one of the options.
+- `workflow` with `with` runs another saved workflow as one step, on the work
+  before it. The run goes on from the branch that workflow kept. The
+  workflows a run calls are checked and frozen when it starts.
+
+`cauce workflow show` prints a definition's revision. A change made with
+`--expect <revision>` is refused if someone else changed it since, so two
+sessions editing one workflow never overwrite each other unseen.
 
 A workflow in the user scope is global: one definition that several projects
 reuse, each run's state kept with its own project. A run never changes under
@@ -921,7 +974,7 @@ and refuses anything else passed with it.
 
 ### The UI
 
-`cauce ui` (or `/cauce:ui` in a session) serves a local page (`http://127.0.0.1:8790/`; it opens no tab by itself, `--open` opens it once)
+`cauce ui` (or `/cauce:ui` in a session) serves a local page (`http://127.0.0.1:8790/`; it opens no tab by itself, `--open` opens it once; `--idle-exit 30` stops it 30 seconds after its last tab closes)
 for someone running many tasks across many repositories. It answers, in order:
 what needs me, what is running and what it costs, and whether the router is
 choosing well. It shows one project at a time, picked at the top: never every

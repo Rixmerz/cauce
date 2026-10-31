@@ -2,6 +2,67 @@
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-10-31
+
+### Added
+
+- **Workers made to use what they were given, not only told of it.** A worker's notes are found by
+  the code its task touches (the notes anchored to the files it names) as well as by its words, now
+  strictly, so one word in common briefs no unrelated note. cauce asks the livespec index what the
+  files a request names reach (the specs they implement, who calls them, the tests) and puts it in
+  the brief before the worker starts. A worker handed layout-inspector for a change to rendered UI,
+  or rastro, is held to evidence (`cauce.evidence`, the `evidence` setting): a pass with no call of
+  that tool that went through, read from cauce's log of its calls, goes back to the same worker once,
+  then waits on the orchestrator with its work kept; each repository tries it in turns with free work
+  and keeps it only where its passes drew fewer blockers from the independent check. Every capability
+  a worker is handed has its calls counted, and `cauce stats` shows the ones handed and never called.
+- **Each TRACER CORRECT line is a criterion of the independent check** (`C1..Cn`): one it says is not
+  met blocks the change; one it leaves unanswered is said on the verdict card and the ending, never
+  taken as met.
+
+- **A workflow step can choose by what the step before it ended with** (`when`): `findings` or
+  `clean` (the blocking findings it passed with), `changed` or `unchanged`, or a question's
+  option. A step whose condition does not hold is skipped with no worker, and what follows starts
+  from the work before it, so two steps with opposite conditions are an if/else.
+- **A workflow step can ask the person** (`ask`, `options`): no worker runs, the step waits on the
+  person (`stops.PERSON_ONLY`, cause `question`), the session hears of it with the line that
+  answers it, and `cauce workflow answer <run> <step> <option>` passes it and goes on. A question
+  is answered, never resumed.
+- **A workflow step can run another workflow** (`workflow`, `with`): a run of it starts on the
+  work before the step, and its end passes the step with the branch it kept. The workflows a run
+  calls are checked and frozen when it starts; one that is missing, lacks an input, calls itself
+  or nests past three levels is refused before anything is queued. Cancelling the run cancels the
+  run it started.
+- **`cauce workflow render`**: a workflow, or a run with each step's state, as a Mermaid
+  flowchart (`--markdown` fences it for a README or a pull request).
+- **`--expect <revision>`** on `cauce workflow save`, `step add|set|rm` and `edit`: a change made on
+  a revision that is no longer the one it builds on is refused; `cauce workflow show` prints it.
+- **`cauce ui --idle-exit SECONDS`**: the board stops once no tab was open for that long, counted
+  after the first one came.
+
+- **Earned trust: the verifier reads less where its record says it may** (`cauce.trust`, the
+  `trust` setting). A cell is a repository, a kind and the worker's cell, and each task's first
+  decided independent check is one inspection. Once ten in a row came clean (ISO 2859-3 skip-lot
+  sampling), a medium change a cheap cell made is checked one pass in two, after ten more one in
+  four, never fewer; one blocker returns the cell to every pass. A high risk, a correction's
+  re-check, a resume carrying blockers and a fix of ledger rows are always checked, and cauce's own
+  check runs on every pass. Which passes are checked is a hash of the repository and the task. A
+  pass let through is a `verifier_sampled` event, said in the run and on the verdict card.
+- **A correction's re-check reads what the correction changed:** the independent check keeps a
+  snapshot commit of what it read (`isolate.snapshot`, `read_at` on `verified`), and the next round
+  is told the files changed since and to read those first, the rest of the change being read
+  already (`delta` on its event). After a new model, or outside a worktree, it reads the whole change.
+- **A cheaper cell below the ladder, on trial** (`matrix.PROBATION`, the `probation` setting): where
+  `implement`'s first rung already passes its first tries in a repository, Haiku is tried in turns
+  with it, every pass read by the independent check. The calibration makes it the start only by its
+  own start-cell rule, and reverts it when pass-first falls or a passed point costs more on it than
+  before: the one place money moves a standard, and only back up the ladder. From `bench/memory`,
+  where Haiku briefed with the project's constraints passed every hidden test at a sixth of
+  Sonnet's cost.
+- **`cauce trust`** (and a section of `cauce stats`): per cell, its clean checks, where its sampling
+  stands, the blockers that repeat an earlier task's here, the re-checks that found something new,
+  and pass-first and cost per point by the cell the work started on.
+
 ## [0.60.0] - 2026-10-29
 
 ### Fixed
