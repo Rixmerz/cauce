@@ -437,6 +437,25 @@ here or from every repository when this one has too few, later climbs go to
 the rung after it. Never the last rung, never one that needs an approval;
 judged by its climbs and reverted when they pass less or take longer.
 
+The calibration can go below the ladder too, but only on evidence. Where
+`implement` work already passes its first rung's first tries here, Haiku is
+tried in turns with that rung, every Haiku pass read by the independent check.
+It becomes the start only by the same rule (70% of at least five first tries),
+and it is reverted when it passes less or when a passed point costs more than
+before: a cheap cell that keeps climbing is cheap only in name. That revert is
+the one place money moves a standard.
+
+The independent check earns trust the same way. Each task's first check is an
+inspection of its cell (repository, kind, the worker's cell). After ten clean
+inspections in a row (skip-lot sampling, as in ISO 2859-3), a medium change
+made by a cheap cell is checked one pass in two, then one in four, never
+fewer. One blocker returns the cell to checking every pass. High risk is always
+checked, and cauce's own check always runs. A correction's re-check reads what
+the correction changed since the last check's snapshot, not the whole change
+again. `cauce trust` shows each cell's record: clean checks, where its sampling
+stands, blockers that repeat an earlier task's, re-checks that found something
+new, and pass-first and cost per point by the cell work started on.
+
 ```bash
 cauce evolution                  # every repository, last 30 days
 cauce evolution --repo . --days 7

@@ -26,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cauce import cells as cells_mod
-from cauce import launch, racing, revisions, trunks, usage, workflows
+from cauce import launch, racing, revisions, trunks, trust, usage, workflows
 from cauce.store import Store
 
 #: The phases of a run, in the order they happen. The first four come before its own wall
@@ -514,6 +514,8 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "races": racing.table(store, repo),
         # What each blind review of a two-review ledger added that no other saw (`workflows.reviewer_yield`).
         "reviewers": workflows.reviewer_yield(store, repo),
+        # What the independent check's record says of each cell, and where its sampling stands (`cauce.trust`).
+        "trust": trust.report(store, repo),
         "expensive": expensive(found),
     }
     if keep_runs is None:
@@ -714,6 +716,10 @@ def text(report: Mapping[str, Any]) -> str:
                              f"{row['rows']:>4}  alone {row['alone']:>3}  kept {row['alone_kept']:>3}"
                              + ("  added nothing the others missed" if row["runs"] >= 3 and not row["alone_kept"]
                                 else ""))
+        if report.get("trust"):
+            lines += ["", "the independent check's record by cell (its sampling, repeated blockers, re-checks finding "
+                      "something new, and the work that started there):"]
+            lines += ["  " + line for line in trust.text(report["trust"])]
         if report["stops"]:
             lines += ["", "stopped by: " + ", ".join(f"{k} {v}" for k, v in report["stops"].items())]
     t = report["turns"]["turns"]

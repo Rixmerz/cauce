@@ -520,6 +520,48 @@ def changed(ws: Workspace) -> tuple[str, ...]:
     return tuple(sorted(p for p in paths if p and not _linked(ws, p) and not is_artifact(p)))
 
 
+def snapshot(path: Path) -> str | None:
+    """A commit of a worktree as it stands, tracked and untracked files alike (what `.gitignore`
+    keeps out stays out), made through a temporary index so the worktree's own index, HEAD and
+    branch are left as they were, and dangling: nothing points at it. What an independent check
+    read, so the next round reads only what changed since (`changed_since`). None when git cannot
+    say."""
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="cauce-snapshot-") as tmp:
+            env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index"), "GIT_AUTHOR_NAME": "cauce",
+                   "GIT_AUTHOR_EMAIL": "cauce@localhost", "GIT_COMMITTER_NAME": "cauce",
+                   "GIT_COMMITTER_EMAIL": "cauce@localhost"}
+
+            def git(*args: str) -> str:
+                proc = subprocess.run(["git", *args], cwd=str(path), env=env, capture_output=True, text=True,
+                                      check=False)
+                if proc.returncode != 0:
+                    raise IsolationError(f"git {args[0]} failed: {proc.stderr.strip()[:300]}")
+                return proc.stdout.strip()
+
+            parent = git("rev-parse", "--verify", "HEAD")
+            git("read-tree", parent)
+            git("add", "-A", "--", ".")
+            return git("commit-tree", git("write-tree"), "-p", parent, "-m", "cauce: what an independent check read")
+    except (IsolationError, OSError):
+        return None
+
+
+def changed_since(path: Path, commit: str) -> list[str] | None:
+    """The files of a worktree that differ from a `snapshot` of it, added and deleted ones among
+    them, its tools' artifacts left out. None when git cannot say."""
+    now = snapshot(path)
+    if now is None:
+        return None
+    try:
+        names = _git(path, "diff", "--name-only", commit, now).splitlines()
+    except (IsolationError, OSError):
+        return None
+    return sorted(p for p in names if p and not is_artifact(p))
+
+
 def fingerprint(path: Path) -> dict[str, str] | None:
     """Every file of a worktree that differs from its HEAD (tracked or not), with the blob
     git would make of it ("" when deleted): taken before and after cauce runs a check, to

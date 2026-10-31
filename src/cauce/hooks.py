@@ -973,6 +973,8 @@ def verdict_summary(verdict: Mapping | None) -> str:
     if ind.get("ran"):
         said.append("independent check "
                     + ("passed" if ind.get("passed") else f"left {ind.get('blocking')} blocker(s)"))
+    elif ind.get("sampled"):
+        said.append(f"independent check not drawn (1 pass in {ind.get('every')} here)")
     return ", ".join(said)
 
 
@@ -1004,7 +1006,7 @@ def verdict_lines(verdict: Mapping | None) -> list[str]:
     if ind.get("ran"):
         lines.append("  independent check: " + ("passed" if ind.get("passed") else
                                                  f"{ind.get('blocking')} blocker(s) left, recorded"))
-    elif ind.get("late"):
+    elif ind.get("late") or ind.get("sampled"):
         lines.append(f"  independent check: {ind['why']}")
     elif ind.get("why"):
         lines.append(f"  independent check: not run ({ind['why']})")

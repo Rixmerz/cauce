@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Earned trust: the verifier reads less where its record says it may** (`cauce.trust`, the
+  `trust` setting). A cell is a repository, a kind and the worker's cell, and each task's first
+  decided independent check is one inspection. Once ten in a row came clean (ISO 2859-3 skip-lot
+  sampling), a medium change a cheap cell made is checked one pass in two, after ten more one in
+  four, never fewer; one blocker returns the cell to every pass. A high risk, a correction's
+  re-check, a resume carrying blockers and a fix of ledger rows are always checked, and cauce's own
+  check runs on every pass. Which passes are checked is a hash of the repository and the task. A
+  pass let through is a `verifier_sampled` event, said in the run and on the verdict card.
+- **A correction's re-check reads what the correction changed:** the independent check keeps a
+  snapshot commit of what it read (`isolate.snapshot`, `read_at` on `verified`), and the next round
+  is told the files changed since and to read those first, the rest of the change being read
+  already (`delta` on its event). After a new model, or outside a worktree, it reads the whole change.
+- **A cheaper cell below the ladder, on trial** (`matrix.PROBATION`, the `probation` setting): where
+  `implement`'s first rung already passes its first tries in a repository, Haiku is tried in turns
+  with it, every pass read by the independent check. The calibration makes it the start only by its
+  own start-cell rule, and reverts it when pass-first falls or a passed point costs more on it than
+  before: the one place money moves a standard, and only back up the ladder. From `bench/memory`,
+  where Haiku briefed with the project's constraints passed every hidden test at a sixth of
+  Sonnet's cost.
+- **`cauce trust`** (and a section of `cauce stats`): per cell, its clean checks, where its sampling
+  stands, the blockers that repeat an earlier task's here, the re-checks that found something new,
+  and pass-first and cost per point by the cell the work started on.
+
 ## [0.60.0] - 2026-10-29
 
 ### Fixed

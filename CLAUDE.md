@@ -10,7 +10,8 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 
 | Path | What lives there |
 |---|---|
-| `src/cauce/matrix.py` | models, the five efforts and their purpose, the ladder per kind; a model's default effort reads cells recorded before it had the dial |
+| `src/cauce/matrix.py` | models, the five efforts and their purpose, the ladder per kind, and the probation cell below a writing kind's ladder (`PROBATION`, `reach`); a model's default effort reads cells recorded before it had the dial |
+| `src/cauce/trust.py` | earned trust, read from the independent check's record per repository, kind and worker cell: skip-lot sampling of the verifier (`sampling`), the probation trial below a ladder (`probation_arm`), and what the record says of learning (`report`, `cauce trust`, `cauce stats`); no model |
 | `src/cauce/classify.py` | rules first, Haiku for the rest; `frontier` only by tag |
 | `src/cauce/escalate.py` | failure kind → move (retry, more effort, next model, more turns, replan) |
 | `src/cauce/launch.py` | one attempt as `claude -p`: argv, the result contract, parsing, git-read changes |
@@ -40,7 +41,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `specs`, `tracer`, `habit_review`, `habit_auto`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number; `livespec_wait`, seconds, 0 never waits), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `trust`, `probation`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `specs`, `tracer`, `habit_review`, `habit_auto`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number; `livespec_wait`, seconds, 0 never waits), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets, and the jobs a person quieted per repository |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -230,7 +231,8 @@ yields the default kind, not a guess.
   (its own and its independent check's apart, and how much of its input the
   cache served), and the report, the board, `cauce spend` and `cauce stats`
   show it; no task stops, skips a cell or gets a shorter attempt for money,
-  and no worker is given a dollar cap. Turns are the one room dial: an attempt
+  and no worker is given a dollar cap. The one place money moves anything is a
+  probation start (below), and only back up the ladder. Turns are the one room dial: an attempt
   is bounded by its turns, never above `escalate.MAX_TURNS_CEILING` however
   many are asked for, and the time they earn (`launch.timeout_for`); a run by
   its attempts. A resume nobody approved is refused after
@@ -412,7 +414,11 @@ yields the default kind, not a guess.
   that measure (`plugins.MEASURES`, `Capability.measures`), plus any its change touches, and the
   code index where one is present (`orchestrate._index_servers`): livespec behind `mcp_guard`'s
   `livespec` policy, an allow-list of reading tools (`LIVESPEC_READ`; a tool's own `readOnlyHint`
-  is not trusted, `export_openspec` carries it and writes files), the late check's too. A correction round is earned by a blocker that
+  is not trusted, `export_openspec` carries it and writes files), the late check's too. A correction's re-check in
+  a worktree is told what the correction changed since the snapshot the round before read (`isolate.snapshot`,
+  `read_at` on its `verified` event, `orchestrate._read_before`, the event's `delta`) and to read that first, the
+  rest of the change being read already; after a new model, outside a worktree or with no snapshot it reads the
+  whole change. A correction round is earned by a blocker that
   persists or by progress (every blocker of the round before fixed and a new
   one a probe shows), at most `MAX_CORRECTIONS`; a new finding after progress
   that is only read from the code goes with the pass, recorded, never a
@@ -444,6 +450,32 @@ yields the default kind, not a guess.
   (`Options.detach_after`, `orchestrate._after_ending`), so the command exits with the ending: never
   a fork, since a forked child's SQLite writes were lost when it closed.
   Tests run with `CAUCE_VERIFIER=off`, `CAUCE_OVERLAP=off` and `CAUCE_LATE_VERIFIER=off`.
+- The independent check's record earns trust (`cauce.trust`, the `trust` setting), never a worker's
+  word: a cell is a repository, a kind and the worker's cell, and each task's first decided check
+  is one inspection (a correction's re-check is no new one). Skip-lot sampling (ISO 2859-3): once
+  `trust.QUALIFY` inspections in a row came clean, a medium change a cheap cell made is checked one
+  pass in two, after another `QUALIFY` one in `trust.EVERY[-1]`, never fewer; one blocker returns
+  the cell to every pass. A high risk, a correction's re-check, a resume carrying blockers and a fix
+  of ledger rows are checked every time (`orchestrate._sampling`); cauce's own check runs on every
+  pass. Which passes are checked is a hash of the repository and the task (`trust.due`), never the
+  clock; a pass let through is a `verifier_sampled` event with its cell's level, said in the run
+  and on the verdict card, and neither qualifies nor resets a cell. `cauce trust` and `cauce stats`
+  show each cell's record: clean checks, its sampling, the blockers that repeat an earlier task's
+  here, the re-checks that found something new, and pass-first and cost per point by the cell work
+  started on. Tests run with `CAUCE_TRUST=off`.
+- A writing kind may have a cheaper cell below its ladder (`matrix.PROBATION`: Haiku for
+  `implement`, from `bench/memory`; no other kind was measured). It is tried only on trial
+  (`trust.probation_arm`, the `probation` setting): where the ladder's first rung passes
+  `standards.PASS_FIRST` of `MIN_SAMPLES` or more first tries of the kind here, on a start nothing
+  raised or pinned, never a high risk, a resume, a ledger, parts or a run in the checkout, and only
+  with the verifier on, since a cheap cell's medium pass is what it reads. The arms alternate
+  (the one with fewer tasks next, `planned.probation`) until the cheaper cell was planned
+  `trust.PROBATION_TRIAL` times in `PROBATION_DAYS`; it stops early, lost, once its first tries pass
+  worse than `PASS_FIRST` by more than `REVERT_MARGIN` over `PROBATION_EARLY`. Its tries are first
+  tries like any, and only the start-cell rule makes it the start (`standards.rungs_of`); a start
+  there climbs into the ladder (`Plan.ladder` is `matrix.reach`). It is judged as any change, and
+  also reverted when a passed point costs more on it than before it (`standards.PROBATION_COSTLIER`):
+  a cheaper cell that climbs is cheaper only in name. Tests run with `CAUCE_PROBATION=off`.
 - A task that stops on a point (`spec`, `decision`) because its surfaces kept it from the
   cause (it changed a path outside them, or its worker says so and names one,
   `orchestrate._widen`) keeps those paths on its stop (`widen`), and its next step is
@@ -471,7 +503,7 @@ yields the default kind, not a guess.
   needed (capped at `escalate.MAX_TURNS_CEILING`), and the plan says so. An
   explicit `--max-turns` wins. A calibrated standard (below) takes the place of
   these rules for its band, and may lower the start cell, never below the
-  ladder, and never the start turns below the kind's (`matrix.turns_for`): a
+  ladder (its probation cell aside, below), and never the start turns below the kind's (`matrix.turns_for`): a
   cap is room, an attempt that is done stops on its own, and a lower cap only
   cuts the slow passes.
 - A task's points are its size on the Fibonacci scale (1, 2, 3, 5, 8, 13),
@@ -499,12 +531,13 @@ yields the default kind, not a guess.
   `standards.MIN_SAMPLES` (a first try is a task's first attempt or the first
   after a new model; more turns or a retry on the same cell goes on with it; a
   pinned task teaches none), one rung per calibration, never below the
-  ladder's first rung and never a cell that needs an approval. The start turns
+  ladder's first rung (but onto the kind's probation cell, by the same rule) and never a cell that
+  needs an approval. The start turns
   move toward the 75th percentile of what the band's passes needed, one
   `standards.TURNS_STEP` per calibration, capped at
   `escalate.MAX_TURNS_CEILING` and never under the kind's own. A band moves one field at a time, and not
   again before that change is judged. Money moves no standard: a point's cost
-  is measured and shown, never a rule's input. `--start` and `--max-turns`
+  is measured and shown, never a rule's input, but for the revert of a probation start. `--start` and `--max-turns`
   always win, and the plan says which standard it used and why (its `planned`
   event keeps the changes it started on).
 - Every change of a standard is appended with when, the repository, the kind

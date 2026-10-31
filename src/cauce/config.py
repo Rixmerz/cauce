@@ -50,6 +50,14 @@ DEFAULTS: dict[str, Any] = {
     # A passing change whose risk is high (or medium, made by a cheap cell) is
     # checked again by an independent verifier before it counts.
     "verifier": True,
+    # A cell whose independent checks came clean ten times in a row here earns skip-lot sampling:
+    # its medium changes made by a cheap cell are checked one pass in two, then one in four; a
+    # blocker returns it to every pass. A high risk is checked every time (`cauce.trust`).
+    "trust": True,
+    # A writing kind with a cheaper cell below its ladder (`matrix.PROBATION`) tries it in turns
+    # with the first rung where that rung already passes here, and starts there only if it passes
+    # as often; a start there that costs more per point is reverted (`trust.probation_arm`).
+    "probation": True,
     # A start that rarely passes its first try here races the next rung on that try, each in
     # its own worktree; the first that passes its check is kept (`orchestrate.race_cell`).
     "race": True,

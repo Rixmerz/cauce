@@ -81,6 +81,18 @@
       "description": "A change that passes is checked again, before it counts, by a separate read-only worker that verifies the request, not the work, when its risk is high (data, security, money, a consumed contract, concurrency, delivery, or code changed with no test beside it) or medium and made by a cheap cell. Its findings go to the next attempt, two corrections at most. Off: a pass stands on its own check.",
       "default": true
     },
+    "trust": {
+      "type": "boolean",
+      "title": "Check less where the record earned it",
+      "description": "Skip-lot sampling of the independent check: a cell (repository, kind and the worker's cell) whose checks came clean ten times in a row has its medium changes made by a cheap cell checked one pass in two, then one in four, never fewer; one blocker returns it to every pass. A high risk is checked every time, and cauce's own check always runs. Off: every such pass is checked.",
+      "default": true
+    },
+    "probation": {
+      "type": "boolean",
+      "title": "Try a cheaper cell below the ladder",
+      "description": "Where a writing kind's first rung already passes its first tries in this repository, a cheaper cell below the ladder (Haiku for implement work) is tried in turns with it, every pass read by the independent check; it becomes the start only if its first tries pass as often, and a start there that later costs more per passed point, or passes less, is reverted. Off: the ladder's first rung is the floor.",
+      "default": true
+    },
     "race": {
       "type": "boolean",
       "title": "Race the next rung on a hard start",

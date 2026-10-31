@@ -1787,6 +1787,25 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_trust(args: argparse.Namespace) -> int:
+    """What the independent check's record says of each cell, read from the store: no model."""
+    from cauce import trust
+
+    key = None if args.all else repo.key(Path(args.repo or ".").resolve())
+    store = Store.open()
+    try:
+        rows = trust.report(store, key)
+    finally:
+        store.close()
+    if args.json:
+        print(json.dumps(rows, indent=2))
+    elif not rows:
+        print("No independent check yet" + (f" in {key}." if key else "."))
+    else:
+        print("\n".join(trust.text(rows)))
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """States the store should never hold, read, never written: 1 when something is broken now."""
     from cauce import doctor
@@ -2731,6 +2750,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--csv", action="store_true", help="with --runs: CSV, for a spreadsheet")
     p.add_argument("--expensive", action="store_true", help="the runs that cost the most for their kind, and why")
     p.set_defaults(func=cmd_stats)
+    p = sub.add_parser("trust", help="what the independent check's record says of each cell: clean checks, where "
+                       "its sampling stands, repeated blockers, re-checks that found something new, and pass-first "
+                       "and cost per point by the cell work started on")
+    p.add_argument("--repo", help="the repository (default: here)")
+    p.add_argument("--all", action="store_true", help="every repository")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_trust)
     p = sub.add_parser("doctor", help="states the store should never hold: work stuck now (broken) and what went "
                        "wrong over the last days (suspect); exits 1 when something is broken")
     p.add_argument("--days", type=int, default=2, help="how far back the suspect rules read (0: everything)")
