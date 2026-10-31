@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.61.0",
+  "version": "0.62.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -157,6 +157,18 @@
       "type": "boolean",
       "title": "Improve each role's lessons by trial",
       "description": "Once a role's workers met enough dead ends and verifier blockers in a repository, Haiku proposes a short list of lessons for that role there (the role's file is never touched). The role's tasks alternate with and without it until each side has 10 first tries; it is kept only where it passed first no worse and did better on one measure, and reverted if it later makes pass-first worse. `cauce roles revisions` shows them. Off: the role's own text alone.",
+      "default": true
+    },
+    "note_trials": {
+      "type": "boolean",
+      "title": "Weigh a worker's notes against their absence",
+      "description": "A note a worker learned starts as a candidate. The tasks it is recalled for take turns carrying it and going without it, and it becomes current only where the tasks that carried it passed their first try no less often; else it is dropped. Off: two later tasks that pass with it make it current.",
+      "default": true
+    },
+    "methods": {
+      "type": "boolean",
+      "title": "Try working methods in turns",
+      "description": "Unclear bugs are briefed a diagnosis protocol (reproduce, where it fails and where it does not, why until a cause that can be shown, then the fix) and plans a pre-mortem whose risks reach the checks of the work after them. Each is tried in turns against its absence in every repository and kept where it did no worse. Off: neither is briefed.",
       "default": true
     },
     "habit_review": {

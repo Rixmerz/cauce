@@ -71,6 +71,7 @@ from cauce import criteria as criteria_mod
 from cauce import evidence as evidence_mod
 from cauce import findings as findings_mod
 from cauce import ledger as ledger_mod
+from cauce import methods as methods_mod
 from cauce import notes as notes_mod
 from cauce import points as points_mod
 from cauce import risk as risk_mod
@@ -270,6 +271,11 @@ class Plan:
     race: Cell | None = None
     #: The arm of a probation trial it starts in (`trust.probation_arm`): None outside one.
     probation: dict | None = None
+    #: The candidate notes its brief left out by their trial (`notes.arms`).
+    withheld: tuple[int, ...] = ()
+    #: What the plan steps before it in its workflow run said could go wrong (`methods.run_risks`),
+    #: for its independent check, as where to probe.
+    seen_risks: tuple[str, ...] = ()
     #: Lines of the plan this repository already heard today (`said_today`): kept, not shown again.
     quiet: frozenset[str] = frozenset()
 
@@ -702,6 +708,7 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     if expected:
         neighbour_notes.append(f"finished {kind} tasks cost ${expected[0]:.2f} on average (last {expected[1]})")
     known: list[dict] = []
+    withheld: list[dict] = []
     key = repo.key(repo_dir)
     if key and config.enabled("notes", os.environ, options.notes):
         if not options.dry_run:
@@ -713,6 +720,11 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
         known = notes.unmerged([n for n in notes.recall(store, key, text, paths=touched_paths(text, options),
                                                         limit=6, strict=True)
                                 if n.get("kind") != notes.CONSTRAINT], repo_dir, options.base)
+        # A worker's candidate note goes without in turn, so it is weighed against its absence (`notes.arms`).
+        known, withheld = notes.arms(store, known)
+        if withheld:
+            neighbour_notes.append(f"notes: {len(withheld)} candidate(s) left out on trial ("
+                                   + ", ".join(f"#{n['id']}" for n in withheld) + ")")
         if known:
             context += notes.brief_lines(known)
             neighbour_notes.append(f"notes: {len(known)} from this project's memory ("
@@ -774,7 +786,8 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     return Plan(kind, classification, ladder, start, reasons + neighbour_notes, names,
                 tuple(context), tuple(statuses), tuple(active), tuple(known), role, team, why,
                 risk, turns, size, standard.data() if standard is not None else None, race,
-                probation={"arm": arm, "cell": PROBATION[kind].label} if arm else None)
+                probation={"arm": arm, "cell": PROBATION[kind].label} if arm else None,
+                withheld=tuple(int(n["id"]) for n in withheld))
 
 
 #: A start whose first tries passed less often than this here, over at least `RACE_SAMPLES`
@@ -1324,9 +1337,20 @@ def run(
         if arm == "gate":
             held_to = owing
             context.append(evidence_mod.brief_line(owing))
+    # A method its kind's workers are briefed to follow (`cauce.methods`): given or not by its trial,
+    # kept either way so the arms can be compared.
+    methodical: dict[str, Any] = {}
+    if methods_mod.enabled() and (method := methods_mod.for_kind(the_plan.kind)) is not None:
+        side, side_why = methods_mod.arm(store, key, method, task["id"])
+        methodical = {methods_mod.KEY: f"{method.name}:{side}", "method_why": side_why}
+        if side == "with":
+            context.append(method.lines)
+    the_plan.seen_risks = tuple(methods_mod.lines_for(methods_mod.run_risks(store, task)))
     store.add_event(task["id"], "briefed", session=got, dead_ends=len(dead), areas=list(reach),
                     context_chars=sum(len(line) for line in context), **primed, **worn, **trunked, **evidenced,
-                    **({notes.BRIEFED: [int(n["id"]) for n in the_plan.notes]} if the_plan.notes else {}))
+                    **methodical,
+                    **({notes.BRIEFED: [int(n["id"]) for n in the_plan.notes]} if the_plan.notes else {}),
+                    **({notes.WITHHELD: list(the_plan.withheld)} if the_plan.withheld else {}))
     # The runtime the project declares goes first on the worker's PATH, and on its
     # check's: a worker given the wrong Node hunts for another and is refused each one.
     run_env = runtime.env_for(workdir)
@@ -1455,8 +1479,12 @@ def run(
             # Numbered as the store numbers it: a resumed task's attempts go on from its last.
             nth = len(store.attempts(task["id"])) + 1
             fork = bool(resume) and decision is not None and decision.move is Move.MORE_EFFORT
+            # A later attempt also reads the notes anchored to the files the work changed so far, which
+            # the first brief could not name (`notes.anchored_to`).
+            later = _later_notes(store, key, the_plan, [*changed, *(isolate.changed(workspace) if workspace
+                                                                     else ())]) if attempts else []
             prompt = brief(text, the_plan.kind, workdir, [*history, *attempts], dead, options.verify,
-                           writes and not declared_read_only, [*context, *aside], options.surfaces)
+                           writes and not declared_read_only, [*context, *aside, *later], options.surfaces)
             role_text = briefing.system_prompt if briefing else ""
             hints = selection.system_prompt()
             if options.trunk_for and (role_text or hints):
@@ -2770,7 +2798,8 @@ def verifier_brief(text: str, kind: str, workdir: Path, base: str | None, change
     links = [line.removeprefix(specs_mod.LINK_PREFIX) for line in impact if line.startswith(specs_mod.LINK_PREFIX)]
     if reach := [line for line in impact if not line.startswith(specs_mod.LINK_PREFIX)]:
         # What the code index (livespec) says the change reaches beyond its own files: where to probe.
-        parts.append("What the project's code index says this change reaches (data, not findings: probe what "
+        parts.append("What the code index says this change reaches, and what a plan before it said could go wrong "
+                     "(data, not findings: probe what "
                      "matters):\n" + "\n".join(f"- {line}" for line in reach))
     if links:
         parts.append(specs_mod.LINK_CHECK + "\ncauce found these without the comment:\n"
@@ -2949,7 +2978,20 @@ def _impact(plan: Plan, changed: Sequence[str], repo_dir: Path, *, workdir: Path
             lines += [x for x in adapter.assess(changed, repo_dir, status) if " could not " not in x]
         except Exception:  # noqa: S112 - an index that cannot say is no reason to skip the check
             continue
-    return lines + _links(plan, changed, workdir, base)
+    return lines + list(plan.seen_risks) + _links(plan, changed, workdir, base)
+
+
+def _later_notes(store: Store, key: str | None, the_plan: Plan, changed: Sequence[str]) -> list[str]:
+    """The lines of the notes anchored to files the work changed that its first brief did not
+    carry (or left out on trial). Never fails a run."""
+    if not key or not changed or not config.enabled("notes", os.environ):
+        return []
+    try:
+        found = notes.anchored_to(store, key, changed,
+                                  skip=[*(int(n["id"]) for n in the_plan.notes), *the_plan.withheld])
+    except sqlite3.Error:
+        return []
+    return notes.brief_lines(found) if found else []
 
 
 def _livespec_calls(store: Store, task_id: int, nth: int, handed: Sequence[str]) -> dict[str, int] | None:
@@ -3131,6 +3173,25 @@ def recheck_lines(sha: str, files: Sequence[str]) -> str:
             "shows it.")
 
 
+def reask_lines(missing: Sequence[str], correct: Mapping[str, str]) -> str:
+    """What an independent check that left CORRECT lines unanswered is asked again: those, each."""
+    return ("Your answer left these CORRECT lines unanswered. Answer each one in `criteria` by its id, whether the "
+            "change meets it and what shows it; your earlier findings stand:\n"
+            + "\n".join(f"{cid}: {correct[cid]}" for cid in missing))
+
+
+def _merged(first: launch.WorkerResult, again: launch.WorkerResult) -> launch.WorkerResult:
+    """A check asked again for what it left unanswered: its criteria answered either time (the later
+    answer wins), every finding of both, both costs; passed as the later answer says."""
+    said = {c["id"]: c for c in first.criteria}
+    said.update({c["id"]: c for c in again.criteria})
+    found = list(first.findings)
+    found += [f for f in again.findings if f not in found]
+    return dataclasses.replace(again, criteria=tuple(said.values()), findings=tuple(found),
+                               cost_usd=first.cost_usd + again.cost_usd, turns=first.turns + again.turns,
+                               duration_s=first.duration_s + again.duration_s)
+
+
 def _correct_lines(verdict: launch.WorkerResult, correct: Mapping[str, str]) -> tuple[list[dict[str, str]], list[str]]:
     """The CORRECT lines (`C#`, `tracer.criteria`) a check said the change does not meet, as blockers,
     and the ones it left unanswered."""
@@ -3185,13 +3246,19 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
             ahead.stop()  # the check changed what it read: read the change as it stands now
         read_at = (isolate.snapshot(workdir) or "") if snapshots else ""
         verdict, overlapped_s = launcher(check), 0.0
+    correct = dict(tracer_mod.criteria(workdir, text)[0]) if config.enabled("tracer", os.environ) else {}
+    reasked: list[str] = []
+    if correct and (missing := _correct_lines(verdict, correct)[1]):
+        # It left CORRECT lines unanswered: asked once more for those alone, in a session of its own.
+        reasked = missing
+        again = launcher(dataclasses.replace(check, prompt=check.prompt + "\n\n" + reask_lines(missing, correct)))
+        verdict = _merged(verdict, again)
     wall_s = time.monotonic() - mark
     fixing = tuple(rows)
     return _judged(result, verdict, vcell=vcell, wall_s=wall_s, overlapped_s=overlapped_s, beside=beside, risk=risk,
                    ledger=ledger, corrections=corrections, store=store, task_id=task_id, nth=nth, say=say,
-                   outgrew=outgrew, rows=fixing,
-                   correct=dict(tracer_mod.criteria(workdir, text)[0]) if config.enabled("tracer", os.environ) else {},
-                   recorded={
+                   outgrew=outgrew, rows=fixing, correct=correct,
+                   recorded={**({"tracer_reasked": reasked} if reasked else {}),
                        "worker": cell.label, **({"read_at": read_at} if read_at else {}),
                        **({"delta": {"since": since[0], "files": list(since[1])[:50], "n": len(since[1])}}
                           if since is not None else {}),
@@ -3323,6 +3390,14 @@ def _judged(result: launch.WorkerResult, verdict: launch.WorkerResult, *, vcell:
     return failed, stop, ledger, corrections, tuple(blockers)
 
 
+#: Reading kinds whose task names a change by nature: the change is for the work after them.
+PLANNING_KINDS = frozenset({"plan"})
+#: What a planning worker is told of the change its task names, in place of the `spec_bug` line:
+#: a real plan step of a workflow ("Plan … : Add a function …") answered `spec_bug`, read-only.
+PLAN_CHANGE = ("the change the task names is for the work that follows you: planning it is the "
+               "deliverable, never a `spec_bug`, and you make none of it here.")
+
+
 def brief(
     text: str,
     kind: str,
@@ -3347,8 +3422,9 @@ def brief(
                      "when what you found is broken, missing or failing. Put the answer in `summary`, each finding "
                      "in `findings` (where, what, how it is known, and its proof), and what shows them (file:line, "
                      "a command and its output) in `evidence`. `code_bug` is never about the "
-                     "code you read: use `inconclusive` for something you could not check, and `fail` with "
-                     "`spec_bug` when the task asks for a change, which you cannot make here.")
+                     "code you read: use `inconclusive` for something you could not check, and "
+                     + (PLAN_CHANGE if kind in PLANNING_KINDS else
+                        "`fail` with `spec_bug` when the task asks for a change, which you cannot make here."))
     if verify:
         parts.append(f"When you report a pass, it is checked by running: {verify}")
         if writes and (near := ci.related(verify, workdir)):

@@ -1,0 +1,204 @@
+"""What cauce learns is made to earn its place: a worker's candidate note weighed against its
+absence, the notes of the files a later attempt changed, a method tried in arms, a plan's
+pre-mortem handed to the checks after it, and a loop's round that moved nothing kept as such."""
+from __future__ import annotations
+
+from datetime import datetime
+
+from cauce import flow, loops, methods, notes, orchestrate
+from cauce.orchestrate import Options, run
+from cauce.store import Store
+
+from .test_loops import ROUND, _loop
+from .test_orchestrate import Script, kind, ok
+from .test_standards import finished
+from .test_workflows import _runner, _save
+
+
+def _briefed(store: Store, task_id: int, carried=(), withheld=()) -> None:
+    store.add_event(task_id, "briefed", session=None, dead_ends=0, areas=[], context_chars=0,
+                    **{notes.BRIEFED: list(carried), notes.WITHHELD: list(withheld)})
+
+
+def _candidate(store: Store, text: str = "Totals are rounded half up") -> int:
+    return store.add_note("r", "code", "t", text, author="worker", filed_by="haiku", state=notes.CANDIDATE)
+
+
+# --- a candidate note weighed against its absence ---------------------------------------------------
+
+
+def test_a_candidate_goes_without_in_turn_until_its_trial_is_full(store: Store, monkeypatch):
+    note = _candidate(store)
+    found = notes.expand(store, [note])
+    assert notes.arms(store, found) == (found, [])  # the trial is off in tests
+    monkeypatch.setenv("CAUCE_NOTE_TRIALS", "on")
+    assert notes.arms(store, found) == (found, [])  # carried first
+    _briefed(store, finished(store, ("sonnet/medium", 1)), carried=[note])
+    carried, left = notes.arms(store, found)
+    assert carried == [] and [n["id"] for n in left] == [note]
+    for _ in range(notes.NOTE_TRIAL):
+        _briefed(store, finished(store, ("sonnet/medium", 1)), withheld=[note])
+        _briefed(store, finished(store, ("sonnet/medium", 1)), carried=[note])
+    assert notes.arms(store, found) == (found, [])  # left out its full share: carried from now on
+    rule = store.add_note("r", "rules", "c", "Gift cards are never discounted", author="worker", filed_by="haiku",
+                          state=notes.CANDIDATE, kind=notes.CONSTRAINT)
+    assert notes.arms(store, notes.expand(store, [rule])) == (notes.expand(store, [rule]), [])  # a rule never goes
+
+
+def test_a_candidate_is_current_where_it_did_no_worse_than_its_absence_and_dropped_where_it_did(store: Store,
+                                                                                            monkeypatch):
+    monkeypatch.setenv("CAUCE_NOTE_TRIALS", "on")
+    helps, hurts = _candidate(store), _candidate(store, "The cache is warmed by a cron job")
+    for n in range(notes.NOTE_TRIAL):
+        _briefed(store, finished(store, ("sonnet/medium", 1)), carried=[helps])
+        _briefed(store, finished(store, ("sonnet/medium", int(n == 0), "code_bug")), withheld=[helps])
+        _briefed(store, finished(store, ("sonnet/medium", int(n == 0), "code_bug")), carried=[hurts])
+        _briefed(store, finished(store, ("sonnet/medium", 1)), withheld=[hurts])
+    assert notes.weigh(store) == {"current": [helps], "dropped": [hurts]}
+    assert store.get_note(helps)["state_reason"].startswith(notes.PROVEN + "the 3 tasks that carried it passed")
+    assert store.get_note(hurts)["state_reason"].startswith(
+        "disproven: the 3 tasks that carried it passed their first try 33%")
+
+
+def test_a_candidate_waits_for_its_arm_even_after_two_passes(store: Store, monkeypatch):
+    monkeypatch.setenv("CAUCE_NOTE_TRIALS", "on")
+    note = _candidate(store)
+    for _ in range(notes.PROVE_AFTER):
+        _briefed(store, finished(store, ("sonnet/medium", 1)), carried=[note])
+    assert notes.weigh(store) == {"current": [], "dropped": []}  # without the trial it would be proven
+    monkeypatch.setenv("CAUCE_NOTE_TRIALS", "off")
+    assert notes.weigh(store) == {"current": [note], "dropped": []}
+
+
+def test_a_later_attempt_reads_the_notes_of_the_files_the_work_changed(git_repo, store: Store, monkeypatch):
+    from cauce import repo
+
+    monkeypatch.setenv("CAUCE_NOTES", "on")
+    key = repo.key(git_repo)
+    note = store.add_note(key, "code", "Counters", "The counter wraps at 255", author="person", filed_by="person")
+    store.add_anchor(note, "counter.txt")
+    script = Script(ok("first"), ok("second"), write="counter.txt")
+    script.results[0] = orchestrate.launch.WorkerResult(False, orchestrate.Failure.CODE_BUG, "wrong", cost_usd=0.1)
+    run("Make the tally right", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
+    first, second = script.specs
+    assert "The counter wraps at 255" not in first.prompt  # the request named no file the note is about
+    assert "The counter wraps at 255 · about counter.txt" in second.prompt
+
+
+# --- methods tried in arms ----------------------------------------------------------------------------
+
+
+def test_a_method_alternates_then_stays_where_it_did_no_worse(store: Store):
+    diagnosis = methods.METHODS["debug-unclear"]
+
+    def task(side: str, passed: bool) -> None:
+        t = store.create_task("t", status="done", source="cauce", repo="r", kind="debug-unclear")
+        store.add_attempt(t["id"], cell="opus/high", max_turns=30, passed=int(passed), input_tokens=10)
+        store.add_event(t["id"], "briefed", method_arm=f"diagnosis:{side}")
+
+    assert methods.arm(store, "r", diagnosis, 2)[0] == "with"
+    task("with", True)
+    assert methods.arm(store, "r", diagnosis, 2)[0] == "without"
+    for n in range(methods.TRIAL):
+        task("with", True)
+        task("without", n < 3)
+    side, why = methods.arm(store, "r", diagnosis, 2)
+    assert side == "with" and why.startswith("the diagnosis won its trial here")
+    for _ in range(8):  # 7 of 15 with it against 3 of 6 without: it lost
+        task("with", False)
+    assert methods.arm(store, "r", diagnosis, 2)[0] == "without"
+    assert methods.arm(store, None, diagnosis, 1)[0] == "with"
+
+
+def test_a_debug_brief_carries_the_diagnosis_on_its_arm(git_repo, store: Store, monkeypatch):
+    monkeypatch.setenv("CAUCE_METHODS", "on")
+    monkeypatch.setattr(methods, "arm", lambda store, repo, method, task_id: ("with", "on trial"))
+    script = Script(ok(), write="x.txt")
+    report = run("The export sometimes drops rows", git_repo, store, registry={}, launcher=script,
+                 classifier=kind("debug-unclear"))
+    assert "Diagnose before you change anything" in script.specs[0].prompt
+    assert store.events_of(report.task_id, "briefed")[0]["data"]["method_arm"] == "diagnosis:with"
+    monkeypatch.setattr(methods, "arm", lambda store, repo, method, task_id: ("without", "on trial"))
+    script = Script(ok(), write="y.txt")
+    run("The import sometimes drops rows", git_repo, store, registry={}, launcher=script,
+        classifier=kind("debug-unclear"))
+    assert "Diagnose before you change anything" not in script.specs[0].prompt
+
+
+def test_a_plan_s_risks_reach_the_check_of_the_work_after_it(git_repo, store: Store, kicks, monkeypatch):
+    assert methods.risks("Split in two.\nRisks:\n- the cache keeps old totals\n- 2. a race on save\n\nLater.") == [
+        "the cache keeps old totals", "a race on save"]
+    assert methods.risks("Risks: none worth a probe") == ["none worth a probe"]
+    assert methods.risks("no section") == []
+    _save({"name": "planned", "inputs": ["goal"], "steps": [
+        {"id": "plan", "prompt": "Plan {goal}", "kind": "plan"},
+        {"id": "build", "prompt": "Build {goal}", "kind": "implement", "start": "haiku/high"}]}, git_repo)
+    from cauce import workflows
+
+    started = workflows.start(store, "planned", git_repo, {"goal": "the export"}, session_id="s1")
+    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    from .test_checking import check
+
+    seen: list[dict] = []
+    flow.work(store, runner=_runner([ok("Two steps.\nRisks:\n- the totals cache keeps old values"), ok("built"),
+                                     check("pass")], seen))
+    assert workflows.status(store, started["id"])["state"] == "done"
+    assert "the plan before this work named a risk: the totals cache keeps old values" in seen[2]["prompt"]
+
+
+def test_stats_show_each_method_s_trial(store: Store):
+    from cauce import analysis
+
+    done = finished(store, ("opus/high", 1), kind="debug-unclear")
+    store.add_event(done, "briefed", method_arm="diagnosis:with")
+    report = analysis.compute(store, days=0, repo="r")
+    assert report["methods"]["diagnosis"]["with"] == {"tasks": 1, "tries": 1, "passed": 1, "rate": 1.0}
+    assert "the diagnosis method (its trial" in analysis.text(report)
+
+
+# --- a loop's round that moved nothing --------------------------------------------------------------
+
+
+def test_a_round_that_changed_and_moved_nothing_is_an_empty_round_and_no_base(tmp_path, store: Store, kicks):
+    folder = tmp_path / "f"
+    folder.mkdir()
+    (folder / "count").write_text("1\n")
+    _save(ROUND, folder)
+    _loop(folder, metric="cat count", stale=3)
+    loops.set_state("leads", status="running")
+    now = datetime(2026, 10, 25, 23, 0).astimezone()
+    assert loops.tick(store, "leads", now=now) == "started"
+    flow.work(store, parallel=False, runner=_runner([ok("nothing would move it now")], []))
+    loops.tick(store, "leads", now=now)
+    first = loops.diary("leads")[0]
+    assert first["empty"] is True and first["changed_files"] == 0
+    told = store.run_tasks(loops.diary("leads")[1]["run"])[0]["body"]
+    assert "A round that changes nothing is a valid outcome" in told and "changed nothing" in told
+    assert "empty rounds (passed, changed nothing): 1" in loops.summary("leads")
+    assert Options  # kept for the module's imports
+
+
+def test_a_run_s_status_says_what_each_step_is_for_its_graph(git_repo, store: Store, kicks, capsys):
+    from cauce import workflows
+
+    from .test_workflow_steps import ASKING
+
+    _save(ASKING, git_repo)
+    started = workflows.start(store, "asking", git_repo, {"goal": "the export"}, session_id="s1")
+    flow.work(store, runner=_runner([ok("built")], []))
+    steps = {s["id"]: s for s in workflows.status(store, started["id"])["steps"]}
+    assert steps["how"]["asks"] == ["flag", "direct"] and steps["flagged"]["when"] == {"how": "flag"}
+    assert "asks" not in steps["build"] and "runs" not in steps["build"]
+    from cauce import workflow_cli
+
+    workflow_cli._print_run(workflows.status(store, started["id"]))
+    out = capsys.readouterr().out
+    assert f"asks the person: how — `cauce workflow answer {started['id']} how <flag|direct>`" in out
+    assert "waits on the orchestrator: " not in out  # a question is answered, never resumed
+
+
+def test_a_plan_is_told_the_change_its_task_names_is_for_the_work_after_it(tmp_path):
+    planned = orchestrate.brief("Plan: add a subtract function", "plan", tmp_path, [], [], None, writes=False)
+    assert orchestrate.PLAN_CHANGE in planned and "`fail` with `spec_bug` when the task asks" not in planned
+    read = orchestrate.brief("Explore the export", "explore", tmp_path, [], [], None, writes=False)
+    assert "`fail` with `spec_bug` when the task asks for a change" in read

@@ -690,10 +690,15 @@ def finish(ws: Workspace, *, keep: bool, message: str) -> str | None:
         # A worker that committed a link committed a pointer into this machine.
         _git(ws.path, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *ws.links, check=False)
     if keep and has_changes(ws):
+        staged = False
         if _git(ws.path, "status", "--porcelain"):
             _git(ws.path, "add", "-A")
             _git(ws.path, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--",
                  *(f":(glob)**/{d}/**" for d in sorted(ARTIFACT_DIRS)), check=False)
+            # A worker that committed its work itself leaves only its tools' artifacts behind:
+            # once they are dropped nothing is staged, and a commit of nothing failed the run.
+            staged = bool(_git(ws.path, "diff", "--cached", "--name-only"))
+        if staged:
             _commit(ws, message)
         elif _unverified(_git(ws.path, "log", "-1", "--format=%B")) and not _unverified(message):
             # Work kept unverified has passed since, unchanged: the branch says so.

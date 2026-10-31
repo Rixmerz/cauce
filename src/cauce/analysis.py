@@ -28,6 +28,7 @@ from typing import Any
 from cauce import cells as cells_mod
 from cauce import evidence as evidence_mod
 from cauce import launch, racing, revisions, trunks, trust, usage, workflows
+from cauce import methods as methods_mod
 from cauce.store import Store
 
 #: The phases of a run, in the order they happen. The first four come before its own wall
@@ -547,6 +548,10 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "capabilities": capabilities_used(events, {r["task"] for r in found}),
         "evidence": evidence_mod.trial(store, repo),
         "evidence_now": evidence_mod.arm(store, repo, 0)[1] if repo else None,
+        # Each method a kind's workers may be briefed to follow, and its trial (`cauce.methods`).
+        "methods": {m.name: methods_mod.trial(store, repo, m) for m in methods_mod.METHODS.values()},
+        "methods_now": {m.name: methods_mod.arm(store, repo, m, 0)[1] for m in methods_mod.METHODS.values()}
+        if repo else {},
         "expensive": expensive(found),
     }
     if keep_runs is None:
@@ -763,6 +768,14 @@ def text(report: Mapping[str, Any]) -> str:
                              f"({_rate(row['blocked_rate'])})")
             if report.get("evidence_now"):
                 lines.append(f"  now: {report['evidence_now']}")
+        for name, arms in (report.get("methods") or {}).items():
+            if any(side.get("tasks") for side in arms.values()):
+                lines += ["", f"the {name} method (its trial; tasks, first tries passed):"]
+                for side, row in arms.items():
+                    lines.append(f"  {side:<8} tasks {row['tasks']:>4}  first tries {row['passed']}/{row['tries']} "
+                                 f"({_rate(row['rate'])})")
+                if (report.get("methods_now") or {}).get(name):
+                    lines.append(f"  now: {report['methods_now'][name]}")
         if report.get("trust"):
             lines += ["", "the independent check's record by cell (its sampling, repeated blockers, re-checks finding "
                       "something new, and the work that started there):"]

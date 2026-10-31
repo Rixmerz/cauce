@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+## [0.62.0] - 2026-10-31
+
+### Fixed
+
+- **A workflow `plan` step no longer stops as `spec_bug` because its task names a change**: a real
+  run's plan worker, told that a read-only task asking for a change is a `spec_bug`, refused to
+  plan "Add a function"; a planning worker is now told the change is for the work after it.
+- **A worker that committed its own work no longer kills its run at the ending**: when only its
+  tools' artifacts (`__pycache__`) were left uncommitted, cauce's commit had nothing staged once
+  they were dropped, and the run died with exit 1 (twice in a real workflow, the automatic resume
+  included). cauce commits only what is still staged, and keeps the worker's commit as the branch.
+- **`cauce workflow status` gives a question step the line that answers it**
+  (`cauce workflow answer <run> <step> <option>`), not `cauce resume`, which a question refuses.
+- **A workflow graph's `when` label sits over its step's box**, where the gap between two boxes
+  cut it off.
+
+### Added
+
+- **A worker's candidate note is weighed against its absence** (the `note_trials` setting): the
+  tasks it is recalled for alternate between carrying it and going without it, and it becomes
+  current only where the ones that carried it passed their first try no less often; two passes in a
+  row no longer prove a note that every task would have passed without. The `briefed` event keeps
+  the candidates left out (`notes_withheld`).
+- **A later attempt reads the notes of the files the work changed**: the notes anchored to what the
+  earlier attempts wrote go in its brief, where the first brief could only read the files the
+  request named.
+- **The independent check is asked once more for the TRACER CORRECT lines it left unanswered**, its
+  two answers merged; only what stays unanswered is said on the verdict card.
+- **Methods tried in arms** (`cauce.methods`, the `methods` setting): a diagnosis protocol for
+  `debug-unclear` (reproduce, where it fails and where not, a cause shown before the fix) and a
+  pre-mortem for `plan` (a `Risks:` section). Each repository tries a method in turns with its
+  absence and keeps it where its arm passed first tries no less often; a plan's risks reach the
+  independent check of the steps after it as where to probe. `cauce stats` shows each trial.
+- **A loop's round that changes nothing is a valid outcome**: its steps are told so, the diary
+  marks a passed round that changed no file and moved nothing as empty, the next round starts from
+  the last one that changed files, and the summary counts them.
+- **Haiku is tried below `refactor` and `test` too** (`matrix.PROBATION`): on `bench/speed/kinds.py`
+  it was as right as their first rung (every check held, every mutant killed) at a fifth of the
+  cost per right answer, though about five times slower; each repository's probation trial decides.
+- **The web board shows what cauce learned**: the Analysis screen lists each trust cell's record and
+  sampling, the capabilities handed and called, and the evidence and method arms; a workflow's graph
+  draws question steps, sub-workflow steps, skipped steps and each edge's `when`.
+
 ## [0.61.0] - 2026-10-31
 
 ### Added

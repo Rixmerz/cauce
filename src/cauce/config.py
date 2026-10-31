@@ -97,6 +97,14 @@ DEFAULTS: dict[str, Any] = {
     # them from what the role's workers met there, its tasks alternate with and without them,
     # and they are kept only where they won (`cauce.revisions`). Off: the role's own text alone.
     "role_trials": True,
+    # A worker's candidate note is weighed against its absence: the tasks it is recalled for
+    # alternate between carrying it and going without it, and it becomes current only where the
+    # ones that carried it passed their first try no less often (`notes.arms`, `notes.weigh`).
+    "note_trials": True,
+    # A method a kind's workers are briefed to follow (a diagnosis protocol for unclear bugs, a
+    # pre-mortem for plans), tried in turns against its absence and kept where it did no worse
+    # (`cauce.methods`).
+    "methods": True,
     # A habit newly found in a project is reviewed by a read-only worker (its tool here, a
     # command scoped to the edited file, timed): its ending lists the install line for the
     # orchestrator to put to the person. Installing stays theirs (`cauce habits install`).

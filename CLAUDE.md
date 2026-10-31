@@ -42,7 +42,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `trust`, `probation`, `evidence`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `specs`, `tracer`, `habit_review`, `habit_auto`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number; `livespec_wait`, seconds, 0 never waits), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `trust`, `probation`, `evidence`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `specs`, `tracer`, `habit_review`, `habit_auto`, `role_trials`, `note_trials`, `methods`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number; `livespec_wait`, seconds, 0 never waits), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets, and the jobs a person quieted per repository |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -57,10 +57,12 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
 | `src/cauce/revisions.py` | a role's lessons per repository, improved by measured trial: proposed by Haiku from the role's dead ends and verifier blockers there, tried in alternating arms, adopted, dropped or reverted, every record appended to `role_revisions`; `cauce roles revisions` reads it |
+| `src/cauce/methods.py` | how a kind's workers are briefed to work, tried against its absence: a diagnosis protocol for `debug-unclear`, a pre-mortem for `plan` whose `Risks:` reach the independent check of the steps after it; arms per repository (`method_arm`); no model |
 | `src/cauce/racing.py` | whether racing a first try paid, per repository and kind: each race read from its attempts (rung, start, neither), the rung's wins and the time to pass against climbs, the judgement `race_cell` and `cauce stats` read; no model |
 | `src/cauce/cells.py` | where a lesson belongs: the area a path or a change is in, the role that met it, or everyone (`scope`); the text a failure is kept and matched by (a workflow step's goal, never its template); the cell's primer (how its workers got oriented) and its trial; no model |
 | `src/cauce/doctor.py` | `cauce doctor`: states the store should never hold, each a bug that shipped turned into a query (broken: stuck now; suspect: over the last days); read only, no model; SessionStart names what is broken |
 | `bench/review/` | the review benchmark: real review chains (one review, two blind ones, two with different purposes, a classifier before a quality check) on a change with planted bugs, matched by `analyze.py`; what it measured is in its README |
+| `bench/speed/kinds.py` | whether Haiku does `refactor` and `test` work as right as their first rung: real workers on the memory bench's pricing engine, a refactor judged by its layout and prices kept, tests judged by mutants killed (real money: run on purpose) |
 | `bench/memory/` | the memory benchmark: real workers on a small pricing engine, judged by hidden tests, cold against briefed with a teacher's memory; what it measured is in its README (real money: run on purpose) |
 | `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away; constraints, the rules a change must meet, briefed apart as requirements |
 | `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
@@ -465,7 +467,8 @@ yields the default kind, not a guess.
   here, the re-checks that found something new, and pass-first and cost per point by the cell work
   started on. Tests run with `CAUCE_TRUST=off`.
 - A writing kind may have a cheaper cell below its ladder (`matrix.PROBATION`: Haiku for
-  `implement`, from `bench/memory`; no other kind was measured). It is tried only on trial
+  `implement`, from `bench/memory`, and for `refactor` and `test`, from `bench/speed/kinds.py`; no
+  other kind was measured). It is tried only on trial
   (`trust.probation_arm`, the `probation` setting): where the ladder's first rung passes
   `standards.PASS_FIRST` of `MIN_SAMPLES` or more first tries of the kind here, on a start nothing
   raised or pinned, never a high risk, a resume, a ledger, parts or a run in the checkout, and only
@@ -1141,10 +1144,16 @@ yields the default kind, not a guess.
   attempt, whose facts no pass confirmed. A worker's note starts as a
   `candidate`: recalled, marked unproven in a brief, and adopted only on
   evidence. The `briefed` event keeps the notes each brief carried
-  (`notes.BRIEFED`), and `notes.weigh`, in `evolution.settle` and never in a
-  GET, makes it current once `notes.PROVE_AFTER` later tasks whose first brief
-  carried it passed their first try, and drops it, with its reason, after
-  `notes.DISPROVE_AFTER` failed theirs with none passing. A person's note and
+  (`notes.BRIEFED`) and the candidates its trial left out (`notes.WITHHELD`): the tasks
+  a candidate is recalled for alternate between carrying it and going without it
+  (`notes.arms`, the `note_trials` setting; a constraint is never left out) until each
+  side has `notes.NOTE_TRIAL` first tries; then `notes.weigh`, in `evolution.settle` and
+  never in a GET, makes it current where the tasks that carried it passed their first try
+  no less often than the ones without it, and drops it, with both rates, where they did
+  worse; one with no pass after `notes.DISPROVE_AFTER` failed is dropped at once. With
+  the trial off, `notes.PROVE_AFTER` passes make it current. A later attempt's brief
+  also carries the notes anchored to the files the work changed so far
+  (`orchestrate._later_notes`). A person's note and
   Haiku's from a conversation are current as written. Haiku files under topics that
   exist and never invents a link; without Haiku a fact is kept by its words.
   A fact that looks like a secret is never kept.
@@ -1183,7 +1192,17 @@ yields the default kind, not a guess.
   count), added to its `criteria`: one it says is not met is a blocker (`orchestrate._correct_lines`),
   a correction like any, the late check's too; one it leaves unanswered is kept on its `verified`
   event (`tracer_unanswered`), said on the verdict card and the ending (`unchecked`), and lets the
-  diff be opened: never taken as met.
+  diff be opened: never taken as met. Before that the check is asked once more for exactly those
+  lines (`orchestrate.reask_lines`, `tracer_reasked`), its two answers merged; what stays
+  unanswered is what is kept.
+- A method is how a kind's workers are told to work (`cauce.methods`, the `methods` setting): a
+  diagnosis for `debug-unclear` (reproduce, where it fails and where not, a cause shown before a
+  fix), a pre-mortem for `plan` (a `Risks:` section). It is data in the brief, tried in arms per
+  repository (`briefed.method_arm`) until each has `methods.TRIAL` first tries, and kept only where
+  its arm passed no less often; a pre-mortem is judged by the first tries of the steps after its
+  plan. A plan's risks reach the independent check of the steps after it as where to probe
+  (`Plan.seen_risks`), data, never findings. Tests run with `CAUCE_METHODS=off` and
+  `CAUCE_NOTE_TRIALS=off`.
 - A note whose anchors were all written at commits outside the history a task starts from
   (its base, else HEAD: a worker's note about its own change, filed while its branch waits
   to be merged) is marked so in that task's brief (`notes.unmerged`), never dropped: what it
@@ -1361,7 +1380,9 @@ yields the default kind, not a guess.
   (the rest counted), quoted as data. The metric is the last number the person's command
   prints, run by cauce before the first round and after each, never a worker's word. A
   loop stops only on evidence: its target, its window, `stale` rounds that did not improve
-  on the best before them (an unmeasured round improves nothing), or a round that waits on
+  on the best before them (an unmeasured round improves nothing; a passed round that changed
+  no file and moved nothing is an empty round, a valid outcome said in the diary, and the
+  next round starts from the last one that changed files), or a round that waits on
   what only the person clears; never on money, and its rounds' cost is kept and shown.
   Variants alternate, the one with fewer measured rounds first, until each has `trial`;
   the one with the larger mean gain is adopted and recorded. A loop starts as a draft:

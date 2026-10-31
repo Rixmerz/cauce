@@ -61,11 +61,15 @@ def test_a_writing_worker_reads_the_method_and_the_check_holds_the_change_to_its
         git_repo, store, monkeypatch):
     _tracer(git_repo)
     monkeypatch.setenv("CAUCE_VERIFIER", "on")
-    script = Script(passing(), check("pass"), write="app.py")
+    script = Script(passing(), check("pass"), check("pass"), write="app.py")
     report = run("Fix the payment of the course so learners can find material", git_repo, store, registry={},
                  launcher=script, classifier=kind("implement"))
     assert report.status == "done"
-    worker, verifier = (s.prompt for s in script.specs)
+    worker, verifier, again = (s.prompt for s in script.specs)
+    # It answered none of the CORRECT lines: asked once more for them, then said as unanswered.
+    assert "Your answer left these CORRECT lines unanswered" in again and "C1:" in again
+    checked = store.events_of(report.task_id, "verified")[0]["data"]
+    assert checked["tracer_reasked"] == checked["tracer_unanswered"] == ["C1", "C2", "C3", "C4", "C5"]
     assert "follows the TRACER method" in worker and "never a UUID" in worker and "real name" in worker
     assert "track-progress" not in worker  # a flow the request does not name stays out
     assert "CORRECT lines of the flows this request names" in verifier

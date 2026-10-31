@@ -86,6 +86,12 @@ PROVE_AFTER = 2
 DISPROVE_AFTER = 3
 #: The `briefed` event's field that lists the notes a brief carried.
 BRIEFED = "notes"
+#: The `briefed` event's field that lists the candidate notes a brief left out by their trial.
+WITHHELD = "notes_withheld"
+#: A worker's candidate note is weighed against its absence (the `note_trials` setting): the tasks
+#: it was recalled for alternate between carrying it and going without it, until each arm has this
+#: many first tries; it becomes current only when the tasks that carried it passed no less often.
+NOTE_TRIAL = 3
 #: How the reason of a candidate made current begins (`doctor` reads it).
 PROVEN = "proven: "
 AUTHORS = ("person", "worker", "session")
@@ -432,6 +438,56 @@ def carried(store: Store) -> dict[int, set[int]]:
     return out
 
 
+def withheld(store: Store) -> dict[int, set[int]]:
+    """Per task, the candidate notes its first brief left out by their trial (`WITHHELD`)."""
+    out: dict[int, set[int]] = {}
+    seen: set[int] = set()
+    for event in store.events_of_kinds(["briefed"]):
+        task_id = int(event["task_id"])
+        if task_id in seen:
+            continue
+        seen.add(task_id)
+        ids = event["data"].get(WITHHELD)
+        if isinstance(ids, list):
+            out[task_id] = {int(i) for i in ids if isinstance(i, int)}
+    return out
+
+
+def trials_on(env: Mapping[str, str] | None = None) -> bool:
+    from cauce import config
+
+    return config.enabled("note_trials", os.environ if env is None else env)
+
+
+def arms(store: Store, found: Sequence[Mapping[str, Any]]) -> tuple[list[dict], list[dict]]:
+    """The notes a brief carries and the candidates it leaves out by their trial: each worker
+    candidate (never a constraint, whose breaking is a finding) goes without in turn, the arm with
+    fewer tasks next, until it was left out `NOTE_TRIAL` times. With `note_trials` off, all carried."""
+    if not trials_on():
+        return list(found), []
+    trial = [n for n in found if n.get("state") == CANDIDATE and n.get("kind") != CONSTRAINT]
+    if not trial:
+        return list(found), []
+    took, left = carried(store), withheld(store)
+    out_ids = set()
+    for note in trial:
+        nid = int(note["id"])
+        with_it = sum(1 for ids in took.values() if nid in ids)
+        without = sum(1 for ids in left.values() if nid in ids)
+        if without < NOTE_TRIAL and without < with_it:
+            out_ids.add(nid)
+    return ([n for n in found if int(n["id"]) not in out_ids], [n for n in found if int(n["id"]) in out_ids])
+
+
+def anchored_to(store: Store, project: str, paths: Iterable[str], skip: Iterable[int] = ()) -> list[dict]:
+    """The live notes anchored to these paths, but the ones in `skip`: what a later attempt's brief
+    adds once the work changed files the first brief could not name."""
+    skipped = {int(i) for i in skip}
+    ids = [i for i in store.notes_at(project, paths) if i not in skipped]
+    rows = [n for n in store.notes(project, states=LIVE, ids=ids) if n.get("kind") != CONSTRAINT]
+    return expand(store, [int(n["id"]) for n in rows], {int(n["id"]): "about a file the work changed" for n in rows})
+
+
 def weigh(store: Store) -> dict[str, list[int]]:
     """Settle the candidates by the tasks whose first brief carried them, other than the one
     that wrote them, once those ended: current after `PROVE_AFTER` passed their first try
@@ -443,16 +499,42 @@ def weigh(store: Store) -> dict[str, list[int]]:
         return moved
     from cauce import standards
 
-    briefs = carried(store)
+    briefs, left_out = carried(store), withheld(store)
     ended = {t.id: t for t in standards.ended(store)}
+
+    def firsts(holding: Mapping[int, set[int]], note: Mapping[str, Any]) -> tuple[list[int], list[int]]:
+        passed, failed = [], []
+        for task_id in sorted(t for t, ids in holding.items() if note["id"] in ids and t != note["task_id"]):
+            task = ended.get(task_id)
+            first = standards.samples(task.attempts)[:1] if task is not None else []
+            if first:
+                (passed if first[0][1] else failed).append(task_id)
+        return passed, failed
+
+    trials = trials_on()
     with store.immediate():
         for note in candidates:
-            passed, failed = [], []
-            for task_id in sorted(t for t, ids in briefs.items() if note["id"] in ids and t != note["task_id"]):
-                task = ended.get(task_id)
-                first = standards.samples(task.attempts)[:1] if task is not None else []
-                if first:
-                    (passed if first[0][1] else failed).append(task_id)
+            passed, failed = firsts(briefs, note)
+            if trials and note.get("kind") != CONSTRAINT:
+                # Weighed against its absence: the tasks that carried it against the ones its trial
+                # left without it. A note that never failed a reader still waits for its arm to fill.
+                w_passed, w_failed = firsts(left_out, note)
+                carried_n, without_n = len(passed) + len(failed), len(w_passed) + len(w_failed)
+                if not passed and len(failed) >= DISPROVE_AFTER:
+                    pass  # dropped below, as without a trial: every reader failed
+                elif carried_n >= NOTE_TRIAL and without_n >= NOTE_TRIAL:
+                    with_rate, without_rate = len(passed) / carried_n, len(w_passed) / without_n
+                    said = (f"the {carried_n} tasks that carried it passed their first try {with_rate:.0%}, the "
+                            f"{without_n} its trial left without it {without_rate:.0%}")
+                    if with_rate >= without_rate:
+                        store.update_note(note["id"], state="current", state_reason=PROVEN + said)
+                        moved["current"].append(int(note["id"]))
+                    else:
+                        store.update_note(note["id"], state="dropped", state_reason="disproven: " + said)
+                        moved["dropped"].append(int(note["id"]))
+                    continue
+                else:
+                    continue
             if len(passed) >= PROVE_AFTER:
                 store.update_note(note["id"], state="current", state_reason=PROVEN + "in the brief of "
                                   + ", ".join(f"#{t}" for t in passed) + ", which passed their first try")

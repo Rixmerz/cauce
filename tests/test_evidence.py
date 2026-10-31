@@ -201,7 +201,7 @@ def test_the_check_answers_each_correct_line_and_one_not_met_is_a_blocker(git_re
     missed = WorkerResult(True, None, "checked", "probe", cost_usd=0.05, verdict="pass",
                           criteria=({"id": "C1", "met": False, "evidence": "the list shows a UUID"},
                                     *({"id": f"C{n}", "met": True, "evidence": "seen"} for n in range(2, 6))))
-    script = Script(passing(), missed, passing("fixed"), check("pass"), write="app.py")
+    script = Script(passing(), missed, passing("fixed"), check("pass"), check("pass"), write="app.py")
     report = run("Fix the course so learners can find material", git_repo, store, registry={}, launcher=script,
                  classifier=kind("implement"))
     assert report.status == "done"
@@ -210,8 +210,10 @@ def test_the_check_answers_each_correct_line_and_one_not_met_is_a_blocker(git_re
     first, second = store.events_of(report.task_id, "verified")
     assert first["data"]["blocking"] == 1 and first["data"]["blockers"][0]["where"] == "C1"
     assert "the list shows a UUID" in script.specs[2].resume_note or "C1 is not met" in script.specs[2].prompt
-    # The re-check answered none of the lines: said, on its event and the verdict card, never taken as met.
-    assert second["data"]["tracer_unanswered"] == ["C1", "C2", "C3", "C4", "C5"]
+    # The re-check answered none of the lines, even asked again: said, on its event and the verdict card,
+    # never taken as met.
+    assert second["data"]["tracer_reasked"] == second["data"]["tracer_unanswered"] == ["C1", "C2", "C3", "C4", "C5"]
+    assert "Your answer left these CORRECT lines unanswered" in script.specs[4].prompt
     card = store.last_event(report.task_id, "finished")["data"]["verdict"]["independent"]
     assert card["unchecked"] == ["C1", "C2", "C3", "C4", "C5"]
     from cauce import hooks
