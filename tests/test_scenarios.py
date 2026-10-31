@@ -86,7 +86,7 @@ def world(tmp_path: Path, git_repo: Path, _isolated_home: Path):
                 broken = [f for f in doctor.check(store) if f.severity == doctor.BROKEN
                           or (f.severity == doctor.SUSPECT and f.rule in (
                               "part-lost-its-mark", "join-short-of-parts", "attempts-with-no-session",
-                              "format-failure-climbed"))]
+                              "format-failure-climbed", "died-after-a-pass"))]
             finally:
                 store.close()
             assert broken == [], doctor.text(broken)
@@ -111,6 +111,20 @@ def test_a_worker_killed_mid_attempt_is_resumed_by_the_dispatcher_and_the_lane_g
     # A worker never sees the host's session, nor another task's identity.
     assert all(c["host"] == {} for c in calls) and all(c["worker_task"] == str(ended["id"]) for c in calls)
     world.wait(lambda store: not any(lane["paused"] for lane in store.lanes()), "the lane to open")
+    world.healthy()
+
+
+def test_a_worker_that_committed_its_own_work_and_left_only_artifacts_passes_on_its_commit(world):
+    # A real docs worker did this and its run died twice at the ending (git commit of nothing).
+    world.script([{"match": "document the greeting", "do": [{
+        "pass": True, "write": {"README.md": "# Greeting\n"}, "commit": "Document the greeting",
+        "litter": {"__pycache__/app.cpython-313.pyc": "x"}}]}])
+    world.cauce("queue", "add", "--kind", "docs", "document the greeting in the README")
+    ended = world.wait(_task(("done", "failed", "blocked", "review", "interrupted")), "the docs task to end")
+    assert ended["status"] == "done"
+    log = subprocess.run(["git", "log", "-1", "--format=%s", f"cauce/task-{ended['id']}"], cwd=world.repo,
+                         capture_output=True, text=True, check=True).stdout.strip()
+    assert log == "Document the greeting"
     world.healthy()
 
 

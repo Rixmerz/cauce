@@ -254,6 +254,29 @@ def test_a_task_queued_by_hand_starts_the_dispatcher_too(git_repo, monkeypatch, 
     assert calls == [git_repo.resolve()] and "A worker takes it" in capsys.readouterr().out
 
 
+def test_a_death_names_the_crash_its_run_wrote_and_says_when_it_is_the_same_again(store: Store, tmp_path):
+    log = tmp_path / "task.log"
+    log.write_text("Traceback (most recent call last):\n  old\nKeyError: 'old'\n")
+    start = log.stat().st_size
+    with open(log, "a") as fh:
+        fh.write("Traceback (most recent call last):\n  File x\ncauce.isolate.IsolationError: git commit failed\n")
+    assert flow.crash_line(log, start) == "cauce.isolate.IsolationError: git commit failed"
+    assert flow.crash_line(log, log.stat().st_size) == "" and flow.crash_line(tmp_path / "none") == ""
+    task = store.enqueue("x", repo="r", cwd="/x")
+    store.claim(task["id"])
+    for nth in (1, 2):
+        store.update_task(task["id"], status="running")
+        handle = object.__new__(flow._Process)
+        handle.task_id, handle.store, handle.log, handle.log_from = task["id"], store, log, start
+        handle.proc = subprocess.Popen([sys.executable, "-c", "raise SystemExit(1)"])
+        handle.proc.wait()
+        assert handle.poll() == "interrupted"
+        stop = store.last_event(task["id"], "finished")["data"]["stop"]
+        assert stop["crash"] == "cauce.isolate.IsolationError: git commit failed" and stop["log"] == str(log)
+        assert stop["reason"].endswith("git commit failed") == (nth == 1)
+        assert ("the same crash as its last death" in stop["reason"]) == (nth == 2)
+
+
 def test_a_task_process_that_dies_unannounced_is_interrupted(store: Store):
     task = store.enqueue("x", repo="r", cwd="/x")
     store.claim(task["id"])
@@ -448,6 +471,15 @@ def test_a_dead_worker_is_swept_and_resumed_once_from_its_kept_work(store: Store
     # Once: a second death is the orchestrator's.
     assert dispatch.recover(store, tmp_path, os.environ, popen=lambda argv, **kw: started.append(argv)) == []
     assert len(started) == 1
+
+
+def test_a_death_that_repeats_its_crash_is_never_resumed_on_its_own(store: Store, tmp_path, monkeypatch):
+    from cauce import stops
+
+    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    task = store.create_task("x", status="interrupted", source="cauce", cwd=str(tmp_path))
+    stops.record(store, task["id"], stops.Stop("died", "the same crash", extra={"crash": "E: x", "repeated": True}))
+    assert dispatch.recover(store, tmp_path, os.environ, popen=pytest.fail) == []
 
 
 def test_no_resume_without_autowork_for_an_old_death_or_one_that_cannot_start(store: Store, tmp_path,

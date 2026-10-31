@@ -47,6 +47,7 @@ from cauce import after, capacity, classify, config, dispatch, isolate, launch, 
 from cauce.matrix import READ_ONLY_KINDS, Cell
 from cauce.orchestrate import Options, Report, declares_read_only
 from cauce.store import Store, home
+from cauce.text import clip
 
 #: How long a session prompt may sit in `running` with no update before it is
 #: taken for abandoned. Claude Code fires no Stop for an interrupted turn.
@@ -577,6 +578,8 @@ class _Process:
         log = home() / "work" / f"task-{task['id']}.log"
         log.parent.mkdir(parents=True, exist_ok=True)
         with open(log, "a") as out:
+            # Where this run's output starts in the log it appends to: a death reads its crash from there.
+            self.log, self.log_from = log, out.tell()
             self.proc = subprocess.Popen(argv, cwd=str(where), env=dispatch.child_env(),
                                          stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
 
@@ -590,13 +593,46 @@ class _Process:
             # It exited without saying how it ended: it died. Killed outright, the kernel's
             # out-of-memory killer is the likely hand, and the machine's level halves on it.
             killed = self.proc.returncode in launch.KILLED
-            stops.record(self.store, self.task_id, stops.Stop(
-                "died", f"its process exited with {self.proc.returncode} without saying how the task ended"
-                + (" (killed: the kernel does so when memory runs out)" if killed else ""),
-                extra={"starved": "memory"} if killed else {}), pid=None, current_cell=None)
+            crash = crash_line(self.log, self.log_from) if getattr(self, "log", None) else ""
+            again = bool(crash) and crash == _last_crash(self.store, self.task_id)
+            reason = f"its process exited with {self.proc.returncode} without saying how the task ended" + (
+                " (killed: the kernel does so when memory runs out)" if killed else "") + (
+                f": {crash}" if crash else "") + (
+                " — the same crash as its last death: cauce's failure, not the work's; resuming repeats it"
+                if again else "")
+            extra: dict[str, Any] = {"starved": "memory"} if killed else {}
+            if crash:
+                extra.update(crash=crash, log=str(self.log), **({"repeated": True} if again else {}))
+            stops.record(self.store, self.task_id, stops.Stop("died", reason, extra=extra), pid=None,
+                         current_cell=None)
             self.store.pause_lane(task["repo"], f"task #{self.task_id}: its process exited unexpectedly")
             return "interrupted"
         return task["status"]
+
+
+#: A Python exception's last line, as a traceback ends: `module.Error: what`.
+_CRASH = re.compile(r"^([A-Za-z_][\w.]*(?:Error|Exception|Exit|Interrupt|Fault))(?::\s*(.*))?$")
+
+
+def crash_line(log: Path, start: int = 0) -> str:
+    """The last exception line a run wrote to its log from `start` (its own output), clipped; "" for none."""
+    try:
+        with open(log, "rb") as fh:
+            fh.seek(start)
+            text = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    found = [line.strip() for line in text.splitlines() if _CRASH.match(line.strip())]
+    return clip(found[-1], 300, one_line=True) if found else ""
+
+
+def _last_crash(store: Store, task_id: int) -> str:
+    """The crash an earlier death of this task named, "" for none."""
+    for event in reversed(store.events_of(task_id, "finished")):
+        stop = event["data"].get("stop") or {}
+        if stop.get("cause") == "died":
+            return str(stop.get("crash") or "")
+    return ""
 
 
 Start = Callable[[dict, Path], Handle]

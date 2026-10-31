@@ -226,6 +226,14 @@ def test_a_probation_start_that_costs_more_per_point_is_reverted(store: Store, m
     assert store.standard("r", "implement", 3)["start_cell"] is None
 
 
+def test_a_probation_start_whose_points_take_far_longer_is_reverted(store: Store, monkeypatch):
+    change = _onto_haiku(store, monkeypatch)
+    many(store, standards.JUDGE_AFTER, ("haiku/high", 1), cost=0.2, wall=600.0 * 5, used=[change["id"]], at=NOW)
+    assert standards.judge(store, "r", now=NOW)[0]["verdict"] == "reverted"
+    revert = store.calibrations(repo="r")[-1]
+    assert "times as long on the probation cell" in revert["rule"] and "17 min after" in revert["rule"]
+
+
 def test_a_probation_start_that_costs_less_and_passes_as_often_is_kept(store: Store, monkeypatch):
     change = _onto_haiku(store, monkeypatch)
     many(store, standards.JUDGE_AFTER, ("haiku/high", 1), cost=0.2, used=[change["id"]], at=NOW)

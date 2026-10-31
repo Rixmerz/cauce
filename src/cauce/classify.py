@@ -100,6 +100,15 @@ _RULES: tuple[tuple[re.Pattern[str], str, str], ...] = (
         "asks for an audit",
     ),
     (
+        # A request that opens by asking for a plan ("Plan how to migrate…", "Planifica la migración"):
+        # it fell to the default build, and a workflow's own plan step read as a change ("Plan, without
+        # changing any file: Add…"). One that asks for it in a file is still widened (`asks_for_change`).
+        re.compile(r"^\s*(plan|planifica\w*|planea\w*|make a plan|haz un plan|write a plan|draft a plan)\b"
+                   r"(?!\s+(file|archivo)s?\b)"),
+        "plan",
+        "opens by asking for a plan",
+    ),
+    (
         re.compile(r"\b(arquitectura|architecture|plan tecnico|technical plan|disena (el|un) sistema"
                    r"|design (the|a) system|roadmap|propuesta tecnica|trade-?offs?)\b"),
         "plan",

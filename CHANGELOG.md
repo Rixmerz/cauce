@@ -19,6 +19,22 @@
   a count of files left out.
 - **`cauce doctor` names a run that died after its attempt passed** (`died-after-a-pass`): the
   ending failed, not the work, as with the empty commit fixed in 0.62.0.
+- **Releases tag themselves**: a version that reaches `main` with CI green is tagged `v<version>` and
+  released with its CHANGELOG section (`.github/workflows/release.yml`, `scripts/release_notes.py`);
+  an older version is tagged by hand from the Actions tab, on the commit a person names.
+- **A worker that died names its crash**: the last exception line its run wrote to its log is in the
+  stop's reason, beside the log's path, where it said only "exited with 1". One that dies of the
+  same crash again says so and is never resumed on its own: it is cauce's failure, and a resume
+  repeats it.
+- **The Analysis screen shows the order of a brief's notes and the notes workers relied on.**
+
+### Changed
+
+- **A probation start is also reverted when a passed point takes more than twice as long** on the
+  cheaper cell (`standards.PROBATION_SLOWER`): Haiku was as right as the first rung of `refactor`
+  and `test`, but about five times slower.
+- **A request that opens by asking for a plan is a plan** ("Plan how to migrate…", "Planifica…"):
+  it fell to the default build.
 
 ## [0.62.0] - 2026-10-31
 

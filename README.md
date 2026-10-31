@@ -1359,6 +1359,10 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m coverage run -m pytest && .venv/bin/python -m coverage report
 ```
 
+A release is cut by merging a version bump: once CI passes on `main`, the `release` workflow tags
+`v<version>` and publishes that version's CHANGELOG section. To tag a version from before that
+workflow, run it from the Actions tab with the version and its commit.
+
 ## License
 
 [Apache-2.0](LICENSE). cauce runs livespec as a separate program and reads its

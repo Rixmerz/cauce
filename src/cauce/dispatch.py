@@ -541,6 +541,8 @@ def recover(store: Store, root: Path, env: Mapping[str, str], *, popen: Callable
         ended = store.final_event(task["id"])
         if stop is None or stop.cause not in MECHANICAL or not task.get("cwd") or not Path(task["cwd"]).is_dir():
             continue
+        if stop.extra.get("repeated"):
+            continue  # it died of the same crash as before: a resume repeats it, the orchestrator decides
         limit = stop.cause == "limit"
         done = [e for e in store.events_of(task["id"], "auto_resumed")
                 if ((e["data"] or {}).get("cause") == "limit") == limit]
