@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-10-31
+
 ### Added
 
 - **A workflow step can choose by what the step before it ended with** (`when`): `findings` or
@@ -23,10 +25,6 @@
   a revision that is no longer the one it builds on is refused; `cauce workflow show` prints it.
 - **`cauce ui --idle-exit SECONDS`**: the board stops once no tab was open for that long, counted
   after the first one came.
-
-## [0.61.0] - 2026-10-31
-
-### Added
 
 - **Earned trust: the verifier reads less where its record says it may** (`cauce.trust`, the
   `trust` setting). A cell is a repository, a kind and the worker's cell, and each task's first
