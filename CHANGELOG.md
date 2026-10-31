@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-10-31
+
 ### Added
 
 - **Earned trust: the verifier reads less where its record says it may** (`cauce.trust`, the
