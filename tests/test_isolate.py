@@ -18,6 +18,20 @@ def test_a_passed_task_leaves_one_branch_and_the_checkout_untouched(git_repo, tm
     assert "feature.py" in git(git_repo, "show", "--name-only", "cauce/task-7")
 
 
+def test_a_worker_that_committed_its_work_and_left_only_artifacts_keeps_its_branch(git_repo, tmp_path):
+    # A real Haiku docs worker committed README.md itself and left __pycache__ behind: cauce's own
+    # commit had nothing staged once the artifacts were dropped, and the run died on it twice.
+    ws = isolate.prepare(git_repo, 16, tmp_path / "home")
+    (ws.path / "README.md").write_text("# docs\n")
+    git(ws.path, "add", "README.md")
+    git(ws.path, "commit", "-q", "-m", "Document it")
+    (ws.path / "__pycache__").mkdir()
+    (ws.path / "__pycache__" / "calc.pyc").write_bytes(b"\0")
+    assert isolate.finish(ws, keep=True, message="Document it") == "cauce/task-16"
+    assert git(git_repo, "log", "-1", "--format=%s", "cauce/task-16") == "Document it"
+    assert "__pycache__" not in git(git_repo, "show", "--name-only", "cauce/task-16")
+
+
 def test_reset_discards_a_wrong_approach(git_repo, tmp_path):
     ws = isolate.prepare(git_repo, 8, tmp_path / "home")
     (ws.path / "app.py").write_text("broken\n")

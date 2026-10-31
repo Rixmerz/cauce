@@ -9,6 +9,10 @@
 - **A workflow `plan` step no longer stops as `spec_bug` because its task names a change**: a real
   run's plan worker, told that a read-only task asking for a change is a `spec_bug`, refused to
   plan "Add a function"; a planning worker is now told the change is for the work after it.
+- **A worker that committed its own work no longer kills its run at the ending**: when only its
+  tools' artifacts (`__pycache__`) were left uncommitted, cauce's commit had nothing staged once
+  they were dropped, and the run died with exit 1 (twice in a real workflow, the automatic resume
+  included). cauce commits only what is still staged, and keeps the worker's commit as the branch.
 - **`cauce workflow status` gives a question step the line that answers it**
   (`cauce workflow answer <run> <step> <option>`), not `cauce resume`, which a question refuses.
 - **A workflow graph's `when` label sits over its step's box**, where the gap between two boxes
