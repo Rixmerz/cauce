@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.63.0] - 2026-10-31
+
+### Added
+
+- **The order of a brief's notes is on trial** (the `recall_fusion` setting): when the code a task
+  touches and its words find different notes, the brief orders them by reciprocal rank fusion (a
+  note both find comes first, and the words' best match is no longer cut by every anchored note)
+  or anchored first, in turns per repository, and keeps fusion only where its first tries passed
+  no less often. `cauce stats` shows the trial.
+- **Workers name the notes they relied on** (`notes_used` in the result block): only notes their
+  brief carried are kept, and `cauce stats` shows how many of the notes briefed were relied on and
+  how first tries went where one was named. Observed, never a verdict.
+- **Long TRACER files go by section**: what does not fit in the brief is named by heading with its
+  lines (`docs/tracer/floors.md:40-88`), so the worker reads only the part it needs, instead of
+  a count of files left out.
+- **`cauce doctor` names a run that died after its attempt passed** (`died-after-a-pass`): the
+  ending failed, not the work, as with the empty commit fixed in 0.62.0.
+
 ## [0.62.0] - 2026-10-31
 
 ### Fixed

@@ -107,3 +107,28 @@ def reads_alike(left: str, right: str, threshold: float = 0.85) -> bool:
     if not a or not b:
         return False
     return difflib.SequenceMatcher(None, a, b).ratio() >= threshold
+
+
+_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+
+
+def outline(path: str, body: str, *, after: int = 0) -> list[str]:
+    """A Markdown document's sections as `heading (path:start-end)`, each heading's lines up to the
+    next heading of its level or above, for a worker to read only the part it needs; the sections that
+    start past line `after` (what a brief already showed). Fenced code is no heading."""
+    lines = body.splitlines()
+    heads: list[tuple[int, int, str]] = []
+    fenced = False
+    for n, raw in enumerate(lines, 1):
+        if raw.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            continue
+        if not fenced and (found := _HEADING.match(raw)):
+            heads.append((n, len(found.group(1)), found.group(2).strip()))
+    out = []
+    for i, (start, level, title) in enumerate(heads):
+        end = next((s - 1 for s, lv, _ in heads[i + 1:] if lv <= level), len(lines))
+        if start > after:
+            out.append(f"{'  ' * (level - 1)}{title} ({path}:{start}-{end})")
+    return out
+

@@ -42,7 +42,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `trust`, `probation`, `evidence`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `specs`, `tracer`, `habit_review`, `habit_auto`, `role_trials`, `note_trials`, `methods`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number; `livespec_wait`, seconds, 0 never waits), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `trust`, `probation`, `evidence`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `specs`, `tracer`, `habit_review`, `habit_auto`, `role_trials`, `note_trials`, `recall_fusion`, `methods`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number; `livespec_wait`, seconds, 0 never waits), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets, and the jobs a person quieted per repository |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -57,6 +57,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
 | `src/cauce/revisions.py` | a role's lessons per repository, improved by measured trial: proposed by Haiku from the role's dead ends and verifier blockers there, tried in alternating arms, adopted, dropped or reverted, every record appended to `role_revisions`; `cauce roles revisions` reads it |
+| `src/cauce/arms.py` | two arms tried in turns until each has enough first tries, then the one that did no worse: the shape methods and the recall order share (`tally`, `pick`); no model |
 | `src/cauce/methods.py` | how a kind's workers are briefed to work, tried against its absence: a diagnosis protocol for `debug-unclear`, a pre-mortem for `plan` whose `Risks:` reach the independent check of the steps after it; arms per repository (`method_arm`); no model |
 | `src/cauce/racing.py` | whether racing a first try paid, per repository and kind: each race read from its attempts (rung, start, neither), the rung's wins and the time to pass against climbs, the judgement `race_cell` and `cauce stats` read; no model |
 | `src/cauce/cells.py` | where a lesson belongs: the area a path or a change is in, the role that met it, or everyone (`scope`); the text a failure is kept and matched by (a workflow step's goal, never its template); the cell's primer (how its workers got oriented) and its trial; no model |
@@ -744,7 +745,8 @@ yields the default kind, not a guess.
   capability of `capabilities.md` the flow belongs to; its CORRECT lines are read as the template writes
   them (the success path's items with the lines under them, the failure table's CORRECT column found by its
   header, never the header row), and the method's files are carried up to
-  `tracer.BRIEF_CHARS`, the rest said by count. Its phases that need the person (contract, empathy, scope)
+  `tracer.BRIEF_CHARS`; what does not fit is named by section with its lines (`text.outline`,
+  `path:start-end`, up to `tracer.OUTLINE_CHARS`), the rest said by count. Its phases that need the person (contract, empathy, scope)
   stay in the session; `tracer-slice` is the bundled workflow for one slice.
 - What livespec's index says a change reaches (`adapter.assess`: specs touched, callers outside it) goes in
   the independent check's brief as where to probe, data, never findings (`orchestrate._impact`); whether
@@ -1153,7 +1155,12 @@ yields the default kind, not a guess.
   worse; one with no pass after `notes.DISPROVE_AFTER` failed is dropped at once. With
   the trial off, `notes.PROVE_AFTER` passes make it current. A later attempt's brief
   also carries the notes anchored to the files the work changed so far
-  (`orchestrate._later_notes`). A person's note and
+  (`orchestrate._later_notes`). When the code a task touches and its words find different
+  notes, the brief's order is on trial (`notes.recall_arm`, the `recall_fusion` setting,
+  `briefed.recall_arm`): reciprocal rank fusion of the two lists (`notes.fused`) against
+  anchored first, kept where its arm passed first tries no less often. A worker names the
+  notes it relied on (`notes_used`); only notes its brief carried are kept, on
+  `attempt_finished`, and `cauce stats` shows them, observed, never a verdict or a trial. A person's note and
   Haiku's from a conversation are current as written. Haiku files under topics that
   exist and never invents a link; without Haiku a fact is kept by its words.
   A fact that looks like a secret is never kept.

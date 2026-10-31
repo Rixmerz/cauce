@@ -338,6 +338,10 @@ A worker's note starts as a candidate and earns its place against its absence: t
 is recalled for take turns carrying it and going without it, and it becomes current only
 where the ones that carried it passed their first try no less often (the `note_trials`
 setting). A later attempt also reads the notes anchored to the files the work changed so far.
+When the code a task touches and its words find different notes, the order they reach the
+brief in is on trial too: rank fusion, where a note both find comes first, against the anchored
+ones first. Workers say which notes they relied on, and `cauce stats` shows it beside how
+their first tries went: observed, never a verdict.
 
 And read back in four places: every worker's brief gets the project's notes
 that match its task (one link away); a prompt that matches notes gets them in

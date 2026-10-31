@@ -276,6 +276,8 @@ class Plan:
     #: What the plan steps before it in its workflow run said could go wrong (`methods.run_risks`),
     #: for its independent check, as where to probe.
     seen_risks: tuple[str, ...] = ()
+    #: The order its notes came in when the code and the words found different ones (`notes.recall_arm`).
+    recalled: dict | None = None
     #: Lines of the plan this repository already heard today (`said_today`): kept, not shown again.
     quiet: frozenset[str] = frozenset()
 
@@ -709,6 +711,7 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
         neighbour_notes.append(f"finished {kind} tasks cost ${expected[0]:.2f} on average (last {expected[1]})")
     known: list[dict] = []
     withheld: list[dict] = []
+    recalled: dict[str, str] = {}
     key = repo.key(repo_dir)
     if key and config.enabled("notes", os.environ, options.notes):
         if not options.dry_run:
@@ -717,9 +720,16 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
         # project's constraints come apart, as requirements, every one that fits.
         # By the code it touches (the notes anchored to the files it names, its surfaces, a step's
         # diff) and by its words, strictly: one word in common puts an unrelated note in its brief.
-        known = notes.unmerged([n for n in notes.recall(store, key, text, paths=touched_paths(text, options),
-                                                        limit=6, strict=True)
-                                if n.get("kind") != notes.CONSTRAINT], repo_dir, options.base)
+        touched = touched_paths(text, options)
+        found = notes.recall(store, key, text, paths=touched, limit=6, strict=True)
+        mixed = notes.recall(store, key, text, paths=touched, limit=6, strict=True, fuse=True) \
+            if notes.recall_on() else found
+        if [n["id"] for n in mixed] != [n["id"] for n in found]:
+            # The code and the words found different notes: which order the brief takes is on trial.
+            side, side_why = notes.recall_arm(store, key, int(hashlib.sha256(text.encode()).hexdigest()[:8], 16))
+            recalled = {notes.RECALL_KEY: side, "recall_why": side_why}
+            found = mixed if side == "fused" else found
+        known = notes.unmerged([n for n in found if n.get("kind") != notes.CONSTRAINT], repo_dir, options.base)
         # A worker's candidate note goes without in turn, so it is weighed against its absence (`notes.arms`).
         known, withheld = notes.arms(store, known)
         if withheld:
@@ -787,7 +797,7 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
                 tuple(context), tuple(statuses), tuple(active), tuple(known), role, team, why,
                 risk, turns, size, standard.data() if standard is not None else None, race,
                 probation={"arm": arm, "cell": PROBATION[kind].label} if arm else None,
-                withheld=tuple(int(n["id"]) for n in withheld))
+                withheld=tuple(int(n["id"]) for n in withheld), recalled=recalled or None)
 
 
 #: A start whose first tries passed less often than this here, over at least `RACE_SAMPLES`
@@ -1348,7 +1358,7 @@ def run(
     the_plan.seen_risks = tuple(methods_mod.lines_for(methods_mod.run_risks(store, task)))
     store.add_event(task["id"], "briefed", session=got, dead_ends=len(dead), areas=list(reach),
                     context_chars=sum(len(line) for line in context), **primed, **worn, **trunked, **evidenced,
-                    **methodical,
+                    **methodical, **(the_plan.recalled or {}),
                     **({notes.BRIEFED: [int(n["id"]) for n in the_plan.notes]} if the_plan.notes else {}),
                     **({notes.WITHHELD: list(the_plan.withheld)} if the_plan.withheld else {}))
     # The runtime the project declares goes first on the worker's PATH, and on its
@@ -1483,6 +1493,9 @@ def run(
             # the first brief could not name (`notes.anchored_to`).
             later = _later_notes(store, key, the_plan, [*changed, *(isolate.changed(workspace) if workspace
                                                                      else ())]) if attempts else []
+            # The notes this attempt's brief carried, the only ones its `notes_used` may name.
+            briefed_notes = {int(n["id"]) for n in the_plan.notes} | {
+                int(m) for line in later for m in re.findall(r"^- #(\d+) ", line)}
             prompt = brief(text, the_plan.kind, workdir, [*history, *attempts], dead, options.verify,
                            writes and not declared_read_only, [*context, *aside, *later], options.surfaces)
             role_text = briefing.system_prompt if briefing else ""
@@ -1779,6 +1792,10 @@ def run(
                             # What cauce's check said where it failed: shown by `cauce show`, the board and
                             # the ending, and handed to the next attempt's brief.
                             **({"check_tail": result.check_tail} if result.check_tail else {}),
+                            # The notes of its brief the worker says it relied on: observed, never a verdict;
+                            # a number its brief never carried is left out.
+                            **({"notes_used": used_notes} if (used_notes := [
+                                n for n in result.notes_used if n in briefed_notes]) else {}),
                             wall_s=round(worker_s, 2), duration_s=round(result.duration_s, 2),
                             check_s=round(check_s, 2), verifier_s=round(verifier_s, 2),
                             input_tokens=result.input_tokens, output_tokens=result.output_tokens,

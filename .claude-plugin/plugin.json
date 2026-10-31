@@ -1,6 +1,6 @@
 {
   "name": "cauce",
-  "version": "0.62.0",
+  "version": "0.63.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
     "name": "Rixmerz"
@@ -163,6 +163,12 @@
       "type": "boolean",
       "title": "Weigh a worker's notes against their absence",
       "description": "A note a worker learned starts as a candidate. The tasks it is recalled for take turns carrying it and going without it, and it becomes current only where the tasks that carried it passed their first try no less often; else it is dropped. Off: two later tasks that pass with it make it current.",
+      "default": true
+    },
+    "recall_fusion": {
+      "type": "boolean",
+      "title": "Order a brief's notes by rank fusion, on trial",
+      "description": "When the code a task touches and its words find different notes, a brief can order them by reciprocal rank fusion (a note both find comes first) instead of the anchored ones first. Each repository tries both orders in turns and keeps fusion only where its first tries passed no less often.",
       "default": true
     },
     "methods": {

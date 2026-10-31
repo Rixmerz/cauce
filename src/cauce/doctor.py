@@ -66,6 +66,7 @@ FIXED_IN = {
     "flake-fix-checked-once": "0.40.0",
     "turns-under-the-wall": "0.40.0",
     "pickup-nobody-saw": "0.45.0",
+    "died-after-a-pass": "0.63.0",
 }
 #: An attempt that ran this long per turn it counted kept a count the CLI restarted.
 WALL_PER_TURN_S = 300
@@ -680,13 +681,39 @@ def specs_with_no_code(store: Store, *, since: str | None, livespec: Any = None,
             yield Finding("specs-with-no-code", SUSPECT, what, fix, None, repo_key(root))
 
 
+def died_after_a_pass(store: Store, *, since: str | None, **_) -> Iterable[Finding]:
+    """A run that died after its attempt had passed: the work was done and the ending killed it
+    (cauce committing nothing, when the worker had committed its own work and only its tools'
+    artifacts were left, `isolate.finish`)."""
+    before: list[int] = []
+    for event in store.events_of_kinds(["finished"], since=since):
+        data = event["data"]
+        if (data.get("stop") or {}).get("cause") != "died":
+            continue
+        tried = [e for e in store.events_of(event["task_id"], "attempt_finished") if e["id"] < event["id"]]
+        if not tried or not tried[-1]["data"].get("passed"):
+            continue
+        task = store.get_task(event["task_id"]) or {}
+        if _fixed("died-after-a-pass", data.get("version")):
+            before.append(event["task_id"])
+            continue
+        yield Finding("died-after-a-pass", SUSPECT,
+                      f"#{event['task_id']} died after its attempt {tried[-1]['data'].get('seq')} passed: its ending "
+                      f"failed, not its work ({(data.get('stop') or {}).get('reason')})",
+                      f"read hook-errors.log for the trace, then `cauce resume {event['task_id']} --unattended`",
+                      event["task_id"], task.get("repo"))
+    if before:
+        yield _history("died-after-a-pass", sorted(set(before)), None)
+
+
 RULES: tuple[Callable[..., Iterable[Finding]], ...] = (
     lanes_paused_on_ended, running_with_no_process, queued_with_no_dispatcher, held_behind_gone, wait_judged_on_gone,
     resumes_that_never_ran,
     parts_that_lost_their_mark, joins_short_of_their_parts, attempts_with_no_session, turns_under_the_kind,
     format_failures_that_climbed, fix_rounds_off_their_base, candidates_on_trial_at_once, revisions_judged_twice,
     trials_never_sampled, notes_proven_unbriefed, preexisting_that_was_not, problems_open_after_pass,
-    flake_fixes_checked_once, turns_under_the_wall, pickups_nobody_saw, indexes_not_ready, specs_with_no_code,
+    flake_fixes_checked_once, turns_under_the_wall, pickups_nobody_saw, died_after_a_pass, indexes_not_ready,
+    specs_with_no_code,
 )
 
 
