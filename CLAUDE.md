@@ -12,6 +12,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 |---|---|
 | `src/cauce/matrix.py` | models, the five efforts and their purpose, the ladder per kind, and the probation cell below a writing kind's ladder (`PROBATION`, `reach`); a model's default effort reads cells recorded before it had the dial |
 | `src/cauce/trust.py` | earned trust, read from the independent check's record per repository, kind and worker cell: skip-lot sampling of the verifier (`sampling`), the probation trial below a ladder (`probation_arm`), and what the record says of learning (`report`, `cauce trust`, `cauce stats`); no model |
+| `src/cauce/evidence.py` | what a neighbour a worker was handed must show before its pass counts (layout-inspector on a UI change, rastro), read from the tool-call log: a pass that owes it goes back once, then to the orchestrator; tried in arms per repository; every handed capability's calls counted per attempt; no model |
 | `src/cauce/classify.py` | rules first, Haiku for the rest; `frontier` only by tag |
 | `src/cauce/escalate.py` | failure kind → move (retry, more effort, next model, more turns, replan) |
 | `src/cauce/launch.py` | one attempt as `claude -p`: argv, the result contract, parsing, git-read changes |
@@ -41,7 +42,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `trust`, `probation`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `specs`, `tracer`, `habit_review`, `habit_auto`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number; `livespec_wait`, seconds, 0 never waits), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `trust`, `probation`, `evidence`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `specs`, `tracer`, `habit_review`, `habit_auto`, `role_trials`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number; `livespec_wait`, seconds, 0 never waits), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets, and the jobs a person quieted per repository |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -1158,6 +1159,31 @@ yields the default kind, not a guess.
   `constraints`, kept only when a check of that task (cauce's own, or the verifier's) failed
   before the pass, else filed as a fact; a worker's starts as a candidate and is weighed as
   any note. It has no anchor: a change to the code it was learned on does not send it to review.
+- A worker's brief recalls notes by the code the task touches (the notes anchored to the files its
+  request names, its surfaces, a step's diff: `touched_paths`) and by its words strictly (several in
+  common, `notes.recall(strict=True)`): one word in common puts no unrelated note in a brief.
+- What a worker must use is made to happen, in this order: cauce does it itself where it can (the
+  livespec index built and its orientation briefed; what the files a request names reach,
+  `Livespec.reach`, asked by cauce and put in a writing brief as data); else the pass is gated on
+  evidence cauce reads (`cauce.evidence`); a hint alone is the weakest. A requirement (`evidence.REQUIRED`)
+  names a neighbour and when its use is owed: layout-inspector on writing work whose change touches
+  rendered UI (`capabilities.UI_FILES`), rastro on writing work it was handed for. A worker held to
+  it is told so in its brief as a requirement (`brief_line`); a pass with no call of that
+  neighbour's tools that went through in the task's attempts (`tool_events.ok`, never the worker's
+  words) is held back (`evidence_owed`): the first time the same cell goes on in its own session told
+  what to measure (`evidence.PROMPT`, as a reshape), the second it stands as a `decision`, its work
+  kept. Never a climb. Whether holding work to it pays is measured: tasks handed a required
+  neighbour alternate `gate` and `free` (`briefed.evidence_arm`) until each arm has `evidence.TRIAL`
+  tasks the independent check read; then the gate stays only where its passes drew the check's
+  blockers less often (`evidence.arm`). Every handed capability's calls are counted per attempt
+  (`attempt_finished.capability_calls`), and `cauce stats` shows each one handed, called and never
+  called, observed. Tests run with `CAUCE_EVIDENCE=off`.
+- Each CORRECT line of the TRACER flows a request names is a criterion of the independent check,
+  `C1..Cn` (`tracer.criteria`; the lines that fit in half of `tracer.BRIEF_CHARS`, the rest said by
+  count), added to its `criteria`: one it says is not met is a blocker (`orchestrate._correct_lines`),
+  a correction like any, the late check's too; one it leaves unanswered is kept on its `verified`
+  event (`tracer_unanswered`), said on the verdict card and the ending (`unchecked`), and lets the
+  diff be opened: never taken as met.
 - A note whose anchors were all written at commits outside the history a task starts from
   (its base, else HEAD: a worker's note about its own change, filed while its branch waits
   to be merged) is marked so in that task's brief (`notes.unmerged`), never dropped: what it

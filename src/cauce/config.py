@@ -58,6 +58,10 @@ DEFAULTS: dict[str, Any] = {
     # with the first rung where that rung already passes here, and starts there only if it passes
     # as often; a start there that costs more per point is reverted (`trust.probation_arm`).
     "probation": True,
+    # A worker handed layout-inspector for a UI change, or rastro, is held to what they measure: a pass
+    # with no call of theirs that went through goes back to it once, then to the orchestrator. Tried in
+    # arms per repository and kept only where the passes it held drew fewer verifier blockers (`cauce.evidence`).
+    "evidence": True,
     # A start that rarely passes its first try here races the next rung on that try, each in
     # its own worktree; the first that passes its check is kept (`orchestrate.race_cell`).
     "race": True,

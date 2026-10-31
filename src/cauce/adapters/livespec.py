@@ -756,19 +756,43 @@ class Livespec:
 
     # --- after a pass ------------------------------------------------------
 
-    def assess(self, changed: Sequence[str], repo_dir: Path, status: Status) -> tuple[str, ...]:
-        if not status.present or not changed:
+    def reach(self, paths: Sequence[str], repo_dir: Path, status: Status) -> tuple[str, ...]:
+        """What the index says the files a task names reach, before any change: the specs they
+        implement, the files outside them that call into them, the tests that exercise them. Asked
+        by cauce for the worker (data in its brief), so it starts knowing, whether or not it calls
+        livespec itself. Nothing when the index holds none of the files."""
+        found = self._reach(set(paths), status)
+        if isinstance(found, str):
             return ()
-        changed_set = set(changed)
+        specs, callers = found
+        lines = []
+        if specs:
+            lines.append("livespec: these files implement specs " + ", ".join(
+                f"{s[0]} {s[1]} [{s[2]}]" for s in specs[:8]))
+        outside = [p for (p,) in callers if p not in set(paths)]
+        code = [p for p in outside if not is_test_path(p)]
+        tests = [p for p in outside if is_test_path(p)]
+        if code:
+            lines.append(f"livespec: {len(code)} file(s) outside them call into them: "
+                         + ", ".join(code[:6]) + (" …" if len(code) > 6 else ""))
+        if tests:
+            lines.append("livespec: tests that exercise them: " + ", ".join(tests[:6]))
+        return tuple(lines)
+
+    def _reach(self, files: set[str], status: Status) -> tuple[list, list] | str:
+        """The specs the symbols of `files` implement and the files that call those symbols, or why
+        the index could not say; ([], []) when it holds none of them."""
+        if not status.present or not files:
+            return [], []
         try:
             with _connect(Path(status.data["db"])) as conn:
                 project = int(status.data["project"])
-                marks = ", ".join("?" for _ in changed_set)
+                marks = ", ".join("?" for _ in files)
                 ids = [r[0] for r in conn.execute(
                     f"SELECT s.id FROM symbol s JOIN file f ON f.id = s.file_id "  # noqa: S608 - placeholders only
-                    f"WHERE f.project_id = ? AND f.path IN ({marks})", [project, *changed_set])]
+                    f"WHERE f.project_id = ? AND f.path IN ({marks})", [project, *files])]
                 if not ids:
-                    return ()
+                    return [], []
                 id_marks = ", ".join("?" for _ in ids)
                 specs = conn.execute(
                     f"SELECT DISTINCT sp.spec_id, sp.title, sp.priority FROM spec_symbol ss "  # noqa: S608
@@ -778,8 +802,18 @@ class Livespec:
                     f"SELECT DISTINCT f.path FROM symbol_edge e JOIN symbol s ON s.id = e.src_symbol_id "  # noqa: S608
                     f"JOIN file f ON f.id = s.file_id WHERE e.edge_type = 'calls' "
                     f"AND e.dst_symbol_id IN ({id_marks}) ORDER BY f.path", ids).fetchall()
-        except sqlite3.Error as exc:
-            return (f"livespec: could not assess the change ({exc})",)
+        except (sqlite3.Error, KeyError, ValueError) as exc:
+            return str(exc)
+        return specs, callers
+
+    def assess(self, changed: Sequence[str], repo_dir: Path, status: Status) -> tuple[str, ...]:
+        if not status.present or not changed:
+            return ()
+        changed_set = set(changed)
+        found = self._reach(changed_set, status)
+        if isinstance(found, str):
+            return (f"livespec: could not assess the change ({found})",)
+        specs, callers = found
         lines = []
         if specs:
             lines.append("livespec: the change touches specs " + ", ".join(

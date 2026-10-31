@@ -1147,12 +1147,13 @@ class Store:
             out.append({"task_id": task_id, "seq": seq, "calls": int(calls), "passed": bool(done and done[0])})
         return out
 
-    def tool_counts(self, task_id: int, attempt: int, prefix: str) -> dict[str, int]:
+    def tool_counts(self, task_id: int, attempt: int, prefix: str, *, ok_only: bool = False) -> dict[str, int]:
         """How many times an attempt's worker called each tool whose name starts with `prefix`
-        (`mcp__livespec__`), by the name after it."""
+        (`mcp__livespec__`), by the name after it; `ok_only`, only the calls that went through."""
         rows = self._conn.execute(
             "SELECT tool, COUNT(*) FROM tool_events WHERE task_id = ? AND attempt = ? "
-            "AND substr(tool, 1, ?) = ? GROUP BY tool ORDER BY tool", (task_id, attempt, len(prefix), prefix))
+            "AND substr(tool, 1, ?) = ? AND (? = 0 OR ok = 1) GROUP BY tool ORDER BY tool",
+            (task_id, attempt, len(prefix), prefix, int(ok_only)))
         return {str(tool)[len(prefix):]: int(n) for tool, n in rows}
 
     def briefs(self, repo: str) -> list[dict]:

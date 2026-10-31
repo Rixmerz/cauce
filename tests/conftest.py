@@ -35,6 +35,7 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # Sampling the verifier and the probation rung read the record: a test that wants them turns them on.
     monkeypatch.setenv("CAUCE_TRUST", "off")
     monkeypatch.setenv("CAUCE_PROBATION", "off")
+    monkeypatch.setenv("CAUCE_EVIDENCE", "off")
     # A race is a second worker on a first try: a test that wants one turns it on.
     monkeypatch.setenv("CAUCE_RACE", "off")
     monkeypatch.setenv("CAUCE_ROUTE", "off")

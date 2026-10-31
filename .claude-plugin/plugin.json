@@ -93,6 +93,12 @@
       "description": "Where a writing kind's first rung already passes its first tries in this repository, a cheaper cell below the ladder (Haiku for implement work) is tried in turns with it, every pass read by the independent check; it becomes the start only if its first tries pass as often, and a start there that later costs more per passed point, or passes less, is reverted. Off: the ladder's first rung is the floor.",
       "default": true
     },
+    "evidence": {
+      "type": "boolean",
+      "title": "Hold workers to what their tools measure",
+      "description": "A worker handed layout-inspector for a change to rendered UI, or rastro, must show a call of that tool that went through before its pass counts, read from cauce's log of its calls, never from its words: the first time it goes back to the same worker, the second it waits on the orchestrator with its work kept. Each repository tries it in turns with free work and keeps it only where the passes it held drew fewer blockers from the independent check. Off: the tools stay a hint.",
+      "default": true
+    },
     "race": {
       "type": "boolean",
       "title": "Race the next rung on a hard start",

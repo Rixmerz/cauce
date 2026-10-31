@@ -6,6 +6,20 @@
 
 ### Added
 
+- **Workers made to use what they were given, not only told of it.** A worker's notes are found by
+  the code its task touches (the notes anchored to the files it names) as well as by its words, now
+  strictly, so one word in common briefs no unrelated note. cauce asks the livespec index what the
+  files a request names reach (the specs they implement, who calls them, the tests) and puts it in
+  the brief before the worker starts. A worker handed layout-inspector for a change to rendered UI,
+  or rastro, is held to evidence (`cauce.evidence`, the `evidence` setting): a pass with no call of
+  that tool that went through, read from cauce's log of its calls, goes back to the same worker once,
+  then waits on the orchestrator with its work kept; each repository tries it in turns with free work
+  and keeps it only where its passes drew fewer blockers from the independent check. Every capability
+  a worker is handed has its calls counted, and `cauce stats` shows the ones handed and never called.
+- **Each TRACER CORRECT line is a criterion of the independent check** (`C1..Cn`): one it says is not
+  met blocks the change; one it leaves unanswered is said on the verdict card and the ending, never
+  taken as met.
+
 - **A workflow step can choose by what the step before it ended with** (`when`): `findings` or
   `clean` (the blocking findings it passed with), `changed` or `unchanged`, or a question's
   option. A step whose condition does not hold is skipped with no worker, and what follows starts

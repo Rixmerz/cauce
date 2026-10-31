@@ -224,3 +224,22 @@ def test_the_snapshot_a_check_keeps_is_the_one_the_next_round_reads_from(git_rep
     store.add_event(task["id"], "verified", **first)
     since = orchestrate._read_before(store, task["id"], Cell("sonnet", "high"), 1, git_repo)
     assert since is not None and since[0] == first["read_at"]
+
+
+def test_the_evidence_arm_a_brief_keeps_is_the_one_its_trial_reads_back(git_repo, store, monkeypatch):
+    """`orchestrate` keeps a task's arm on `briefed` (`evidence.KEY`); `evidence.trial` counts arms from it."""
+    from cauce import capabilities as caps
+    from cauce import evidence
+    from cauce.orchestrate import run
+
+    from .test_checking import passing
+    from .test_orchestrate import Script, kind
+
+    monkeypatch.setenv("CAUCE_EVIDENCE", "on")
+    monkeypatch.setattr(evidence, "arm", lambda store, repo, task_id: ("free", "free for the test"))
+    registry = {"rastro": caps.Capability("rastro", {"command": "rastro"}, hint="drive the app")}
+    report = run("Rename the helper in notes", git_repo, store, registry=registry,
+                 launcher=Script(passing(), write="notes.txt"), classifier=kind("implement"))
+    task = store.get_task(report.task_id)
+    found = evidence.trial(store, task["repo"])
+    assert found["free"]["tasks"] == 1 and found["gate"]["tasks"] == 0

@@ -68,6 +68,7 @@ from cauce import (
 from cauce import allow as allow_rules
 from cauce import capabilities as caps
 from cauce import criteria as criteria_mod
+from cauce import evidence as evidence_mod
 from cauce import findings as findings_mod
 from cauce import ledger as ledger_mod
 from cauce import notes as notes_mod
@@ -707,7 +708,10 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
             notes.review(store, key, repo_dir)
         # A note written on work not merged where the task starts is said to be so; the
         # project's constraints come apart, as requirements, every one that fits.
-        known = notes.unmerged([n for n in notes.recall(store, key, text, limit=6)
+        # By the code it touches (the notes anchored to the files it names, its surfaces, a step's
+        # diff) and by its words, strictly: one word in common puts an unrelated note in its brief.
+        known = notes.unmerged([n for n in notes.recall(store, key, text, paths=touched_paths(text, options),
+                                                        limit=6, strict=True)
                                 if n.get("kind") != notes.CONSTRAINT], repo_dir, options.base)
         if known:
             context += notes.brief_lines(known)
@@ -737,6 +741,18 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
                                    "writes none goes back to its worker once, then to the orchestrator")
         if drifted.behind:
             neighbour_notes.append(f"specs: {drifted.text()}; the worker is told to keep the ones it reaches")
+    if kind not in READ_ONLY_KINDS and (named := [p for p in touched_paths(text, options) if "*" not in p]):
+        # What the code index says the files the request names reach, asked by cauce before the worker
+        # starts (data), so the worker knows it whether or not it calls the index itself.
+        for adapter, status in active:
+            try:
+                found = list(getattr(adapter, "reach", lambda _p, _r, _s: ())(named, repo_dir, status))
+            except Exception:  # an index that cannot say costs the plan nothing
+                found = []
+            if found:
+                context.append("What the code index says the files this request names reach, before any change "
+                               "(data; probe what matters):\n" + "\n".join(f"- {line}" for line in found))
+                neighbour_notes.append(f"{adapter.name}: what {len(named)} named file(s) reach is in the brief")
     selected = _with_role(caps.select(registry, kind, workdir=repo_dir, paths=touched_paths(text, options),
                                       reading=kind in READ_ONLY_KINDS), role, registry, repo_dir)
     names = tuple(dict.fromkeys([*selected.names, *(a.name for a, _ in active)]))
@@ -1297,8 +1313,19 @@ def run(
         say(f"cauce: #{task['id']} " + (f"forks step {trunk.get('step')!r}'s session (#{trunk.get('task')}) "
                                          f"on its first try: {trunked['trunk_why']}" if forking is not None
                                          else trunked["trunk_why"]))
+    # A worker handed a neighbour whose measurement its work owes (`cauce.evidence`): held to it or
+    # free by the trial, kept either way so the arms can be compared.
+    evidenced: dict[str, Any] = {}
+    held_to: list[evidence_mod.Requirement] = []
+    if writes and evidence_mod.enabled() and (owing := evidence_mod.handed(the_plan.capabilities)):
+        arm, arm_why = evidence_mod.arm(store, key, task["id"])
+        evidenced = {evidence_mod.KEY: arm, "evidence_why": arm_why,
+                     "evidence_of": [r.capability for r in owing]}
+        if arm == "gate":
+            held_to = owing
+            context.append(evidence_mod.brief_line(owing))
     store.add_event(task["id"], "briefed", session=got, dead_ends=len(dead), areas=list(reach),
-                    context_chars=sum(len(line) for line in context), **primed, **worn, **trunked,
+                    context_chars=sum(len(line) for line in context), **primed, **worn, **trunked, **evidenced,
                     **({notes.BRIEFED: [int(n["id"]) for n in the_plan.notes]} if the_plan.notes else {}))
     # The runtime the project declares goes first on the worker's PATH, and on its
     # check's: a worker given the wrong Node hunts for another and is refused each one.
@@ -1620,6 +1647,24 @@ def run(
                 if again:
                     stands = "cauce" if options.verify else "worker"
                 store.add_event(task["id"], "spec_owed", seq=nth, paths=owed[:50], again=again)
+            if result.passed and held_to and (unmet := evidence_mod.owed(
+                    store, task["id"], nth, selection.names,
+                    sorted({*changed, *(isolate.changed(workspace) if workspace else result.changed_paths)}),
+                    the_plan.kind)):
+                # Held to evidence (`cauce.evidence`): a pass with no call of the neighbour it owes goes
+                # back to the same worker once, in its own session; a second stands as work with one
+                # point for the orchestrator, kept on its branch. Never a climb.
+                again = any(a.shape.startswith(evidence_mod.SHAPE) for a in attempts)
+                why = evidence_mod.shape(unmet)
+                result = dataclasses.replace(
+                    result, passed=False, verdict="",
+                    failure=Failure.SPEC_BUG if again else Failure.INCONCLUSIVE,
+                    shape="" if again else why,
+                    summary=f"{why}{' again' if again else ''}: {result.summary}")
+                if again:
+                    stands = "cauce" if options.verify else "worker"
+                store.add_event(task["id"], "evidence_owed", seq=nth, capabilities=[r.capability for r in unmet],
+                                again=again)
             review_stop = None
             open_blockers: tuple[dict[str, str], ...] = ()
             mark = time.monotonic()
@@ -1700,6 +1745,9 @@ def run(
                             # Whether it used the code index it was handed, and which calls (`cauce stats`).
                             **({"livespec_calls": used} if (used := _livespec_calls(
                                 store, task["id"], nth, selection.names)) is not None else {}),
+                            # Every capability it was handed, and the calls of its tools (`evidence.calls`).
+                            **({"capability_calls": evidence_mod.calls(store, task["id"], nth, selection.names)}
+                               if selection.names else {}),
                             # What cauce's check said where it failed: shown by `cauce show`, the board and
                             # the ending, and handed to the next attempt's brief.
                             **({"check_tail": result.check_tail} if result.check_tail else {}),
@@ -1950,7 +1998,9 @@ def verdict_card(store: Store, task_id: int, report: Report, options: Options, v
     verified = store.last_event(task_id, "verified")
     if verified is not None:
         data = verified["data"] or {}
-        independent = {"ran": True, "passed": bool(data.get("passed")), "blocking": int(data.get("blocking") or 0)}
+        independent = {"ran": True, "passed": bool(data.get("passed")), "blocking": int(data.get("blocking") or 0),
+                       # CORRECT lines of the request's flows it left unanswered: no one checked them.
+                       **({"unchecked": list(data["tracer_unanswered"])} if data.get("tracer_unanswered") else {})}
     elif (skipped := store.last_event(task_id, "verifier_sampled")) is not None:
         # Its cell's record earned skip-lot sampling (`cauce.trust`), and this pass was not drawn.
         independent = {"ran": False, "sampled": True, "every": int((skipped["data"] or {}).get("every") or 1),
@@ -2865,10 +2915,14 @@ def _late_check(store: Store, task_id: int, *, text: str, kind: str, risk: risk_
         return
     shown = findings_mod.read({"findings": list(verdict.findings)})
     blockers = findings_mod.blocking(shown)
+    unmet_lines, unanswered = _correct_lines(verdict, dict(tracer_mod.criteria(repo_dir, text)[0])
+                                             if config.enabled("tracer", os.environ) else {})
+    blockers += [b for b in unmet_lines if not any(findings_mod.same(b, f) for f in blockers)]
     if not verdict.passed and not blockers and verdict.verdict == "fail":
         blockers = [{"where": "", "what": verdict.summary or "the check failed without a finding",
                      "evidence_class": "inferential", "cause": "unknown", "proof": ""}]
     store.add_event(task_id, "verified", seq=deferred["nth"], late=True, cell=vcell.label,
+                    **({"tracer_unanswered": unanswered} if unanswered else {}),
                     worker=deferred["cell"].label, risk=risk.data(),
                     verdict=verdict.verdict, passed=not blockers and verdict.passed, findings=list(shown)[:20],
                     blocking=len(blockers), blockers=list(blockers)[:20], cost_usd=verdict.cost_usd,
@@ -3077,6 +3131,17 @@ def recheck_lines(sha: str, files: Sequence[str]) -> str:
             "shows it.")
 
 
+def _correct_lines(verdict: launch.WorkerResult, correct: Mapping[str, str]) -> tuple[list[dict[str, str]], list[str]]:
+    """The CORRECT lines (`C#`, `tracer.criteria`) a check said the change does not meet, as blockers,
+    and the ones it left unanswered."""
+    said = {c["id"]: c for c in verdict.criteria}
+    blockers = [{"where": cid, "what": f"{cid} is not met ({line}): {said[cid]['evidence'] or 'no evidence given'}",
+                 "evidence_class": "deterministic" if said[cid]["evidence"] else "inferential",
+                 "cause": "introduced", "proof": said[cid]["evidence"]}
+                for cid, line in correct.items() if cid in said and not said[cid]["met"]]
+    return blockers, [cid for cid in correct if cid not in said]
+
+
 def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec,
                        workdir: Path, base: str | None, changed: Sequence[str], risk: risk_mod.Risk,
                        ledger: dict[str, Mapping[str, str]], corrections: int, launcher: Launcher, store: Store,
@@ -3124,7 +3189,9 @@ def _independent_check(result: launch.WorkerResult, *, text: str, kind: str, cel
     fixing = tuple(rows)
     return _judged(result, verdict, vcell=vcell, wall_s=wall_s, overlapped_s=overlapped_s, beside=beside, risk=risk,
                    ledger=ledger, corrections=corrections, store=store, task_id=task_id, nth=nth, say=say,
-                   outgrew=outgrew, rows=fixing, recorded={
+                   outgrew=outgrew, rows=fixing,
+                   correct=dict(tracer_mod.criteria(workdir, text)[0]) if config.enabled("tracer", os.environ) else {},
+                   recorded={
                        "worker": cell.label, **({"read_at": read_at} if read_at else {}),
                        **({"delta": {"since": since[0], "files": list(since[1])[:50], "n": len(since[1])}}
                           if since is not None else {}),
@@ -3155,8 +3222,11 @@ def _check_spec(*, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec, wo
     for name, (server, hint) in (index or {}).items():
         measuring[name], hints[name] = server, hint
     fixing = tuple(rows)
+    # The CORRECT lines of the flows the request names, each a criterion the check answers (`tracer.criteria`).
+    lines = tracer_mod.criteria(workdir, text)[0] if config.enabled("tracer", os.environ) else []
     check = dataclasses.replace(
-        spec, prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values()), risk.reasons,
+        spec, criteria=(*spec.criteria, *(cid for cid, _ in lines)),
+        prompt=verifier_brief(text, kind, workdir, base, changed, list(ledger.values()), risk.reasons,
                                     rules=rules, rows=fixing, running=running, impact=impact,
                                     method=tracer_mod.verifier_lines(workdir, text, tuple(measuring))
                                     if config.enabled("tracer", os.environ) else (), since=since),
@@ -3179,13 +3249,17 @@ def _check_spec(*, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec, wo
 def _judged(result: launch.WorkerResult, verdict: launch.WorkerResult, *, vcell: Cell, wall_s: float,
             overlapped_s: float, beside: bool, risk: risk_mod.Risk, ledger: dict[str, Mapping[str, str]],
             corrections: int, store: Store, task_id: int, nth: int, say: Callable[[str], None], outgrew: bool,
-            rows: Sequence[str], recorded: Mapping[str, Any] | None = None
+            rows: Sequence[str], recorded: Mapping[str, Any] | None = None, correct: Mapping[str, str] | None = None
             ) -> tuple[launch.WorkerResult, stops.Stop | None, dict[str, Mapping[str, str]], int,
                        tuple[dict[str, str], ...]]:
     """What the independent check's verdict does to the pass: a correction, a stop, or nothing."""
     cost = result.cost_usd + verdict.cost_usd
     shown = findings_mod.read({"findings": list(verdict.findings)})
     blockers = findings_mod.blocking(shown)
+    # A CORRECT line of a flow the request names that the check says the change does not meet blocks it,
+    # as a finding does; one it left unanswered is said, never taken as met.
+    unmet_lines, unanswered = _correct_lines(verdict, correct or {})
+    blockers += [b for b in unmet_lines if not any(findings_mod.same(b, f) for f in blockers)]
     # A row of the fix it says is still open is a problem of this change, as a finding is.
     answered = {v["id"]: v for v in verdict.verdicts if v["id"] in rows}
     blockers += [{"where": v["id"], "what": f"{v['id']} is {v['verdict'].replace('_', ' ')}: {v['proof']}",
@@ -3209,6 +3283,7 @@ def _judged(result: launch.WorkerResult, verdict: launch.WorkerResult, *, vcell:
                     carried=len(carried), cost_usd=verdict.cost_usd, summary=verdict.summary[:500],
                     round=corrections, wall_s=round(wall_s, 2), duration_s=round(verdict.duration_s, 2),
                     turns=verdict.turns, **({"verdicts": list(answered.values())} if rows else {}), **(recorded or {}),
+                    **({"tracer_unanswered": unanswered} if unanswered else {}),
                     **({"beside_check": True, "beside_check_s": round(overlapped_s, 2)} if beside else {}))
     if not decided:
         say(f"cauce: #{task_id} the independent check could not decide; the pass stands")
@@ -3308,6 +3383,8 @@ def brief(
 def _reshape_prompt(attempts: Sequence[Attempt]) -> str:
     """What a worker asked again on its own cell is told: write the spec its build owes, or answer
     in the form it was given."""
+    if attempts and attempts[-1].shape.startswith(evidence_mod.SHAPE):
+        return evidence_mod.PROMPT
     return specs_mod.FIRST_PROMPT if attempts and attempts[-1].shape.startswith(specs_mod.FIRST_SHAPE) \
         else launch.RESHAPE_PROMPT
 
@@ -3316,7 +3393,7 @@ def continuation_note(last: Attempt) -> str:
     """What a continued session is told failed its attempt, which its context does not
     hold: the independent check's blockers in a correction round (its work passed its
     own check), else the output that failed it."""
-    if last.shape.startswith(specs_mod.FIRST_SHAPE):
+    if last.shape.startswith((specs_mod.FIRST_SHAPE, evidence_mod.SHAPE)):
         return f"Why your last answer was held back: {last.shape}."
     if last.shape:
         return f"Why your last answer could not be read: {last.shape}."

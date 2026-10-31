@@ -456,6 +456,20 @@ again. `cauce trust` shows each cell's record: clean checks, where its sampling
 stands, blockers that repeat an earlier task's, re-checks that found something
 new, and pass-first and cost per point by the cell work started on.
 
+What a worker is given, it is made to use, not only told of. Where cauce can do
+the work itself, it does: the livespec index is built before the worker
+starts, and what the files a request names reach (the specs they implement,
+who calls them, the tests) is in its brief. Notes are found by the code the
+task touches as well as by its words. Where the worker must do it, the pass
+is gated on evidence cauce reads from its own log of the worker's calls,
+never from what the worker writes. A UI change handed layout-inspector, or
+work handed rastro, does not pass without a call of that tool that went
+through. The first time, the worker goes on to measure; the second time, the
+work waits on the orchestrator. Each repository tries that gate in turns with
+free work and keeps it only where it caught more. Each TRACER CORRECT line is
+a criterion the independent check must answer. `cauce stats` shows every
+capability workers were handed, and how often they never called it.
+
 ```bash
 cauce evolution                  # every repository, last 30 days
 cauce evolution --repo . --days 7
