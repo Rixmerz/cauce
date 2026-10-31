@@ -17,3 +17,7 @@ node_modules/
 bench/memory/results-*.jsonl
 bench/review/results-*.jsonl
 bench/speed/results-*.jsonl
+bench/tokens/tap-*.jsonl
+bench/tokens/runs-*.json
+bench/tokens/counts.json
+bench/tokens/report.json
