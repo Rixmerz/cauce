@@ -79,6 +79,11 @@ def world(tmp_path: Path, git_repo: Path, _isolated_home: Path):
             try:
                 tasks = [(t["id"], t["status"], t["title"][:50]) for t in store.list_tasks(limit=20)]
                 said = doctor.text(doctor.check(store))
+                # How each task ended each time, and what resumed it: a stuck scenario says why.
+                said += "\n" + "\n".join(
+                    f"#{t['id']} {e['kind']} {json.dumps({k: e['data'].get(k) for k in ('status', 'stop', 'after')})}"
+                    for t in store.list_tasks(limit=20) for kind in ("dispatched", "auto_resumed", "finished")
+                    for e in store.events_of(t["id"], kind))
             finally:
                 store.close()
             logs = "\n".join(p.read_text()[-1500:] for p in (self.home / "work").glob("*.log"))

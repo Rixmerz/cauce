@@ -143,12 +143,14 @@ class UIServer(ThreadingHTTPServer):
         """The sweep, in the server, on a timer — never because a page is open.
         And the check for a newer cauce, which takes this server's place."""
         store = Store(self.root / "cauce.db")
-        pruned_at = 0.0
+        # Never pruned yet: the first pass prunes. `time.monotonic()` counts from the machine's boot,
+        # so a 0.0 start skipped pruning for the first hour after a boot (a fresh CI runner).
+        pruned_at: float | None = None
         try:
             while not self.stop_event.wait(SWEEP_EVERY_S):
                 try:
                     flow.sweep(store)
-                    if time.monotonic() - pruned_at >= PRUNE_EVERY_S:
+                    if pruned_at is None or time.monotonic() - pruned_at >= PRUNE_EVERY_S:
                         pruned_at = time.monotonic()
                         flow.prune(store)
                     newer = newer_install(os.environ)
@@ -221,7 +223,7 @@ class Handler(BaseHTTPRequestHandler):
         given = self.headers.get("X-Cauce-Token", "")
         return bool(expected) and hmac.compare_digest(given.encode(), expected.encode())
 
-    def _send(self, status: int, body: bytes, content_type: str, extra: dict[str, str] | None = None) -> None:
+    def _send(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
@@ -229,8 +231,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Cache-Control", "no-store")
-        for k, v in (extra or {}).items():
-            self.send_header(k, v)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
