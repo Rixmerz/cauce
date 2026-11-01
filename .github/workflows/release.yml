@@ -34,7 +34,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || inputs.ref || 'main' }}
+          # The commit CI passed; for a version tagged by hand, main, whose script and CHANGELOG hold
+          # every version (an old commit has neither), and the commit to tag is `inputs.ref`.
+          ref: ${{ github.event.workflow_run.head_sha || 'main' }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -43,10 +45,12 @@ jobs:
         id: read
         env:
           WANTED: ${{ inputs.version }}
+          TARGET: ${{ inputs.ref }}
         run: |
           version="${WANTED:-$(python scripts/release_notes.py version)}"
+          sha="$(git rev-parse --verify "${TARGET:-HEAD}^{commit}")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
           python scripts/release_notes.py notes "$version" > "$RUNNER_TEMP/notes.md"
           if git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then
             echo "due=false" >> "$GITHUB_OUTPUT"
