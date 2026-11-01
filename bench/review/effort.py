@@ -24,14 +24,14 @@ sys.path.insert(0, str(HERE.parents[1] / "src"))
 
 import harness  # noqa: E402
 
-from cauce import ledger  # noqa: E402
-from cauce.orchestrate import verifier_brief  # noqa: E402
+from locks import ledger  # noqa: E402
+from locks.orchestrate import verifier_brief  # noqa: E402
 
 
 def one(cell: str) -> dict:
     where = harness.repository("volume")
     try:
-        if cell.startswith("verifier:"):  # cauce's independent verifier on the change, at the cell named
+        if cell.startswith("verifier:"):  # locks' independent verifier on the change, at the cell named
             changed = subprocess.run(["git", "diff", "--name-only", "main", "HEAD"], cwd=where, capture_output=True,
                                      text=True).stdout.split()
             done = harness.worker(where, verifier_brief(harness.REQUEST, "feature", where, "main", changed),

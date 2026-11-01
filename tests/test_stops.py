@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from cauce import orchestrate, stops
-from cauce.escalate import Failure
-from cauce.launch import WorkerResult
-from cauce.orchestrate import Options, run
-from cauce.store import Store
+from locks import orchestrate, stops
+from locks.escalate import Failure
+from locks.launch import WorkerResult
+from locks.orchestrate import Options, run
+from locks.store import Store
 
 from .test_orchestrate import Script, bad, kind, refused
 
@@ -21,11 +21,11 @@ def _stop(store: Store, task_id: int) -> stops.Stop:
         ([refused()], Options(), "permission", "settings"),
         ([bad(Failure.ENVIRONMENT), bad(Failure.ENVIRONMENT)], Options(), "environment", "environment"),
         ([bad(Failure.SPEC_BUG, "the API has no such field")], Options(), "spec", "worker"),
-        ([bad(Failure.TURNS_EXHAUSTED)] * 2, Options(), "turns", "cauce"),
-        ([bad(Failure.CODE_BUG, "still broken")] * 3, Options(), "ladder", "cauce"),
-        ([bad(Failure.CODE_BUG, s) for s in ("a", "b")], Options(max_attempts=2), "attempts", "cauce"),
+        ([bad(Failure.TURNS_EXHAUSTED)] * 2, Options(), "turns", "locks"),
+        ([bad(Failure.CODE_BUG, "still broken")] * 3, Options(), "ladder", "locks"),
+        ([bad(Failure.CODE_BUG, s) for s in ("a", "b")], Options(max_attempts=2), "attempts", "locks"),
         ([bad(Failure.CODE_BUG, s) for s in ("missed a", "broke b", "left c", "forgot d")], Options(),
-         "exhausted", "cauce"),
+         "exhausted", "locks"),
     ],
 )
 def test_every_ending_short_of_a_pass_says_why_and_who(git_repo, store, results, options, cause, who):
@@ -44,8 +44,8 @@ def test_a_refusal_names_the_rules_and_the_command_that_allows_them(git_repo, st
     stop = _stop(store, report.task_id)
     assert stop.denied == ("Bash(node server.js)",)
     assert stop.account == "created the routes; node was refused"
-    assert stops.next_step(report.task_id, stop) == f"cauce resume {report.task_id} --allow 'Bash(node:*)'"
-    assert f"  cauce resume {report.task_id} --allow 'Bash(node:*)'" in report.text()
+    assert stops.next_step(report.task_id, stop) == f"locks resume {report.task_id} --allow 'Bash(node:*)'"
+    assert f"  locks resume {report.task_id} --allow 'Bash(node:*)'" in report.text()
 
 
 def test_approval_and_an_old_budget_stop_say_how_to_go_on(tmp_path, store):
@@ -57,17 +57,17 @@ def test_approval_and_an_old_budget_stop_say_how_to_go_on(tmp_path, store):
     stop = _stop(store, report.task_id)
     assert stop.cause == "approval" and stop.next_cell == "fable/high"
     assert stops.next_step(report.task_id, stop).endswith("--allow-approval")
-    # A stop an older cauce wrote on a dollar budget reads back, its amount kept, and resumes plainly.
+    # A stop an older locks wrote on a dollar budget reads back, its amount kept, and resumes plainly.
     old = stops.read({"cause": "budget", "reason": "the $5.00 budget is spent", "budget_usd": 5.0})
-    assert old.status == "blocked" and old.data()["budget_usd"] == 5.0 and "older cauce" in old.line()
-    assert stops.next_step(7, old) == "cauce resume 7" and "no longer exists" in stops.what_to_do(old)
-    assert stops.resume_args(7, {"cause": "budget", "budget_usd": 5.0, "next": "cauce resume 7"}) == [
+    assert old.status == "blocked" and old.data()["budget_usd"] == 5.0 and "older locks" in old.line()
+    assert stops.next_step(7, old) == "locks resume 7" and "no longer exists" in stops.what_to_do(old)
+    assert stops.resume_args(7, {"cause": "budget", "budget_usd": 5.0, "next": "locks resume 7"}) == [
         "resume", "7", "--detach"]
     assert stops.next_step(7, stops.Stop("spec", "wrong")) is None
     assert stops.next_step(7, stops.Stop("cancelled", "x"), resumable=False) is None
 
 
-@pytest.mark.parametrize(("via", "how"), [("ui", "from the UI"), ("cli", "with `cauce cancel`")])
+@pytest.mark.parametrize(("via", "how"), [("ui", "from the UI"), ("cli", "with `locks cancel`")])
 def test_a_cancel_says_a_person_did_it_and_how(git_repo, store, via, how):
     def launcher(spec):
         store.request_cancel(store.list_tasks()[0]["id"], via=via)
@@ -95,7 +95,7 @@ def test_a_signal_nobody_asked_for_and_ctrl_c_are_told_apart(git_repo, store):
     assert stop.who == "you" and "Ctrl-C" in stop.reason
 
 
-def test_an_error_in_cauce_itself_is_its_own_account(git_repo, store):
+def test_an_error_in_locks_itself_is_its_own_account(git_repo, store):
     def broken(spec):
         raise RuntimeError("disk full")
 
@@ -115,7 +115,7 @@ def test_a_pass_has_no_account(git_repo, store):
 
 
 def test_older_tasks_get_an_account_read_back_from_their_records(store: Store):
-    blocked = store.create_task("routes", status="blocked", source="cauce", cwd="/x", result="refused node")
+    blocked = store.create_task("routes", status="blocked", source="locks", cwd="/x", result="refused node")
     store.add_attempt(blocked["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="permission")
     store.set_move(blocked["id"], 1, "blocked", "the worker was refused Bash(node x.js)")
     store.add_event(blocked["id"], "attempt_finished", seq=1, denied=["Bash(node x.js)"])
@@ -137,18 +137,18 @@ def test_older_tasks_get_an_account_read_back_from_their_records(store: Store):
         ("interrupted", "", None, "died"),
     ]
     for status, result, failure, cause in cases:
-        t = store.create_task("t", status=status, source="cauce", result=result)
+        t = store.create_task("t", status=status, source="locks", result=result)
         if failure:
             store.add_attempt(t["id"], cell="sonnet/medium", max_turns=30, passed=0, failure=failure)
         assert stops.of(store, store.get_task(t["id"])).cause == cause, status
-    assert stops.of(store, store.create_task("t", status="done", source="cauce")) is None
+    assert stops.of(store, store.create_task("t", status="done", source="locks")) is None
     assert stops.recovered("weird") is None
     cancelled = stops.of(store, store.list_tasks(status=["cancelled"])[0])
     assert cancelled.who == "unknown" and stops.WHO[cancelled.who] == "not recorded"
 
 
 def test_a_recorded_account_that_no_longer_matches_the_status_is_read_again(store: Store):
-    t = store.create_task("t", status="running", source="cauce")
+    t = store.create_task("t", status="running", source="locks")
     stops.record(store, t["id"], stops.Stop("died", "gone"))
     assert stops.of(store, store.get_task(t["id"])).cause == "died"
     store.update_task(t["id"], status="cancelled")  # changed after, without an account
@@ -156,16 +156,16 @@ def test_a_recorded_account_that_no_longer_matches_the_status_is_read_again(stor
 
 
 def test_the_view_says_who_in_words_and_what_to_do(store: Store):
-    ran = store.create_task("ran", status="running", source="cauce", cwd="/x")
+    ran = store.create_task("ran", status="running", source="locks", cwd="/x")
     stops.record(store, ran["id"], stops.Stop("permission", "refused", denied=("Bash(ls -la)",)))
     view = stops.view(store, store.get_task(ran["id"]))
     assert view["who"] == "your permission settings" and view["status"] == "blocked"
-    assert view["next"] == f"cauce resume {ran['id']} --allow 'Bash(ls:*)'" and "allow" in view["todo"]
+    assert view["next"] == f"locks resume {ran['id']} --allow 'Bash(ls:*)'" and "allow" in view["todo"]
     never = store.enqueue("never ran", repo="r", cwd="/x")
     stops.record(store, never["id"], stops.Stop("cancelled", "you cancelled it", by="you"))
     view = stops.view(store, store.get_task(never["id"]))
     # a queued task cancelled before it started runs from the base on a resume
-    assert view["next"] == f"cauce resume {never['id']}" and view["todo"] == "resume it if you still want it"
+    assert view["next"] == f"locks resume {never['id']}" and view["todo"] == "resume it if you still want it"
     dropped = store.enqueue("dismissed off the queue", repo="r", cwd="/x", options={"after": {"task": ran["id"]}})
     stops.dismiss(store, store.get_task(dropped["id"]), via="cli")
     view = stops.view(store, store.get_task(dropped["id"]))
@@ -176,9 +176,9 @@ def test_the_view_says_who_in_words_and_what_to_do(store: Store):
 
 
 def test_a_dismissed_task_leaves_the_board_and_says_who_and_what_it_was(store):
-    from cauce.ui import api
+    from locks.ui import api
 
-    task = store.create_task("audit it", status="blocked", source="cauce", repo="r", cwd="/x")
+    task = store.create_task("audit it", status="blocked", source="locks", repo="r", cwd="/x")
     store.add_event(task["id"], "finished", status="blocked",
                     stop=stops.Stop("environment", "the environment failed twice", attempt=2).data())
     stop = stops.dismiss(store, store.get_task(task["id"]), via="ui")
@@ -211,13 +211,13 @@ def test_a_pass_takes_its_stopped_copies_off_the_board(git_repo, store):
     assert gone["status"] == "dismissed"
     stop = stops.of(store, gone)
     assert stop.cause == "superseded"
-    assert stop.who == "cauce"
+    assert stop.who == "locks"
     assert stop.extra["by_task"] == passed.task_id
     assert store.get_task(other.task_id)["status"] == "replan"
 
 
 def test_a_dismissed_task_resumes_as_what_it_was(git_repo, store, capsys):
-    from cauce import cli
+    from locks import cli
 
     replanned = run("x", git_repo, store, registry={}, launcher=Script(bad(Failure.SPEC_BUG, "wrong")),
                     classifier=kind("implement"))
@@ -233,7 +233,7 @@ def test_a_dismissed_task_resumes_as_what_it_was(git_repo, store, capsys):
 
 
 def test_a_dismissed_blocked_task_resumes(git_repo, store, monkeypatch):
-    from cauce import cli
+    from locks import cli
 
     blocked = run("x", git_repo, store, registry={},
                   launcher=Script(bad(Failure.ENVIRONMENT), bad(Failure.ENVIRONMENT)), classifier=kind("implement"))
@@ -263,8 +263,8 @@ def test_a_dismissal_or_a_supersession_is_no_ending_a_session_is_told_of(git_rep
 
 
 def test_a_dismissed_replan_offers_no_resume_unless_it_only_outgrew_its_turns(store):
-    for cause, offered in (("spec", None), ("turns", "cauce resume")):
-        task = store.create_task(f"t-{cause}", status="replan", source="cauce", repo="r", cwd="/x")
+    for cause, offered in (("spec", None), ("turns", "locks resume")):
+        task = store.create_task(f"t-{cause}", status="replan", source="locks", repo="r", cwd="/x")
         store.add_event(task["id"], "finished", status="replan", stop=stops.Stop(cause, "r").data())
         stops.dismiss(store, store.get_task(task["id"]), via="cli")
         nxt = stops.view(store, store.get_task(task["id"]))["next"]
@@ -274,9 +274,9 @@ def test_a_dismissed_replan_offers_no_resume_unless_it_only_outgrew_its_turns(st
 def test_dismissing_the_task_a_lane_paused_on_opens_the_lane(store):
     """A queued task waited 16 hours behind a lane paused on a task the person had
     already dismissed."""
-    stopped = store.create_task("wrong task", status="replan", source="cauce", repo="r", cwd="/x")
-    other = store.create_task("other", status="blocked", source="cauce", repo="r", cwd="/x")
-    store.create_task("next", status="queued", source="cauce", repo="r", cwd="/x")
+    stopped = store.create_task("wrong task", status="replan", source="locks", repo="r", cwd="/x")
+    other = store.create_task("other", status="blocked", source="locks", repo="r", cwd="/x")
+    store.create_task("next", status="queued", source="locks", repo="r", cwd="/x")
     store.pause_lane("r", f"task #{stopped['id']} ended replan: spec_bug")
     assert store.lane_paused_on("r", stopped["id"]) == 1
     assert store.lane_paused_on("r", other["id"]) == 0
@@ -288,26 +288,26 @@ def test_dismissing_the_task_a_lane_paused_on_opens_the_lane(store):
 
 
 def test_an_ending_that_paused_its_lane_says_what_waits(store):
-    from cauce import hooks
+    from locks import hooks
 
-    task = store.create_task("wrong task", status="replan", source="cauce", repo="r", cwd="/x", session_id="s")
+    task = store.create_task("wrong task", status="replan", source="locks", repo="r", cwd="/x", session_id="s")
     store.add_event(task["id"], "finished", status="replan",
                     stop=stops.Stop("spec", "the task is wrong", by="worker").data())
-    store.create_task("next", status="queued", source="cauce", repo="r", cwd="/x")
+    store.create_task("next", status="queued", source="locks", repo="r", cwd="/x")
     store.pause_lane("r", f"task #{task['id']} ended replan: wrong")
     text, _ = hooks.endings(store, "s")
     assert "its lane is paused on it: 1 queued task(s) wait" in text
-    assert "cauce lanes --unpause r" in text
+    assert "locks lanes --unpause r" in text
 
 
 def test_a_worktree_that_cannot_be_made_stops_the_task_resumable_instead_of_leaving_it_running(git_repo, store,
                                                                                                monkeypatch):
     """After a restart, `isolate.prepare` raised before the first attempt and the task stayed
     `running` with the pid of a process that was gone: nothing but the sweep freed it."""
-    from cauce import isolate
+    from locks import isolate
 
     def refuse(*args, **kwargs):
-        raise isolate.IsolationError("git worktree add -b cauce/task-1 /w HEAD failed: fatal: '/w' is a missing "
+        raise isolate.IsolationError("git worktree add -b locks/task-1 /w HEAD failed: fatal: '/w' is a missing "
                                      "but already registered worktree;\nuse 'add -f' to override")
 
     monkeypatch.setattr(isolate, "prepare", refuse)
@@ -319,23 +319,23 @@ def test_a_worktree_that_cannot_be_made_stops_the_task_resumable_instead_of_leav
     stop = store.last_event(report.task_id, "finished")["data"]["stop"]
     assert stop["cause"] == "environment" and "\n" not in stop["reason"]
     assert "already registered worktree; use 'add -f' to override" in stop["reason"]
-    assert stops.next_step(report.task_id, stops.read(stop)) == f"cauce resume {report.task_id}"
-    assert f"cauce resume {report.task_id}" in report.text()
+    assert stops.next_step(report.task_id, stops.read(stop)) == f"locks resume {report.task_id}"
+    assert f"locks resume {report.task_id}" in report.text()
 
 
 def test_a_stopped_task_whose_kept_work_landed_leaves_the_board_from_the_hooks(store: Store, git_repo, tmp_path,
                                                                                 monkeypatch):
-    from cauce import hooks
+    from locks import hooks
 
     # A death is resumed on its own with autowork (`dispatch.recover`): here only the landing is read.
-    monkeypatch.setenv("CAUCE_AUTOWORK", "off")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "off")
 
     from .conftest import git
 
     def stopped(text: str, branch_file: str) -> dict:
-        task = store.create_task(text, status="running", source="cauce", cwd=str(git_repo), repo="r")
+        task = store.create_task(text, status="running", source="locks", cwd=str(git_repo), repo="r")
         stops.record(store, task["id"], stops.Stop("died", "its process went away"))
-        git(git_repo, "checkout", "-q", "-b", f"cauce/task-{task['id']}")
+        git(git_repo, "checkout", "-q", "-b", f"locks/task-{task['id']}")
         (git_repo / branch_file).write_text(f"{text}\n")
         git(git_repo, "add", "-A")
         git(git_repo, "commit", "-q", "-m", text)
@@ -345,8 +345,8 @@ def test_a_stopped_task_whose_kept_work_landed_leaves_the_board_from_the_hooks(s
     merged = stopped("add the export", "export.py")
     squashed = stopped("add the import", "import.py")
     open_work = stopped("add the report", "report.py")
-    git(git_repo, "merge", "-q", "--no-ff", "-m", "merge", f"cauce/task-{merged['id']}")
-    git(git_repo, "merge", "-q", "--squash", f"cauce/task-{squashed['id']}")
+    git(git_repo, "merge", "-q", "--no-ff", "-m", "merge", f"locks/task-{merged['id']}")
+    git(git_repo, "merge", "-q", "--squash", f"locks/task-{squashed['id']}")
     git(git_repo, "commit", "-q", "-m", "add the import")
     # A GET never sweeps: the board reads it as it is until a hook runs.
     assert store.get_task(merged["id"])["status"] == "interrupted"
@@ -354,13 +354,13 @@ def test_a_stopped_task_whose_kept_work_landed_leaves_the_board_from_the_hooks(s
     for task, how in ((merged, "merged"), (squashed, "squash-merged")):
         after = store.get_task(task["id"])
         stop = stops.of(store, after)
-        assert after["status"] == "dismissed" and stop.cause == "landed" and stop.who == "cauce"
+        assert after["status"] == "dismissed" and stop.cause == "landed" and stop.who == "locks"
         assert stop.reason == f"its change is already in main ({how})"
         assert stops.next_step(task["id"], stop) is None
         assert {e["data"]["via"] for e in store.events_of(task["id"], "reported")} == {"landed"}
     assert store.get_task(open_work["id"])["status"] == "interrupted"
     # The Stop hook sweeps too, and a second sweep finds nothing new.
-    git(git_repo, "merge", "-q", "--no-ff", "-m", "merge", f"cauce/task-{open_work['id']}")
+    git(git_repo, "merge", "-q", "--no-ff", "-m", "merge", f"locks/task-{open_work['id']}")
     hooks.stop({"session_id": "s", "cwd": str(git_repo)}, store)
     assert stops.of(store, store.get_task(open_work["id"])).cause == "landed"
     assert stops.landed(store, git_repo) == []
@@ -369,19 +369,19 @@ def test_a_stopped_task_whose_kept_work_landed_leaves_the_board_from_the_hooks(s
 def test_a_death_whose_work_landed_is_never_resumed_on_its_own_at_session_start(store: Store, git_repo, tmp_path,
                                                                                  monkeypatch):
     """SessionStart resumed the deaths (`dispatch.recover`) before it read what landed: a task whose
-    kept work was already merged got a `cauce resume --unattended` and was then dismissed as landed."""
-    from cauce import dispatch, hooks
+    kept work was already merged got a `locks resume --unattended` and was then dismissed as landed."""
+    from locks import dispatch, hooks
 
     from .conftest import git
 
-    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "on")
     resumed: list[int] = []
     monkeypatch.setattr(dispatch, "_start_resume", lambda task, *a, **kw: resumed.append(task["id"]) or True)
 
     def died(text: str, name: str) -> dict:
-        task = store.create_task(text, status="interrupted", source="cauce", cwd=str(git_repo), repo="r")
+        task = store.create_task(text, status="interrupted", source="locks", cwd=str(git_repo), repo="r")
         stops.record(store, task["id"], stops.Stop("died", "its process went away"))
-        git(git_repo, "checkout", "-q", "-b", f"cauce/task-{task['id']}")
+        git(git_repo, "checkout", "-q", "-b", f"locks/task-{task['id']}")
         (git_repo / name).write_text(f"{text}\n")
         git(git_repo, "add", "-A")
         git(git_repo, "commit", "-q", "-m", text)
@@ -390,7 +390,7 @@ def test_a_death_whose_work_landed_is_never_resumed_on_its_own_at_session_start(
 
     landed = died("add the export", "export.py")
     open_work = died("add the report", "report.py")
-    git(git_repo, "merge", "-q", "--no-ff", "-m", "merge", f"cauce/task-{landed['id']}")
+    git(git_repo, "merge", "-q", "--no-ff", "-m", "merge", f"locks/task-{landed['id']}")
     hooks.session_start({"session_id": "s", "cwd": str(git_repo), "source": "startup"}, store, tmp_path)
     assert stops.of(store, store.get_task(landed["id"])).cause == "landed"
     assert resumed == [open_work["id"]]
@@ -400,8 +400,8 @@ def test_a_death_whose_work_landed_is_never_resumed_on_its_own_at_session_start(
 def test_a_stop_that_waits_on_a_comparison_the_orchestrator_makes_resumes_with_a_plain_line(cause):
     stop = stops.Stop(cause, "x")
     assert stop.status == "blocked"
-    assert stop.who == "cauce"
-    assert stops.next_step(7, stop) == "cauce resume 7"
+    assert stop.who == "locks"
+    assert stops.next_step(7, stop) == "locks resume 7"
     assert stops.what_to_do(stop) != "read the attempts"
     assert not stops.for_person(stop)
     assert cause not in stops.PERSON_ONLY
@@ -410,15 +410,15 @@ def test_a_stop_that_waits_on_a_comparison_the_orchestrator_makes_resumes_with_a
 def test_a_paused_lane_holding_work_the_session_queued_is_told_once_per_pause(store):
     """A workflow run waited behind a lane a replan had paused, and the session that
     queued it was never told: the ending came before the run's step was queued."""
-    from cauce import hooks
+    from locks import hooks
 
-    stopped = store.create_task("wrong task", status="replan", source="cauce", repo="r", cwd="/x")
+    stopped = store.create_task("wrong task", status="replan", source="locks", repo="r", cwd="/x")
     store.pause_lane("r", f"task #{stopped['id']}: its process exited unexpectedly")
     assert hooks._paused_lanes(store, "s") is None  # nothing of this session waits
-    store.create_task("step", status="queued", source="cauce", repo="r", cwd="/x", session_id="s")
+    store.create_task("step", status="queued", source="locks", repo="r", cwd="/x", session_id="s")
     assert store.lane_paused_on("r", stopped["id"]) == 1  # the colon form is a pause on it too
     text = hooks._paused_lanes(store, "s")
-    assert "r: 1 queued task(s) of yours wait" in text and "cauce lanes --unpause" in text
+    assert "r: 1 queued task(s) of yours wait" in text and "locks lanes --unpause" in text
     assert hooks._paused_lanes(store, "s") is None  # told once
     store.pause_lane("r", f"task #{stopped['id']}: its process exited unexpectedly")
     assert hooks._paused_lanes(store, "s") is None  # the sweep pausing it again is no new pause
@@ -426,7 +426,7 @@ def test_a_paused_lane_holding_work_the_session_queued_is_told_once_per_pause(st
     assert hooks._paused_lanes(store, "s") is not None  # a new pause is told again
     store.pause_lane("r", f"task #{stopped['id']} ended replan: once more")
     assert hooks._paused_lanes(store, "s", said=[stopped["id"]]) is None  # its ending says it
-    # The route the mod wakes an idle session by: `cauce endings`, with nothing ended.
+    # The route the mod wakes an idle session by: `locks endings`, with nothing ended.
     store.pause_lane("r", f"task #{stopped['id']} ended replan: last")
     text, ids = hooks.endings(store, "s", claim="mod")
     assert ids == [] and "nothing in it starts" in text
@@ -434,10 +434,10 @@ def test_a_paused_lane_holding_work_the_session_queued_is_told_once_per_pause(st
 
 
 def test_a_step_whose_run_changed_a_spec_is_not_told_the_specs_are_behind(store):
-    from cauce import hooks
+    from locks import hooks
 
     run_id = 7
-    spec = store.create_task("specs", status="done", source="cauce", repo="r", cwd="/x", session_id="s")
+    spec = store.create_task("specs", status="done", source="locks", repo="r", cwd="/x", session_id="s")
     store._conn.execute("UPDATE tasks SET workflow_run = ? WHERE id = ?", (run_id, spec["id"]))
     store.add_event(spec["id"], "finished", status="done", changed=["openspec/specs/a/spec.md"])
     assert hooks._run_touched_specs(store, {**spec, "workflow_run": run_id})

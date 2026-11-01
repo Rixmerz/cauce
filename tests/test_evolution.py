@@ -5,8 +5,8 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
-from cauce import __version__, cli, evolution, hooks, standards
-from cauce.store import Store
+from locks import __version__, cli, evolution, hooks, standards
+from locks.store import Store
 
 from .test_standards import NOW, finished, many, stamp
 
@@ -51,7 +51,7 @@ def test_the_first_ending_of_a_new_local_day_takes_the_snapshot_of_the_days_befo
         "cost_usd": 4.0, "velocity": 8.0, "cost_per_point": 0.5, "time_per_point_s": 450.0, "pass_first": 0.5,
         "climbed": 0.5, "version": __version__}
     assert evolution.settle(store, now=local(19, 9), tz=HERE)["snapshot"] is None
-    # `cauce evolution --snapshot`: one now, from where the last one ended
+    # `locks evolution --snapshot`: one now, from where the last one ended
     taken = evolution.snapshot(store, now=local(19, 9), tz=HERE, until_now=True)
     assert [r["tasks"] for r in taken] == [1] and store.snapshots()[-1]["since"] == row["until"]
 
@@ -112,7 +112,7 @@ def test_a_revert_reads_as_one(store: Store):
     standards.judge(store, MECHA, now=local(23, 12))
     reverted, back = evolution.report(store, now=local(24, 12), tz=HERE)["changes"]
     assert reverted["line"].endswith("pass-first since then 0 %, reverted on Oct 23")
-    assert back["line"].startswith("feature in mecha, 5 points: back to cauce's rules since Oct 23: revert #")
+    assert back["line"].startswith("feature in mecha, 5 points: back to locks' rules since Oct 23: revert #")
 
 
 def test_the_trend_of_each_metric_over_the_window(store: Store):
@@ -179,7 +179,7 @@ def test_the_stop_hook_settles_and_a_failure_costs_the_turn_nothing(store: Store
 
 
 def test_the_dispatcher_settles_after_the_work_it_ran(git_repo, store: Store):
-    from cauce import flow
+    from locks import flow
 
     from .test_flow import _runner
     from .test_orchestrate import ok
@@ -192,7 +192,7 @@ def test_the_dispatcher_settles_after_the_work_it_ran(git_repo, store: Store):
 
 
 def test_the_evolution_screen_reads_and_never_writes(store: Store):
-    from cauce.ui import api
+    from locks.ui import api
 
     _calibrated(store)
     ended_at(store, local(16, 12), ("sonnet/medium", 1), realized=1)

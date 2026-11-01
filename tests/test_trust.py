@@ -6,11 +6,11 @@ from datetime import timedelta
 
 import pytest
 
-from cauce import isolate, orchestrate, standards, trust
-from cauce.launch import WorkerResult
-from cauce.matrix import PROBATION, Cell, reach
-from cauce.orchestrate import Options, run
-from cauce.store import Store
+from locks import isolate, orchestrate, standards, trust
+from locks.launch import WorkerResult
+from locks.matrix import PROBATION, Cell, reach
+from locks.orchestrate import Options, run
+from locks.store import Store
 
 from .test_checking import BUG, OTHER, check, passing
 from .test_orchestrate import Script, kind
@@ -23,7 +23,7 @@ FIRST = Cell("sonnet", "medium")
 def inspected(store: Store, outcome: str, *, repo="r", kind_="implement", cell="haiku/high", blockers=(),
               round_=0, late=False, worker=True) -> int:
     """A task whose first independent check came `clean` or `blocked`, or that the sampling let through."""
-    task = store.create_task("t", status="done", source="cauce", repo=repo, kind=kind_, points=3)
+    task = store.create_task("t", status="done", source="locks", repo=repo, kind=kind_, points=3)
     store.add_attempt(task["id"], cell=cell, max_turns=30, passed=1)
     named = {"worker": cell} if worker else {}
     if outcome == "sampled":
@@ -71,7 +71,7 @@ def test_inspections_read_each_task_s_first_decided_check_with_the_cell_it_read(
     later = inspected(store, "clean")
     store.add_event(later, "verified", seq=1, round=1, passed=False, blocking=1, blockers=[BUG])  # a re-check
     store.add_event(clean, "verified", seq=2, round=0, passed=False, blocking=1, blockers=[BUG])  # not its first
-    undecided = store.create_task("t", status="done", source="cauce", repo="r", kind="implement")
+    undecided = store.create_task("t", status="done", source="locks", repo="r", kind="implement")
     store.add_event(undecided["id"], "verified", seq=1, round=0, passed=False, blocking=0, worker="haiku/high")
     old = inspected(store, "clean", worker=False)  # before events named the cell: the attempt's is read
     inspected(store, "sampled")
@@ -85,7 +85,7 @@ def test_only_a_qualified_cell_s_passes_go_unchecked_and_never_a_high_risk(store
     for _ in range(trust.QUALIFY):
         inspected(store, "clean")
     assert trust.sampling(store, "r", "implement", HAIKU, 1, tier="medium").check  # trust is off in tests
-    monkeypatch.setenv("CAUCE_TRUST", "on")
+    monkeypatch.setenv("LOCKS_TRUST", "on")
     drawn = [trust.sampling(store, "r", "implement", HAIKU, n, tier="medium") for n in range(40)]
     skipped = [s for s in drawn if not s.check]
     assert skipped and len(skipped) < 40 and all(s.every == 2 for s in drawn)
@@ -138,16 +138,16 @@ def _arm(store, start=FIRST, **kw):
 
 def _plan(store, arm):
     """A task planned in an arm of the trial, as `orchestrate.run` records it."""
-    task = store.create_task("t", status="running", source="cauce", repo="r", kind="implement", points=3)
+    task = store.create_task("t", status="running", source="locks", repo="r", kind="implement", points=3)
     store.add_event(task["id"], "planned", probation={"arm": arm, "cell": "haiku/high"})
 
 
 def test_a_trial_runs_only_where_the_first_rung_passes_and_its_arms_alternate(store: Store, monkeypatch):
-    monkeypatch.setenv("CAUCE_PROBATION", "off")
+    monkeypatch.setenv("LOCKS_PROBATION", "off")
     many(store, 6, ("sonnet/medium", 1))
     assert _arm(store) == (None, "")  # probation is off
-    monkeypatch.setenv("CAUCE_PROBATION", "on")
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_PROBATION", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
     arm, why = _arm(store)
     assert arm == "probation" and why.startswith("on trial at haiku/high, below the implement ladder: 6 of 6 first "
                                                  "tries at sonnet/medium passed here")
@@ -159,13 +159,13 @@ def test_a_trial_runs_only_where_the_first_rung_passes_and_its_arms_alternate(st
     assert _arm(store, start=Cell("sonnet", "high")) == (None, "")
     assert _arm(store, eligible=False) == (None, "")
     assert _arm(store, tier="high") == (None, "")
-    monkeypatch.setenv("CAUCE_VERIFIER", "off")
+    monkeypatch.setenv("LOCKS_VERIFIER", "off")
     assert _arm(store) == (None, "")
 
 
 def test_no_trial_where_the_first_rung_does_not_pass_often_enough(store: Store, monkeypatch):
-    monkeypatch.setenv("CAUCE_PROBATION", "on")
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_PROBATION", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
     many(store, 4, ("sonnet/medium", 1))
     assert _arm(store) == (None, "")  # too few
     many(store, 3, ("sonnet/medium", 0, "code_bug", "more_effort"), ("sonnet/high", 1))
@@ -173,8 +173,8 @@ def test_no_trial_where_the_first_rung_does_not_pass_often_enough(store: Store, 
 
 
 def test_a_trial_ends_once_its_cell_was_tried_enough_or_lost_early(store: Store, monkeypatch):
-    monkeypatch.setenv("CAUCE_PROBATION", "on")
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_PROBATION", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
     many(store, 6, ("sonnet/medium", 1))
     for _ in range(trust.PROBATION_TRIAL):
         _plan(store, "probation")
@@ -189,28 +189,28 @@ def test_a_trial_ends_once_its_cell_was_tried_enough_or_lost_early(store: Store,
 def test_the_calibration_moves_onto_the_probation_cell_only_by_its_own_rule(store: Store, monkeypatch):
     many(store, 6, ("sonnet/medium", 1))
     many(store, 5, ("haiku/high", 1))
-    monkeypatch.setenv("CAUCE_PROBATION", "off")
+    monkeypatch.setenv("LOCKS_PROBATION", "off")
     assert standards.calibrate(store, "r", now=NOW) == []  # off: the ladder's first rung is the floor
-    monkeypatch.setenv("CAUCE_PROBATION", "on")
+    monkeypatch.setenv("LOCKS_PROBATION", "on")
     change, = standards.calibrate(store, "r", now=NOW)
     assert (change["field"], change["old_value"], change["new_value"]) == ("start_cell", None, "haiku/high")
     assert change["rule"].endswith("(its probation cell, below the ladder)")
     used = standards.for_plan(store, "r", "implement", 3, pinned=False, explicit_turns=False)
     assert used.cell == HAIKU
-    monkeypatch.setenv("CAUCE_PROBATION", "off")
+    monkeypatch.setenv("LOCKS_PROBATION", "off")
     gone = standards.for_plan(store, "r", "implement", 3, pinned=False, explicit_turns=False)
     assert gone.cell is None and "no longer holds" in gone.reasons[0]
 
 
-def test_without_enough_cheap_tries_cauce_s_own_start_stays_put(store: Store, monkeypatch):
-    monkeypatch.setenv("CAUCE_PROBATION", "on")
+def test_without_enough_cheap_tries_locks_s_own_start_stays_put(store: Store, monkeypatch):
+    monkeypatch.setenv("LOCKS_PROBATION", "on")
     many(store, 6, ("sonnet/medium", 1))
     many(store, 4, ("haiku/high", 1))
     assert standards.calibrate(store, "r", now=NOW) == []
 
 
 def _onto_haiku(store, monkeypatch) -> dict:
-    monkeypatch.setenv("CAUCE_PROBATION", "on")
+    monkeypatch.setenv("LOCKS_PROBATION", "on")
     many(store, 6, ("sonnet/medium", 1), cost=1.0, at=NOW - timedelta(days=3))
     many(store, 5, ("haiku/high", 1), cost=0.2, at=NOW - timedelta(days=3))
     change, = standards.calibrate(store, "r", now=NOW - timedelta(days=2))
@@ -244,12 +244,12 @@ def test_a_probation_start_that_costs_less_and_passes_as_often_is_kept(store: St
 
 
 def test_a_plan_on_trial_starts_on_the_probation_cell_and_climbs_into_the_ladder(git_repo, store, monkeypatch):
-    from cauce import repo
+    from locks import repo
 
     key = repo.key(git_repo)
     many(store, 6, ("sonnet/medium", 1), repo=key, points=1)
-    monkeypatch.setenv("CAUCE_PROBATION", "on")
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_PROBATION", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
     script = Script(WorkerResult(False, orchestrate.Failure.APPROACH, "wrong", cost_usd=0.01), passing(),
                     write="notes.txt")
     report = run("rename the helper in app.py", git_repo, store, registry={}, launcher=script,
@@ -267,13 +267,13 @@ def test_a_plan_on_trial_starts_on_the_probation_cell_and_climbs_into_the_ladder
 # --- the orchestrator: a sampled pass, and a correction's re-check of what changed --------------------
 
 def test_a_qualified_cell_s_pass_the_sampling_does_not_draw_goes_unchecked_and_says_so(git_repo, store, monkeypatch):
-    from cauce import repo
+    from locks import repo
 
     key = repo.key(git_repo)
     for _ in range(trust.QUALIFY):
         inspected(store, "clean", repo=key)
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
-    monkeypatch.setenv("CAUCE_TRUST", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_TRUST", "on")
     monkeypatch.setattr(trust, "due", lambda repo_, task_id, every: False)
     script = Script(passing(), write="notes.txt")  # no code: the risk stays medium
     report = run("rename the helper in app.py", git_repo, store, Options(start=HAIKU), registry={},
@@ -294,7 +294,7 @@ def test_a_qualified_cell_s_pass_the_sampling_does_not_draw_goes_unchecked_and_s
 
 
 def test_a_correction_s_re_check_reads_what_the_correction_changed_since(git_repo, store, monkeypatch):
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
     script = Script(passing(), check("fail", [BUG]), passing("fixed"), check("pass"), write="app.py")
     report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
     assert report.status == "done"
@@ -308,7 +308,7 @@ def test_a_correction_s_re_check_reads_what_the_correction_changed_since(git_rep
 
 
 def test_a_re_check_after_a_new_model_reads_the_whole_change(store: Store, tmp_path):
-    task = store.create_task("t", status="running", source="cauce", repo="r", kind="implement")
+    task = store.create_task("t", status="running", source="locks", repo="r", kind="implement")
     store.add_event(task["id"], "verified", seq=1, round=0, read_at="abc", worker="sonnet/xhigh")
     assert orchestrate._read_before(store, task["id"], Cell("opus", "high"), 1, tmp_path) is None
     assert orchestrate._read_before(store, task["id"], Cell("sonnet", "xhigh"), 0, tmp_path) is None
@@ -346,7 +346,7 @@ def test_a_snapshot_of_no_checkout_is_none(tmp_path):
 
 
 def test_the_cli_prints_the_record(store: Store, capsys, monkeypatch, tmp_path):
-    from cauce import cli
+    from locks import cli
 
     inspected(store, "clean", repo=None)
     assert cli.main(["trust", "--all", "--json"]) == 0
@@ -361,7 +361,7 @@ def test_the_cli_prints_the_record(store: Store, capsys, monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("tier", ["high", "passive"])
 def test_only_a_medium_change_a_cheap_cell_made_is_ever_sampled(store: Store, tier, monkeypatch):
-    monkeypatch.setenv("CAUCE_TRUST", "on")
+    monkeypatch.setenv("LOCKS_TRUST", "on")
     for _ in range(trust.QUALIFY * 2):
         inspected(store, "clean")
     task = {"id": 1, "repo": "r"}
@@ -375,7 +375,7 @@ def test_only_a_medium_change_a_cheap_cell_made_is_ever_sampled(store: Store, ti
 
 
 def test_an_ending_says_a_pass_its_sampling_let_through():
-    from cauce import hooks
+    from locks import hooks
 
     verdict = {"check": {"command": "pytest", "passed": True}, "criteria": [],
                "independent": {"ran": False, "sampled": True, "every": 4, "why": "its independent check was not "

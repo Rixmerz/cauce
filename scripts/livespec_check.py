@@ -1,11 +1,11 @@
-"""Keep the livespec cauce runs current, checked before it is taken.
+"""Keep the livespec locks runs current, checked before it is taken.
 
     python scripts/livespec_check.py newer          # the release on PyPI newer than PINNED, else exit 1
     python scripts/livespec_check.py bump 0.37.0    # PINNED and its comments in the adapter, a CHANGELOG line
     python scripts/livespec_check.py verify         # the pinned release against a real index of this repo
 
 `verify` indexes a copy of this repository with the pinned release and asks the adapter for what a
-task gets from it: the index read, a brief, what a change reaches, every tool cauce names served, and
+task gets from it: the index read, a brief, what a change reaches, every tool locks names served, and
 `validate_openspec` on a small spec tree. Anything short of that fails. The weekly workflow
 (`.github/workflows/livespec-pin.yml`) runs newer, bump, verify and the suite, and opens a pull
 request only when all of it passed. Standard library only.
@@ -22,7 +22,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-ADAPTER = ROOT / "src" / "cauce" / "adapters" / "livespec.py"
+ADAPTER = ROOT / "src" / "locks" / "adapters" / "livespec.py"
 CHANGELOG = ROOT / "CHANGELOG.md"
 PYPI = "https://pypi.org/pypi/livespec/json"
 
@@ -60,7 +60,7 @@ def bumped(adapter: str, changelog: str, old: str, new: str) -> tuple[str, str]:
     adapter = adapter.replace(f"Checked against livespec {old}.", f"Checked against livespec {new}.")
     adapter = adapter.replace(f"Verified to exist in {old}.", f"Verified to exist in {new}.")
     line = (f"- **livespec pinned at {new}** (was {old}), checked by `scripts/livespec_check.py verify` against a "
-            "real index of this repository: the index read, a brief, a change's reach, every tool cauce names "
+            "real index of this repository: the index read, a brief, a change's reach, every tool locks names "
             "served, and `validate_openspec`.\n")
     head = "## [Unreleased]\n"
     if head not in changelog:
@@ -73,14 +73,14 @@ def verify() -> list[str]:
     sys.path.insert(0, str(ROOT / "src"))
     import os
 
-    from cauce.adapters.livespec import PINNED, TOOLS, Livespec, LivespecError
+    from locks.adapters.livespec import PINNED, TOOLS, Livespec, LivespecError
 
     problems: list[str] = []
     with tempfile.TemporaryDirectory(prefix="livespec-check-") as tmp:
         work = Path(tmp)
         copy = work / "repo"
         subprocess.run(["git", "clone", "-q", str(ROOT), str(copy)], check=True)
-        env = {**os.environ, "CAUCE_HOME": str(work / "home")}
+        env = {**os.environ, "LOCKS_HOME": str(work / "home")}
         adapter = Livespec(env)
         indexed = subprocess.run(["uvx", f"livespec@{PINNED}", "index", str(copy)], capture_output=True, text=True,
                                  timeout=900, check=False)
@@ -91,7 +91,7 @@ def verify() -> list[str]:
             return [f"the index livespec {PINNED} built cannot be read: {status.line()}"]
         if not adapter.brief("Change how isolate.join merges the parts' branches", copy, status).lines:
             problems.append("a brief naming a known symbol came back empty")
-        if not adapter.reach(["src/cauce/isolate.py"], copy, status):
+        if not adapter.reach(["src/locks/isolate.py"], copy, status):
             problems.append("the reach of a widely used file came back empty")
         try:
             missing = TOOLS - adapter.list_tools(copy, timeout_s=300)

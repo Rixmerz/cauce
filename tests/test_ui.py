@@ -9,25 +9,25 @@ from pathlib import Path
 
 import pytest
 
-from cauce import stops, usage
-from cauce.store import Store
-from cauce.ui import api, server
+from locks import stops, usage
+from locks.store import Store
+from locks.ui import api, server
 
 # --- the data each screen shows -------------------------------------------------------
 
 def test_the_board_sorts_work_by_what_it_needs(store: Store):
-    failed = store.create_task("broke", status="failed", source="cauce", repo="r", kind="implement")
-    running = store.create_task("going", status="running", source="cauce", repo="r", current_cell="sonnet/high")
+    failed = store.create_task("broke", status="failed", source="locks", repo="r", kind="implement")
+    running = store.create_task("going", status="running", source="locks", repo="r", current_cell="sonnet/high")
     store.add_event(running["id"], "attempt_started", seq=2, cell="sonnet/high")
-    done = store.create_task("shipped", status="done", source="cauce", repo="r")
-    store.add_event(done["id"], "finished", status="done", branch="cauce/task-3")
+    done = store.create_task("shipped", status="done", source="locks", repo="r")
+    store.add_event(done["id"], "finished", status="done", branch="locks/task-3")
     store.create_task("asked in a session", status="failed", source="hook", session_id="s")
     store.create_task("child", status="running", source="delegation", session_id="s")
     store.enqueue("later", repo="r", cwd="/x")
     store.pause_lane("other", "task #9 ended failed")
     b = api.board(store)
     assert [t["id"] for t in b["needs_you"]] == [done["id"], failed["id"]]
-    assert "review branch cauce/task-3" in b["needs_you"][0]["asks"]
+    assert "review branch locks/task-3" in b["needs_you"][0]["asks"]
     assert b["needs_you"][1]["asks"].startswith("every cell")
     assert b["needs_you"][1]["stop"]["recovered"] and b["needs_you"][1]["stop"]["cause"] == "exhausted"
     assert b["running"][0]["attempt"] == 2 and b["running"][0]["current_cell"] == "sonnet/high"
@@ -44,11 +44,11 @@ def test_the_board_sorts_work_by_what_it_needs(store: Store):
 
 
 def test_prompts_answered_in_sessions_are_not_cards(store: Store):
-    """Every prompt is recorded as a task, but the board is for work cauce runs: a
+    """Every prompt is recorded as a task, but the board is for work locks runs: a
     long session must not bury the done column in turns."""
     for i in range(80):
         store.create_task(f"prompt {i}", status="done", source="hook", session_id="s", repo="r")
-    shipped = store.create_task("shipped", status="done", source="cauce", repo="r")
+    shipped = store.create_task("shipped", status="done", source="locks", repo="r")
     store.create_task("still typing", status="running", source="hook", session_id="s", repo="r")
     store.create_task("elsewhere", status="running", source="hook", session_id="t", repo="other")
     b = api.board(store)
@@ -59,11 +59,11 @@ def test_prompts_answered_in_sessions_are_not_cards(store: Store):
 
 
 def test_the_board_shows_each_task_s_way_and_the_worker_out_now(store: Store):
-    """The flow: kind, ladder, start and every attempt with its move. The worker: the claude -p cauce
+    """The flow: kind, ladder, start and every attempt with its move. The worker: the claude -p locks
     launched for the attempt in flight, gone from the board once that attempt is recorded."""
     import os
 
-    t = store.create_task("going", status="running", source="cauce", repo="r", pid=os.getpid())
+    t = store.create_task("going", status="running", source="locks", repo="r", pid=os.getpid())
     store.add_event(t["id"], "planned", kind="implement", start="sonnet/low",
                     ladder=["sonnet/low", "sonnet/medium", "opus/medium"], reasons=["history raised it"])
     store.add_attempt(t["id"], cell="sonnet/low", max_turns=30, passed=0, failure="code_bug", cost_usd=0.1)
@@ -91,7 +91,7 @@ def test_the_board_shows_each_task_s_way_and_the_worker_out_now(store: Store):
 
 
 def test_task_detail_spend_routing_memory_habits(store: Store):
-    t = store.create_task("fix it", status="done", source="cauce", repo="r", kind="docs", start_cell="haiku",
+    t = store.create_task("fix it", status="done", source="locks", repo="r", kind="docs", start_cell="haiku",
                           final_cell="sonnet/low", cost_usd=0.3)
     store.add_attempt(t["id"], cell="haiku", max_turns=30, passed=0, failure="code_bug", changed_paths=["a.py"],
                       capabilities=["livespec"], cost_usd=0.1)
@@ -139,7 +139,7 @@ def test_a_session_s_own_task_list_its_work_and_its_turns(store: Store, tmp_path
     (plan / "10.json").write_text(json.dumps({"id": "10", "subject": "later", "status": "pending"}))
     (plan / ".lock").write_text("")
     work = tmp_path / "work"
-    (work / ".cauce").mkdir(parents=True)
+    (work / ".locks").mkdir(parents=True)
     store.touch_session("s1", str(work), "r")
     store.create_task("make the importer faster", status="done", source="hook", session_id="s1", repo="r")
     sent = store.enqueue("rewrite the importer", repo="r", cwd="/x", session_id="s1")
@@ -169,7 +169,7 @@ def test_a_session_s_own_task_list_its_work_and_its_turns(store: Store, tmp_path
 
 
 def test_a_lane_says_whether_its_dispatcher_runs(store: Store):
-    from cauce import dispatch
+    from locks import dispatch
 
     store.enqueue("x", repo="r", cwd="/x")
     assert api.board(store, {"r"})["queued"][0]["dispatching"] is False
@@ -262,32 +262,32 @@ def test_the_token_is_only_for_the_page_and_every_write_needs_it(ui):
     assert call(ui, "OPTIONS", "/api/lanes/unpause")[0].status == 403
     body = {"repo": "r"}
     assert call(ui, "POST", "/api/lanes/unpause", body)[0].status == 403
-    assert call(ui, "POST", "/api/lanes/unpause", body, headers={"X-Cauce-Token": "wrong"})[0].status == 403
-    assert call(ui, "POST", "/api/lanes/unpause", body, headers={"X-Cauce-Token": key})[0].status == 200
+    assert call(ui, "POST", "/api/lanes/unpause", body, headers={"X-Locks-Token": "wrong"})[0].status == 403
+    assert call(ui, "POST", "/api/lanes/unpause", body, headers={"X-Locks-Token": key})[0].status == 200
     form = call(ui, "POST", "/api/lanes/unpause", b"repo=r",
-                headers={"X-Cauce-Token": key, "Content-Type": "application/x-www-form-urlencoded"})
+                headers={"X-Locks-Token": key, "Content-Type": "application/x-www-form-urlencoded"})
     assert form[0].status == 415
-    assert call(ui, "POST", "/api/lanes/unpause", b"{bad", headers={"X-Cauce-Token": key})[0].status == 400
-    assert call(ui, "POST", "/api/lanes/unpause", b"[1]", headers={"X-Cauce-Token": key})[0].status == 400
+    assert call(ui, "POST", "/api/lanes/unpause", b"{bad", headers={"X-Locks-Token": key})[0].status == 400
+    assert call(ui, "POST", "/api/lanes/unpause", b"[1]", headers={"X-Locks-Token": key})[0].status == 400
     # Refused on the declared length, before a byte of it is read. Sending the
     # whole body would race the refusal: the server closes while the client writes.
-    big = {"X-Cauce-Token": key, "Content-Length": str(server.MAX_BODY + 1)}
+    big = {"X-Locks-Token": key, "Content-Length": str(server.MAX_BODY + 1)}
     assert call(ui, "POST", "/api/lanes/unpause", b"{}", headers=big)[0].status == 413
     # Work is asked for in a session, never typed into the page.
     assert call(ui, "POST", "/api/queue", {"text": "x", "repo_dir": "/tmp"},
-                headers={"X-Cauce-Token": key})[0].status == 404
+                headers={"X-Locks-Token": key})[0].status == 404
 
     # deleting the token file revokes every open tab
     server.token_path(ui.root).unlink()
-    assert call(ui, "POST", "/api/lanes/unpause", body, headers={"X-Cauce-Token": key})[0].status == 403
+    assert call(ui, "POST", "/api/lanes/unpause", body, headers={"X-Locks-Token": key})[0].status == 403
 
 
 def test_cancel_unpause_and_start(ui, git_repo, monkeypatch):
-    monkeypatch.setenv("CAUCE_AUTOWORK", "off")  # what follows reads its absence, then turns it on
-    key = {"X-Cauce-Token": token(ui)}
-    store = Store(ui.root / "cauce.db")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "off")  # what follows reads its absence, then turns it on
+    key = {"X-Locks-Token": token(ui)}
+    store = Store(ui.root / "locks.db")
     queued = store.enqueue("x", repo="r", cwd=str(git_repo))
-    running = store.create_task("y", status="running", source="cauce", pid=None)
+    running = store.create_task("y", status="running", source="locks", pid=None)
     store.pause_lane("r", "failed")
     assert call(ui, "POST", f"/api/tasks/{queued['id']}/cancel", {}, headers=key)[0].status == 200
     assert call(ui, "POST", f"/api/tasks/{running['id']}/cancel", {}, headers=key)[0].status == 200
@@ -301,7 +301,7 @@ def test_cancel_unpause_and_start(ui, git_repo, monkeypatch):
     res, data = call(ui, "POST", "/api/lanes/unpause", {"repo": "r"}, headers=key)
     assert res.status == 200 and json.loads(data)["started"] is False and not started  # autowork is off here
     assert not store.lanes()[0]["paused"]
-    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "on")
     assert json.loads(call(ui, "POST", "/api/lanes/unpause", {"repo": "r"}, headers=key)[1])["started"] is True
     assert call(ui, "POST", "/api/work", {"repo": "r"}, headers=key)[0].status == 202
     assert started == [(git_repo, "r"), (git_repo, "r")]
@@ -311,8 +311,8 @@ def test_cancel_unpause_and_start(ui, git_repo, monkeypatch):
 
 
 def test_the_stream_sends_events_and_is_bounded(ui, monkeypatch):
-    store = Store(ui.root / "cauce.db")
-    t = store.create_task("x", status="running", source="cauce")
+    store = Store(ui.root / "locks.db")
+    t = store.create_task("x", status="running", source="locks")
     store.add_event(t["id"], "planned", kind="docs")
     store.close()
     monkeypatch.setattr(server, "STREAM_SECONDS", 1)
@@ -340,8 +340,8 @@ def test_a_crash_is_a_bare_500_and_a_logged_trace(ui, monkeypatch):
 
 def test_housekeeping_sweeps_without_a_page(_isolated_home, monkeypatch):
     srv = server.UIServer(0, _isolated_home)
-    store = Store(_isolated_home / "cauce.db")
-    dead = store.create_task("dead", status="running", source="cauce", pid=999999)
+    store = Store(_isolated_home / "locks.db")
+    dead = store.create_task("dead", status="running", source="locks", pid=999999)
     monkeypatch.setattr(server, "SWEEP_EVERY_S", 0.05)
     thread = threading.Thread(target=srv.housekeeping, daemon=True)
     thread.start()
@@ -364,16 +364,16 @@ def test_the_int_parser():
 # --- a server that outlives an update ------------------------------------------------------
 
 
-def test_the_server_says_which_cauce_it_is(ui):
-    from cauce import __version__
+def test_the_server_says_which_locks_it_is(ui):
+    from locks import __version__
 
     res, data = call(ui, "GET", "/api/version")
     assert res.status == 200 and json.loads(data) == {"version": __version__}
-    assert server.occupant(ui.server_address[1]) == {"cauce": True, "version": __version__}
+    assert server.occupant(ui.server_address[1]) == {"locks": True, "version": __version__}
 
 
 def test_only_a_newer_install_takes_the_servers_place(monkeypatch, tmp_path):
-    launcher = tmp_path / "bin" / "cauce"
+    launcher = tmp_path / "bin" / "locks"
     monkeypatch.setattr(server.link, "installed", lambda env: [((0, 0, 1), launcher), ((99, 0), launcher)])
     assert server.newer_install({}) == ("99.0", launcher)
     monkeypatch.setattr(server.link, "installed", lambda env: [((0, 0, 1), launcher)])
@@ -382,10 +382,10 @@ def test_only_a_newer_install_takes_the_servers_place(monkeypatch, tmp_path):
     assert server.newer_install({}) is None
 
 
-def test_housekeeping_hands_the_port_to_a_newer_cauce(_isolated_home, monkeypatch, tmp_path):
+def test_housekeeping_hands_the_port_to_a_newer_locks(_isolated_home, monkeypatch, tmp_path):
     srv = server.UIServer(0, _isolated_home)
     port = srv.server_address[1]
-    launcher = tmp_path / "cauce"
+    launcher = tmp_path / "locks"
     ran = []
     monkeypatch.setattr(server, "SWEEP_EVERY_S", 0.01)
     monkeypatch.setattr(server, "newer_install", lambda env: ("9.9.9", launcher))
@@ -408,13 +408,13 @@ class _Other(http.server.BaseHTTPRequestHandler):
         pass
 
 
-class _OldCauce(_Other):
-    server_version = "cauce"
+class _OldLocks(_Other):
+    server_version = "locks"
 
 
 @pytest.mark.parametrize(("handler", "expected"), [
-    (_Other, {"cauce": False, "version": None}),
-    (_OldCauce, {"cauce": True, "version": None}),
+    (_Other, {"locks": False, "version": None}),
+    (_OldLocks, {"locks": True, "version": None}),
 ])
 def test_who_holds_a_taken_port(handler, expected):
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -429,9 +429,9 @@ def test_who_holds_a_taken_port(handler, expected):
 
 
 def test_each_move_says_where_it_went_and_why_and_routing_adds_them_up(store: Store, git_repo):
-    from cauce.escalate import Failure
-    from cauce.launch import WorkerResult
-    from cauce.orchestrate import run
+    from locks.escalate import Failure
+    from locks.launch import WorkerResult
+    from locks.orchestrate import run
 
     from .test_orchestrate import Script, bad, kind
 
@@ -446,7 +446,7 @@ def test_each_move_says_where_it_went_and_why_and_routing_adds_them_up(store: St
     assert api.flow_of(store, report.task_id)["steps"][0]["climb"]["to"] == "sonnet/high"
 
     # a run from before moves kept their evidence: what its attempts say
-    old = store.create_task("old", status="failed", source="cauce", kind="implement")
+    old = store.create_task("old", status="failed", source="locks", kind="implement")
     store.add_event(old["id"], "planned", kind="implement", ladder=["sonnet/medium"], start="sonnet/medium")
     store.add_attempt(old["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="approach")
     store.set_move(old["id"], 1, "next_model", "the approach was wrong")
@@ -465,15 +465,15 @@ def test_each_move_says_where_it_went_and_why_and_routing_adds_them_up(store: St
 
 
 def test_each_message_says_who_wrote_it_and_older_ones_say_it_is_inferred(store: Store):
-    sent = store.create_task("reduce the app", status="blocked", source="cauce", session_id="s",
+    sent = store.create_task("reduce the app", status="blocked", source="locks", session_id="s",
                              author="orchestrator")
-    typed = store.create_task("write the changelog", status="done", source="cauce", author="person")
-    old = store.create_task("remove the role", status="blocked", source="cauce", session_id="s")  # before authors
-    terminal = store.create_task("old, from a terminal", status="done", source="cauce")
+    typed = store.create_task("write the changelog", status="done", source="locks", author="person")
+    old = store.create_task("remove the role", status="blocked", source="locks", session_id="s")  # before authors
+    terminal = store.create_task("old, from a terminal", status="done", source="locks")
     prompt = store.create_task("why is it slow?", status="done", source="hook", session_id="s")
     store.add_message(sent["id"], "worker", "task #1: blocked")
     label = lambda t: [m["author"] for m in api.task_detail(store, t["id"])["messages"]]  # noqa: E731
-    assert label(sent) == ["main session (orchestrator)", "cauce report"]
+    assert label(sent) == ["main session (orchestrator)", "locks report"]
     assert label(typed) == ["you"]
     assert label(old)[0].startswith("main session (orchestrator, inferred")
     assert label(terminal) == ["you"] and label(prompt) == ["you"]
@@ -481,7 +481,7 @@ def test_each_message_says_who_wrote_it_and_older_ones_say_it_is_inferred(store:
 
 
 def test_a_project_s_notes_by_topic_with_their_links(store: Store, ui):
-    from cauce import notes
+    from locks import notes
 
     rule, _ = notes.add(store, "r", "Orders over 100 USD need approval", topic="business", author="person",
                         filed_by="person")
@@ -506,11 +506,11 @@ def test_a_project_s_notes_by_topic_with_their_links(store: Store, ui):
     assert call(ui, "GET", "/static/notes.js")[0].status == 200
     key = token(ui)
     assert call(ui, "POST", f"/api/notes/{code}/ok", {})[0].status == 403
-    res, data = call(ui, "POST", f"/api/notes/{code}/ok", {}, headers={"X-Cauce-Token": key})
+    res, data = call(ui, "POST", f"/api/notes/{code}/ok", {}, headers={"X-Locks-Token": key})
     assert res.status == 200 and json.loads(data)["state"] == "current"
-    res, data = call(ui, "POST", f"/api/notes/{rule}/drop", {}, headers={"X-Cauce-Token": key})
+    res, data = call(ui, "POST", f"/api/notes/{rule}/drop", {}, headers={"X-Locks-Token": key})
     assert json.loads(data)["state"] == "dropped"
-    assert call(ui, "POST", "/api/notes/999/ok", {}, headers={"X-Cauce-Token": key})[0].status == 404
+    assert call(ui, "POST", "/api/notes/999/ok", {}, headers={"X-Locks-Token": key})[0].status == 404
 
 
 def rule_title(store, note_id):
@@ -522,25 +522,25 @@ def test_a_branch_that_landed_waits_on_nobody(store: Store, git_repo):
     from .conftest import git
 
     def done(task_id, branch, changed):
-        t = store.create_task(f"task {task_id}", status="running", source="cauce", cwd=str(git_repo), repo="r")
+        t = store.create_task(f"task {task_id}", status="running", source="locks", cwd=str(git_repo), repo="r")
         store.add_event(t["id"], "finished", status="done", branch=branch, changed=changed)
         store.update_task(t["id"], status="done")
         return t["id"]
 
     for name, content in (("merged", "a"), ("squashed", "b"), ("pending", "c")):
-        git(git_repo, "checkout", "-qb", f"cauce/{name}")
+        git(git_repo, "checkout", "-qb", f"locks/{name}")
         (git_repo / f"{name}.txt").write_text(content)
         git(git_repo, "add", "-A")
         git(git_repo, "commit", "-qm", name)
         git(git_repo, "checkout", "-q", "main")
-    git(git_repo, "merge", "-q", "--ff-only", "cauce/merged")
+    git(git_repo, "merge", "-q", "--ff-only", "locks/merged")
     (git_repo / "squashed.txt").write_text("b")
     git(git_repo, "add", "-A")
     git(git_repo, "commit", "-qm", "squash")
-    ids = {name: done(i, f"cauce/{name}", [f"{name}.txt"]) for i, name in enumerate(("merged", "squashed", "pending"))}
-    ids["gone"] = done(9, "cauce/gone", ["x.txt"])
+    ids = {name: done(i, f"locks/{name}", [f"{name}.txt"]) for i, name in enumerate(("merged", "squashed", "pending"))}
+    ids["gone"] = done(9, "locks/gone", ["x.txt"])
     asks = {c["id"]: c["asks"] for c in api.board(store, {"r"})["needs_you"]}
-    assert asks == {ids["pending"]: "review branch cauce/pending, then merge it"}
+    assert asks == {ids["pending"]: "review branch locks/pending, then merge it"}
     # a squash-merged file changed again on HEAD is asked for again: unknown is never "landed"
     (git_repo / "squashed.txt").write_text("changed later")
     git(git_repo, "commit", "-qam", "later")
@@ -548,8 +548,8 @@ def test_a_branch_that_landed_waits_on_nobody(store: Store, git_repo):
 
 
 def test_done_is_ordered_by_when_each_ended_not_by_id(store: Store):
-    old = store.create_task("resumed today", status="done", source="cauce", repo="r")
-    new = store.create_task("ended yesterday", status="done", source="cauce", repo="r")
+    old = store.create_task("resumed today", status="done", source="locks", repo="r")
+    new = store.create_task("ended yesterday", status="done", source="locks", repo="r")
     store.update_task(new["id"], status="done")
     store._conn.execute("UPDATE tasks SET updated_at = '2026-01-01T00:00:00+00:00' WHERE id = ?", (new["id"],))
     store._conn.execute("UPDATE tasks SET updated_at = '2026-01-02T00:00:00+00:00' WHERE id = ?", (old["id"],))
@@ -557,10 +557,10 @@ def test_done_is_ordered_by_when_each_ended_not_by_id(store: Store):
 
 
 def test_dismiss_and_forget_from_the_ui(ui):
-    key = {"X-Cauce-Token": token(ui)}
-    store = Store(ui.root / "cauce.db")
-    blocked = store.create_task("x", status="blocked", source="cauce", repo="r")
-    done = store.create_task("y", status="done", source="cauce", repo="r")
+    key = {"X-Locks-Token": token(ui)}
+    store = Store(ui.root / "locks.db")
+    blocked = store.create_task("x", status="blocked", source="locks", repo="r")
+    done = store.create_task("y", status="done", source="locks", repo="r")
     problem = store.open_problem("a clash, not the work", repo="r")
     store.add_fix(problem, "reinstalled node_modules", "worked", repo="r")
     assert call(ui, "POST", f"/api/tasks/{blocked['id']}/dismiss", {})[0].status == 403
@@ -577,12 +577,12 @@ def test_dismiss_and_forget_from_the_ui(ui):
 
 
 def test_routing_keeps_a_period_and_says_why_a_move_has_no_next_attempt(store: Store):
-    old = store.create_task("old", status="blocked", source="cauce", repo="r", kind="test")
+    old = store.create_task("old", status="blocked", source="locks", repo="r", kind="test")
     store.add_attempt(old["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="permission")
     store.set_move(old["id"], 1, "blocked", "refused")
     store._conn.execute("UPDATE tasks SET created_at = '2020-01-01T00:00:00+00:00' WHERE id = ?", (old["id"],))
     store._conn.execute("UPDATE attempts SET created_at = '2020-01-01T00:00:00+00:00' WHERE task_id = ?", (old["id"],))
-    going = store.create_task("going", status="running", source="cauce", repo="r", kind="test")
+    going = store.create_task("going", status="running", source="locks", repo="r", kind="test")
     store.add_attempt(going["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="turns_exhausted")
     store.set_move(going["id"], 1, "more_turns", "raised")
     test = next(r for r in api.routing(store, days=7) if r["kind"] == "test")
@@ -594,9 +594,9 @@ def test_routing_keeps_a_period_and_says_why_a_move_has_no_next_attempt(store: S
 
 
 def test_routing_says_a_pass_with_no_worker_ran_instead_of_a_null_cell(store: Store):
-    joined = store.create_task("join the parts", status="done", source="cauce", repo="r", kind="implement")
+    joined = store.create_task("join the parts", status="done", source="locks", repo="r", kind="implement")
     store.update_task(joined["id"], start_cell="sonnet/medium", final_cell=None)
-    built = store.create_task("build it", status="done", source="cauce", repo="r", kind="implement")
+    built = store.create_task("build it", status="done", source="locks", repo="r", kind="implement")
     store.add_attempt(built["id"], cell="sonnet/medium", max_turns=30, passed=1)
     store.update_task(built["id"], start_cell="sonnet/medium", final_cell="sonnet/medium")
     implement = next(r for r in api.routing(store) if r["kind"] == "implement")
@@ -605,18 +605,18 @@ def test_routing_says_a_pass_with_no_worker_ran_instead_of_a_null_cell(store: St
     assert implement["passes"][api.NO_WORKER] == 1
 
 
-def test_resume_from_the_ui_runs_the_rules_cauce_suggested_never_the_requests(ui, monkeypatch):
+def test_resume_from_the_ui_runs_the_rules_locks_suggested_never_the_requests(ui, monkeypatch):
     import subprocess
 
     ran: list[list[str]] = []
     monkeypatch.setattr(server, "resume", lambda args, cwd: ran.append(args) or subprocess.CompletedProcess(
         args, 0, "resuming", ""))
-    key = {"X-Cauce-Token": token(ui)}
-    store = Store(ui.root / "cauce.db")
-    refused = store.create_task("x", status="blocked", source="cauce", repo="r", cwd="/x")
+    key = {"X-Locks-Token": token(ui)}
+    store = Store(ui.root / "locks.db")
+    refused = store.create_task("x", status="blocked", source="locks", repo="r", cwd="/x")
     store.add_event(refused["id"], "finished", status="blocked", stop=stops.Stop(
         "permission", "refused", allow=("Bash(npm:*)",)).data())
-    done = store.create_task("y", status="done", source="cauce", repo="r", cwd="/x")
+    done = store.create_task("y", status="done", source="locks", repo="r", cwd="/x")
     path = f"/api/tasks/{refused['id']}/resume"
     assert call(ui, "POST", path, {})[0].status == 403
     sent = {"keep": True, "allow": ["Bash(rm:*)"]}
@@ -633,14 +633,14 @@ def test_resume_from_the_ui_runs_the_rules_cauce_suggested_never_the_requests(ui
 
 @pytest.mark.parametrize(("cause", "extra", "keep", "expected"), [
     ("approval", {}, False, ["--allow-approval"]),
-    ("budget", {"budget_usd": 5.0}, False, []),  # an older cauce's stop: a plain resume
+    ("budget", {"budget_usd": 5.0}, False, []),  # an older locks' stop: a plain resume
     ("budget", {"budget_usd": 5.0}, True, None),
     ("turns", {}, False, []),
     ("turns", {}, True, None),
     ("permission", {}, False, None),
 ])
 def test_resume_args_follow_the_stop(cause, extra, keep, expected):
-    shown = {"cause": cause, "next": "cauce resume 3", "allow": [], **extra}
+    shown = {"cause": cause, "next": "locks resume 3", "allow": [], **extra}
     args = stops.resume_args(3, shown, keep=keep)
     assert args == (None if expected is None else ["resume", "3", "--detach", *expected])
     assert stops.resume_args(3, {**shown, "next": None}) is None
@@ -650,8 +650,8 @@ def test_a_branch_of_tool_artifacts_only_waits_on_nobody(store: Store):
     """Validations committed before artifacts were left out kept branches of a
     browser's logs: nine "review branch" cards with nothing to merge."""
     def done(changed):
-        t = store.create_task("validate", status="running", source="cauce", repo="r")
-        store.add_event(t["id"], "finished", status="done", branch=f"cauce/task-{t['id']}", changed=changed)
+        t = store.create_task("validate", status="running", source="locks", repo="r")
+        store.add_event(t["id"], "finished", status="done", branch=f"locks/task-{t['id']}", changed=changed)
         store.update_task(t["id"], status="done")
         return t["id"]
 
@@ -663,21 +663,21 @@ def test_a_branch_of_tool_artifacts_only_waits_on_nobody(store: Store):
 
 def test_overview_is_every_recent_session_and_how_its_work_stands(store: Store, tmp_path, capsys):
     """One watcher, several projects: per session what waits, runs, is queued and ended."""
-    from cauce import cli
+    from locks import cli
 
     for name in ("shop", "api", "old"):
-        (tmp_path / name / ".cauce").mkdir(parents=True)
+        (tmp_path / name / ".locks").mkdir(parents=True)
         store.touch_session(name, str(tmp_path / name), name)
     store._conn.execute("UPDATE sessions SET last_seen_at = '2020-01-01T00:00:00+00:00' WHERE id = 'old'")
-    waits = store.create_task("add the export", status="running", source="cauce", repo="shop", session_id="shop")
+    waits = store.create_task("add the export", status="running", source="locks", repo="shop", session_id="shop")
     stops.record(store, waits["id"], stops.Stop("spec", "the API has no such field", by="worker"))
-    runs = store.create_task("write stats", status="running", source="cauce", repo="api", session_id="api")
+    runs = store.create_task("write stats", status="running", source="locks", repo="api", session_id="api")
     store.add_event(runs["id"], "planned", kind="implement", start="sonnet/medium", ladder=["sonnet/medium"])
     store.add_event(runs["id"], "attempt_started", seq=1, cell="sonnet/medium", model="sonnet")
-    ended = store.create_task("fix the date", status="done", source="cauce", repo="api", session_id="api")
-    long_ago = store.create_task("rename it", status="done", source="cauce", repo="api", session_id="api")
+    ended = store.create_task("fix the date", status="done", source="locks", repo="api", session_id="api")
+    long_ago = store.create_task("rename it", status="done", source="locks", repo="api", session_id="api")
     store._conn.execute("UPDATE tasks SET updated_at = '2020-01-01T00:00:00+00:00' WHERE id = ?", (long_ago["id"],))
-    old_open = store.create_task("old work", status="failed", source="cauce", repo="old", session_id="old")
+    old_open = store.create_task("old work", status="failed", source="locks", repo="old", session_id="old")
     store._conn.execute("UPDATE tasks SET updated_at = '2020-01-01T00:00:00+00:00' WHERE id = ?", (old_open["id"],))
     queued = store.enqueue("tidy the lane", repo="api", cwd=str(tmp_path / "api"))
     store._conn.commit()
@@ -704,7 +704,7 @@ def test_overview_is_every_recent_session_and_how_its_work_stands(store: Store, 
 
 def test_a_session_s_own_turns_are_priced_apart_from_its_workers(store: Store, tmp_path):
     work = tmp_path / "work"
-    (work / ".cauce").mkdir(parents=True)
+    (work / ".locks").mkdir(parents=True)
     store.touch_session("s1", str(work), "r")
     asked = store.create_task("build it", status="done", source="hook", session_id="s1", repo="r")
     child = store.create_task("write the server", status="done", source="delegation", session_id="s1",
@@ -722,7 +722,7 @@ def test_a_session_s_own_turns_are_priced_apart_from_its_workers(store: Store, t
 
 
 def test_a_card_carries_its_points_and_why(store: Store):
-    t = store.create_task("schema work", status="running", source="cauce", repo="r", points=5,
+    t = store.create_task("schema work", status="running", source="locks", repo="r", points=5,
                           points_why="4 criteria, touches schema, risk high")
     card = api.board(store, {"r"})["running"][0]
     assert card["id"] == t["id"] and card["points"] == 5 and card["points_why"].startswith("4 criteria")
@@ -737,9 +737,9 @@ def test_a_session_has_one_tab_that_opens_its_page():
 
 
 def test_a_server_gives_a_session_its_tab_once(ui):
-    """The token holder (a second `cauce ui --tabs` that found this server) asks for the session's
+    """The token holder (a second `locks ui --tabs` that found this server) asks for the session's
     tab; only the first ask is told it may open it, and nothing opens from the server itself."""
-    key = {"X-Cauce-Token": token(ui)}
+    key = {"X-Locks-Token": token(ui)}
     assert call(ui, "POST", "/api/tab", {"session": "s1"})[0].status == 403
     assert call(ui, "POST", "/api/tab", {"session": "../x"}, headers=key)[0].status == 400
     port = ui.server_address[1]
@@ -754,24 +754,24 @@ def test_a_server_handed_over_keeps_the_claims(ui, monkeypatch):
     ran = []
     monkeypatch.setattr(server.os, "execv", lambda path, argv: ran.append(argv))
     ui.tabs = {"s2", "s1"}
-    ui.hand_over("9.9.9", server.Path("/bin/cauce"))
+    ui.hand_over("9.9.9", server.Path("/bin/locks"))
     assert ran[0][1:] == ["ui", "--port", str(ui.server_address[1]), "--tabs", "--session", "s1", "--session", "s2"]
     ran.clear()
     ui.tabs = set()
-    ui.hand_over("9.9.9", server.Path("/bin/cauce"))
+    ui.hand_over("9.9.9", server.Path("/bin/locks"))
     assert ran[0][1:] == ["ui", "--port", str(ui.server_address[1])]
 
 
 def test_tabs_are_for_the_session_the_command_runs_in(monkeypatch, capsys):
     import argparse
 
-    from cauce import cli
+    from locks import cli
 
-    monkeypatch.setenv("CAUCE_SESSION_ID", "here")
+    monkeypatch.setenv("LOCKS_SESSION_ID", "here")
     assert cli._tabs_sessions(argparse.Namespace(tabs=False, session=None)) == []
     assert cli._tabs_sessions(argparse.Namespace(tabs=True, session=None)) == ["here"]
     assert cli._tabs_sessions(argparse.Namespace(tabs=True, session=["a"])) == ["a"]
-    monkeypatch.delenv("CAUCE_SESSION_ID")
+    monkeypatch.delenv("LOCKS_SESSION_ID")
     assert cli._tabs_sessions(argparse.Namespace(tabs=True, session=None)) == []
     assert "--tabs needs a session" in capsys.readouterr().err
 
@@ -780,7 +780,7 @@ def test_the_skill_starts_the_board_with_no_tab():
     """The complaint was a tab per task: the skill's command opens none and never passes `--tabs` itself."""
     skill = (Path(__file__).resolve().parent.parent / "commands" / "ui.md").read_text(encoding="utf-8")
     started = skill.split("```bash\n")[1].split("```")[0]
-    assert started.strip() == "cauce ui"
+    assert started.strip() == "locks ui"
     assert "Do not pass it on your own" in skill
 
 
@@ -790,7 +790,7 @@ def _log_calls(rows):
     import os
     from datetime import UTC, datetime
 
-    from cauce import signature
+    from locks import signature
 
     directory = signature.log_dir(os.environ)
     directory.mkdir(parents=True, exist_ok=True)
@@ -802,7 +802,7 @@ def _log_calls(rows):
 def test_a_running_task_shows_what_its_worker_does_now(store: Store):
     """The attempt in flight, its phase and its last calls, newest last: a signature and no more,
     never an argument or its hash."""
-    t = store.create_task("going", status="running", source="cauce", repo="r")
+    t = store.create_task("going", status="running", source="locks", repo="r")
     store.add_attempt(t["id"], cell="sonnet/low", max_turns=30, passed=0, failure="code_bug")
     store.add_event(t["id"], "attempt_started", seq=2, cell="sonnet/medium")
     base = {"task_id": t["id"], "attempt": 2, "session_id": "w", "arg_hash": "abc123", "ok": 1}
@@ -822,7 +822,7 @@ def test_a_running_task_shows_what_its_worker_does_now(store: Store):
     assert live["status"] == "running" and live["recent_calls"] == calls and live["phase"] == "checking"
     assert "abc123" not in json.dumps(live)
     # Before its attempt says it started, the attempt after the last recorded one is in flight.
-    other = store.create_task("fresh", status="running", source="cauce", repo="r")
+    other = store.create_task("fresh", status="running", source="locks", repo="r")
     fresh = api.task_live(store, other["id"])
     assert fresh["attempt_now"] == 1 and fresh["recent_calls"] == [] and fresh["phase"] is None
     # Work that is over has no calls going on.
@@ -836,7 +836,7 @@ def test_a_running_task_shows_what_its_worker_does_now(store: Store):
 def test_attempts_carry_what_the_comparison_shows(store: Store):
     """Two attempts side by side: cell, served model, turns, cost, wall time, how each ended, the move
     after it, the files it changed, its summary and its evidence."""
-    t = store.create_task("fix", status="done", source="cauce", repo="r")
+    t = store.create_task("fix", status="done", source="locks", repo="r")
     store.add_attempt(t["id"], cell="sonnet/low", max_turns=30, passed=0, failure="code_bug", turns=12,
                       cost_usd=0.2, duration_s=95.0, changed_paths=["a.py"], summary="tried", evidence="1 failed")
     store.set_move(t["id"], 1, "more_effort", "the work was shallow")
@@ -851,9 +851,9 @@ def test_attempts_carry_what_the_comparison_shows(store: Store):
 
 
 def test_the_live_read_is_served_and_the_favicon_may_be_drawn(ui):
-    srv_store = Store(ui.root / "cauce.db")
+    srv_store = Store(ui.root / "locks.db")
     try:
-        t = srv_store.create_task("going", status="running", source="cauce", repo="r")
+        t = srv_store.create_task("going", status="running", source="locks", repo="r")
     finally:
         srv_store.close()
     res, data = call(ui, "GET", f"/api/tasks/{t['id']}/live")

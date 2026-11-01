@@ -1,11 +1,11 @@
-"""Branches of `cauce.standards` the standards suite leaves unread."""
+"""Branches of `locks.standards` the standards suite leaves unread."""
 from __future__ import annotations
 
 import contextlib
 from datetime import timedelta
 
-from cauce import standards
-from cauce.store import Store
+from locks import standards
+from locks.store import Store
 
 from .test_standards import NOW, WASTED, finished, many, skips_of
 

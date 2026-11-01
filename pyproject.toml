@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cauce"
+name = "locks"
 version = "0.67.0"
 description = "One core for Claude Code: route each task to the right model, effort and capabilities, escalate on evidence, and remember what failed across repositories"
 readme = "README.md"
@@ -17,14 +17,15 @@ dependencies = []
 dev = ["pytest>=8", "ruff>=0.6", "coverage>=7"]
 
 [project.scripts]
-cauce = "cauce.cli:main"
+locks = "locks.cli:main"
+cauce = "locks.cli:main"  # legacy-name: the old command keeps working
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-"cauce" = ["workflow_templates/*.json", "guides/*.md", "roles/*.md", "roles/CREDITS.txt", "roles_internal/*.md", "skills/*/*", "skills/*.md", "skills/LICENSE*"]
-"cauce.ui" = ["static/*"]
+"locks" = ["workflow_templates/*.json", "guides/*.md", "roles/*.md", "roles/CREDITS.txt", "roles_internal/*.md", "skills/*/*", "skills/*.md", "skills/LICENSE*"]
+"locks.ui" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -44,9 +45,9 @@ ignore = ["S101", "S603", "S607", "RUF001", "RUF002", "RUF003"]
 "tests/*" = ["S"]
 
 [tool.coverage.run]
-source = ["cauce"]
+source = ["locks"]
 branch = true
-# The scenarios and the hooks run cauce as real processes (`bin/cauce`, `python -m cauce`):
+# The scenarios and the hooks run locks as real processes (`bin/locks`, `python -m locks`):
 # measured too, so the fast path and the dispatcher count.
 patch = ["subprocess"]
 parallel = true

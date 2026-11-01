@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from cauce import allow
+from locks import allow
 
 
 @pytest.mark.parametrize(

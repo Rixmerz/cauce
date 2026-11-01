@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from cauce import cli, dispatch, flow, hooks, launch
-from cauce.store import Store
+from locks import cli, dispatch, flow, hooks, launch
+from locks.store import Store
 
 from .test_classify import _reply, _runner
 
@@ -124,8 +124,8 @@ def test_the_question_names_declared_surfaces_and_what_running_work_changed():
 
 
 def test_the_dispatcher_asks_about_what_running_work_changed_and_keeps_the_answer(store: Store, git_repo):
-    from cauce import isolate
-    from cauce.store import home
+    from locks import isolate
+    from locks.store import home
 
     from .conftest import git
     from .test_flow import _never
@@ -215,31 +215,31 @@ def _no_popen(*a, **kw):
 
 
 def test_start_launches_a_detached_dispatcher_without_the_session_s_identity(tmp_path, monkeypatch):
-    monkeypatch.setenv("CAUCE_SESSION_ID", "the-session")
+    monkeypatch.setenv("LOCKS_SESSION_ID", "the-session")
     started = []
     assert dispatch.start(tmp_path, tmp_path, "r", popen=lambda argv, **kw: started.append((argv, kw)))
     argv, kw = started[0]
-    assert argv[1:] == ["-m", "cauce", "work", "--repo", str(tmp_path), "--detached"] and kw["start_new_session"]
-    assert "CAUCE_SESSION_ID" not in kw["env"] and str(Path(dispatch.__file__).parents[1]) in kw["env"]["PYTHONPATH"]
+    assert argv[1:] == ["-m", "locks", "work", "--repo", str(tmp_path), "--detached"] and kw["start_new_session"]
+    assert "LOCKS_SESSION_ID" not in kw["env"] and str(Path(dispatch.__file__).parents[1]) in kw["env"]["PYTHONPATH"]
 
     def broken(*a, **kw):
         raise OSError("no fork")
 
     assert dispatch.start(tmp_path, tmp_path, "s", popen=broken) is False
-    assert "CAUCE_SESSION_ID" not in launch.worker_env()
+    assert "LOCKS_SESSION_ID" not in launch.worker_env()
 
 
 def test_double_plus_starts_the_dispatcher_when_autowork_is_on(store: Store, git_repo, monkeypatch):
-    monkeypatch.setenv("CAUCE_AUTOWORK", "off")  # what follows reads its absence, then turns it on
-    monkeypatch.setenv("CAUCE_PARALLEL", "off")  # and the same of running beside the work ahead
+    monkeypatch.setenv("LOCKS_AUTOWORK", "off")  # what follows reads its absence, then turns it on
+    monkeypatch.setenv("LOCKS_PARALLEL", "off")  # and the same of running beside the work ahead
     calls = []
     monkeypatch.setattr(dispatch, "start", lambda repo_dir, root, scope: calls.append(repo_dir) or True)
     event = {"session_id": "s", "prompt_id": "1", "cwd": str(git_repo), "prompt": "++ write the changelog"}
-    assert "`cauce work` runs the queue" in hooks.user_prompt_submit(event, store)["reason"] and not calls
-    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    assert "`locks work` runs the queue" in hooks.user_prompt_submit(event, store)["reason"] and not calls
+    monkeypatch.setenv("LOCKS_AUTOWORK", "on")
     reason = hooks.user_prompt_submit({**event, "prompt_id": "2"}, store)["reason"]
     assert calls == [git_repo] and "when the tasks ahead of it are done" in reason
-    monkeypatch.setenv("CAUCE_PARALLEL", "on")
+    monkeypatch.setenv("LOCKS_PARALLEL", "on")
     assert "beside the running ones" in hooks.user_prompt_submit({**event, "prompt_id": "3"}, store)["reason"]
     monkeypatch.setattr(dispatch, "start", lambda *a: False)
     assert "Starting a worker failed" in hooks.user_prompt_submit({**event, "prompt_id": "4"}, store)["reason"]
@@ -247,11 +247,11 @@ def test_double_plus_starts_the_dispatcher_when_autowork_is_on(store: Store, git
 
 
 def test_a_task_queued_by_hand_starts_the_dispatcher_too(git_repo, monkeypatch, capsys):
-    """A session that queued with `cauce queue add` waited for a `cauce work`
+    """A session that queued with `locks queue add` waited for a `locks work`
     nobody ran: the task sat queued."""
     calls = []
     monkeypatch.setattr(dispatch, "start", lambda repo_dir, root, scope: calls.append(repo_dir) or True)
-    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "on")
     assert cli.main(["queue", "add", "write the docs", "--repo", str(git_repo)]) == 0
     assert calls == [git_repo.resolve()] and "A worker takes it" in capsys.readouterr().out
 
@@ -261,8 +261,8 @@ def test_a_death_names_the_crash_its_run_wrote_and_says_when_it_is_the_same_agai
     log.write_text("Traceback (most recent call last):\n  old\nKeyError: 'old'\n")
     start = log.stat().st_size
     with open(log, "a") as fh:
-        fh.write("Traceback (most recent call last):\n  File x\ncauce.isolate.IsolationError: git commit failed\n")
-    assert flow.crash_line(log, start) == "cauce.isolate.IsolationError: git commit failed"
+        fh.write("Traceback (most recent call last):\n  File x\nlocks.isolate.IsolationError: git commit failed\n")
+    assert flow.crash_line(log, start) == "locks.isolate.IsolationError: git commit failed"
     assert flow.crash_line(log, log.stat().st_size) == "" and flow.crash_line(tmp_path / "none") == ""
     task = store.enqueue("x", repo="r", cwd="/x")
     store.claim(task["id"])
@@ -274,7 +274,7 @@ def test_a_death_names_the_crash_its_run_wrote_and_says_when_it_is_the_same_agai
         handle.proc.wait()
         assert handle.poll() == "interrupted"
         stop = store.last_event(task["id"], "finished")["data"]["stop"]
-        assert stop["crash"] == "cauce.isolate.IsolationError: git commit failed" and stop["log"] == str(log)
+        assert stop["crash"] == "locks.isolate.IsolationError: git commit failed" and stop["log"] == str(log)
         assert stop["reason"].endswith("git commit failed") == (nth == 1)
         assert ("the same crash as its last death" in stop["reason"]) == (nth == 2)
 
@@ -289,7 +289,7 @@ def test_a_task_process_that_dies_unannounced_is_interrupted(store: Store):
     assert handle.poll() == "interrupted"
     assert store.get_task(task["id"])["status"] == "interrupted" and store.lanes()[0]["paused"]
     stop = store.last_event(task["id"], "finished")["data"]["stop"]
-    assert stop["cause"] == "died" and stop["by"] == "cauce" and "without saying how" in stop["reason"]
+    assert stop["cause"] == "died" and stop["by"] == "locks" and "without saying how" in stop["reason"]
     store.update_task(task["id"], status="done")
     assert handle.poll() == "done"
     store.update_task(task["id"], status="running")
@@ -300,7 +300,7 @@ def test_a_task_process_that_dies_unannounced_is_interrupted(store: Store):
     sleeper.wait()
 
 
-def test_a_task_process_runs_through_cauce_run_queued(store: Store, git_repo, monkeypatch, capsys):
+def test_a_task_process_runs_through_locks_run_queued(store: Store, git_repo, monkeypatch, capsys):
     task = store.enqueue("write the docs", repo=str(git_repo.resolve()), cwd=str(git_repo),
                          options={"kind": "docs"})
     assert cli.main(["run-queued", str(task["id"])]) == 1  # not claimed by a dispatcher
@@ -328,12 +328,12 @@ def test_the_process_handle_starts_run_queued(store: Store, tmp_path, monkeypatc
 
     monkeypatch.setattr(flow.subprocess, "Popen", Proc)
     flow._Process(store.get_task(task["id"]), tmp_path, store, flow.orchestrate.Options(use_model_classifier=False))
-    assert started["argv"][1:] == ["-m", "cauce", "run-queued", str(task["id"]), "--no-model"]
+    assert started["argv"][1:] == ["-m", "locks", "run-queued", str(task["id"]), "--no-model"]
     assert started["cwd"] == str(tmp_path)
 
 
 def test_a_second_dispatcher_for_the_same_repository_steps_aside(git_repo, capsys):
-    from cauce.store import home
+    from locks.store import home
 
     key = str(git_repo.resolve())
     with dispatch.hold(home(), key):
@@ -344,13 +344,13 @@ def test_a_second_dispatcher_for_the_same_repository_steps_aside(git_repo, capsy
 
 
 def test_a_detached_dispatcher_at_its_limit_hands_queued_work_to_a_fresh_one(git_repo, monkeypatch, capsys):
-    from cauce.flow import WorkReport
+    from locks.flow import WorkReport
 
     monkeypatch.setattr(cli.flow, "work", lambda store, **kw: WorkReport([], "started 10 tasks", at_limit=True))
     handed = []
     monkeypatch.setattr(dispatch, "start_lane", lambda store, root, key: handed.append(key) or True)
     assert cli.main(["work", "--repo", str(git_repo)]) == 0
-    assert handed == []  # a person's own `cauce work` keeps its bound
+    assert handed == []  # a person's own `locks work` keeps its bound
     assert cli.main(["work", "--repo", str(git_repo), "--detached"]) == 0
     assert handed == [str(git_repo.resolve())] and "a fresh dispatcher takes the rest" in capsys.readouterr().out
 
@@ -360,8 +360,8 @@ def test_work_queued_while_the_dispatcher_was_leaving_gets_a_fresh_one(git_repo,
     the queue before that step was there, still holds the lock: the kick is never lost."""
     import time
 
-    from cauce.flow import WorkReport
-    from cauce.store import home
+    from locks.flow import WorkReport
+    from locks.store import home
 
     key = str(git_repo.resolve())
     started = []
@@ -387,11 +387,11 @@ def test_work_queued_while_the_dispatcher_was_leaving_gets_a_fresh_one(git_repo,
 
 
 def test_a_run_or_queue_typed_in_a_session_is_that_session_s(git_repo, monkeypatch, capsys):
-    monkeypatch.setenv("CAUCE_AUTOWORK", "off")
-    monkeypatch.setenv("CAUCE_SESSION_ID", "sess-1")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "off")
+    monkeypatch.setenv("LOCKS_SESSION_ID", "sess-1")
     assert cli.main(["queue", "add", "write the docs", "--repo", str(git_repo), "--json"]) == 0
     queued = json.loads(capsys.readouterr().out)
-    assert queued["then"] == "`cauce work` runs the queue."  # autowork is off here
+    assert queued["then"] == "`locks work` runs the queue."  # autowork is off here
     store = Store.open()
     assert store.get_task(queued["id"])["session_id"] == "sess-1"
     store.close()
@@ -403,8 +403,8 @@ def test_a_run_or_queue_typed_in_a_session_is_that_session_s(git_repo, monkeypat
 
 
 def test_a_lane_whose_dispatcher_died_gets_one_from_the_next_hook(git_repo, store: Store):
-    from cauce import after
-    from cauce.store import home
+    from locks import after
+    from locks.store import home
 
     key = str(git_repo.resolve())
     store.enqueue("write the docs", repo=key, cwd=str(git_repo))
@@ -413,8 +413,8 @@ def test_a_lane_whose_dispatcher_died_gets_one_from_the_next_hook(git_repo, stor
     store.pause_lane("paused", "task #1 stopped")
     started = []
     popen = lambda argv, **kw: started.append(kw["cwd"])  # noqa: E731
-    assert dispatch.revive(store, home(), {"CAUCE_AUTOWORK": "off"}, popen=popen) == []
-    on = {"CAUCE_AUTOWORK": "on"}
+    assert dispatch.revive(store, home(), {"LOCKS_AUTOWORK": "off"}, popen=popen) == []
+    on = {"LOCKS_AUTOWORK": "on"}
     assert dispatch.revive(store, home(), on, popen=popen, now=1000.0) == [key]
     assert started == [str(git_repo)]  # held work and a paused lane are left alone
     # Tried again at once (its dispatcher is still starting): left alone for a while.
@@ -428,7 +428,7 @@ def test_a_lane_whose_dispatcher_died_gets_one_from_the_next_hook(git_repo, stor
 
 
 def test_the_hooks_revive_lanes_and_a_failure_costs_the_turn_nothing(store: Store, monkeypatch, tmp_path):
-    from cauce.store import home
+    from locks.store import home
 
     seen = []
     monkeypatch.setattr(dispatch, "revive", lambda store, root, env: seen.append(env.get("X")))
@@ -450,18 +450,18 @@ def test_without_an_env_file_nothing_is_exported(tmp_path):
 
 
 def test_a_dead_worker_is_swept_and_resumed_once_from_its_kept_work(store: Store, tmp_path, monkeypatch):
-    from cauce import stops
+    from locks import stops
 
-    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "on")
     started: list[list[str]] = []
-    task = store.create_task("build the export", status="running", source="cauce", cwd=str(tmp_path), pid=999999)
+    task = store.create_task("build the export", status="running", source="locks", cwd=str(tmp_path), pid=999999)
     store.add_event(task["id"], "attempt_started", seq=1, cell="opus/high")
-    alive = store.create_task("still going", status="running", source="cauce", cwd=str(tmp_path), pid=os.getpid())
-    gone = store.create_task("its folder is gone", status="interrupted", source="cauce", cwd=str(tmp_path / "x"))
+    alive = store.create_task("still going", status="running", source="locks", cwd=str(tmp_path), pid=os.getpid())
+    gone = store.create_task("its folder is gone", status="interrupted", source="locks", cwd=str(tmp_path / "x"))
     stops.record(store, gone["id"], stops.Stop("died", "no sign of life"))
     # Never from inside a worker (its mod asks for endings): that resume would be refused, its one try spent.
-    assert dispatch.recover(store, tmp_path, {**os.environ, "CAUCE_WORKER_TASK": "7"}, popen=pytest.fail) == []
-    assert "CAUCE_WORKER_TASK" not in dispatch.child_env({"CAUCE_WORKER_TASK": "7", "CAUCE_WORKER_ATTEMPT": "1"})
+    assert dispatch.recover(store, tmp_path, {**os.environ, "LOCKS_WORKER_TASK": "7"}, popen=pytest.fail) == []
+    assert "LOCKS_WORKER_TASK" not in dispatch.child_env({"LOCKS_WORKER_TASK": "7", "LOCKS_WORKER_ATTEMPT": "1"})
     found = dispatch.recover(store, tmp_path, os.environ, popen=lambda argv, **kw: started.append(argv),
                              is_alive=lambda pid: pid == os.getpid())
     assert found == [task["id"]]
@@ -477,23 +477,23 @@ def test_a_dead_worker_is_swept_and_resumed_once_from_its_kept_work(store: Store
 
 
 def test_a_death_that_repeats_its_crash_is_never_resumed_on_its_own(store: Store, tmp_path, monkeypatch):
-    from cauce import stops
+    from locks import stops
 
-    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
-    task = store.create_task("x", status="interrupted", source="cauce", cwd=str(tmp_path))
+    monkeypatch.setenv("LOCKS_AUTOWORK", "on")
+    task = store.create_task("x", status="interrupted", source="locks", cwd=str(tmp_path))
     stops.record(store, task["id"], stops.Stop("died", "the same crash", extra={"crash": "E: x", "repeated": True}))
     assert dispatch.recover(store, tmp_path, os.environ, popen=pytest.fail) == []
 
 
 def test_no_resume_without_autowork_for_an_old_death_or_one_that_cannot_start(store: Store, tmp_path,
                                                                                 monkeypatch):
-    monkeypatch.setenv("CAUCE_AUTOWORK", "off")  # what follows reads its absence, then turns it on
-    from cauce import stops
+    monkeypatch.setenv("LOCKS_AUTOWORK", "off")  # what follows reads its absence, then turns it on
+    from locks import stops
 
-    task = store.create_task("x", status="interrupted", source="cauce", cwd=str(tmp_path))
+    task = store.create_task("x", status="interrupted", source="locks", cwd=str(tmp_path))
     stops.record(store, task["id"], stops.Stop("died", "no sign of life"))
     assert dispatch.recover(store, tmp_path, os.environ, popen=pytest.fail) == []  # autowork off in tests
-    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "on")
     later = __import__("time").time() + dispatch.AUTO_RESUME_WITHIN_S + 60
     assert dispatch.recover(store, tmp_path, os.environ, popen=pytest.fail, now=later) == []
 
@@ -507,13 +507,13 @@ def test_no_resume_without_autowork_for_an_old_death_or_one_that_cannot_start(st
 
 
 def test_mechanical_stops_are_resumed_without_waking_the_session(store: Store, tmp_path, monkeypatch):
-    from cauce import stops
+    from locks import stops
 
-    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "on")
     started: list[list[str]] = []
     made = {}
     for cause in ("turns", "network", "load", "review", "permission"):
-        task = store.create_task(cause, status=stops.Stop(cause, "r").status, source="cauce", cwd=str(tmp_path),
+        task = store.create_task(cause, status=stops.Stop(cause, "r").status, source="locks", cwd=str(tmp_path),
                                  session_id="s")
         stops.record(store, task["id"], stops.Stop(cause, "r"))
         made[cause] = task["id"]
@@ -528,7 +528,7 @@ def test_mechanical_stops_are_resumed_without_waking_the_session(store: Store, t
 
 def test_the_endings_command_resumes_a_mechanical_stop_before_it_could_wake(store: Store, tmp_path, monkeypatch,
                                                                           capsys):
-    from cauce import stops
+    from locks import stops
 
     calls = []
     monkeypatch.setattr(dispatch, "recover", lambda *a, **kw: calls.append(1) or [])
@@ -548,11 +548,11 @@ def test_two_recovers_at_once_start_one_resume_and_a_resume_that_never_took_hold
         store: Store, tmp_path, monkeypatch):
     from datetime import UTC, datetime, timedelta
 
-    from cauce import stops
+    from locks import stops
 
-    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "on")
     started: list[list[str]] = []
-    task = store.create_task("build the export", status="blocked", source="cauce", cwd=str(tmp_path))
+    task = store.create_task("build the export", status="blocked", source="locks", cwd=str(tmp_path))
     reset = datetime.now(UTC) - timedelta(hours=1)  # a limit (it allows more than one resume) already over
     stops.record(store, task["id"], stops.Stop("limit", "the account's usage limit stopped it",
                                                extra={"resets_at": reset.isoformat(timespec="seconds")}))
@@ -581,11 +581,11 @@ def test_a_usage_limit_is_resumed_after_its_reset_and_a_waiter_wakes_it_then(sto
     import time as clock
     from datetime import UTC, datetime, timedelta
 
-    from cauce import stops
+    from locks import stops
 
-    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "on")
     resets = datetime.now(UTC) + timedelta(hours=2)
-    task = store.create_task("build the export", status="blocked", source="cauce", cwd=str(tmp_path), session_id="s")
+    task = store.create_task("build the export", status="blocked", source="locks", cwd=str(tmp_path), session_id="s")
     stops.record(store, task["id"], stops.Stop("limit", "the account's usage limit stopped it",
                                                extra={"resets_at": resets.isoformat(timespec="seconds")}))
     started: list[list[str]] = []
@@ -602,7 +602,7 @@ def test_a_usage_limit_is_resumed_after_its_reset_and_a_waiter_wakes_it_then(sto
         _age_resumes(store, task["id"])  # the resume took hold, met the limit again and ended after the window
     assert dispatch.recover(store, tmp_path, os.environ, popen=pytest.fail, now=after) == []
     # One that named no reset is tried an hour after it stopped.
-    unknown = store.create_task("y", status="blocked", source="cauce", cwd=str(tmp_path))
+    unknown = store.create_task("y", status="blocked", source="locks", cwd=str(tmp_path))
     stops.record(store, unknown["id"], stops.Stop("limit", "r"))
     soon = clock.time() + 60
     assert dispatch._due(stops.of(store, store.get_task(unknown["id"])), soon) == soon + dispatch.LIMIT_UNKNOWN_S

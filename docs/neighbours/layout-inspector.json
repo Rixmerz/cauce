@@ -1,5 +1,5 @@
 {
-  "cauce": {
+  "locks": {
     "format": 1,
     "tools": {
       "check_environment": "why a browser will not start",

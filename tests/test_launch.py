@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from cauce import launch
-from cauce.escalate import Failure
-from cauce.launch import LaunchSpec, build_argv, parse, result_block
-from cauce.matrix import Cell
+from locks import launch
+from locks.escalate import Failure
+from locks.launch import LaunchSpec, build_argv, parse, result_block
+from locks.matrix import Cell
 
 from .conftest import git
 
@@ -20,7 +20,7 @@ def spec(tmp_path: Path, **kw) -> LaunchSpec:
 
 
 def block(**fields) -> str:
-    return "done.\n```cauce-result\n" + json.dumps(fields) + "\n```"
+    return "done.\n```locks-result\n" + json.dumps(fields) + "\n```"
 
 
 def envelope(text: str = "", **extra) -> str:
@@ -86,7 +86,7 @@ def test_a_pass_needs_evidence(tmp_path):
         (envelope("no block at all"), Failure.INCONCLUSIVE),
         (envelope(block(verdict="pass") + block(verdict="fail")), Failure.INCONCLUSIVE),
         (json.dumps({"is_error": True, "subtype": "error_max_turns"}), Failure.TURNS_EXHAUSTED),
-        # cauce sets no dollar cap; one set elsewhere reads as the session erroring.
+        # locks sets no dollar cap; one set elsewhere reads as the session erroring.
         (json.dumps({"is_error": True, "subtype": "error_max_budget_usd"}), Failure.ENVIRONMENT),
         (json.dumps({"is_error": True, "subtype": "error_during_execution"}), Failure.ENVIRONMENT),
         ("not json", Failure.ENVIRONMENT),
@@ -135,30 +135,30 @@ def test_a_session_flagged_errored_that_answered_with_its_block_is_read(tmp_path
 
 
 def test_result_block_rejects_garbage():
-    assert result_block("```cauce-result\n[1]\n```") is None
-    assert result_block("```cauce-result\n{bad\n```") is None
+    assert result_block("```locks-result\n[1]\n```") is None
+    assert result_block("```locks-result\n{bad\n```") is None
 
 
 def test_a_block_whose_strings_hold_a_fence_or_a_tab_is_still_read():
     evidence = "pytest -q:\n```\n3 passed\n```\nand\ta raw tab"
     raw = '{"verdict": "pass", "summary": "done", "evidence": ' + json.dumps(evidence).replace("\\t", "\t") + "}"
-    block = result_block(f"Done.\n```cauce-result\n{raw}\n```\n")
+    block = result_block(f"Done.\n```locks-result\n{raw}\n```\n")
     assert block["verdict"] == "pass" and "3 passed" in block["evidence"] and "\t" in block["evidence"]
     # The same block repeated is one verdict; two that differ in anything are none, and a block that
     # never closes is read as far as its JSON goes.
-    twice = result_block(f"```cauce-result\n{raw}\n```\nAgain:\n```cauce-result\n{raw}\n```")
+    twice = result_block(f"```locks-result\n{raw}\n```\nAgain:\n```locks-result\n{raw}\n```")
     assert twice is not None and twice["summary"] == "done"
     other = raw.replace('"done"', '"done."')
-    assert result_block(f"```cauce-result\n{raw}\n```\n```cauce-result\n{other}\n```") is None
-    assert result_block(f"```cauce-result\n{raw}\n```\n```cauce-result\n{{bad\n```") is None
-    assert result_block(f"```cauce-result\n{raw}")["summary"] == "done"
+    assert result_block(f"```locks-result\n{raw}\n```\n```locks-result\n{other}\n```") is None
+    assert result_block(f"```locks-result\n{raw}\n```\n```locks-result\n{{bad\n```") is None
+    assert result_block(f"```locks-result\n{raw}")["summary"] == "done"
     # Two verdicts in one block, or anything after its JSON, are no verdict either.
     failing = '{"verdict": "fail", "failure": "code_bug", "summary": "no"}'
-    assert result_block(f"```cauce-result\n{raw}\n{failing}\n```") is None
-    assert result_block(f"```cauce-result\n{raw}\n}}\n```") is None
-    report ='```cauce-report\n{"project": "x", "note": "a ```fenced``` word"}\n```'
+    assert result_block(f"```locks-result\n{raw}\n{failing}\n```") is None
+    assert result_block(f"```locks-result\n{raw}\n}}\n```") is None
+    report ='```locks-report\n{"project": "x", "note": "a ```fenced``` word"}\n```'
     assert launch.report_block(report) == {"project": "x", "note": "a ```fenced``` word"}
-    assert launch.report_block("```cauce-report\nnot json") == {"unparsed": "not json"}
+    assert launch.report_block("```locks-report\nnot json") == {"unparsed": "not json"}
 
 
 def test_run_reads_changes_from_git_and_cleans_its_mcp_file(git_repo):
@@ -182,7 +182,7 @@ def test_run_reads_changes_from_git_and_cleans_its_mcp_file(git_repo):
     assert result.changed_paths == ("app.py", "new.py")
     assert seen["mcp"] == {"mcpServers": {"idx": {"command": "idx"}}}
     assert not seen["cfg"].exists() and git_repo not in seen["cfg"].parents
-    assert "cauce-result" in seen["input"] and seen["env"]["CAUCE_HOOKS_OFF"] == "1"
+    assert "locks-result" in seen["input"] and seen["env"]["LOCKS_HOOKS_OFF"] == "1"
 
 
 def test_run_timeout_and_missing_cli(tmp_path):
@@ -351,7 +351,7 @@ def test_changed_paths_leave_out_tool_artifacts():
 
 
 def test_the_commit_subject_a_worker_proposes_is_one_short_line():
-    from cauce.launch import commit_subject
+    from locks.launch import commit_subject
 
     assert commit_subject({"commit": "  `Fix rounding of the total.`\nmore"}) == "Fix rounding of the total"
     assert commit_subject({"commit": 3}) == "" and commit_subject({}) == "" and commit_subject({"commit": " "}) == ""
@@ -387,7 +387,7 @@ def test_a_network_that_dropped_is_named_wherever_it_shows(tmp_path):
     assert silent.network.startswith("getaddrinfo ENOTFOUND") and silent.transient
     named = '{"verdict": "fail", "failure": "environment", "summary": "npm install failed", ' \
             '"evidence": "npm ERR! code ENOTFOUND registry.npmjs.org"}'
-    worker = parse(proc(json.dumps({"result": f"```cauce-result\n{named}\n```"})), spec(tmp_path))
+    worker = parse(proc(json.dumps({"result": f"```locks-result\n{named}\n```"})), spec(tmp_path))
     assert worker.failure is Failure.ENVIRONMENT and worker.network == "ENOTFOUND"
     # A usage limit is no network, and a test that prints a reset is no network either.
     limited = json.dumps({"is_error": True, "subtype": "success", "result": "Claude AI usage limit reached"})
@@ -396,7 +396,7 @@ def test_a_network_that_dropped_is_named_wherever_it_shows(tmp_path):
     # A worker's evidence is a command's output: a local server that is not up is no network.
     local = '{"verdict": "fail", "failure": "environment", "summary": "the e2e check could not reach the app", ' \
             '"evidence": "TypeError: fetch failed (connect ECONNREFUSED 127.0.0.1:3000)"}'
-    assert parse(proc(json.dumps({"result": f"```cauce-result\n{local}\n```"})), spec(tmp_path)).network == ""
+    assert parse(proc(json.dumps({"result": f"```locks-result\n{local}\n```"})), spec(tmp_path)).network == ""
 
 
 # --- more turns continue the worker's own session ---------------------------------------
@@ -558,9 +558,9 @@ def test_what_the_worker_needed_to_get_oriented_is_read_from_its_block_and_kept_
 
 
 def test_a_lean_worker_gets_no_subagent_tool_nor_skill_listing_and_only_flags_its_cli_knows(tmp_path, monkeypatch):
-    from cauce import launch
+    from locks import launch
 
-    monkeypatch.setenv("CAUCE_LEAN", "on")
+    monkeypatch.setenv("LOCKS_LEAN", "on")
     knows_all = "  --disable-slash-commands\n  --exclude-dynamic-system-prompt-sections\n"
     lean = launch.lean_flags("claude", os.environ, help_text=lambda b: knows_all)
     assert lean == launch.LEAN_FLAGS
@@ -571,7 +571,7 @@ def test_a_lean_worker_gets_no_subagent_tool_nor_skill_listing_and_only_flags_it
     assert argv[argv.index("--disallowedTools") + 1] == "Agent,Task"
     assert "--disable-slash-commands" in argv and "--exclude-dynamic-system-prompt-sections" in argv
     assert "--disallowedTools" not in build_argv(spec(tmp_path))
-    monkeypatch.setenv("CAUCE_LEAN", "off")
+    monkeypatch.setenv("LOCKS_LEAN", "off")
     assert launch.lean_flags("claude", os.environ, help_text=lambda b: knows_all) == ()
 
 

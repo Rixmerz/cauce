@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from cauce import dispatch, flow, workflows
-from cauce.escalate import Failure
-from cauce.launch import WorkerResult
-from cauce.orchestrate import Options, run
-from cauce.store import Store
+from locks import dispatch, flow, workflows
+from locks.escalate import Failure
+from locks.launch import WorkerResult
+from locks.orchestrate import Options, run
+from locks.store import Store
 
 from .test_orchestrate import bad, kind, ok
 
@@ -31,7 +31,7 @@ def test_a_lane_runs_in_order_and_pauses_on_the_first_failure(git_repo, store: S
     lane = store.lanes()[0]
     assert lane["paused"] and "replan" in lane["reason"] and lane["queued"] == 1
     first = store.list_tasks(status=["done"])[0]
-    assert first["title"] == "first" and first["source"] == "cauce" and first["dispatched"] == 1
+    assert first["title"] == "first" and first["source"] == "locks" and first["dispatched"] == 1
     assert next(m["role"] for m in store.messages(first["id"])) == "user"  # the queued text kept its id
 
     store.unpause_lane(key)
@@ -121,8 +121,8 @@ def test_haiku_lets_independent_work_start_beside_running_work(store: Store):
 
 
 def test_a_held_back_task_says_what_it_waits_for_wherever_it_is_shown(capsys, store: Store):
-    from cauce import cli
-    from cauce.ui import api
+    from locks import cli
+    from locks.ui import api
 
     first = store.enqueue("rewrite the importer", repo="r", cwd="/x")
     store.claim(first["id"])
@@ -167,7 +167,7 @@ def test_a_held_back_task_says_what_it_waits_for_wherever_it_is_shown(capsys, st
 
 
 def test_what_a_held_back_task_waits_for_moves_on_with_its_lane(capsys, store: Store):
-    from cauce import cli
+    from locks import cli
 
     first = store.enqueue("rewrite the importer", repo="r", cwd="/x")
     store.claim(first["id"])
@@ -424,7 +424,7 @@ def test_the_dispatcher_runs_parallel_work_and_waits_for_it(git_repo, store: Sto
 
 
 def test_queued_options_reach_the_run():
-    # A budget an older cauce stored is left where it is: nothing reads it.
+    # A budget an older locks stored is left where it is: nothing reads it.
     task = {"options": '{"budget_usd": "x", "verify": "pytest", "kind": "docs", "start": "sonnet/high"}'}
     options = flow.queued_options(task, Options(max_attempts=3))
     assert (options.verify, options.kind, options.start.label, options.max_attempts) == (
@@ -434,8 +434,8 @@ def test_queued_options_reach_the_run():
 
 
 def test_the_sweep_marks_dead_runs_and_abandoned_prompts(store: Store):
-    dead = store.create_task("dead", status="running", source="cauce", pid=999999, repo="r", dispatched=1)
-    live = store.create_task("live", status="running", source="cauce", pid=1, repo="r")
+    dead = store.create_task("dead", status="running", source="locks", pid=999999, repo="r", dispatched=1)
+    live = store.create_task("live", status="running", source="locks", pid=1, repo="r")
     prompt = store.create_task("old prompt", status="running", source="hook", session_id="s")
     child = store.create_task("child", status="running", source="delegation", session_id="s")
     later = datetime.now(UTC) + timedelta(hours=13)
@@ -448,7 +448,7 @@ def test_the_sweep_marks_dead_runs_and_abandoned_prompts(store: Store):
     assert store.get_task(prompt["id"])["result"] is None  # a prompt keeps its own answer
     assert store.last_event(prompt["id"], "finished")["data"]["stop"]["cause"] == "turn"  # a turn, not work to resume
     assert flow.alive(None) is False and flow.alive(1) is True and flow.alive(999999) is False
-    # A subagent whose ending never reached cauce goes after a day, as nothing to resume.
+    # A subagent whose ending never reached locks goes after a day, as nothing to resume.
     gone = flow.sweep(store, now=datetime.now(UTC) + timedelta(hours=25), is_alive=lambda pid: pid == 1)
     assert gone == [child["id"]] and store.get_task(child["id"])["status"] != "running"
     stop = store.last_event(child["id"], "finished")["data"]["stop"]
@@ -456,7 +456,7 @@ def test_the_sweep_marks_dead_runs_and_abandoned_prompts(store: Store):
 
 
 def test_pinned_runs_never_teach_the_router(git_repo, store: Store):
-    from cauce.matrix import Cell
+    from locks.matrix import Cell
 
     for _ in range(3):
         run("x", git_repo, store, Options(start=Cell("opus", "max")), registry={},
@@ -470,12 +470,12 @@ def test_prune_deletes_only_the_branches_whose_work_landed(store, git_repo, monk
     """Merged, squash-merged and artifact-only branches go, each kept on its task's
     events with its tip; work not landed, a task that may resume, and a branch
     checked out in a worktree stay."""
-    from cauce import cli, flow, isolate
+    from locks import cli, flow, isolate
 
     from .conftest import git
 
     def branch(task_id, files, status="done"):
-        task = store.create_task(f"task {task_id}", status="running", source="cauce", cwd=str(git_repo))
+        task = store.create_task(f"task {task_id}", status="running", source="locks", cwd=str(git_repo))
         store.update_task(task["id"], status=status)
         name = isolate.branch_for(task["id"])
         git(git_repo, "checkout", "-qb", name)
@@ -504,12 +504,12 @@ def test_prune_deletes_only_the_branches_whose_work_landed(store, git_repo, monk
     assert {x["task"] for x in flow.prune(store, dry_run=True)} == {merged[0], squashed[0], artifacts[0]}
     assert len(isolate.kept_branches(git_repo)) == 6  # a dry run deletes nothing
 
-    monkeypatch.setenv("CAUCE_PRUNE", "off")
+    monkeypatch.setenv("LOCKS_PRUNE", "off")
     assert flow.prune(store) == []
     assert cli.main(["prune"]) == 0
     assert "pruning is off" in capsys.readouterr().out
 
-    monkeypatch.setenv("CAUCE_PRUNE", "on")
+    monkeypatch.setenv("LOCKS_PRUNE", "on")
     gone = {x["task"]: x["why"] for x in flow.prune(store, [git_repo])}
     assert gone == {merged[0]: "merged", squashed[0]: "squash-merged", artifacts[0]: "artifacts only"}
     assert set(isolate.kept_branches(git_repo)) == {pending[0], blocked[0], checked_out[0]}
@@ -517,7 +517,7 @@ def test_prune_deletes_only_the_branches_whose_work_landed(store, git_repo, monk
     assert event["branch"] == merged[1]
     assert git(git_repo, "cat-file", "-t", event["tip"]) == "commit"  # still there to bring back
     assert cli.main(["prune", "--repo", str(git_repo)]) == 0
-    assert "no branch cauce kept has landed" in capsys.readouterr().out
+    assert "no branch locks kept has landed" in capsys.readouterr().out
 
 
 def test_an_investigator_that_stops_leaves_the_person_s_lane_open(git_repo, store: Store):
@@ -530,13 +530,13 @@ def test_an_investigator_that_stops_leaves_the_person_s_lane_open(git_repo, stor
 
 
 def test_prune_deletes_a_finished_copy_of_work_another_branch_keeps(store, git_repo):
-    from cauce import flow, isolate
+    from locks import flow, isolate
 
     from .conftest import git
 
     ids = []
     for _ in range(3):
-        task = store.create_task("rename the field", status="done", source="cauce", cwd=str(git_repo))
+        task = store.create_task("rename the field", status="done", source="locks", cwd=str(git_repo))
         ids.append(task["id"])
         git(git_repo, "checkout", "-qb", isolate.branch_for(task["id"]))
         (git_repo / "field.py").write_text("renamed\n")
@@ -546,12 +546,12 @@ def test_prune_deletes_a_finished_copy_of_work_another_branch_keeps(store, git_r
     store.update_task(ids[2], status="blocked")  # the newest may resume: it stays
     pruned = flow.prune(store, [git_repo])
     # A copy goes only for a twin that passed: the blocked one may resume, fail and drop its branch.
-    assert [(p["task"], p["why"]) for p in pruned] == [(ids[0], f"the same work as cauce/task-{ids[1]}")]
+    assert [(p["task"], p["why"]) for p in pruned] == [(ids[0], f"the same work as locks/task-{ids[1]}")]
     assert list(isolate.kept_branches(git_repo)) == [ids[1], ids[2]]
 
 
 def test_prune_leaves_the_branches_of_a_run_that_is_still_going(store, git_repo):
-    from cauce import flow, isolate
+    from locks import flow, isolate
 
     from .conftest import git
     from .test_workflows import TWO, _save
@@ -573,7 +573,7 @@ def test_prune_leaves_the_branches_of_a_run_that_is_still_going(store, git_repo)
 
 
 def test_a_task_asked_again_points_at_the_one_that_keeps_its_work(git_repo, store):
-    from cauce.escalate import Failure as F
+    from locks.escalate import Failure as F
 
     from .test_orchestrate import Script
 
@@ -583,7 +583,7 @@ def test_a_task_asked_again_points_at_the_one_that_keeps_its_work(git_repo, stor
     said = []
     run("migrate the totals to cents", git_repo, store, registry={}, adapters=[], launcher=Script(ok()),
         classifier=kind("implement"), progress=said.append)
-    assert any(f"task #{first.task_id} asked the same and keeps its work" in s and f"cauce resume {first.task_id}" in s
+    assert any(f"task #{first.task_id} asked the same and keeps its work" in s and f"locks resume {first.task_id}" in s
                for s in said)
 
 
@@ -658,7 +658,7 @@ def test_another_dispatcher_s_unjudged_writing_work_borrows_no_worker(store: Sto
     assert len(picked) == 1 and shares["other"].started == 1
 
 
-def test_what_reads_as_a_full_disk_and_what_is_cauce_s_own_error():
+def test_what_reads_as_a_full_disk_and_what_is_locks_s_own_error():
     import errno
     import sqlite3
 
@@ -673,8 +673,8 @@ def test_what_reads_as_a_full_disk_and_what_is_cauce_s_own_error():
 def test_a_full_disk_does_not_end_the_dispatcher_it_waits_and_goes_on(store: Store, monkeypatch):
     import sqlite3
 
-    from cauce import capacity
-    from cauce.store import home
+    from locks import capacity
+    from locks.store import home
 
     capacity.settle(store, home(), machine=capacity.Machine(4, None, None), ceiling=None, wanting=False)
     task = store.enqueue("read the docs", repo="r", cwd="/")
@@ -715,7 +715,7 @@ def test_a_disk_that_stays_full_stops_the_dispatcher_and_any_other_error_is_rais
     report = flow.work(store, pause=lambda: None, backoff=waits.append)
     assert sum(waits) >= flow.DISK_GIVE_UP_S and waits[-1] == flow.DISK_WAITS_S[-1]
     assert report.stopped_because.startswith("the disk stayed full for") and not report.ran
-    monkeypatch.setattr(flow, "pick", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("cauce's own")))
+    monkeypatch.setattr(flow, "pick", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("locks' own")))
     with pytest.raises(RuntimeError):
         flow.work(store, pause=lambda: None, backoff=waits.append)
 
@@ -745,7 +745,7 @@ def test_a_task_whose_process_could_not_start_for_the_disk_goes_back_to_the_queu
 
 
 def test_the_files_a_request_names_hold_it_back_never_start_it_beside(store: Store):
-    from cauce import flow
+    from locks import flow
 
     api = {"id": 1, "body": "add the service in src/app/curriculum-api.service.ts", "options": "{}"}
     admin = {"id": 2, "body": "write the spec src/app/curriculum-api.service.ts for the admin", "options": "{}"}
@@ -792,9 +792,9 @@ def test_a_wait_judged_against_work_that_ended_is_judged_again(store: Store):
 
 
 def test_the_session_lets_a_queued_task_start_beside_the_work_ahead(capsys, store: Store, monkeypatch):
-    from cauce import cli
+    from locks import cli
 
-    monkeypatch.setenv("CAUCE_AUTOWORK", "off")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "off")
     first = store.enqueue("build the long feature", repo="r", cwd="/x")
     store.claim(first["id"])
     held = store.enqueue("fix the BLE test", repo="r", cwd="/x")
@@ -812,16 +812,16 @@ def test_a_running_task_longer_than_nine_in_ten_of_its_kind_s_passes_is_slow(sto
     import time
 
     for wall in (600, 700, 800, 900, 1000):
-        done = store.create_task("ui", status="done", source="cauce", repo="r", kind="ui")
+        done = store.create_task("ui", status="done", source="locks", repo="r", kind="ui")
         store.add_event(done["id"], "finished", status="done", wall_s=wall)
-    running = store.create_task("the slow one", status="running", source="cauce", repo="r", kind="ui")
+    running = store.create_task("the slow one", status="running", source="locks", repo="r", kind="ui")
     store.add_event(running["id"], "planned", start="sonnet/high")
     began = datetime.fromisoformat(store.last_event(running["id"], "planned")["ts"]).timestamp()
     assert flow.slow(store, store.get_task(running["id"]), now=began + 60) is None  # under SLOW_MIN_S
     line = flow.slow(store, store.get_task(running["id"]), now=began + 101 * 60)
     assert line == (f"running 101m: longer than 9 in 10 of the 5 ui tasks that passed here (p90 17m); "
-                    f"`cauce show {running['id']}` says what it is doing")
-    other = store.create_task("docs", status="running", source="cauce", repo="r", kind="docs")
+                    f"`locks show {running['id']}` says what it is doing")
+    other = store.create_task("docs", status="running", source="locks", repo="r", kind="docs")
     store.add_event(other["id"], "planned", start="haiku/medium")
     assert flow.slow(store, store.get_task(other["id"]), now=time.time() + 3 * 3600) is None  # no history
 

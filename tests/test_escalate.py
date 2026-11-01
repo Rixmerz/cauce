@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from cauce.escalate import Attempt, Failure, Move, Skip, decide, repeated_answer
-from cauce.matrix import LADDERS, Cell
+from locks.escalate import Attempt, Failure, Move, Skip, decide, repeated_answer
+from locks.matrix import LADDERS, Cell
 
 IMPLEMENT = LADDERS["implement"]  # sonnet/medium, sonnet/high, sonnet/xhigh, opus/high
 PLAN = LADDERS["plan"]  # opus/xhigh, opus/max, fable/high
@@ -228,7 +228,7 @@ def dropped(cell: str, changed: tuple[str, ...] = ("app.py",)) -> Attempt:
 
 
 def test_a_network_that_dropped_earns_the_same_cell_after_a_wait_and_stops_only_when_it_stays_down():
-    from cauce.escalate import NETWORK_WAITS
+    from locks.escalate import NETWORK_WAITS
 
     attempts = [fail("sonnet/medium", Failure.CODE_BUG), dropped("sonnet/high")]
     waits = []
@@ -248,13 +248,13 @@ def test_a_network_that_dropped_earns_the_same_cell_after_a_wait_and_stops_only_
 
 
 def timed_out(cell: str) -> Attempt:
-    """The worker's run passed; cauce's check timed its tests out on a loaded machine."""
+    """The worker's run passed; locks' check timed its tests out on a loaded machine."""
     return Attempt(Cell.parse(cell), 30, False, Failure.ENVIRONMENT, "claimed a pass, but the check timed out",
                    changed=("cocha-config.json",), load="thrown: Exceeded timeout of 5000 ms for a test.")
 
 
 def test_tests_that_timed_out_under_load_earn_the_same_cell_after_a_wait_never_a_climb():
-    from cauce.escalate import LOAD_WAITS, waited
+    from locks.escalate import LOAD_WAITS, waited
 
     attempts = [timed_out("sonnet/medium")]
     waits = []
@@ -316,8 +316,8 @@ def test_a_second_correction_in_a_row_on_one_model_hands_the_work_to_a_stronger_
 
 
 def test_a_task_failure_on_work_that_stands_is_a_decision_not_a_replan():
-    from cauce.escalate import Attempt, Failure, Move, decide
-    from cauce.matrix import ladder_for
+    from locks.escalate import Attempt, Failure, Move, decide
+    from locks.matrix import ladder_for
 
     ladder = ladder_for("implement")
     cell = ladder[0]
@@ -343,7 +343,7 @@ def test_several_pieces_that_outgrow_their_turns_are_split_not_given_more():
 
 
 def failing(cell: str, *ids: str, summary: str = "the check still fails") -> Attempt:
-    """An attempt whose claimed pass cauce's check turned down, naming the tests that failed it."""
+    """An attempt whose claimed pass locks' check turned down, naming the tests that failed it."""
     return Attempt(Cell.parse(cell), 30, False, Failure.CODE_BUG, summary, failing=frozenset(ids))
 
 

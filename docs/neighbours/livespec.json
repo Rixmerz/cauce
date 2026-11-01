@@ -1,5 +1,5 @@
 {
-  "cauce": {
+  "locks": {
     "format": 1,
     "tools": {
       "analyze_impact": "what changing a symbol reaches",

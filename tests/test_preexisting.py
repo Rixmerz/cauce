@@ -7,10 +7,10 @@ import time
 
 import pytest
 
-from cauce import ci, doctor, hooks, isolate, launch, orchestrate, stops
-from cauce.launch import WorkerResult, check_failures
-from cauce.orchestrate import Options, run
-from cauce.store import Store
+from locks import ci, doctor, hooks, isolate, launch, orchestrate, stops
+from locks.launch import WorkerResult, check_failures
+from locks.orchestrate import Options, run
+from locks.store import Store
 
 from .conftest import git
 from .test_orchestrate import Script, kind, ok
@@ -153,9 +153,9 @@ def test_a_check_s_failing_lines_are_read_from_each_runner_s_own_shape(output, e
 
 def test_two_runs_of_the_same_failure_read_the_same_wherever_and_however_long_they_ran():
     here = "\x1b[31mFAIL\x1b[0m /tmp/w/task-3/src/a.test.ts (1.2 s)\n  ✕ adds (31 ms)\n"
-    there = "FAIL /home/u/.cauce/worktrees/base-abc/src/a.test.ts (9.9 s)\n  ✕ adds (2 ms)\n"
+    there = "FAIL /home/u/.locks/worktrees/base-abc/src/a.test.ts (9.9 s)\n  ✕ adds (2 ms)\n"
     assert check_failures(here, roots=("/tmp/w/task-3",)) == check_failures(
-        there, roots=("/home/u/.cauce/worktrees/base-abc/",)) == {"FAIL src/a.test.ts", "✕ adds"}
+        there, roots=("/home/u/.locks/worktrees/base-abc/",)) == {"FAIL src/a.test.ts", "✕ adds"}
     many = "\n".join(f"FAIL src/t{i}.test.ts" for i in range(launch.FAILURES_KEPT + 20))
     assert len(check_failures(many)) == launch.FAILURES_KEPT
     long = check_failures("FAIL src/" + "x" * 600 + ".test.ts")
@@ -278,16 +278,16 @@ def test_a_check_that_fails_at_the_base_with_the_same_lines_lets_the_pass_stand(
     verdict = store.final_event(report.task_id)["data"]["verdict"]
     assert verdict["check"]["state"] == orchestrate.FAILING_AT_BASE and verdict["check"]["failures"] == 2
     said = "\n".join(hooks.verdict_lines(verdict))
-    assert "failing at base, unchanged" in said and "passed, run by cauce" not in said
+    assert "failing at base, unchanged" in said and "passed, run by locks" not in said
     # The ending offers the bugfix for them, and starts nothing.
     found = hooks._found_before(store, store.get_task(report.task_id))
     assert found[0].startswith("  it found 1 problem(s) that were already there")
-    assert "cauce workflow run bugfix" in found[1] and f"--after task:{report.task_id}" in found[1]
+    assert "locks workflow run bugfix" in found[1] and f"--after task:{report.task_id}" in found[1]
     assert "FAIL legacy/old.test.js" in found[1]
 
 
 def test_a_worker_that_stops_only_on_failures_already_at_the_base_passes(git_repo, store):
-    from cauce.escalate import Failure
+    from locks.escalate import Failure
 
     check = "echo 'FAILED test_legacy.py::test_legacy_broken'; exit 1"
     stopped = WorkerResult(False, Failure.SPEC_BUG, f"Fixed mul. `{check}` still fails on test_legacy.py, which "
@@ -300,7 +300,7 @@ def test_a_worker_that_stops_only_on_failures_already_at_the_base_passes(git_rep
 
 
 def test_a_worker_s_open_point_about_something_else_stays_a_decision(git_repo, store):
-    from cauce.escalate import Failure
+    from locks.escalate import Failure
 
     check = "echo 'FAILED test_legacy.py::test_legacy_broken'; exit 1"
     stopped = WorkerResult(False, Failure.SPEC_BUG, "Built it, but the request says two things about the "
@@ -354,8 +354,8 @@ def test_a_base_that_cannot_run_the_check_blocks_the_task_as_unknown_never_as_th
     assert stop.cause == "base_unknown"
     assert stop.reason.startswith("base unknown")
     assert "FAIL src/f.test.js" in stop.reason
-    assert stops.next_step(report.task_id, stop) == f"cauce resume {report.task_id}"
-    assert f"cauce resume {report.task_id}" in report.text()
+    assert stops.next_step(report.task_id, stop) == f"locks resume {report.task_id}"
+    assert f"locks resume {report.task_id}" in report.text()
     assert store.last_event(report.task_id, "check_preexisting") is None
 
 
@@ -417,12 +417,12 @@ def test_the_doctor_knows_the_kinds_that_must_make_a_failure_go_away():
 
 
 def test_a_failure_called_pre_existing_that_the_work_added_is_suspect(store: Store):
-    task = store.create_task("t", status="done", source="cauce", repo="r", kind="implement")
+    task = store.create_task("t", status="done", source="locks", repo="r", kind="implement")
     fine = {"command": "npm test", "base": "abc", "n": 2, "base_n": 2, "fixed": 0, "added": 0}
     store.add_event(task["id"], "check_preexisting", **fine, version="0.34.0")
     assert not [f for f in doctor.check(store, days=0) if f.rule == "preexisting-that-was-not"]
     store.add_event(task["id"], "check_preexisting", **{**fine, "added": 1}, version="0.34.0")
-    fix = store.create_task("f", status="done", source="cauce", repo="r", kind="debug-repro")
+    fix = store.create_task("f", status="done", source="locks", repo="r", kind="debug-repro")
     store.add_event(fix["id"], "check_preexisting", **fine, version="0.34.0")
     store.add_event(fix["id"], "check_preexisting", **{**fine, "n": 3}, version="0.33.0")
     found = [f for f in doctor.check(store, days=0) if f.rule == "preexisting-that-was-not"]
@@ -459,7 +459,7 @@ def test_a_check_whose_exit_is_a_filter_s_or_always_zero_is_read_as_weak(command
 def test_the_plan_warns_once_of_a_weak_check_and_reads_the_scripts_it_runs(git_repo, store):
     warned = ci.weak("npm test | grep -v warn")
     assert warned == ("this task's check `npm test | grep -v warn` exits as its last command (`grep -v`) does: a "
-                      "failure before it never reaches cauce, so a green check proves nothing; add `set -o pipefail` "
+                      "failure before it never reaches locks, so a green check proves nothing; add `set -o pipefail` "
                       "or drop the pipe")
     assert "always exits 0 (`|| true`)" in ci.weak("npm test || true")
     (git_repo / "package.json").write_text(json.dumps({"scripts": {"test": "jest --ci | tee jest.log"}}))
@@ -476,10 +476,10 @@ def test_the_check_card_without_a_base_failure_is_a_plain_pass():
 
 
 def test_a_few_tests_that_fail_once_and_pass_again_are_flaky_never_the_work_s(tmp_path, store):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     flip = "test -f once && echo '1 passed' || (touch once; echo 'FAIL src/a.test.ts'; exit 1)"
-    task = store.create_task("t", status="running", source="cauce")
+    task = store.create_task("t", status="running", source="locks")
     baseline = orchestrate.Baseline(store=store, task_id=task["id"], repo_dir=tmp_path, base="abc", root=tmp_path)
     code, out = orchestrate._steady_check(flip, tmp_path, baseline)
     assert code == 0 and "failed on the first run and passed on the second: FAIL src/a.test.ts" in out
@@ -493,10 +493,10 @@ def test_a_few_tests_that_fail_once_and_pass_again_are_flaky_never_the_work_s(tm
 
 
 def test_a_repository_s_known_flaky_tests_reach_every_writing_brief(git_repo, store):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     flip = "test -f once && echo '1 passed' || (touch once; echo 'FAIL src/ble.test.ts'; exit 1)"
-    task = store.create_task("t", status="running", source="cauce")
+    task = store.create_task("t", status="running", source="locks")
     baseline = orchestrate.Baseline(store=store, task_id=task["id"], repo_dir=git_repo, base="abc", root=git_repo)
     assert orchestrate._steady_check(flip, git_repo, baseline)[0] == 0
     assert orchestrate.known_flaky(store, git_repo) == ["FAIL src/ble.test.ts"]
@@ -523,7 +523,7 @@ def test_work_that_fixes_a_flake_is_checked_several_times(text, runs):
 
 
 def _flake_baseline(store, where, runs=3):
-    task = store.create_task("fix the flaky test", status="running", source="cauce")
+    task = store.create_task("fix the flaky test", status="running", source="locks")
     return orchestrate.Baseline(store=store, task_id=task["id"], repo_dir=where, base="abc", root=where, runs=runs)
 
 
@@ -562,11 +562,11 @@ def test_the_plan_says_a_flake_fix_is_checked_several_times(git_repo, store):
 
 
 def test_the_ending_says_how_many_runs_a_flake_fix_passed():
-    from cauce import hooks
+    from locks import hooks
 
     lines = hooks.verdict_lines({"criteria": [], "check": {"command": "npm test", "passed": True, "runs": 3},
                                  "independent": {"ran": False, "why": "x"}, "attempts": 1})
-    assert any("passed, run by cauce in its worktree 3 times, every run" in line for line in lines)
+    assert any("passed, run by locks in its worktree 3 times, every run" in line for line in lines)
 
 
 # --- the base's run is sized from the check's own duration ------------------------------------
@@ -730,8 +730,8 @@ def test_the_same_failing_tests_after_a_climb_stop_the_run_instead_of_climbing_a
     assert report.status == "blocked"
     assert report.stop.cause == "same_failures"
     assert "FAIL src/f.test.js" in report.stop.reason
-    assert stops.next_step(report.task_id, report.stop) == f"cauce resume {report.task_id}"
-    assert f"cauce resume {report.task_id}" in report.text()
+    assert stops.next_step(report.task_id, report.stop) == f"locks resume {report.task_id}"
+    assert f"locks resume {report.task_id}" in report.text()
 
 
 # --- every launch shape ------------------------------------------------------------------
@@ -788,7 +788,7 @@ def test_a_check_failing_at_the_base_passes_in_a_folder_of_several_repositories(
     assert "web@" in kept["base"]
     assert f"`{check}` fails at the base too, with the same 1 failure:" in report.text()
     found = hooks._found_before(store, store.get_task(report.task_id))
-    assert "cauce workflow run bugfix" in found[1]
+    assert "locks workflow run bugfix" in found[1]
     assert f"--after task:{report.task_id}" in found[1]
     # The base's copies of the repositories are gone with the check.
     assert not list((orchestrate.home() / "worktrees").glob("base-*"))
@@ -825,10 +825,10 @@ def test_a_worker_s_report_that_the_failure_was_at_the_base_is_checked_against_t
                  launcher=Script(_claim(), write="f.py"), classifier=kind("implement"))
     assert report.status == "done"
     assert len(store.attempts(report.task_id)) == 1
-    assert "cauce's own run at the base shows the same failures" in store.attempts(report.task_id)[0]["summary"]
+    assert "locks' own run at the base shows the same failures" in store.attempts(report.task_id)[0]["summary"]
     assert store.last_event(report.task_id, "check_preexisting") is not None
     found = hooks._found_before(store, store.get_task(report.task_id))
-    assert "cauce workflow run bugfix" in found[1]
+    assert "locks workflow run bugfix" in found[1]
 
 
 def test_a_claim_about_the_base_that_the_comparison_refutes_stays_the_work_s_failure(git_repo, store):
@@ -838,7 +838,7 @@ def test_a_claim_about_the_base_that_the_comparison_refutes_stays_the_work_s_fai
     first = _first(store, report)
     assert report.status != "done"
     assert first["failure"] == "code_bug"
-    assert "what the worker said of the base, checked by cauce" in first["evidence"]
+    assert "what the worker said of the base, checked by locks" in first["evidence"]
     assert "1 failing line(s) are new with this work, focus on them:\n  - FAIL src/f.test.js" in first["evidence"]
     assert store.last_event(report.task_id, "check_preexisting") is None
 

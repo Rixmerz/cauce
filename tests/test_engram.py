@@ -10,11 +10,11 @@ from pathlib import Path
 
 import pytest
 
-from cauce import mcp_guard, notes
-from cauce.adapters import ABSENT, PRESENT, UNREADABLE
-from cauce.adapters.engram import Engram, EngramDown, endpoint, http_client, private_out
-from cauce.launch import WorkerResult
-from cauce.orchestrate import run
+from locks import mcp_guard, notes
+from locks.adapters import ABSENT, PRESENT, UNREADABLE
+from locks.adapters.engram import Engram, EngramDown, endpoint, http_client, private_out
+from locks.launch import WorkerResult
+from locks.orchestrate import run
 
 from .test_orchestrate import Script, kind
 
@@ -33,7 +33,7 @@ class Fake:
         self.calls: list[tuple[str, str, dict | None]] = []
         self.routes = {"GET /health": (200, HEALTH), "GET /compatibility": (200, READY),
                        "GET /project/current": (200, {"project": "shop", "project_source": "git_remote"}),
-                       "GET /search": (200, HITS), "POST /sessions": (201, {"id": "cauce-task-1", "status": "created"}),
+                       "GET /search": (200, HITS), "POST /sessions": (201, {"id": "locks-task-1", "status": "created"}),
                        "POST /observations": (201, {"id": 41, "status": "saved"}), **routes}
         self.next_id = 41
 
@@ -114,7 +114,7 @@ def test_a_worker_gets_engram_read_only_and_held_to_its_project(tmp_path):
     assert adapter.server() is None  # nothing inspected yet
     adapter.inspect(tmp_path)
     server = adapter.server()
-    assert server["args"][:3] == ["-m", "cauce.mcp_guard", "engram"]
+    assert server["args"][:3] == ["-m", "locks.mcp_guard", "engram"]
     assert server["args"][-3:] == ["/usr/bin/engram", "mcp", "--tools=agent"]
     assert server["env"]["ENGRAM_PROJECT"] == "shop"
     assert "read-only" in adapter.hint("implement", tmp_path, tmp_path)
@@ -132,7 +132,7 @@ def test_the_guard_lets_only_reads_of_this_project_through(monkeypatch):
     assert why is None and args["project"] == "shop"
     sent, answers = mcp_guard.screen({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                                       "params": {"name": "mem_update", "arguments": {}}}, mcp_guard.engram)
-    assert sent is None and "cauce refused" in answers[0]["result"]["content"][0]["text"]
+    assert sent is None and "locks refused" in answers[0]["result"]["content"][0]["text"]
 
 
 def test_what_a_passing_worker_learned_is_saved_once_per_fact(tmp_path):
@@ -147,7 +147,7 @@ def test_what_a_passing_worker_learned_is_saved_once_per_fact(tmp_path):
     saved = fake.posted("/observations")[0]
     assert saved["type"] == "learning" and saved["scope"] == "project" and saved["title"] == "Prices are kept in cents."
     assert saved["capture_prompt"] is False and len(saved["operation_id"]) == 32
-    assert fake.posted("/sessions/cauce-task-1/end")[0]["summary"] == "cauce task #1: prices"
+    assert fake.posted("/sessions/locks-task-1/end")[0]["summary"] == "locks task #1: prices"
     again = Fake()
     engram(again).remember(["Prices are kept in cents. Always."], project="shop", task_id=1, title="p",
                            directory=tmp_path)
@@ -170,7 +170,7 @@ def test_a_run_reads_engram_and_writes_only_when_turned_on(git_repo, store, monk
                  classifier=kind("implement"), adapters=[engram(fake)])
     assert "engram #7 [decision] Prices in cents" in script.specs[0].prompt
     assert "engram" in script.specs[0].mcp_servers and not fake.posted("/observations")
-    monkeypatch.setenv("CAUCE_ENGRAM_WRITE", "on")
+    monkeypatch.setenv("LOCKS_ENGRAM_WRITE", "on")
     report = run("store prices in cents", git_repo, store, registry={}, launcher=Script(learned),
                  classifier=kind("implement"), adapters=[engram(fake)])
     saved = fake.posted("/observations")
@@ -187,13 +187,13 @@ def test_a_run_reads_engram_and_writes_only_when_turned_on(git_repo, store, monk
 
 
 def test_engram_is_on_its_own_setting_and_never_indexed(git_repo, store, monkeypatch, tmp_path):
-    from cauce import hooks
-    from cauce import orchestrate as o
-    from cauce.adapters import default_adapters
+    from locks import hooks
+    from locks import orchestrate as o
+    from locks.adapters import default_adapters
 
-    monkeypatch.setenv("CAUCE_ENGRAM", "on")
+    monkeypatch.setenv("LOCKS_ENGRAM", "on")
     assert [a.name for a in default_adapters()] == ["engram"]
-    monkeypatch.setenv("CAUCE_LIVESPEC", "on")
+    monkeypatch.setenv("LOCKS_LIVESPEC", "on")
     assert [a.name for a in o.adopted(o.Options(), None)] == ["livespec", "engram"]
     assert [a.name for a in o.adopted(o.Options(livespec=False), None)] == ["engram"]
     down = engram(Fake(**{"GET /health": EngramDown("x")}))

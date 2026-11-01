@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from cauce import capabilities as caps
-from cauce import cli, launch, roles, teams
-from cauce.matrix import Cell
-from cauce.orchestrate import Options, run
-from cauce.store import home
-from cauce.ui import api
+from locks import capabilities as caps
+from locks import cli, launch, roles, teams
+from locks.matrix import Cell
+from locks.orchestrate import Options, run
+from locks.store import home
+from locks.ui import api
 
 from .test_orchestrate import Script, kind, ok
 from .test_roles import write_role
@@ -28,10 +28,10 @@ def test_a_worker_is_told_its_role_and_carries_its_skills(git_repo, store):
     assert "browser: open the page" in spec.append_system_prompt  # the role names it; its `when` does not
     assert set(spec.mcp_servers) == {"browser"} and "mcp__browser" in spec.allowed_tools
     assert f"Read(/{roles.bundled_skills_dir().resolve()}/**)" in spec.allowed_tools
-    assert report.plan.role.name == "tester" and report.plan.team == "cauce"
-    assert "role tester (bundled) of the cauce team: the role that takes test" in report.text()
+    assert report.plan.role.name == "tester" and report.plan.team == "locks"
+    assert "role tester (bundled) of the locks team: the role that takes test" in report.text()
     started = store.last_event(report.task_id, "attempt_started")["data"]
-    assert started["role"] == "tester" and started["team"] == "cauce" and "ponytail" in started["skills"]
+    assert started["role"] == "tester" and started["team"] == "locks" and "ponytail" in started["skills"]
     assert store.last_event(report.task_id, "planned")["data"]["role"] == "tester"
 
 
@@ -74,13 +74,13 @@ def test_a_team_left_with_no_role_falls_back_to_the_bundled_one(git_repo, store)
     write_role(home() / "roles", "broken", description="d", kinds=["nope"])
     dry = run("x", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"))
     reasons = " | ".join(dry.plan.reasons)
-    assert dry.plan.team == "cauce" and dry.plan.role.name == "implementer"
+    assert dry.plan.team == "locks" and dry.plan.role.name == "implementer"
     assert "names role(s) that are not there: temp" in reasons and "has no role left" in reasons
     assert "roles refused: broken" in reasons
 
 
 def test_a_critical_spec_does_not_upgrade_a_review_into_a_kind_the_team_lacks(git_repo, store):
-    from cauce.adapters import Briefing, Status
+    from locks.adapters import Briefing, Status
 
     class Critical:
         name = "spec"
@@ -105,7 +105,7 @@ def test_a_critical_spec_does_not_upgrade_a_review_into_a_kind_the_team_lacks(gi
 
 
 def teams_key(path):
-    from cauce import repo
+    from locks import repo
 
     return repo.key(path)
 
@@ -141,7 +141,7 @@ def test_roles_and_team_commands(capsys, git_repo):
     assert [r["name"] for r in json.loads(capsys.readouterr().out)["roles"]] == ["tester"]
     assert cli.main(["roles", "show", "security-auditor"]) == 0
     out = capsys.readouterr().out
-    assert "skills        security-audit" in out and "in teams      cauce" in out
+    assert "skills        security-audit" in out and "in teams      locks" in out
     assert cli.main(["roles", "show", "tester", "--full", "--json"]) == 0
     assert "## Skill `ponytail`" in json.loads(capsys.readouterr().out)["system_prompt"]
     assert cli.main(["roles", "copy", "reviewer", "strict", "--description", "no mercy"]) == 0
@@ -158,7 +158,7 @@ def test_roles_and_team_commands(capsys, git_repo):
     assert "check out" in capsys.readouterr().out
 
     repo = str(git_repo)
-    assert cli.main(["team", "create", "web", "--from", "cauce", "--role", "strict", "--description", "web"]) == 0
+    assert cli.main(["team", "create", "web", "--from", "locks", "--role", "strict", "--description", "web"]) == 0
     assert cli.main(["team", "change", "web", "--drop", "reviewer"]) == 0
     assert cli.main(["team", "use", "web", "--repo", repo]) == 0
     assert "uses the web team" in capsys.readouterr().out
@@ -166,12 +166,12 @@ def test_roles_and_team_commands(capsys, git_repo):
     assert cli.main(["team", "show", "--repo", repo]) == 0
     out = capsys.readouterr().out
     assert "web: web" in out and "strict" in out and "used by" in out
-    assert cli.main(["team", "show", "cauce", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["name"] == "cauce"
+    assert cli.main(["team", "show", "locks", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["name"] == "locks"
     assert cli.main(["team", "list", "--repo", repo]) == 0
     assert "* web" in capsys.readouterr().out
     assert cli.main(["team", "list", "--json"]) == 0
-    assert {t["name"] for t in json.loads(capsys.readouterr().out)["teams"]} == {"cauce", "web"}
+    assert {t["name"] for t in json.loads(capsys.readouterr().out)["teams"]} == {"locks", "web"}
     assert cli.main(["team", "delete", "web"]) == 1
     assert "give them another first" in capsys.readouterr().err
     assert cli.main(["team", "use", "--none", "--repo", repo]) == 0
@@ -198,9 +198,9 @@ def test_roles_check_names_what_is_wrong(capsys):
     assert "refused" in capsys.readouterr().out
 
 
-def test_team_use_outside_a_directory_cauce_can_key(capsys, tmp_path, monkeypatch):
-    monkeypatch.setattr("cauce.team_cli._key", lambda args: None)
-    assert cli.main(["team", "use", "cauce"]) == 1
+def test_team_use_outside_a_directory_locks_can_key(capsys, tmp_path, monkeypatch):
+    monkeypatch.setattr("locks.team_cli._key", lambda args: None)
+    assert cli.main(["team", "use", "locks"]) == 1
     assert "no directory" in capsys.readouterr().err
 
 
@@ -226,14 +226,14 @@ def test_the_teams_view_shows_every_team_its_roles_and_who_uses_it(git_repo):
     loose = next(r for r in view["roles"] if r["name"] == "loose")
     assert loose["teams"] == [] and loose["scope"] == "user"
     auditor = next(r for r in view["roles"] if r["name"] == "security-auditor")
-    assert "security-audit" in auditor["carried"] and auditor["teams"] == ["cauce"]
+    assert "security-audit" in auditor["carried"] and auditor["teams"] == ["locks"]
     assert "security-audit" in view["skills"]
     assert api.teams_view()["here"] is None
 
 
 def test_the_teams_route_reads(ui):  # noqa: F811
     res, data = call(ui, "GET", "/api/teams")
-    assert res.status == 200 and any(t["name"] == "cauce" for t in json.loads(data)["teams"])
+    assert res.status == 200 and any(t["name"] == "locks" for t in json.loads(data)["teams"])
     res, data = call(ui, "GET", "/static/teams.js")
     assert res.status == 200 and b"innerHTML" not in data
 

@@ -1,4 +1,4 @@
-"""What cauce learns is made to earn its place: a worker's candidate note weighed against its
+"""What locks learns is made to earn its place: a worker's candidate note weighed against its
 absence, the notes of the files a later attempt changed, a method tried in arms, a plan's
 pre-mortem handed to the checks after it, and a loop's round that moved nothing kept as such."""
 from __future__ import annotations
@@ -8,9 +8,9 @@ from datetime import datetime
 
 import pytest
 
-from cauce import flow, loops, methods, notes, orchestrate
-from cauce.orchestrate import Options, run
-from cauce.store import Store
+from locks import flow, loops, methods, notes, orchestrate
+from locks.orchestrate import Options, run
+from locks.store import Store
 
 from .test_loops import ROUND, _loop
 from .test_orchestrate import Script, kind, ok
@@ -34,7 +34,7 @@ def test_a_candidate_goes_without_in_turn_until_its_trial_is_full(store: Store, 
     note = _candidate(store)
     found = notes.expand(store, [note])
     assert notes.arms(store, found) == (found, [])  # the trial is off in tests
-    monkeypatch.setenv("CAUCE_NOTE_TRIALS", "on")
+    monkeypatch.setenv("LOCKS_NOTE_TRIALS", "on")
     assert notes.arms(store, found) == (found, [])  # carried first
     _briefed(store, finished(store, ("sonnet/medium", 1)), carried=[note])
     carried, left = notes.arms(store, found)
@@ -50,7 +50,7 @@ def test_a_candidate_goes_without_in_turn_until_its_trial_is_full(store: Store, 
 
 def test_a_candidate_is_current_where_it_did_no_worse_than_its_absence_and_dropped_where_it_did(store: Store,
                                                                                             monkeypatch):
-    monkeypatch.setenv("CAUCE_NOTE_TRIALS", "on")
+    monkeypatch.setenv("LOCKS_NOTE_TRIALS", "on")
     helps, hurts = _candidate(store), _candidate(store, "The cache is warmed by a cron job")
     for n in range(notes.NOTE_TRIAL):
         _briefed(store, finished(store, ("sonnet/medium", 1)), carried=[helps])
@@ -64,19 +64,19 @@ def test_a_candidate_is_current_where_it_did_no_worse_than_its_absence_and_dropp
 
 
 def test_a_candidate_waits_for_its_arm_even_after_two_passes(store: Store, monkeypatch):
-    monkeypatch.setenv("CAUCE_NOTE_TRIALS", "on")
+    monkeypatch.setenv("LOCKS_NOTE_TRIALS", "on")
     note = _candidate(store)
     for _ in range(notes.PROVE_AFTER):
         _briefed(store, finished(store, ("sonnet/medium", 1)), carried=[note])
     assert notes.weigh(store) == {"current": [], "dropped": []}  # without the trial it would be proven
-    monkeypatch.setenv("CAUCE_NOTE_TRIALS", "off")
+    monkeypatch.setenv("LOCKS_NOTE_TRIALS", "off")
     assert notes.weigh(store) == {"current": [note], "dropped": []}
 
 
 def test_a_later_attempt_reads_the_notes_of_the_files_the_work_changed(git_repo, store: Store, monkeypatch):
-    from cauce import repo
+    from locks import repo
 
-    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
     key = repo.key(git_repo)
     note = store.add_note(key, "code", "Counters", "The counter wraps at 255", author="person", filed_by="person")
     store.add_anchor(note, "counter.txt")
@@ -95,7 +95,7 @@ def test_a_method_alternates_then_stays_where_it_did_no_worse(store: Store):
     diagnosis = methods.METHODS["debug-unclear"]
 
     def task(side: str, passed: bool) -> None:
-        t = store.create_task("t", status="done", source="cauce", repo="r", kind="debug-unclear")
+        t = store.create_task("t", status="done", source="locks", repo="r", kind="debug-unclear")
         store.add_attempt(t["id"], cell="opus/high", max_turns=30, passed=int(passed), input_tokens=10)
         store.add_event(t["id"], "briefed", method_arm=f"diagnosis:{side}")
 
@@ -114,7 +114,7 @@ def test_a_method_alternates_then_stays_where_it_did_no_worse(store: Store):
 
 
 def test_a_debug_brief_carries_the_diagnosis_on_its_arm(git_repo, store: Store, monkeypatch):
-    monkeypatch.setenv("CAUCE_METHODS", "on")
+    monkeypatch.setenv("LOCKS_METHODS", "on")
     monkeypatch.setattr(methods, "arm", lambda store, repo, method, task_id: ("with", "on trial"))
     script = Script(ok(), write="x.txt")
     report = run("The export sometimes drops rows", git_repo, store, registry={}, launcher=script,
@@ -136,10 +136,10 @@ def test_a_plan_s_risks_reach_the_check_of_the_work_after_it(git_repo, store: St
     _save({"name": "planned", "inputs": ["goal"], "steps": [
         {"id": "plan", "prompt": "Plan {goal}", "kind": "plan"},
         {"id": "build", "prompt": "Build {goal}", "kind": "implement", "start": "haiku/high"}]}, git_repo)
-    from cauce import workflows
+    from locks import workflows
 
     started = workflows.start(store, "planned", git_repo, {"goal": "the export"}, session_id="s1")
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
     from .test_checking import check
 
     seen: list[dict] = []
@@ -150,7 +150,7 @@ def test_a_plan_s_risks_reach_the_check_of_the_work_after_it(git_repo, store: St
 
 
 def test_stats_show_each_method_s_trial(store: Store):
-    from cauce import analysis
+    from locks import analysis
 
     done = finished(store, ("opus/high", 1), kind="debug-unclear")
     store.add_event(done, "briefed", method_arm="diagnosis:with")
@@ -182,7 +182,7 @@ def test_a_round_that_changed_and_moved_nothing_is_an_empty_round_and_no_base(tm
 
 
 def test_a_run_s_status_says_what_each_step_is_for_its_graph(git_repo, store: Store, kicks, capsys):
-    from cauce import workflows
+    from locks import workflows
 
     from .test_workflow_steps import ASKING
 
@@ -192,11 +192,11 @@ def test_a_run_s_status_says_what_each_step_is_for_its_graph(git_repo, store: St
     steps = {s["id"]: s for s in workflows.status(store, started["id"])["steps"]}
     assert steps["how"]["asks"] == ["flag", "direct"] and steps["flagged"]["when"] == {"how": "flag"}
     assert "asks" not in steps["build"] and "runs" not in steps["build"]
-    from cauce import workflow_cli
+    from locks import workflow_cli
 
     workflow_cli._print_run(workflows.status(store, started["id"]))
     out = capsys.readouterr().out
-    assert f"asks the person: how — `cauce workflow answer {started['id']} how <flag|direct>`" in out
+    assert f"asks the person: how — `locks workflow answer {started['id']} how <flag|direct>`" in out
     assert "waits on the orchestrator: " not in out  # a question is answered, never resumed
 
 
@@ -228,7 +228,7 @@ def test_recall_fuses_what_the_code_and_the_words_found(store: Store):
 
 def test_the_recall_order_alternates_then_stays_where_it_did_no_worse(store: Store):
     def task(side: str, passed: bool) -> None:
-        t = store.create_task("t", status="done", source="cauce", repo="r", kind="implement")
+        t = store.create_task("t", status="done", source="locks", repo="r", kind="implement")
         store.add_attempt(t["id"], cell="sonnet/medium", max_turns=30, passed=int(passed), input_tokens=10)
         store.add_event(t["id"], "briefed", recall_arm=side)
 
@@ -245,10 +245,10 @@ def test_the_recall_order_alternates_then_stays_where_it_did_no_worse(store: Sto
 
 @pytest.mark.usefixtures("no_verifier")
 def test_a_brief_whose_code_and_words_found_different_notes_records_its_order(git_repo, store: Store, monkeypatch):
-    from cauce import repo
+    from locks import repo
 
-    monkeypatch.setenv("CAUCE_NOTES", "on")
-    monkeypatch.setenv("CAUCE_RECALL_FUSION", "on")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
+    monkeypatch.setenv("LOCKS_RECALL_FUSION", "on")
     key = repo.key(git_repo)
     for n in range(7):
         anchored = store.add_note(key, "code", f"App {n}", f"app.py detail number {n}", author="person",
@@ -264,11 +264,11 @@ def test_a_brief_whose_code_and_words_found_different_notes_records_its_order(gi
 
 @pytest.mark.usefixtures("no_verifier")
 def test_a_worker_s_notes_used_are_kept_only_for_notes_its_brief_carried(git_repo, store: Store, monkeypatch):
-    from cauce import analysis, launch, repo
+    from locks import analysis, launch, repo
 
     assert launch.notes_used({"notes_used": [12, "#13", "x", True, 12]}) == (12, 13)
     assert launch.notes_used({"notes_used": "12"}) == ()
-    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
     key = repo.key(git_repo)
     note = store.add_note(key, "code", "Greeting", "The greeting prints hi", author="person", filed_by="person")
     store.add_anchor(note, "app.py")
@@ -283,7 +283,7 @@ def test_a_worker_s_notes_used_are_kept_only_for_notes_its_brief_carried(git_rep
 
 
 def test_an_outline_names_each_section_with_its_lines():
-    from cauce.text import outline
+    from locks.text import outline
 
     body = "# A\nx\n## B\ny\n```\n# not a heading\n```\n# C\nz\n"
     assert outline("f.md", body) == ["A (f.md:1-7)", "  B (f.md:3-7)", "C (f.md:8-9)"]
@@ -291,7 +291,7 @@ def test_an_outline_names_each_section_with_its_lines():
 
 
 def test_method_files_that_do_not_fit_are_named_by_section(tmp_path, monkeypatch):
-    from cauce import tracer
+    from locks import tracer
 
     folder = tmp_path / "docs" / "tracer"
     folder.mkdir(parents=True)

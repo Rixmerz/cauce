@@ -1,12 +1,14 @@
 # Changelog
 
+> The project was named cauce until it was renamed Locks; the entries of released versions below keep the old name. <!-- legacy-name: history -->
+
 ## [Unreleased]
 
 ### Added
 
-- **A newer livespec is taken and checked, not trusted.** When the livespec cauce runs (a plugin's,
+- **A newer livespec is taken and checked, not trusted.** When the livespec locks runs (a plugin's,
   or one on PATH) is newer than the release it was checked against, its own tools are read once per
-  release and kept. A tool cauce names that it does not serve is left out of the orientation, named
+  release and kept. A tool locks names that it does not serve is left out of the orientation, named
   in the hint as not served, and said in the plan; tools that cannot be read brief as for the checked
   release. Before, a release that renamed a tool left workers told to call one that was not there.
 - **The pinned livespec keeps itself current** (`.github/workflows/livespec-pin.yml`,

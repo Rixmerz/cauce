@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from cauce.matrix import EFFORTS, KINDS, LADDERS, MODELS, READ_ONLY_KINDS, Cell, estimate_usd, ladder_for
+from locks.matrix import EFFORTS, KINDS, LADDERS, MODELS, READ_ONLY_KINDS, Cell, estimate_usd, ladder_for
 
 
 def test_every_effort_level_exists_and_haiku_defaults_to_medium():

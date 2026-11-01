@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import os
 
-from cauce import flow
-from cauce.store import Store
+from locks import flow
+from locks.store import Store
 
 
 def test_a_run_is_never_running_without_its_process(git_repo, store: Store, monkeypatch):
     """A run marked running and given its pid in two writes was read in between by a sweep as dead (a
     running task with no pid): a resume that had just started was stopped with no crash named, and when
     it died for real nobody saw it (the all-on CI run of the repeated-crash scenario stuck on this)."""
-    from cauce.orchestrate import run
+    from locks.orchestrate import run
 
     from .test_orchestrate import Script, kind, ok
 
@@ -43,14 +43,14 @@ def test_a_run_is_never_running_without_its_process(git_repo, store: Store, monk
 
 
 def test_the_doctor_names_a_run_swept_before_its_pid(store: Store):
-    from cauce import doctor
+    from locks import doctor
 
     from .test_doctor import LATER, rules
 
     def swept(version: str, reason: str = "no sign of life") -> int:
-        task = store.create_task("work", status="interrupted", source="cauce", repo="r")["id"]
+        task = store.create_task("work", status="interrupted", source="locks", repo="r")["id"]
         store.add_event(task, "finished", status="interrupted", version=version,
-                        stop={"cause": "died", "by": "cauce", "reason": reason})
+                        stop={"cause": "died", "by": "locks", "reason": reason})
         return task
 
     now = swept("0.66.0")

@@ -1,10 +1,10 @@
-"""Branches of `cauce.tracer` and `cauce.specs` their suites leave unread."""
+"""Branches of `locks.tracer` and `locks.specs` their suites leave unread."""
 from __future__ import annotations
 
 import subprocess
 from pathlib import Path
 
-from cauce import specs, tracer
+from locks import specs, tracer
 
 from .conftest import git
 from .test_tracer import FLOORS, _floors, _tracer

@@ -1,6 +1,6 @@
-"""Which model should cauce's own small decisions run on: the classifier and the dispatcher?
+"""Which model should locks' own small decisions run on: the classifier and the dispatcher?
 
-Real calls, the same prompts and schemas cauce uses (`classify.by_model`, `dispatch.decide`), only
+Real calls, the same prompts and schemas locks uses (`classify.by_model`, `dispatch.decide`), only
 the model and effort changed, by rewriting the argv `classify.ask_haiku` builds:
 
 - the classifier on `REQUESTS`, each labelled with the kinds that fit it (the rules are skipped:
@@ -29,12 +29,12 @@ sys.path.insert(0, str(HERE))
 
 import dispatch as pairs  # noqa: E402  (bench/speed/dispatch.py)
 
-from cauce import classify  # noqa: E402
-from cauce import dispatch as cauce_dispatch  # noqa: E402
+from locks import classify  # noqa: E402
+from locks import dispatch as locks_dispatch  # noqa: E402
 
 OUT = HERE / "results-delegate.jsonl"
-#: A directory with no project instructions, as cauce gives its own classifier.
-NEUTRAL = Path(tempfile.gettempdir()) / "cauce-delegate-neutral"
+#: A directory with no project instructions, as locks gives its own classifier.
+NEUTRAL = Path(tempfile.gettempdir()) / "locks-delegate-neutral"
 
 REQUESTS = [
     ("Agrega un endpoint /api/cursos que liste los cursos con paginación y tests", {"implement", "feature"}),
@@ -105,7 +105,7 @@ def one_dispatch(cell: str, n: int) -> dict:
                **({"changed": changed} if changed is not None else {})}
     queued = {"id": 102, "status": "queued", "body": new, "options": "{}"}
     began = time.monotonic()
-    got = cauce_dispatch.decide(queued, [running], runner=runner_for(cell))
+    got = locks_dispatch.decide(queued, [running], runner=runner_for(cell))
     return {"task": "dispatch", "cell": cell, "n": n, "label": label, "parallel": got.parallel,
             "right": got.parallel == (label == "independent"), "s": round(time.monotonic() - began, 2),
             "cost": got.cost_usd}

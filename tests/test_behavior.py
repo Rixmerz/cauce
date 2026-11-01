@@ -1,10 +1,10 @@
 """How a worker worked: an attempt's profile from its own tool calls, kept on `attempt_finished`
-and read back by `cauce stats`, its table and its export."""
+and read back by `locks stats`, its table and its export."""
 import json
 import os
 
-from cauce import analysis, behavior, signature
-from cauce.store import Store
+from locks import analysis, behavior, signature
+from locks.store import Store
 
 
 def call(tool, sig, at, *, ok=1, arg="a"):
@@ -58,9 +58,9 @@ def test_the_table_adds_profiles_up_by_kind_outcome_and_cell():
 
 
 def test_an_attempt_s_profile_is_kept_and_read_back_by_stats_and_its_export(git_repo, store: Store, monkeypatch):
-    """`orchestrate` keeps the worker's calls as `attempt_finished.behavior`; `cauce stats` reads it
+    """`orchestrate` keeps the worker's calls as `attempt_finished.behavior`; `locks stats` reads it
     back by kind, on the run and in the per-attempt export."""
-    from cauce.orchestrate import run
+    from locks.orchestrate import run
 
     from .test_orchestrate import Script, kind, ok
 
@@ -91,18 +91,18 @@ def test_an_attempt_s_profile_is_kept_and_read_back_by_stats_and_its_export(git_
 
 
 def test_the_independent_check_s_calls_are_never_its_attempt_s():
-    from cauce.orchestrate import _verifier_env
+    from locks.orchestrate import _verifier_env
 
-    assert _verifier_env({"CAUCE_WORKER_TASK": "4", "CAUCE_WORKER_ATTEMPT": "2"})["CAUCE_WORKER_ATTEMPT"] == "2-verify"
-    assert "CAUCE_WORKER_ATTEMPT" not in _verifier_env({"CAUCE_WORKER_TASK": "4"})
-    kept = signature.entry({"tool_name": "Read"}, {"CAUCE_WORKER_TASK": "4", "CAUCE_WORKER_ATTEMPT": "2-verify"})
+    assert _verifier_env({"LOCKS_WORKER_TASK": "4", "LOCKS_WORKER_ATTEMPT": "2"})["LOCKS_WORKER_ATTEMPT"] == "2-verify"
+    assert "LOCKS_WORKER_ATTEMPT" not in _verifier_env({"LOCKS_WORKER_TASK": "4"})
+    kept = signature.entry({"tool_name": "Read"}, {"LOCKS_WORKER_TASK": "4", "LOCKS_WORKER_ATTEMPT": "2-verify"})
     assert kept["task_id"] == 4 and kept["attempt"] is None
 
 
 def test_stats_attempts_prints_one_record_per_attempt(store: Store, capsys):
-    from cauce import cli
+    from locks import cli
 
-    task = store.create_task("x", status="done", source="cauce", repo="/r", kind="implement")["id"]
+    task = store.create_task("x", status="done", source="locks", repo="/r", kind="implement")["id"]
     store.add_event(task, "planned", kind="implement", start="sonnet/high")
     store.add_event(task, "attempt_finished", seq=1, cell="sonnet/high", passed=True,
                     behavior={"calls": 4, "tools": {"read": 4}})

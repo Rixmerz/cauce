@@ -4,8 +4,8 @@ import os
 
 import pytest
 
-from cauce import models
-from cauce.store import Store
+from locks import models
+from locks.store import Store
 
 
 @pytest.mark.parametrize(
@@ -41,8 +41,8 @@ def test_an_alias_follows_claude_code_until_a_person_pins_it(_isolated_home):
     models.pin("sonnet", "claude-sonnet-5-5", env)
     assert models.resolve("sonnet", env) == "claude-sonnet-5-5"
     assert (_isolated_home / "config.json").is_file()  # the test's own home, never the real one
-    assert models.resolve("sonnet", {**env, "CAUCE_MODEL_SONNET": "claude-sonnet-6"}) == "claude-sonnet-6"
-    assert models.resolve("sonnet", {**env, "CAUCE_MODEL_SONNET": "bad id; rm -rf"}) == "claude-sonnet-5-5"
+    assert models.resolve("sonnet", {**env, "LOCKS_MODEL_SONNET": "claude-sonnet-6"}) == "claude-sonnet-6"
+    assert models.resolve("sonnet", {**env, "LOCKS_MODEL_SONNET": "bad id; rm -rf"}) == "claude-sonnet-5-5"
     models.pin("sonnet", None, env)
     assert models.resolve("sonnet", env) == "sonnet"
     with pytest.raises(ValueError, match="unknown model"):
@@ -54,11 +54,11 @@ def test_an_alias_follows_claude_code_until_a_person_pins_it(_isolated_home):
 def test_workers_behind_the_person_s_sessions_are_named_with_the_pin(store: Store):
     for i, model in enumerate(("claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5-5")):
         store.add_usage(message_id=f"m{i}", session_id="s", model=model, output_tokens=1, ts="2099-01-01")
-    t = store.create_task("x", status="done", source="cauce")
+    t = store.create_task("x", status="done", source="locks")
     store.add_attempt(t["id"], cell="sonnet/medium", max_turns=30, passed=0, served_model="claude-sonnet-5")
     store.add_attempt(t["id"], cell="opus/high", max_turns=30, passed=1, served_model="claude-opus-5-5")
     assert store.worker_models() == {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5"}
     assert models.lagging(store, dict(os.environ)) == [{"alias": "sonnet", "workers": "claude-sonnet-5",
                                          "sessions": "claude-sonnet-5-5",
-                                         "command": "cauce config model sonnet claude-sonnet-5-5"}]
-    assert models.lagging(store, {**os.environ, "CAUCE_MODEL_SONNET": "claude-sonnet-5-5"}) == []
+                                         "command": "locks config model sonnet claude-sonnet-5-5"}]
+    assert models.lagging(store, {**os.environ, "LOCKS_MODEL_SONNET": "claude-sonnet-5-5"}) == []

@@ -5,8 +5,8 @@ import os
 import time
 from pathlib import Path
 
-from cauce import cli, survey
-from cauce.store import home
+from locks import cli, survey
+from locks.store import home
 
 from .conftest import git
 
@@ -75,7 +75,7 @@ def session(cwd):
         user("no, eso no: te dije que no toques el redondeo", cwd),
         user("sigue", cwd),
         user("[Request interrupted by user]", cwd),
-        user("<command-name>/cauce:workflow</command-name>", cwd),
+        user("<command-name>/locks:workflow</command-name>", cwd),
         assistant([tool("x1", "Bash", command="rm -rf build")]),
         result("x1", "The user doesn't want to proceed with this tool use.", error=True),
         assistant([tool("e1", "Edit", file_path=f"{cwd}/cart.py", old_string="zz", new_string="b")]),
@@ -126,7 +126,7 @@ def test_the_survey_reads_sessions_by_project_with_their_history(git_repo, tmp_p
     assert p["tool_errors"] == {"Bash": 3} and p["friction"]["noise"] == 1  # an edit of text not there: noise
     assert {"command": "uv run pytest", "runs": 3, "check": True} in p["commands"]
     assert p["skills"] == {"python-rules": 1} and p["subagents"] == {"Explore": 1, "general-purpose": 1}
-    assert p["slash_commands"] == {"cauce:workflow": 1} and p["models"] == {"sonnet": 10}
+    assert p["slash_commands"] == {"locks:workflow": 1} and p["models"] == {"sonnet": 10}
     assert p["plan_mode"] == 1 and p["commits"] == 1 and p["prs"] == 1
     assert p["per_session"]["minutes"] is not None
     h = p["history"]
@@ -135,19 +135,19 @@ def test_the_survey_reads_sessions_by_project_with_their_history(git_repo, tmp_p
     assert h["branch_prefixes"] == {"feat/": 1}
     assert h["fragile_files"] == [{"file": "cart.py", "fixes": 2}]
     assert [c["subject"] for c in h["fixes"]] == ["arreglar el login", "fix: the total again", "fix(cart): round once"]
-    assert p["cauce"] == {"tasks": 0, "team": "cauce"}
+    assert p["locks"] == {"tasks": 0, "team": "locks"}
     missing = next(x for x in found["projects"] if not x["exists"])
     assert missing["dir"] == str(gone) and missing["history"] is None
     assert found["flows"][0]["projects"] and found["friction"]["corrections"] == 1
-    assert "init" in found["have"]["cauce_skills"] or found["have"]["cauce_skills"]
+    assert "init" in found["have"]["locks_skills"] or found["have"]["locks_skills"]
     assert {w["name"] for w in found["have"]["workflows"]} >= {"bugfix", "feature"}
     text = survey.text(found)
     assert "3 sessions in 2 projects" in text and "1 corrections" in text and "uv run pytest" in text
-    assert "6 commits since" in text and "/cauce:init" in text
+    assert "6 commits since" in text and "/locks:init" in text
     assert json.loads(survey.as_json(found))["read"]["sessions"] == 3
 
 
-def test_one_project_only_limits_and_cauce_s_own_facts(git_repo, tmp_path, store):
+def test_one_project_only_limits_and_locks_s_own_facts(git_repo, tmp_path, store):
     claude = tmp_path / "claude-config"
     for n in range(3):
         write(claude, "-repo", f"s{n}", [user(f"implementa el cambio {n}", git_repo)])
@@ -155,14 +155,14 @@ def test_one_project_only_limits_and_cauce_s_own_facts(git_repo, tmp_path, store
     other.mkdir()
     write(claude, "-other", "o1", [user("arregla el bug", other)])
     key = survey.repo.key(git_repo)
-    store.create_task("fix it", status="done", source="cauce", repo=key, kind="implement", final_cell="sonnet/high")
+    store.create_task("fix it", status="done", source="locks", repo=key, kind="implement", final_cell="sonnet/high")
     found = survey.gather(store, only=key, per_project=2)
     assert [p["repo"] for p in found["projects"]] == [key]
     assert found["projects"][0]["sessions"] == 2 and found["read"]["skipped"]["over the per-project limit"] == 1
-    assert found["projects"][0]["cauce"]["tasks"] == 1
-    assert found["projects"][0]["cauce"]["by_kind"][0]["kind"] == "implement"
+    assert found["projects"][0]["locks"]["tasks"] == 1
+    assert found["projects"][0]["locks"]["by_kind"][0]["kind"] == "implement"
     assert survey.gather(None, limit=1)["read"]["skipped"]["older"] == 3  # the rest, past the limit
-    assert survey.gather(None, only=key)["projects"][0]["cauce"] is None
+    assert survey.gather(None, only=key)["projects"][0]["locks"] is None
 
 
 def test_nothing_to_read(store, tmp_path):
@@ -275,7 +275,7 @@ def deep_repo(repo: Path) -> None:
     git(repo, "commit", "-q", "-m", "feat: squashed work (#2)")
     git(repo, "branch", "merged-one")
     for n in (1, 2):
-        git(repo, "branch", f"cauce/task-{n}", "feat/tokens")
+        git(repo, "branch", f"locks/task-{n}", "feat/tokens")
 
 
 def test_a_deep_history_reads_every_branch_the_chains_and_the_reverts(git_repo):
@@ -287,7 +287,7 @@ def test_a_deep_history_reads_every_branch_the_chains_and_the_reverts(git_repo):
     assert states == {"feat/tokens": "unmerged", "feat/squashed": "squashed", "merged-one": "merged"}
     lost = b["unmerged_commits"][0]
     assert lost["branch"] == "feat/tokens" and lost["security"] and lost["type"] == "fix"
-    assert b["cauce_kept"]["count"] == 2 and b["cauce_kept"]["duplicates"] == [["cauce/task-1", "cauce/task-2"]]
+    assert b["locks_kept"]["count"] == 2 and b["locks_kept"]["duplicates"] == [["locks/task-1", "locks/task-2"]]
     chain = h["chains"][0]
     assert chain["cause"]["subject"] == "feat(cart): totals in cents" and chain["files"] == ["cart.py"]
     assert [f["subject"] for f in chain["followups"]] == ["fix(cart): round once", "fix: the rounding again"]
@@ -317,7 +317,7 @@ def test_the_default_branch(git_repo, tmp_path):
     assert survey._landed(git_repo, "HEAD", "HEAD") is False
 
 
-def test_a_deep_survey_follows_each_reported_error_and_keeps_cauce_s_stops(git_repo, tmp_path, store):
+def test_a_deep_survey_follows_each_reported_error_and_keeps_locks_s_stops(git_repo, tmp_path, store):
     deep_repo(git_repo)
     claude = tmp_path / "claude-config"
     write(claude, "-repo", "s1", [
@@ -329,9 +329,9 @@ def test_a_deep_survey_follows_each_reported_error_and_keeps_cauce_s_stops(git_r
         user("x" * 2100, git_repo),
     ])
     key = survey.repo.key(git_repo)
-    task = store.create_task("fix the palette", status="blocked", source="cauce", repo=key, kind="ui")
+    task = store.create_task("fix the palette", status="blocked", source="locks", repo=key, kind="ui")
     store.add_event(task["id"], "finished", status="blocked", stop={"cause": "review", "reason": "new findings"})
-    store.create_task("rename", status="failed", source="cauce", repo=key, kind="refactor", result="it broke")
+    store.create_task("rename", status="failed", source="locks", repo=key, kind="refactor", result="it broke")
     found = survey.gather(store, deep=True)
     p = found["projects"][0]
     first = p["deep"]["reported_errors"][0]
@@ -340,7 +340,7 @@ def test_a_deep_survey_follows_each_reported_error_and_keeps_cauce_s_stops(git_r
     assert p["deep"]["reported_errors"][1]["answer"] is None
     assert p["deep"]["requests"][0].startswith("me sale este error")
     assert p["deep"]["history"]["branches"]["default"] == "main"
-    stopped = {s["title"]: s for s in p["cauce"]["stopped"]}
+    stopped = {s["title"]: s for s in p["locks"]["stopped"]}
     assert stopped["fix the palette"]["cause"] == "review" and stopped["fix the palette"]["reason"] == "new findings"
     assert stopped["rename"]["reason"] == "it broke"
     assert survey.gather(store, only=[key])["projects"][0]["repo"] == key

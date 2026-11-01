@@ -1,13 +1,13 @@
 ---
-description: Propose, build and run a cauce loop — a goal that runs in rounds through the night (finding and following up leads, keeping CI green, triage) until evidence stops it — after the person agrees to every part of it
+description: Propose, build and run a locks loop — a goal that runs in rounds through the night (finding and following up leads, keeping CI green, triage) until evidence stops it — after the person agrees to every part of it
 argument-hint: [the goal: what should keep happening, and where]
 ---
 
-A cauce loop is for a goal that does not end with one answer: work that repeats,
-learns from each round and stops on evidence. Each round is an ordinary cauce
+A locks loop is for a goal that does not end with one answer: work that repeats,
+learns from each round and stops on evidence. Each round is an ordinary locks
 workflow run (fresh workers, checked, costed); the loop keeps a diary between
 rounds, measures its metric itself, tries strategies against each other, and
-holds every tool that acts on the world to the person's rules. Detail: `cauce
+holds every tool that acts on the world to the person's rules. Detail: `locks
 guide loops`.
 
 Request: $ARGUMENTS
@@ -16,12 +16,12 @@ Request: $ARGUMENTS
 
 It is when the goal repeats with no natural end (keep doing X until Y, every
 night, follow up on what came back) and something can be measured between
-rounds. A task with one result is `cauce run`; a chain that ends is a
+rounds. A task with one result is `locks run`; a chain that ends is a
 workflow. Say which it is, and why, before going on.
 
 ## 2. Ask the person, in their language, one short round
 
-Ask only what you cannot read from the request, the repository or cauce:
+Ask only what you cannot read from the request, the repository or locks:
 
 - **The goal and its metric.** What counts as progress, and a command that
   prints it as a number (rows in a file the rounds keep, open CI failures,
@@ -34,17 +34,17 @@ Ask only what you cannot read from the request, the repository or cauce:
   a price, a service or a promise: ask.
 - **What it may do alone and what waits for them.** A tool that sends, posts or
   replies acts on the world: the loop runs as a draft first (nothing leaves),
-  and only the person's `cauce loop act` lets it act, within the hours
+  and only the person's `locks loop act` lets it act, within the hours
   (`--hours 8-21`), an hourly cap (`--per-hour`) and exclusions (`--exclude`,
-  who must never be contacted) that cauce's guard enforces. Anything outside
+  who must never be contacted) that locks' guard enforces. Anything outside
   the rules (a discount, a deadline, a deal) is listed for them, never done.
 - **Where and when:** the folder its rounds run in (a folder of its own when
   the work is not code), how often (`--every 30m`), until when (`--until 07:00`).
 - **Strategies to compare**, if they have two or more (`--variant`): the loop
   measures which one moves the metric and adopts it.
 
-Check the tools the rounds need: `cauce` hands a worker only the MCP servers of
-the person's registry (`~/.local/share/cauce/capabilities.json`) and adopted
+Check the tools the rounds need: `locks` hands a worker only the MCP servers of
+the person's registry (`~/.local/share/locks/capabilities.json`) and adopted
 neighbours. A tool that is not there is said, with what entry it needs; one that
 sends is registered with `"outbound": {"acts": ["<its sending tools>"]}`, so the
 guard holds it. Never write the registry, a settings file or a credential for
@@ -54,22 +54,22 @@ automation (a social network's messages) is for reading or drafts only: say so.
 ## 3. Propose the whole loop, then wait
 
 Show, in a few lines: the workflow (its steps, the file it will be), the
-`cauce loop add` line with every flag, the rules as they will be kept, the
+`locks loop add` line with every flag, the rules as they will be kept, the
 metric and the stop rules (target, window, `--stale` rounds without
 improving), that it starts as a draft, and the cost of a round estimated from
-cauce's own numbers (`cauce stats`), never capped. Nothing is written before
+locks' own numbers (`locks stats`), never capped. Nothing is written before
 the person says yes; change what they change and show it again.
 
-## 4. Build it with cauce's commands only
+## 4. Build it with locks' commands only
 
 On their yes:
 
 ```bash
-cauce workflow new <round> --description "…"   # then cauce workflow step add|set …
-cauce loop add <name> --goal "<their words>" --workflow <round> --dir <folder> \
+locks workflow new <round> --description "…"   # then locks workflow step add|set …
+locks loop add <name> --goal "<their words>" --workflow <round> --dir <folder> \
   --every 30m --until 07:00 --metric "<command>" [--target N] [--down] \
   --policy "<rule>" … [--variant "<strategy>" …] [--hours 8-21] [--per-hour N] [--exclude "<who>"]
-cauce loop start <name>
+locks loop start <name>
 ```
 
 A round's steps keep their state in files of the loop's folder (a list of
@@ -82,6 +82,6 @@ step that updates them writes (`--kind implement`), never a reading kind.
 It runs without this session. When it stops (target, window, no progress, or
 something only the person clears), this session hears of it once with its
 summary: tell the person what it did, what it cost and what waits on them
-(`cauce loop show <name>`). Moving from draft to acting is their word only:
-show them the draft's rounds first, and run `cauce loop act <name>` only when
-they say so. `cauce loop stop <name>` ends it after the round running.
+(`locks loop show <name>`). Moving from draft to acting is their word only:
+show them the draft's rounds first, and run `locks loop act <name>` only when
+they say so. `locks loop stop <name>` ends it after the round running.

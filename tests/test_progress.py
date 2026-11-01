@@ -6,9 +6,9 @@ import shutil
 import subprocess
 from datetime import datetime
 
-from cauce import isolate, progress
-from cauce.cli import main
-from cauce.config import home
+from locks import isolate, progress
+from locks.cli import main
+from locks.config import home
 
 from .conftest import git
 from .test_standards import finished
@@ -43,15 +43,15 @@ def test_an_estimate_needs_passes_of_its_kind_and_prefers_its_size(store):
 def test_progress_says_the_stage_and_a_worker_gone_quiet(store):
     task = _running(store)
     began = _at(store, task["id"], "attempt_started")
-    found = progress.of(store, task, now=began + 30, env={"CAUCE_HOME": str(home())})
+    found = progress.of(store, task, now=began + 30, env={"LOCKS_HOME": str(home())})
     assert found["stage"] == "worker" and found["quiet_s"] == 30 and "no tool call" not in progress.line(found)
     quiet = progress.of(store, task, now=began + progress.IDLE_S + 60)
     assert "no tool call for 6m (a long command, or stuck)" in progress.line(quiet)
-    # Once its worker is done, cauce's own check runs: no worker to be quiet.
+    # Once its worker is done, locks' own check runs: no worker to be quiet.
     store.add_event(task["id"], "stage", seq=1, stage="check")
     checking = progress.of(store, task, now=began + progress.IDLE_S + 60)
-    assert checking["stage"] == "cauce's check" and "quiet_s" not in checking
-    assert progress.line(checking).startswith("cauce's check")
+    assert checking["stage"] == "locks' check" and "quiet_s" not in checking
+    assert progress.line(checking).startswith("locks' check")
     # A new attempt is its worker's again.
     store.add_event(task["id"], "attempt_started", seq=2)
     assert progress.of(store, task)["stage"] == "worker"
@@ -61,7 +61,7 @@ def test_what_the_worker_wrote_so_far_is_read_from_its_worktree(git_repo, store)
     task = _running(store)
     base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=git_repo, capture_output=True, text=True).stdout.strip()
     path = home() / "worktrees" / f"task-{task['id']}"
-    git(git_repo, "worktree", "add", "-q", "-b", f"cauce/task-{task['id']}", str(path))
+    git(git_repo, "worktree", "add", "-q", "-b", f"locks/task-{task['id']}", str(path))
     assert progress.changes(task["id"], base) == {"files": 0, "added": 0, "removed": 0, "paths": []}
     (path / "new.py").write_text("a = 1\nb = 2\n")
     (path / "__pycache__").mkdir()
@@ -110,12 +110,12 @@ def test_progress_names_what_the_worker_is_doing_and_its_warnings(store):
     assert progress.warnings(late) == ["past 9 in 10 of its kind here (10m)",
                                        "no tool call for 6m (a long command, or stuck)"]
     assert progress.warnings({"elapsed_s": 60, "quiet_s": 30}) == []
-    # `cauce tasks` says the same words: its line ends with them.
+    # `locks tasks` says the same words: its line ends with them.
     assert progress.line({"stage": "worker", **late}).endswith(" · ".join(progress.warnings(late)))
 
 
 def test_a_task_look_reads_its_progress_while_it_runs_and_the_check_that_refused_it(store):
-    from cauce import acp
+    from locks import acp
 
     from .test_checking import log
 
@@ -130,7 +130,7 @@ def test_a_task_look_reads_its_progress_while_it_runs_and_the_check_that_refused
     assert look.stage == "worker"
     assert look.doing == "running npm test"
     assert "checking" in look.line
-    assert look.check.startswith("cauce's check failed: `npm test` exited 1\nthe end of its output:\nline 10\n")
+    assert look.check.startswith("locks' check failed: `npm test` exited 1\nthe end of its output:\nline 10\n")
     assert look.check.endswith("line 29")
     assert len(look.check.splitlines()) - 2 == acp.CHECK_TAIL_LINES
     # An attempt the check did not turn down says nothing of a check.
@@ -146,20 +146,20 @@ def _ended(store, status, **data):
 
 
 def test_a_pass_ends_with_its_verdict_and_how_the_branch_is_merged(store):
-    from cauce import acp
+    from locks import acp
 
     card = {"criteria": [{"id": "S1", "met": True, "evidence": "x"}, {"id": "S2", "met": False, "evidence": "y"}],
             "check": {"command": "npm test", "passed": True},
             "independent": {"ran": False, "why": "its risk (passive) does not call for one"}, "attempts": 2}
-    one = _ended(store, "done", final_cell="sonnet/high", branch="cauce/task-7", attempts=2, verdict=card)
+    one = _ended(store, "done", final_cell="sonnet/high", branch="locks/task-7", attempts=2, verdict=card)
     look = acp.task_look(one, True)
     assert look.ending.splitlines() == [
-        f"cauce: task #{one} passed at sonnet/high after 2 attempts.",
-        "  check: cauce ran `npm test` and it passed",
+        f"locks: task #{one} passed at sonnet/high after 2 attempts.",
+        "  check: locks ran `npm test` and it passed",
         "  criteria: 1 of 2 met (not met: S2)",
         "  independent check: not run (its risk (passive) does not call for one)",
-        "The work is on branch cauce/task-7; your checkout has none of it until it is merged. Next: review it "
-        f"(`git diff HEAD...cauce/task-7`), then `cauce merge {one}` merges it, or `cauce pr {one}` opens a draft "
+        "The work is on branch locks/task-7; your checkout has none of it until it is merged. Next: review it "
+        f"(`git diff HEAD...locks/task-7`), then `locks merge {one}` merges it, or `locks pr {one}` opens a draft "
         "pull request."]
     assert look.skipped == (acp.STAGE_ENTRIES[2],)
     assert (look.line, look.doing) == ("", "")
@@ -172,21 +172,21 @@ def test_a_pass_ends_with_its_verdict_and_how_the_branch_is_merged(store):
 
 
 def test_a_stop_ends_with_why_and_the_command_that_goes_on(store):
-    from cauce import acp
+    from locks import acp
 
-    stop = {"cause": "review", "by": "cauce", "reason": "the independent check kept finding problems"}
-    task = _ended(store, "blocked", branch="cauce/task-9", stop=stop)
+    stop = {"cause": "review", "by": "locks", "reason": "the independent check kept finding problems"}
+    task = _ended(store, "blocked", branch="locks/task-9", stop=stop)
     ending = acp.task_look(task, True).ending
-    assert ending.splitlines()[0].startswith(f"cauce: task #{task} blocked. stopped by")
-    assert "Its work is kept on branch cauce/task-9 (`git diff HEAD...cauce/task-9` shows it)." in ending
-    assert f"The command that goes on: `cauce resume {task}`." in ending
+    assert ending.splitlines()[0].startswith(f"locks: task #{task} blocked. stopped by")
+    assert "Its work is kept on branch locks/task-9 (`git diff HEAD...locks/task-9` shows it)." in ending
+    assert f"The command that goes on: `locks resume {task}`." in ending
     assert acp.task_look(_ended(store, "failed"), True).ending.endswith("failed.")
 
 
 def test_the_editor_sees_a_real_task_run_and_end_through_the_agent(store):
-    """`cauce acp` with nothing faked but the process: the tool call's title is the line `cauce tasks` says,
+    """`locks acp` with nothing faked but the process: the tool call's title is the line `locks tasks` says,
     the stages move with the task's `stage` events, and the ending leads the answer."""
-    from cauce import acp
+    from locks import acp
 
     from .test_acp import Client, Spawner, said, statuses
     from .test_checking import log
@@ -194,7 +194,7 @@ def test_the_editor_sees_a_real_task_run_and_end_through_the_agent(store):
     task = _running(store)
     n = task["id"]
     log([(n, 1, "bash:npm-test")])
-    spawner = Spawner(stderr=[f"cauce: #{n} attempt 1 at sonnet/high"], hold=True)
+    spawner = Spawner(stderr=[f"locks: #{n} attempt 1 at sonnet/high"], hold=True)
     c = Client(spawner, look=acp.task_look, look_every=0.01)
     try:
         session = c.new_session()
@@ -203,15 +203,15 @@ def test_the_editor_sees_a_real_task_run_and_end_through_the_agent(store):
         assert said(live)["title"].startswith("checking · ")
         store.add_event(n, "stage", seq=1, stage="check")
         c.out.wait_for(lambda m: statuses(m) == ["completed", "in_progress", "pending"])
-        store.add_event(n, "finished", status="done", final_cell="sonnet/high", branch=f"cauce/task-{n}",
+        store.add_event(n, "finished", status="done", final_cell="sonnet/high", branch=f"locks/task-{n}",
                         verdict={"criteria": [], "check": {"command": "npm test", "passed": True},
                                  "independent": {"ran": True, "passed": True}})
         store.update_task(n, status="done")
         spawner.procs[0].release()
         c.answer(request)
         text = c.updates(session)[-1]["content"]["text"]
-        assert text.startswith(f"cauce: task #{n} passed at sonnet/high.\n  check: cauce ran `npm test`")
-        assert f"`cauce merge {n}`" in text
+        assert text.startswith(f"locks: task #{n} passed at sonnet/high.\n  check: locks ran `npm test`")
+        assert f"`locks merge {n}`" in text
         assert [e["status"] for e in [u for u in c.updates(session) if u["sessionUpdate"] == "plan"][-1]["entries"]] \
             == ["completed"] * 3
     finally:
@@ -220,31 +220,31 @@ def test_the_editor_sees_a_real_task_run_and_end_through_the_agent(store):
 
 
 def test_queueing_says_how_long_tasks_like_it_took(git_repo, store, capsys, monkeypatch):
-    from cauce import repo
+    from locks import repo
 
-    monkeypatch.setenv("CAUCE_AUTOWORK", "off")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "off")
     for wall in (100, 200, 300):
         finished(store, ("sonnet/medium", True), kind="implement", repo=repo.key(git_repo), wall=wall)
     assert main(["queue", "add", "--repo", str(git_repo), "--kind", "implement", "add a logout button"]) == 0
     assert "tasks like it took ≈3m here (9 in 10 within 5m" in capsys.readouterr().out
 
 
-def test_cauce_tasks_shows_a_running_task_s_progress(store, capsys):
+def test_locks_tasks_shows_a_running_task_s_progress(store, capsys):
     task = _running(store, repo=None)
-    store.update_task(task["id"], source="cauce")
+    store.update_task(task["id"], source="locks")
     main(["tasks", "--all"])
     out = capsys.readouterr().out
     assert f"#{task['id']}" in out and "\n       " in out  # its progress line under it
 
 
 def test_peek_shows_a_running_worker_s_diff_so_far(git_repo, store, capsys):
-    from cauce.ui import api
+    from locks.ui import api
 
     task = _running(store)
     base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=git_repo, capture_output=True, text=True).stdout.strip()
     store.add_event(task["id"], "attempt_started", seq=1, base=base)
     path = home() / "worktrees" / f"task-{task['id']}"
-    git(git_repo, "worktree", "add", "-q", "-b", f"cauce/task-{task['id']}", str(path))
+    git(git_repo, "worktree", "add", "-q", "-b", f"locks/task-{task['id']}", str(path))
     assert main(["peek", str(task["id"])]) == 0 and "nothing written yet" in capsys.readouterr().out
     (path / "logout.py").write_text("def logout():\n    return True\n")
     assert main(["peek", str(task["id"])]) == 0
@@ -258,14 +258,14 @@ def test_peek_shows_a_running_worker_s_diff_so_far(git_repo, store, capsys):
 
 
 def test_texts_give_each_file_before_and_after_live_and_kept(git_repo, store):
-    from cauce import acp
+    from locks import acp
 
     task = _running(store)
     store.update_task(task["id"], cwd=str(git_repo))
     base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=git_repo, capture_output=True, text=True).stdout.strip()
     store.add_event(task["id"], "attempt_started", seq=1, base=base)
     path = home() / "worktrees" / f"task-{task['id']}"
-    branch = f"cauce/task-{task['id']}"
+    branch = f"locks/task-{task['id']}"
     git(git_repo, "worktree", "add", "-q", "-b", branch, str(path))
     (path / "logout.py").write_text("def logout():\n    return True\n")
     (path / "blob.bin").write_bytes(b"\0\1\2")  # a binary is no text to show
@@ -302,7 +302,7 @@ def _folder_of_two_repositories(tmp_path):
 def test_a_task_in_a_folder_of_repositories_is_read_in_each_of_them(tmp_path, store, capsys):
     """No worktree can be made in a folder that is no checkout: progress, peek and the phase read each
     repository against the commit it was at when the attempt started."""
-    from cauce.ui import api as ui
+    from locks.ui import api as ui
 
     from .test_checking import log
 

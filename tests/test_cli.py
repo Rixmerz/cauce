@@ -6,9 +6,9 @@ import os
 
 import pytest
 
-from cauce import cli, dispatch, orchestrate, stops
-from cauce.launch import WorkerResult
-from cauce.store import Store
+from locks import cli, dispatch, orchestrate, stops
+from locks.launch import WorkerResult
+from locks.store import Store
 
 
 def test_matrix_and_classify(capsys):
@@ -37,14 +37,14 @@ def test_run_reports_and_fails_on_a_non_pass(capsys, git_repo, monkeypatch):
     out, err = capsys.readouterr()
     assert code == 1 and "task #1: failed" in out
     # progress goes to stderr as it happens, so stdout stays the report alone
-    assert err.splitlines()[:2] == ["cauce: task #1 started: docs, at haiku/medium",
-                                    "cauce: #1 attempt 1 at haiku/medium"]
-    assert "cauce: task #1 started" not in out
+    assert err.splitlines()[:2] == ["locks: task #1 started: docs, at haiku/medium",
+                                    "locks: #1 attempt 1 at haiku/medium"]
+    assert "locks: task #1 started" not in out
 
 
 def test_tasks_show_and_memory(capsys, git_repo):
     store = Store.open()
-    t = store.create_task("a task", status="done", source="cauce", repo="github.com/o/r", kind="docs")
+    t = store.create_task("a task", status="done", source="locks", repo="github.com/o/r", kind="docs")
     store.add_attempt(t["id"], cell="haiku", max_turns=30, passed=0, failure="code_bug", summary="missed")
     store.set_move(t["id"], 1, "more_effort", "shallow")
     store.close()
@@ -55,7 +55,7 @@ def test_tasks_show_and_memory(capsys, git_repo):
     assert "attempt 1 haiku" in out and "more_effort" in out and "missed" in out
     assert cli.main(["show", "999"]) == 1
     store = Store.open()
-    blocked = store.create_task("routes", status="running", source="cauce", repo="github.com/o/r", cwd=str(git_repo))
+    blocked = store.create_task("routes", status="running", source="locks", repo="github.com/o/r", cwd=str(git_repo))
     store.add_attempt(blocked["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="permission")
     store.add_event(blocked["id"], "attempt_finished", seq=1, denied=["Bash(node a.js)"])
     stops.record(store, blocked["id"], stops.Stop("permission", "the worker was refused Bash(node a.js)",
@@ -65,7 +65,7 @@ def test_tasks_show_and_memory(capsys, git_repo):
     out = capsys.readouterr().out
     assert "refused: Bash(node a.js)" in out
     assert "stopped by your permission settings: the worker was refused" in out
-    assert f"cauce resume {blocked['id']} --allow 'Bash(node:*)'" in out
+    assert f"locks resume {blocked['id']} --allow 'Bash(node:*)'" in out
     store = Store.open()
     store.set_move(blocked["id"], 1, "more_effort", "code_bug: same model, more thorough")
     store.add_event(blocked["id"], "moved", seq=1, from_cell="sonnet/medium", to_cell="sonnet/high", axis="effort",
@@ -87,7 +87,7 @@ def test_tasks_show_and_memory(capsys, git_repo):
 
 def test_show_prints_what_the_independent_check_found_under_its_attempt(capsys):
     store = Store.open()
-    t = store.create_task("build it", status="blocked", source="cauce", repo="r", kind="implement")
+    t = store.create_task("build it", status="blocked", source="locks", repo="r", kind="implement")
     for seq in (1, 2):
         store.add_attempt(t["id"], cell="sonnet/high", max_turns=30, passed=1, summary=f"built it {seq}")
     blocker = {"where": "src/x.py:12", "what": "the total is rounded twice", "evidence_class": "deterministic",
@@ -123,7 +123,7 @@ def test_show_prints_what_the_independent_check_found_under_its_attempt(capsys):
 def test_config_model_shows_pins_and_what_served(capsys):
     store = Store.open()
     store.add_usage(message_id="m1", session_id="s", model="claude-sonnet-5-5", output_tokens=1, ts="2099-01-01")
-    t = store.create_task("x", status="done", source="cauce")
+    t = store.create_task("x", status="done", source="locks")
     store.add_attempt(t["id"], cell="sonnet/medium", max_turns=30, passed=1, served_model="claude-sonnet-5")
     store.close()
     assert cli.main(["config", "model"]) == 0
@@ -141,11 +141,11 @@ def test_config_model_shows_pins_and_what_served(capsys):
 
 
 def test_init_refuses_the_home_directory(capsys, tmp_path, monkeypatch):
-    from cauce import project
+    from locks import project
 
     monkeypatch.setattr(project.Path, "home", classmethod(lambda cls: tmp_path))
     assert cli.main(["init", str(tmp_path)]) == 1
-    assert "is not a project" in capsys.readouterr().err and not (tmp_path / ".cauce").exists()
+    assert "is not a project" in capsys.readouterr().err and not (tmp_path / ".locks").exists()
 
 
 def test_allow_keeps_rules_for_the_repository_and_config_mode_sets_modes(capsys, git_repo):
@@ -200,7 +200,7 @@ def test_config_and_neighbours(capsys, git_repo):
 
 
 def test_delegate_is_on_until_the_person_turns_it_off_and_the_mod_reads_it_as_a_word(capsys):
-    # the mod reads `cauce config delegate` and lets queue and resume through only on `true`
+    # the mod reads `locks config delegate` and lets queue and resume through only on `true`
     assert cli.main(["config", "delegate"]) == 0 and capsys.readouterr().out == "true\n"
     assert cli.main(["config", "delegate", "off"]) == 0
     capsys.readouterr()
@@ -211,9 +211,9 @@ def test_cancel_signals_the_run_and_events_print(capsys, monkeypatch):
     import signal
 
     store = Store.open()
-    running = store.create_task("long job", status="running", source="cauce", pid=4242)
-    queued = store.create_task("later", status="queued", source="cauce")
-    done = store.create_task("old", status="done", source="cauce")
+    running = store.create_task("long job", status="running", source="locks", pid=4242)
+    queued = store.create_task("later", status="queued", source="locks")
+    done = store.create_task("old", status="done", source="locks")
     store.add_event(running["id"], "planned", kind="implement")
     store.close()
     killed = []
@@ -226,7 +226,7 @@ def test_cancel_signals_the_run_and_events_print(capsys, monkeypatch):
     assert cli.main(["cancel", "999"]) == 1
     store = Store.open()
     assert store.get_task(queued["id"])["status"] == "cancelled"
-    assert "with `cauce cancel`" in store.last_event(queued["id"], "finished")["data"]["stop"]["reason"]
+    assert "with `locks cancel`" in store.last_event(queued["id"], "finished")["data"]["stop"]["reason"]
     assert store.last_event(running["id"], "cancel_requested")["data"] == {"via": "cli"}
     store.close()
 
@@ -235,7 +235,7 @@ def test_cancel_signals_the_run_and_events_print(capsys, monkeypatch):
 
     monkeypatch.setattr(cli.os, "kill", gone)
     store = Store.open()
-    again = store.create_task("x", status="running", source="cauce", pid=1)
+    again = store.create_task("x", status="running", source="locks", pid=1)
     store.close()
     assert cli.main(["cancel", str(again["id"])]) == 0
 
@@ -251,10 +251,10 @@ def test_cancel_signals_the_run_and_events_print(capsys, monkeypatch):
     store = Store.open()
     for i in range(250):
         store.add_event(again["id"], "noise", i=i)
-    store.add_event(again["id"], "branch_pruned", branch="cauce/task-1")
+    store.add_event(again["id"], "branch_pruned", branch="locks/task-1")
     store.close()
     assert cli.main(["events", "--kind", "branch_pruned"]) == 0
-    assert "cauce/task-1" in capsys.readouterr().out
+    assert "locks/task-1" in capsys.readouterr().out
 
 
 def test_sigterm_becomes_a_cancel():
@@ -272,7 +272,7 @@ def test_sigterm_becomes_a_cancel():
 
 def test_queue_lanes_and_work(capsys, git_repo, monkeypatch):
     # With autowork, `queue add` starts a real dispatcher, which would hold the lock `work` asks for.
-    monkeypatch.setenv("CAUCE_AUTOWORK", "off")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "off")
     assert cli.main(["queue", "add", "write docs", "--repo", str(git_repo), "--verify", "true",
                      "--kind", "docs"]) == 0
     assert "queued #1" in capsys.readouterr().out
@@ -290,7 +290,7 @@ def test_queue_lanes_and_work(capsys, git_repo, monkeypatch):
 
     def fake_work(store, **kw):
         seen.update(kw)
-        from cauce.flow import WorkReport
+        from locks.flow import WorkReport
         return WorkReport([], "nothing runnable is queued")
 
     monkeypatch.setattr(cli.flow, "work", fake_work)
@@ -312,7 +312,7 @@ def test_queue_lanes_and_work(capsys, git_repo, monkeypatch):
 
 def test_spend_and_invalidate(capsys):
     store = Store.open()
-    t = store.create_task("x", status="done", source="cauce", repo="r", kind="docs")
+    t = store.create_task("x", status="done", source="locks", repo="r", kind="docs")
     store.add_attempt(t["id"], cell="haiku", max_turns=30, passed=1, cost_usd=0.1)
     p = store.open_problem("p", repo="r")
     fix = store.add_fix(p, "f", "worked", repo="r")
@@ -373,8 +373,8 @@ def test_habits_commands(capsys, tmp_path, monkeypatch):
 
 def test_board_counts_for_a_status_line(capsys):
     store = Store.open()
-    store.create_task("x", status="failed", source="cauce")  # the orchestrator decides it
-    refused = store.create_task("z", status="blocked", source="cauce")  # a refused command: the person's
+    store.create_task("x", status="failed", source="locks")  # the orchestrator decides it
+    refused = store.create_task("z", status="blocked", source="locks")  # a refused command: the person's
     stops.record(store, refused["id"], stops.Stop("permission", "refused", denied=("Bash(npm ci)",)))
     store.enqueue("y", repo="r", cwd="/x")
     store.close()
@@ -382,18 +382,18 @@ def test_board_counts_for_a_status_line(capsys):
     assert json.loads(capsys.readouterr().out) == {"needs_you": 1, "orchestrator": 1, "running": 0, "workers": 0,
                                                    "queued": 1, "done": 0, "answering": 0}
     assert cli.main(["board"]) == 0
-    assert capsys.readouterr().out.strip() == "cauce ◆2 ▶0 ⏸1"
+    assert capsys.readouterr().out.strip() == "locks ◆2 ▶0 ⏸1"
 
 
 def test_the_json_surface_a_page_reads(capsys, git_repo):
     """What another program reads: the board scoped to some repositories, a task, a queued task."""
-    from cauce import repo
+    from locks import repo
 
     assert cli.main(["queue", "add", "write the docs", "--repo", str(git_repo), "--json"]) == 0
     queued = json.loads(capsys.readouterr().out)
     assert queued["status"] == "queued" and queued["cwd"] == str(git_repo.resolve())
     store = Store.open()
-    store.create_task("elsewhere", status="failed", source="cauce", repo="github.com/o/other")
+    store.create_task("elsewhere", status="failed", source="locks", repo="github.com/o/other")
     store.close()
 
     assert cli.main(["board", "--full", "--repo", str(git_repo)]) == 0
@@ -412,9 +412,9 @@ def test_the_json_surface_a_page_reads(capsys, git_repo):
 
 
 def test_projects_sessions_and_memory_as_json(capsys, git_repo):
-    """Where cauce has worked, the sessions it saw there with how to resume them, and the problems
+    """Where locks has worked, the sessions it saw there with how to resume them, and the problems
     and fixes it remembers, everything or one repository's."""
-    from cauce import repo
+    from locks import repo
 
     key = repo.key(git_repo.resolve())
     store = Store.open()
@@ -430,11 +430,11 @@ def test_projects_sessions_and_memory_as_json(capsys, git_repo):
     store.add_fix(q, "retry", "failed", repo="github.com/o/other")
     store.close()
 
-    # Only an enrolled project (a .cauce/ folder) is listed; --all shows the rest.
+    # Only an enrolled project (a .locks/ folder) is listed; --all shows the rest.
     assert cli.main(["projects", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == []
     assert cli.main(["init", str(git_repo)]) == 0 and "enrolled" in capsys.readouterr().out
-    assert (git_repo / ".cauce" / ".gitignore").read_text().endswith("*\n")
+    assert (git_repo / ".locks" / ".gitignore").read_text().endswith("*\n")
     assert cli.main(["init", str(git_repo / "nope")]) == 1
     assert cli.main(["projects", "--json"]) == 0
     projects = {x["repo"]: x for x in json.loads(capsys.readouterr().out)}
@@ -469,7 +469,7 @@ def test_projects_sessions_and_memory_as_json(capsys, git_repo):
 
 
 def test_ui_command_serves_until_interrupted(monkeypatch, capsys):
-    from cauce.ui import server
+    from locks.ui import server
 
     class Fake:
         server_address = ("127.0.0.1", 4321)
@@ -519,17 +519,17 @@ def test_resume_continues_a_stopped_task_with_what_it_was_refused_granted(capsys
 
     monkeypatch.setattr(orchestrate.Report, "text", lambda self: f"task #{self.task_id}: {self.status}")
     store = Store.open()
-    t = store.create_task("create the routes", status="blocked", source="cauce", repo="r", cwd=str(git_repo),
+    t = store.create_task("create the routes", status="blocked", source="locks", repo="r", cwd=str(git_repo),
                           kind="implement", dispatched=1, cancel_requested=1,
                           options=json.dumps({"verify": "npm test", "allow_tools": ["Bash(npm run build)"]}))
     store.add_attempt(t["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="permission", summary="refused")
     store.add_event(t["id"], "attempt_finished", seq=1, denied=["Bash(node app.js)"])
-    approval = store.create_task("plan it", status="needs_approval", source="cauce", repo="r", cwd=str(git_repo),
+    approval = store.create_task("plan it", status="needs_approval", source="locks", repo="r", cwd=str(git_repo),
                                  kind="plan")
     store.add_event(approval["id"], "moved", move="needs_approval", next_cell="fable/high")
     hook = store.create_task("a prompt", status="interrupted", source="hook", repo="r", cwd=str(git_repo))
-    done = store.create_task("finished", status="done", source="cauce", repo="r", cwd=str(git_repo))
-    odd = store.create_task("odd", status="failed", source="cauce", repo="r", cwd=str(git_repo), kind="implement")
+    done = store.create_task("finished", status="done", source="locks", repo="r", cwd=str(git_repo))
+    odd = store.create_task("odd", status="failed", source="locks", repo="r", cwd=str(git_repo), kind="implement")
     store.add_attempt(odd["id"], cell="sonnet/high", max_turns=30, passed=0, failure="no-such-failure")
     store.close()
     monkeypatch.setattr(orchestrate, "run", fake_run)
@@ -557,12 +557,12 @@ def test_resume_continues_a_stopped_task_with_what_it_was_refused_granted(capsys
     assert cli.main(["resume", str(odd["id"]), "--verify", "true", "--no-isolate"]) == 0
     assert calls[-1][2].isolate is False and calls[-1][2].verify == "true"
     assert calls[-1][3]["history"][0].failure is None  # an old or unknown failure reads back as no verdict
-    from cauce import stops
+    from locks import stops
 
     store = Store.open()
-    big = store.create_task("reduce it", status="running", source="cauce", repo="r", cwd=str(git_repo), kind="refactor")
+    big = store.create_task("reduce it", status="running", source="locks", repo="r", cwd=str(git_repo), kind="refactor")
     stops.record(store, big["id"], stops.Stop("turns", "outgrew"))
-    wrong = store.create_task("impossible", status="running", source="cauce", repo="r", cwd=str(git_repo))
+    wrong = store.create_task("impossible", status="running", source="locks", repo="r", cwd=str(git_repo))
     stops.record(store, wrong["id"], stops.Stop("spec", "no such API"))
     store.close()
     assert cli.main(["resume", str(big["id"])]) == 0
@@ -582,7 +582,7 @@ def test_queue_add_keeps_the_rules_a_person_granted(capsys, git_repo):
     store = Store.open()
     task = store.get_task(task_id)
     store.close()
-    from cauce import flow
+    from locks import flow
     assert flow.queued_options(task, orchestrate.Options()).allow_tools == ("Bash(npm run build)",)
     store = Store.open()
     assert store.messages(task_id)[0]["role"] == "person"
@@ -590,7 +590,7 @@ def test_queue_add_keeps_the_rules_a_person_granted(capsys, git_repo):
 
 
 def test_queue_add_from_a_session_is_the_orchestrator_s(capsys, git_repo, monkeypatch):
-    monkeypatch.setenv("CAUCE_SESSION_ID", "s1")
+    monkeypatch.setenv("LOCKS_SESSION_ID", "s1")
     assert cli.main(["queue", "add", "build it", "--repo", str(git_repo), "--json"]) == 0
     task_id = json.loads(capsys.readouterr().out)["id"]
     store = Store.open()
@@ -599,13 +599,13 @@ def test_queue_add_from_a_session_is_the_orchestrator_s(capsys, git_repo, monkey
 
 
 @pytest.mark.parametrize(("found", "code", "says"), [
-    ({"cauce": True, "version": None}, 1, "from before 0.4.1"),
-    ({"cauce": True, "version": "0.1.1"}, 1, "0.1.1, started before"),
-    ({"cauce": False, "version": None}, 1, "another program"),
+    ({"locks": True, "version": None}, 1, "from before 0.4.1"),
+    ({"locks": True, "version": "0.1.1"}, 1, "0.1.1, started before"),
+    ({"locks": False, "version": None}, 1, "another program"),
     (None, 1, "another program"),
 ])
 def test_ui_on_a_taken_port_says_who_holds_it(monkeypatch, capsys, found, code, says):
-    from cauce.ui import server
+    from locks.ui import server
 
     def taken(port):
         raise OSError(errno.EADDRINUSE, "Address already in use")
@@ -617,8 +617,8 @@ def test_ui_on_a_taken_port_says_who_holds_it(monkeypatch, capsys, found, code, 
     assert says in capsys.readouterr().err
 
 
-def test_ui_takes_the_port_from_an_older_cauce_ui(monkeypatch, capsys):
-    from cauce.ui import server
+def test_ui_takes_the_port_from_an_older_locks_ui(monkeypatch, capsys):
+    from locks.ui import server
 
     served = []
 
@@ -641,20 +641,20 @@ def test_ui_takes_the_port_from_an_older_cauce_ui(monkeypatch, capsys):
         return Up()
 
     monkeypatch.setattr(server, "serve", serve)
-    monkeypatch.setattr(server, "occupant", lambda port: {"cauce": True, "version": "0.31.0"})
+    monkeypatch.setattr(server, "occupant", lambda port: {"locks": True, "version": "0.31.0"})
     monkeypatch.setattr(server, "take_over", lambda port: 4242)
     assert cli.main(["ui", "--port", "8791"]) == 0
     out = capsys.readouterr().out
-    assert "stopped the cauce UI 0.31.0 that held port 8791 (pid 4242)" in out and served == [8791, 8791]
+    assert "stopped the locks UI 0.31.0 that held port 8791 (pid 4242)" in out and served == [8791, 8791]
 
 
-def test_only_an_older_cauce_ui_found_by_its_command_line_is_stopped(monkeypatch):
-    from cauce import __version__
-    from cauce.ui import server
+def test_only_an_older_locks_ui_found_by_its_command_line_is_stopped(monkeypatch):
+    from locks import __version__
+    from locks.ui import server
 
-    assert server.older({"cauce": True, "version": "0.31.0"}) and server.older({"cauce": True, "version": None})
-    assert not server.older({"cauce": True, "version": __version__}) and not server.older({"cauce": False})
-    assert not server.older({"cauce": True, "version": "999.0.0"}) and not server.older(None)
+    assert server.older({"locks": True, "version": "0.31.0"}) and server.older({"locks": True, "version": None})
+    assert not server.older({"locks": True, "version": __version__}) and not server.older({"locks": False})
+    assert not server.older({"locks": True, "version": "999.0.0"}) and not server.older(None)
 
     class Ran:
         def __init__(self, out):
@@ -663,29 +663,29 @@ def test_only_an_older_cauce_ui_found_by_its_command_line_is_stopped(monkeypatch
     def run_as(command_line, pids="4242\n"):
         return lambda argv, **kw: Ran(pids if argv[0] == "lsof" else command_line)
 
-    assert server.listener(8791, run_as("/usr/bin/python3 -m cauce ui --port 8791\n")) == 4242
+    assert server.listener(8791, run_as("/usr/bin/python3 -m locks ui --port 8791\n")) == 4242
     assert server.listener(8791, run_as("node server.js\n")) is None
-    assert server.listener(8791, run_as("python -m cauce ui", pids="1\n2\n")) is None
-    assert server.listener(8791, run_as("python -m cauce ui", pids="")) is None
+    assert server.listener(8791, run_as("python -m locks ui", pids="1\n2\n")) is None
+    assert server.listener(8791, run_as("python -m locks ui", pids="")) is None
     killed = []
-    gone = iter([{"cauce": True}, None])
+    gone = iter([{"locks": True}, None])
     monkeypatch.setattr(server, "occupant", lambda port: next(gone))
-    assert server.take_over(8791, run=run_as("python -m cauce ui\n"), kill=lambda pid, sig: killed.append(pid)) == 4242
+    assert server.take_over(8791, run=run_as("python -m locks ui\n"), kill=lambda pid, sig: killed.append(pid)) == 4242
     assert killed == [4242]
-    monkeypatch.setattr(server, "occupant", lambda port: {"cauce": True})
-    assert server.take_over(8791, run=run_as("python -m cauce ui\n"), kill=lambda pid, sig: None, wait_s=0.2) is None
+    monkeypatch.setattr(server, "occupant", lambda port: {"locks": True})
+    assert server.take_over(8791, run=run_as("python -m locks ui\n"), kill=lambda pid, sig: None, wait_s=0.2) is None
     assert server.take_over(8791, run=run_as("vim\n"), kill=lambda pid, sig: killed.append(pid)) is None
 
 
-def test_ui_on_a_port_this_cauce_already_serves_opens_it(monkeypatch, capsys):
-    from cauce import __version__
-    from cauce.ui import server
+def test_ui_on_a_port_this_locks_already_serves_opens_it(monkeypatch, capsys):
+    from locks import __version__
+    from locks.ui import server
 
     def taken(port):
         raise OSError(errno.EADDRINUSE, "Address already in use")
 
     monkeypatch.setattr(server, "serve", taken)
-    monkeypatch.setattr(server, "occupant", lambda port: {"cauce": True, "version": __version__})
+    monkeypatch.setattr(server, "occupant", lambda port: {"locks": True, "version": __version__})
     opened = []
     monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
     assert cli.main(["ui", "--port", "8791", "--open"]) == 0
@@ -714,7 +714,7 @@ def test_ui_on_a_port_this_cauce_already_serves_opens_it(monkeypatch, capsys):
 
 def test_a_report_the_caller_read_is_not_reported_again(capsys, git_repo, monkeypatch):
     store = Store.open()
-    t = store.create_task("x", status="running", source="cauce", session_id="s", cwd=str(git_repo))
+    t = store.create_task("x", status="running", source="locks", session_id="s", cwd=str(git_repo))
     store.close()
 
     def fake_run(text, repo_dir, store, options, **kw):
@@ -724,7 +724,7 @@ def test_a_report_the_caller_read_is_not_reported_again(capsys, git_repo, monkey
 
     monkeypatch.setattr(orchestrate, "run", fake_run)
     monkeypatch.setattr(orchestrate.Report, "text", lambda self: "task: done")
-    monkeypatch.setenv("CAUCE_SESSION_ID", "s")
+    monkeypatch.setenv("LOCKS_SESSION_ID", "s")
     assert cli.main(["run", "x", "--repo", str(git_repo), "--no-model"]) == 0
     store = Store.open()
     assert store.unreported("s") == []
@@ -733,25 +733,25 @@ def test_a_report_the_caller_read_is_not_reported_again(capsys, git_repo, monkey
 
 def test_an_unattended_resume_never_grants_what_only_a_person_can(capsys, git_repo, monkeypatch):
     """A model may continue work; it may not clear a refusal or an approval."""
-    from cauce import grants, stops
+    from locks import grants, stops
 
     ran = []
     monkeypatch.setattr(orchestrate, "run", lambda *a, **kw: ran.append(kw["task_id"]) or orchestrate.Report(
         kw["task_id"], "done", None))  # type: ignore[arg-type]
     monkeypatch.setattr(orchestrate.Report, "text", lambda self: "ok")
     store = Store.open()
-    refused = store.create_task("build it", status="running", source="cauce", repo="r", cwd=str(git_repo))
+    refused = store.create_task("build it", status="running", source="locks", repo="r", cwd=str(git_repo))
     stops.record(store, refused["id"], stops.Stop("permission", "refused", denied=("Bash(npm run build)",),
                                                   allow=("Bash(npm run build:*)",)))
-    waiting = store.create_task("plan it", status="needs_approval", source="cauce", repo="r", cwd=str(git_repo))
-    outgrew = store.create_task("big", status="running", source="cauce", repo="r", cwd=str(git_repo))
+    waiting = store.create_task("plan it", status="needs_approval", source="locks", repo="r", cwd=str(git_repo))
+    outgrew = store.create_task("big", status="running", source="locks", repo="r", cwd=str(git_repo))
     stops.record(store, outgrew["id"], stops.Stop("turns", "outgrew"))
     store.close()
 
     # 1. refused, nothing granted: exit 3, the rule named, nothing ran
     assert cli.main(["resume", str(refused["id"]), "--unattended"]) == 3
     err = capsys.readouterr().err
-    assert "only the person can allow Bash(npm run build:*)" in err and "cauce allow 'Bash(npm run build:*)'" in err
+    assert "only the person can allow Bash(npm run build:*)" in err and "locks allow 'Bash(npm run build:*)'" in err
     # 2. a rule passed by hand is the person's, as is one they kept for the repository
     assert cli.main(["resume", str(refused["id"]), "--unattended", "--allow", "Bash(npm run build:*)"]) == 0
     grants.grant("r", ["Bash(npm run build:*)"])
@@ -765,19 +765,19 @@ def test_an_unattended_resume_never_grants_what_only_a_person_can(capsys, git_re
 
 
 def test_a_detached_resume_returns_at_once_and_its_ending_is_left_for_the_session(capsys, git_repo, monkeypatch):
-    from cauce import stops
+    from locks import stops
 
     store = Store.open()
-    big = store.create_task("big", status="running", source="cauce", repo="r", cwd=str(git_repo), session_id="s")
+    big = store.create_task("big", status="running", source="locks", repo="r", cwd=str(git_repo), session_id="s")
     stops.record(store, big["id"], stops.Stop("turns", "outgrew"))
     store.close()
     started = []
     monkeypatch.setattr(cli.subprocess, "Popen", lambda argv, **kw: started.append((argv, kw)))
     assert cli.main(["resume", str(big["id"]), "--detach", "--max-turns", "150", "--allow", "Bash(ls:*)"]) == 0
     argv, kw = started[0]
-    assert argv[1:] == ["-m", "cauce", "resume", str(big["id"]), "--no-report", "--max-turns", "150",
+    assert argv[1:] == ["-m", "locks", "resume", str(big["id"]), "--no-report", "--max-turns", "150",
                         "--allow", "Bash(ls:*)"]
-    assert kw["start_new_session"] and "CAUCE_SESSION_ID" not in kw["env"]
+    assert kw["start_new_session"] and "LOCKS_SESSION_ID" not in kw["env"]
     assert "in the background" in capsys.readouterr().out
     # a detached resume does not take the ending its session is owed
     monkeypatch.setattr(orchestrate, "run", lambda *a, **kw: orchestrate.Report(kw["task_id"], "done", None))
@@ -790,19 +790,19 @@ def test_a_detached_resume_returns_at_once_and_its_ending_is_left_for_the_sessio
 
 def test_keep_allows_once_for_the_repository_and_never_unattended(capsys, git_repo, monkeypatch):
     """One press per program per repository: the next task there is not refused it again."""
-    from cauce import grants, stops
+    from locks import grants, stops
 
     monkeypatch.setattr(orchestrate, "run", lambda *a, **kw: orchestrate.Report(kw["task_id"], "done", None))
     monkeypatch.setattr(orchestrate.Report, "text", lambda self: "ok")
     started = []
     monkeypatch.setattr(cli.subprocess, "Popen", lambda argv, **kw: started.append(argv))
     store = Store.open()
-    refused = store.create_task("build it", status="blocked", source="cauce", repo="r", cwd=str(git_repo))
+    refused = store.create_task("build it", status="blocked", source="locks", repo="r", cwd=str(git_repo))
     stops.record(store, refused["id"], stops.Stop("permission", "refused", denied=("Bash(npm test)",),
                                                   allow=("Bash(npm test:*)",)))
-    other = store.create_task("other", status="blocked", source="cauce", repo="elsewhere", cwd=str(git_repo))
+    other = store.create_task("other", status="blocked", source="locks", repo="elsewhere", cwd=str(git_repo))
     stops.record(store, other["id"], stops.Stop("permission", "refused", allow=("Bash(npm test:*)",)))
-    keyless = store.create_task("no repo", status="blocked", source="cauce", repo=None, cwd=str(git_repo))
+    keyless = store.create_task("no repo", status="blocked", source="locks", repo=None, cwd=str(git_repo))
     store.close()
 
     # 1. an unattended resume never keeps a rule, whatever it names: nothing granted, nothing run
@@ -828,13 +828,13 @@ def test_keep_allows_once_for_the_repository_and_never_unattended(capsys, git_re
 
 def test_endings_are_peeked_or_delivered_once_and_only_to_their_session(capsys):
     store = Store.open()
-    mine = store.create_task("write docs", status="running", source="cauce", session_id="s1", final_cell="haiku")
+    mine = store.create_task("write docs", status="running", source="locks", session_id="s1", final_cell="haiku")
     store.add_event(mine["id"], "finished", status="done", final_cell="haiku")
     store.update_task(mine["id"], status="done", result="wrote them")
-    other = store.create_task("other session's", status="running", source="cauce", session_id="s2")
+    other = store.create_task("other session's", status="running", source="locks", session_id="s2")
     store.add_event(other["id"], "finished", status="failed")
     store.update_task(other["id"], status="failed")
-    store.create_task("still running", status="running", source="cauce", session_id="s1")
+    store.create_task("still running", status="running", source="locks", session_id="s1")
     store.close()
 
     assert cli.main(["endings", "--session", "s1", "--peek", "--json"]) == 0
@@ -888,7 +888,7 @@ def test_a_start_cell_with_no_such_dial_is_a_usage_error(capsys):
 
 
 def test_a_kind_alias_is_read_as_the_kind_it_means(capsys):
-    from cauce import cli
+    from locks import cli
 
     assert cli._kind("research") == "explore"
     assert "read as 'explore'" in capsys.readouterr().err
@@ -900,23 +900,23 @@ def test_an_unknown_kind_names_the_kinds():
 
     import pytest
 
-    from cauce import cli
+    from locks import cli
 
     with pytest.raises(argparse.ArgumentTypeError, match="leave --kind out"):
         cli._kind("whatever")
 
 
-def test_events_for_a_watcher_outside_cauce(tmp_path, capsys):
+def test_events_for_a_watcher_outside_locks(tmp_path, capsys):
     """A neighbour that watches some repositories starts at the newest event and reads only theirs, each
     ending named without asking again."""
-    from cauce import repo
+    from locks import repo
 
     mine, theirs = tmp_path / "mine", tmp_path / "theirs"
     mine.mkdir()
     theirs.mkdir()
     store = Store.open()
-    ours = store.create_task("fix the cart", status="done", source="cauce", repo=repo.key(mine), session_id="s1")
-    other = store.create_task("elsewhere", status="done", source="cauce", repo=repo.key(theirs))
+    ours = store.create_task("fix the cart", status="done", source="locks", repo=repo.key(mine), session_id="s1")
+    other = store.create_task("elsewhere", status="done", source="locks", repo=repo.key(theirs))
     store.add_event(ours["id"], "finished", status="done")
     store.add_event(other["id"], "finished", status="done")
     store.add_event(ours["id"], "reported", via="stop")
@@ -933,14 +933,14 @@ def test_events_for_a_watcher_outside_cauce(tmp_path, capsys):
 
 
 def test_overview_keeps_the_repositories_asked_for(tmp_path, capsys):
-    from cauce import repo
+    from locks import repo
 
     for name in ("shop", "api"):
-        (tmp_path / name / ".cauce").mkdir(parents=True)
+        (tmp_path / name / ".locks").mkdir(parents=True)
     store = Store.open()
     for name in ("shop", "api"):
         store.touch_session(name, str(tmp_path / name), repo.key(tmp_path / name))
-        store.create_task(f"work in {name}", status="done", source="cauce", repo=repo.key(tmp_path / name),
+        store.create_task(f"work in {name}", status="done", source="locks", repo=repo.key(tmp_path / name),
                           session_id=name)
     store.enqueue("tidy the api", repo=repo.key(tmp_path / "api"), cwd=str(tmp_path / "api"))
     store.close()
@@ -951,15 +951,15 @@ def test_overview_keeps_the_repositories_asked_for(tmp_path, capsys):
     assert seen["other"] == []
 
 
-def test_a_press_elsewhere_runs_the_resume_cauce_names_and_nothing_else(tmp_path, monkeypatch, capsys):
-    """A page outside cauce sends the task id; the rules or approval come from cauce's account."""
+def test_a_press_elsewhere_runs_the_resume_locks_names_and_nothing_else(tmp_path, monkeypatch, capsys):
+    """A page outside locks sends the task id; the rules or approval come from locks' account."""
     work = tmp_path / "work"
     work.mkdir()
     monkeypatch.chdir(tmp_path)
     store = Store.open()
-    refused = store.create_task("x", status="blocked", source="cauce", repo="r", cwd=str(work))
+    refused = store.create_task("x", status="blocked", source="locks", repo="r", cwd=str(work))
     stops.record(store, refused["id"], stops.Stop("permission", "refused", allow=("Bash(npm:*)",)))
-    done = store.create_task("y", status="done", source="cauce", repo="r", cwd=str(work))
+    done = store.create_task("y", status="done", source="locks", repo="r", cwd=str(work))
     store.close()
     ran = []
     monkeypatch.setattr(cli, "_detach", lambda args: ran.append((args.id, args.allow, cli.os.getcwd())) or 0)
@@ -972,9 +972,9 @@ def test_a_press_elsewhere_runs_the_resume_cauce_names_and_nothing_else(tmp_path
     assert cli.main(["resume", "999", "--pressed"]) == 1
     assert "has no resume to press" in capsys.readouterr().err
     assert len(ran) == 1
-    # A stop an older cauce wrote on a dollar budget resumes plainly: the flag no longer exists.
+    # A stop an older locks wrote on a dollar budget resumes plainly: the flag no longer exists.
     store = Store.open()
-    spent = store.create_task("z", status="blocked", source="cauce", repo="r", cwd=str(work),
+    spent = store.create_task("z", status="blocked", source="locks", repo="r", cwd=str(work),
                               options=json.dumps({"budget_usd": 0.5, "verify": "true"}))
     stops.record(store, spent["id"], stops.Stop("budget", "the $5.00 budget is spent", extra={"budget_usd": 5.0}))
     store.close()
@@ -984,7 +984,7 @@ def test_a_press_elsewhere_runs_the_resume_cauce_names_and_nothing_else(tmp_path
 
 def test_a_dismissal_from_tanka_says_where_it_came_from(capsys):
     store = Store.open()
-    t = store.create_task("x", status="failed", source="cauce", repo="r")
+    t = store.create_task("x", status="failed", source="locks", repo="r")
     store.close()
     assert cli.main(["dismiss", str(t["id"]), "--via", "tanka"]) == 0
     store = Store.open()
@@ -1007,7 +1007,7 @@ def test_a_resume_nobody_approved_stops_after_two_runs_of_attempts_and_carries_n
     work = tmp_path / "work"
     work.mkdir()
     store = Store.open()
-    task = store.create_task("x", status="failed", source="cauce", repo="r", cwd=str(work),
+    task = store.create_task("x", status="failed", source="locks", repo="r", cwd=str(work),
                              options=json.dumps({"allow_approval": True}))
     for n in range(cli.UNATTENDED_ATTEMPTS):
         store.add_attempt(task["id"], cell="sonnet/high", max_turns=30, passed=0, failure="code_bug",
@@ -1031,14 +1031,14 @@ def test_a_resume_nobody_approved_stops_after_two_runs_of_attempts_and_carries_n
     ["run", "x"], ["resume", "1"], ["work"], ["queue", "add", "x"], ["workflow", "run", "w"],
     ["workflow", "retry", "1", "s"], ["investigate", "start"],
 ])
-def test_a_worker_never_starts_cauce_work(argv, monkeypatch, capsys):
-    monkeypatch.setenv("CAUCE_WORKER_TASK", "41")
+def test_a_worker_never_starts_locks_work(argv, monkeypatch, capsys):
+    monkeypatch.setenv("LOCKS_WORKER_TASK", "41")
     assert cli.main(argv) == 2
     assert "worker of task #41" in capsys.readouterr().err
 
 
 def test_a_worker_still_reads(monkeypatch, capsys):
-    monkeypatch.setenv("CAUCE_WORKER_TASK", "41")
+    monkeypatch.setenv("LOCKS_WORKER_TASK", "41")
     assert cli.main(["tasks"]) == 0
     assert cli.main(["queue", "list"]) == 0
 
@@ -1047,7 +1047,7 @@ def test_a_task_the_check_stopped_resumes_with_what_the_check_found(tmp_path, mo
     work = tmp_path / "work"
     work.mkdir()
     store = Store.open()
-    task = store.create_task("fix it", status="blocked", source="cauce", repo="r", cwd=str(work), kind="implement")
+    task = store.create_task("fix it", status="blocked", source="locks", repo="r", cwd=str(work), kind="implement")
     store.add_attempt(task["id"], cell="sonnet/high", max_turns=30, passed=0, failure="code_bug",
                       summary="still", evidence="The independent check found: x", cost_usd=0.1, input_tokens=0,
                       output_tokens=0, turns=1, duration_s=1, changed_paths=(), capabilities=())
@@ -1076,9 +1076,9 @@ def test_an_unattended_resume_never_starts_on_a_cell_only_a_person_approves(caps
         kw["task_id"], "done", None))  # type: ignore[arg-type]
     monkeypatch.setattr(orchestrate.Report, "text", lambda self: "ok")
     store = Store.open()
-    climbed = store.create_task("plan the migration", status="running", source="cauce", repo="r",
+    climbed = store.create_task("plan the migration", status="running", source="locks", repo="r",
                                 cwd=str(git_repo), kind="plan", options=json.dumps({"allow_approval": True}))
-    tagged = store.create_task("#fable plan it", status="running", source="cauce", repo="r", cwd=str(git_repo),
+    tagged = store.create_task("#fable plan it", status="running", source="locks", repo="r", cwd=str(git_repo),
                                kind="frontier")
     for task in (climbed, tagged):
         store.add_attempt(task["id"], cell="fable/high", max_turns=30, passed=0, failure="environment",
@@ -1099,7 +1099,7 @@ def test_a_dismissed_review_resumes_with_the_blockers_the_check_recorded(tmp_pat
     work = tmp_path / "work"
     work.mkdir()
     store = Store.open()
-    task = store.create_task("fix it", status="blocked", source="cauce", repo="r", cwd=str(work), kind="implement",
+    task = store.create_task("fix it", status="blocked", source="locks", repo="r", cwd=str(work), kind="implement",
                              options=json.dumps({"investigation": "inv-1", "kind": "implement",
                                                  "part": {"id": "api", "n": 1, "of": 2, "plan": 9}}))
     shown = {"where": "app.py:3", "what": "drops the last item", "evidence_class": "deterministic",
@@ -1134,7 +1134,7 @@ def test_tries_the_network_dropped_under_are_no_attempts_for_an_unattended_resum
     monkeypatch.setattr(orchestrate, "run", lambda *a, **kw: orchestrate.Report(kw["task_id"], "done", None))
     monkeypatch.setattr(orchestrate.Report, "text", lambda self: "ok")
     store = Store.open()
-    task = store.create_task("sync it", status="running", source="cauce", repo="r", cwd=str(git_repo))
+    task = store.create_task("sync it", status="running", source="locks", repo="r", cwd=str(git_repo))
     for seq in range(1, cli.UNATTENDED_ATTEMPTS + 1):
         store.add_attempt(task["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="environment",
                           summary="dropped", evidence="", cost_usd=0.0, input_tokens=0, output_tokens=0, turns=1,
@@ -1172,9 +1172,9 @@ def _gone_pid() -> int:
 def test_resume_of_a_running_task_whose_process_is_gone_sweeps_it_instead_of_refusing(capsys, git_repo, monkeypatch):
     calls = _stub_run(monkeypatch)
     store = Store.open()
-    stuck = store.create_task("create the routes", status="running", source="cauce", repo="r", cwd=str(git_repo),
+    stuck = store.create_task("create the routes", status="running", source="locks", repo="r", cwd=str(git_repo),
                               kind="implement", pid=_gone_pid())
-    alive = store.create_task("still going", status="running", source="cauce", repo="r", cwd=str(git_repo),
+    alive = store.create_task("still going", status="running", source="locks", repo="r", cwd=str(git_repo),
                               kind="implement", pid=os.getpid())
     store.close()
 
@@ -1189,14 +1189,14 @@ def test_resume_of_a_running_task_whose_process_is_gone_sweeps_it_instead_of_ref
 
 
 def test_resuming_the_task_a_lane_paused_on_opens_the_lane_and_a_pause_on_another_stays(git_repo, monkeypatch):
-    from cauce import flow
+    from locks import flow
 
     _stub_run(monkeypatch)
     key = str(git_repo.resolve())
     store = Store.open()
-    died = store.create_task("create the routes", status="running", source="cauce", repo=key, cwd=str(git_repo),
+    died = store.create_task("create the routes", status="running", source="locks", repo=key, cwd=str(git_repo),
                              kind="implement", pid=_gone_pid(), dispatched=1)
-    other = store.create_task("other", status="failed", source="cauce", repo=key, cwd=str(git_repo), kind="implement")
+    other = store.create_task("other", status="failed", source="locks", repo=key, cwd=str(git_repo), kind="implement")
     assert flow.sweep(store) == [died["id"]]
     assert store.lanes()[0]["paused"]
     store.close()
@@ -1212,14 +1212,14 @@ def test_resuming_the_task_a_lane_paused_on_opens_the_lane_and_a_pause_on_anothe
 
 
 def test_the_end_of_a_resume_starts_the_dispatcher_when_work_waits_behind_it(git_repo, monkeypatch):
-    """After a restart no `cauce work` existed: the task queued behind a resumed one stayed queued."""
-    monkeypatch.setenv("CAUCE_AUTOWORK", "off")  # what follows reads its absence, then turns it on
+    """After a restart no `locks work` existed: the task queued behind a resumed one stayed queued."""
+    monkeypatch.setenv("LOCKS_AUTOWORK", "off")  # what follows reads its absence, then turns it on
     _stub_run(monkeypatch)
     started = []
     monkeypatch.setattr(dispatch, "start", lambda repo_dir, root, scope: started.append((repo_dir, scope)) or True)
     key = str(git_repo.resolve())
     store = Store.open()
-    stopped = store.create_task("create the routes", status="blocked", source="cauce", repo=key, cwd=str(git_repo),
+    stopped = store.create_task("create the routes", status="blocked", source="locks", repo=key, cwd=str(git_repo),
                                 kind="implement")
     store.close()
 
@@ -1227,7 +1227,7 @@ def test_the_end_of_a_resume_starts_the_dispatcher_when_work_waits_behind_it(git
     queued = store.enqueue("write the docs", repo=key, cwd=str(git_repo))
     store.close()
     assert cli.main(["resume", str(stopped["id"])]) == 0 and not started  # autowork is off here
-    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "on")
     assert cli.main(["resume", str(stopped["id"])]) == 0
     assert started == [(git_repo.resolve(), key)]
     # nothing waits behind it: no dispatcher to start
@@ -1239,7 +1239,7 @@ def test_the_end_of_a_resume_starts_the_dispatcher_when_work_waits_behind_it(git
 
 def test_a_resume_that_reopens_a_paused_lane_starts_its_dispatcher_before_its_own_run(git_repo, monkeypatch):
     """The queue behind a resumed task waited for the resumed task to end, though it may run beside it."""
-    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "on")
     started, during = [], []
     monkeypatch.setattr(dispatch, "start", lambda repo_dir, root, scope: started.append((repo_dir, scope)) or True)
 
@@ -1251,7 +1251,7 @@ def test_a_resume_that_reopens_a_paused_lane_starts_its_dispatcher_before_its_ow
     monkeypatch.setattr(orchestrate.Report, "text", lambda self: f"task #{self.task_id}: {self.status}")
     key = str(git_repo.resolve())
     store = Store.open()
-    stopped = store.create_task("create the routes", status="blocked", source="cauce", repo=key, cwd=str(git_repo),
+    stopped = store.create_task("create the routes", status="blocked", source="locks", repo=key, cwd=str(git_repo),
                                 kind="implement")
     store.enqueue("write the docs", repo=key, cwd=str(git_repo))
     store.pause_lane(key, f"task #{stopped['id']} ended blocked: refused")
@@ -1266,7 +1266,7 @@ def test_a_resume_that_reopens_a_paused_lane_starts_its_dispatcher_before_its_ow
 
 
 def test_unpausing_a_lane_with_queued_work_starts_its_dispatcher(git_repo, monkeypatch, capsys):
-    monkeypatch.setenv("CAUCE_AUTOWORK", "off")  # what follows reads its absence, then turns it on
+    monkeypatch.setenv("LOCKS_AUTOWORK", "off")  # what follows reads its absence, then turns it on
     key = str(git_repo.resolve())
     store = Store.open()
     store.enqueue("write the docs", repo=key, cwd=str(git_repo))
@@ -1279,7 +1279,7 @@ def test_unpausing_a_lane_with_queued_work_starts_its_dispatcher(git_repo, monke
     store = Store.open()
     store.pause_lane(key, "task #1 stopped with no sign of life")
     store.close()
-    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "on")
     capsys.readouterr()
     assert cli.main(["lanes", "--unpause", str(git_repo)]) == 0
     assert started == [(git_repo.resolve(), key)] and "started its dispatcher" in capsys.readouterr().out
@@ -1288,13 +1288,13 @@ def test_unpausing_a_lane_with_queued_work_starts_its_dispatcher(git_repo, monke
 
 
 def test_a_dispatcher_that_runs_is_not_started_again_by_an_unpause(git_repo, monkeypatch):
-    from cauce.store import home
+    from locks.store import home
 
     key = str(git_repo.resolve())
     store = Store.open()
     store.enqueue("write the docs", repo=key, cwd=str(git_repo))
     store.close()
-    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    monkeypatch.setenv("LOCKS_AUTOWORK", "on")
     launched = []
     real = dispatch.start
     monkeypatch.setattr(dispatch, "start", lambda *a: real(*a, popen=lambda argv, **kw: launched.append(argv)))
@@ -1302,20 +1302,20 @@ def test_a_dispatcher_that_runs_is_not_started_again_by_an_unpause(git_repo, mon
         assert cli.main(["lanes", "--unpause", str(git_repo)]) == 0
     assert launched == []
     assert cli.main(["lanes", "--unpause", str(git_repo)]) == 0
-    assert len(launched) == 1 and launched[0][1:5] == ["-m", "cauce", "work", "--repo"]
+    assert len(launched) == 1 and launched[0][1:5] == ["-m", "locks", "work", "--repo"]
 
 
-def test_a_resume_cauce_could_not_run_prints_one_line_and_keeps_the_traceback_in_the_hook_log(
+def test_a_resume_locks_could_not_run_prints_one_line_and_keeps_the_traceback_in_the_hook_log(
         capsys, git_repo, monkeypatch):
-    from cauce import hooks, isolate
-    from cauce.store import home
+    from locks import hooks, isolate
+    from locks.store import home
 
     def boom(*args, **kwargs):
         raise isolate.IsolationError("git worktree add failed: fatal: a worktree is already\nregistered here")
 
     monkeypatch.setattr(orchestrate, "run", boom)
     store = Store.open()
-    stopped = store.create_task("create the routes", status="blocked", source="cauce", repo="r", cwd=str(git_repo),
+    stopped = store.create_task("create the routes", status="blocked", source="locks", repo="r", cwd=str(git_repo),
                                 kind="implement")
     store.close()
 
@@ -1323,7 +1323,7 @@ def test_a_resume_cauce_could_not_run_prints_one_line_and_keeps_the_traceback_in
     out, err = capsys.readouterr()
     assert out == "" and "Traceback" not in err and len(err.strip().splitlines()) == 1
     assert (f"task #{stopped['id']}" in err and "a worktree is already registered here" in err
-            and f"cauce resume {stopped['id']}" in err and str(home() / hooks.ERROR_LOG) in err)
+            and f"locks resume {stopped['id']}" in err and str(home() / hooks.ERROR_LOG) in err)
     log = (home() / hooks.ERROR_LOG).read_text()
     assert "Traceback" in log and "IsolationError" in log and f"resume #{stopped['id']}" in log
     assert hooks._drain_errors(home()) == 1  # the next SessionStart reports it
@@ -1331,10 +1331,10 @@ def test_a_resume_cauce_could_not_run_prints_one_line_and_keeps_the_traceback_in
 
 def test_a_resume_whose_worktree_cannot_be_made_stops_resumable_and_the_next_one_goes_on(capsys, git_repo,
                                                                                          monkeypatch):
-    """The audited case end to end: `cauce resume` raised `IsolationError` from `isolate.prepare`, left the
-    task `running` with its dead pid, and every later `cauce resume` refused it."""
-    from cauce import isolate
-    from cauce.classify import Classification
+    """The audited case end to end: `locks resume` raised `IsolationError` from `isolate.prepare`, left the
+    task `running` with its dead pid, and every later `locks resume` refused it."""
+    from locks import isolate
+    from locks.classify import Classification
 
     real_run, real_prepare = orchestrate.run, isolate.prepare
 
@@ -1348,13 +1348,13 @@ def test_a_resume_whose_worktree_cannot_be_made_stops_resumable_and_the_next_one
 
     monkeypatch.setattr(orchestrate, "run", fake_run)
     store = Store.open()
-    stopped = store.create_task("fix the cart", status="blocked", source="cauce", repo="r", cwd=str(git_repo),
+    stopped = store.create_task("fix the cart", status="blocked", source="locks", repo="r", cwd=str(git_repo),
                                 kind="implement")
     store.close()
     monkeypatch.setattr(isolate, "prepare", refuse)
     assert cli.main(["resume", str(stopped["id"]), "--no-model"]) == 1
     out, err = capsys.readouterr()
-    assert "Traceback" not in out + err and f"cauce resume {stopped['id']}" in out
+    assert "Traceback" not in out + err and f"locks resume {stopped['id']}" in out
     store = Store.open()
     row = store.get_task(stopped["id"])
     assert row["status"] == "blocked" and row["pid"] is None
@@ -1366,10 +1366,10 @@ def test_a_resume_whose_worktree_cannot_be_made_stops_resumable_and_the_next_one
 
 def test_tasks_and_show_say_the_points(capsys):
     store = Store.open()
-    t = store.create_task("schema work", status="done", source="cauce", repo="r", kind="implement", points=5,
+    t = store.create_task("schema work", status="done", source="locks", repo="r", kind="implement", points=5,
                           points_why="4 criteria, touches schema, risk high")
     store.add_event(t["id"], "finished", status="done", realized=8, realized_why=["8 files", "400 lines"])
-    store.create_task("older work", status="done", source="cauce", repo="r", kind="docs")
+    store.create_task("older work", status="done", source="locks", repo="r", kind="docs")
     store.close()
     assert cli.main(["tasks", "--all"]) == 0
     lines = capsys.readouterr().out.splitlines()
@@ -1382,9 +1382,9 @@ def test_tasks_and_show_say_the_points(capsys):
 
 def test_a_dismissal_keeps_its_why_given_by_flag_or_after_the_ids(capsys):
     store = Store.open()
-    one = store.create_task("x", status="failed", source="cauce", repo="r")
-    two = store.create_task("y", status="blocked", source="cauce", repo="r")
-    three = store.create_task("z", status="failed", source="cauce", repo="r")
+    one = store.create_task("x", status="failed", source="locks", repo="r")
+    two = store.create_task("y", status="blocked", source="locks", repo="r")
+    three = store.create_task("z", status="failed", source="locks", repo="r")
     store.close()
     assert cli.main(["dismiss", str(one["id"]), "--why", "the blockers are wrong"]) == 0
     # Words after the ids are the reason, not an id that fails to parse.
@@ -1401,30 +1401,30 @@ def test_a_dismissal_keeps_its_why_given_by_flag_or_after_the_ids(capsys):
     assert cli.main(["show", str(one["id"])]) == 0
     assert "the blockers are wrong" in capsys.readouterr().out
     assert cli.main(["dismiss", "--reason", "x", "not-a-number"]) == 2
-    assert "cauce dismiss N --why" in capsys.readouterr().err
+    assert "locks dismiss N --why" in capsys.readouterr().err
 
 
 def test_every_notice_that_offers_a_dismissal_prints_its_real_syntax():
     from pathlib import Path
 
-    from cauce import hooks
+    from locks import hooks
 
     said = Path(hooks.__file__).read_text(encoding="utf-8")
-    assert "`cauce dismiss N`" not in said and said.count("cauce dismiss N --why '<why>'") == 2
-    assert stops.dismiss_command(12) == "cauce dismiss 12 --why '<why>'"
+    assert "`locks dismiss N`" not in said and said.count("locks dismiss N --why '<why>'") == 2
+    assert stops.dismiss_command(12) == "locks dismiss 12 --why '<why>'"
 
 
 def test_tasks_lists_every_project_with_all_and_points_there_from_an_empty_one(capsys, tmp_path, monkeypatch):
     store = Store.open()
-    store.create_task("api work", status="done", source="cauce", repo="/work/api", kind="implement")
-    store.create_task("web work", status="failed", source="cauce", repo="/work/web", kind="implement")
+    store.create_task("api work", status="done", source="locks", repo="/work/api", kind="implement")
+    store.create_task("web work", status="failed", source="locks", repo="/work/web", kind="implement")
     store.close()
     empty = tmp_path / "elsewhere"
     empty.mkdir()
     monkeypatch.chdir(empty)
     assert cli.main(["tasks"]) == 0
     out = capsys.readouterr().out
-    assert "no tasks in this project" in out and "2 in 2 other project(s)" in out and "cauce tasks --all" in out
+    assert "no tasks in this project" in out and "2 in 2 other project(s)" in out and "locks tasks --all" in out
     assert cli.main(["tasks", "--all"]) == 0
     rows = capsys.readouterr().out.splitlines()
     assert any(" api " in row and "api work" in row for row in rows)
@@ -1440,13 +1440,13 @@ def test_run_detach_queues_the_task_and_starts_its_lane(capsys, git_repo, monkey
     store = Store.open()
     (task,) = store.list_tasks(status=["queued"])
     store.close()
-    assert f"queued #{task['id']}" in out and f"cauce events --task {task['id']} --follow" in out
+    assert f"queued #{task['id']}" in out and f"locks events --task {task['id']} --follow" in out
     assert json.loads(task["options"])["verify"] == "true"
     assert kicked == [(str(git_repo.resolve()), task["repo"])]
 
 
 def test_clip_cuts_at_a_sentence_or_a_word_never_inside_a_bracket():
-    from cauce.text import clip
+    from locks.text import clip
 
     assert clip("short", 30) == "short"
     cell = clip("attempt 3 sonnet/xhigh [claude-sonnet-4-5] → more effort on the same model", 26)
@@ -1470,8 +1470,8 @@ def test_run_and_queue_add_ask_a_build_of_many_items_split_and_start_nothing(git
         AssertionError("started")))
     assert cli.main(["run", big, "--repo", str(git_repo)]) == cli.EXIT_SPLIT
     err = capsys.readouterr().err
-    assert err.startswith("cauce: not started: this request is several tasks (6 listed items)")
-    assert "--surface" in err and "cauce workflow run feature" in err and "--whole" in err
+    assert err.startswith("locks: not started: this request is several tasks (6 listed items)")
+    assert "--surface" in err and "locks workflow run feature" in err and "--whole" in err
     assert cli.main(["queue", "add", big, "--repo", str(git_repo)]) == cli.EXIT_SPLIT
     store = Store.open()
     try:
@@ -1483,11 +1483,11 @@ def test_run_and_queue_add_ask_a_build_of_many_items_split_and_start_nothing(git
 
 
 def test_a_dismissal_or_a_resume_of_a_task_in_another_state_says_what_it_takes(store, capsys, tmp_path):
-    running = store.create_task("build it", status="running", source="cauce", cwd=str(tmp_path), pid=os.getpid())
-    done = store.create_task("built", status="done", source="cauce", cwd=str(tmp_path))
+    running = store.create_task("build it", status="running", source="locks", cwd=str(tmp_path), pid=os.getpid())
+    done = store.create_task("built", status="done", source="locks", cwd=str(tmp_path))
     assert cli.main(["dismiss", str(running["id"])]) == 1
     err = capsys.readouterr().err
-    assert "It is running: its ending reaches you when it ends" in err and f"cauce cancel {running['id']}" in err
+    assert "It is running: its ending reaches you when it ends" in err and f"locks cancel {running['id']}" in err
     assert cli.main(["resume", str(running["id"])]) == 1
     assert "It is running" in capsys.readouterr().err
     assert cli.main(["resume", str(done["id"])]) == 1
@@ -1506,7 +1506,7 @@ def test_a_resume_says_where_it_starts_and_when_that_is_below_what_it_ran():
 
 def test_show_tells_each_run_of_a_task_that_failed_and_was_resumed(capsys):
     store = Store.open()
-    t = store.create_task("fix the radio", status="done", source="cauce", repo="r", kind="debug-repro")
+    t = store.create_task("fix the radio", status="done", source="locks", repo="r", kind="debug-repro")
     store.add_event(t["id"], "planned", start="sonnet/xhigh", reasons=[])
     store.add_event(t["id"], "finished", status="failed", attempts=3)
     store.add_event(t["id"], "planned", start="opus/high", reasons=[
@@ -1521,10 +1521,10 @@ def test_show_tells_each_run_of_a_task_that_failed_and_was_resumed(capsys):
 
 def test_tasks_workers_lists_only_work_a_worker_ran_by_project(capsys):
     store = Store.open()
-    ran = store.create_task("fix the radio", status="done", source="cauce", repo="/w/hertzbench", kind="bugfix",
+    ran = store.create_task("fix the radio", status="done", source="locks", repo="/w/hertzbench", kind="bugfix",
                             cost_usd=3.2)
     store.add_attempt(ran["id"], cell="sonnet/high", max_turns=30, passed=1)
-    other = store.create_task("add the button", status="done", source="cauce", repo="/w/site", kind="ui")
+    other = store.create_task("add the button", status="done", source="locks", repo="/w/site", kind="ui")
     store.add_attempt(other["id"], cell="sonnet/high", max_turns=30, passed=1)
     store.create_task("never ran", status="cancelled", source="queue", repo="/w/site", kind="ui")
     store.create_task("a prompt", status="done", source="hook", repo="/w/site")
@@ -1547,7 +1547,7 @@ def test_a_command_that_wants_task_ids_refuses_a_word_that_is_none_in_one_line(a
     `ValueError: invalid literal for int() with base 10: 'N'`."""
     assert cli.main(argv) == 2
     out, err = capsys.readouterr()
-    assert err.strip() == f"cauce {argv[0]}: {bad} is not a task number (N or #N)"
+    assert err.strip() == f"locks {argv[0]}: {bad} is not a task number (N or #N)"
     assert out == ""
 
 
@@ -1567,7 +1567,7 @@ def test_queue_add_reads_the_request_from_stdin_as_it_is(git_repo, monkeypatch):
     """Backticks and `$(…)` in a request sent through a quoted heredoc are text: nothing runs them."""
     import io
 
-    text = "fix `cauce merge N`, then read `cauce guide dispatch` and $(echo hi)\n"
+    text = "fix `locks merge N`, then read `locks guide dispatch` and $(echo hi)\n"
     monkeypatch.setattr("sys.stdin", io.StringIO(text))
     assert cli.main(["queue", "add", "-", "--repo", str(git_repo), "--json"]) == 0
     store = Store.open()
@@ -1605,9 +1605,9 @@ def test_a_request_with_no_task_in_it_is_refused_before_anything_starts(text, ar
 
 
 def test_config_livespec_wait_takes_whole_seconds(capsys, monkeypatch):
-    from cauce import config
+    from locks import config
 
-    monkeypatch.delenv("CAUCE_LIVESPEC_WAIT")  # the suite sets it to 0, and the variable outranks the file
+    monkeypatch.delenv("LOCKS_LIVESPEC_WAIT")  # the suite sets it to 0, and the variable outranks the file
     assert cli.main(["config", "livespec_wait", "20"]) == 0
     assert config.livespec_wait(os.environ) == 20
     assert cli.main(["config", "livespec_wait", "soon"]) == 1
@@ -1616,34 +1616,34 @@ def test_config_livespec_wait_takes_whole_seconds(capsys, monkeypatch):
 
 
 def test_dismissing_a_task_whose_run_died_keeps_its_worktree_work_on_its_branch(git_repo, store, capsys):
-    from cauce import isolate
-    from cauce.store import home
+    from locks import isolate
+    from locks.store import home
 
     from .conftest import git
 
-    task = store.create_task("fix the cart total", status="interrupted", source="cauce", cwd=str(git_repo))
+    task = store.create_task("fix the cart total", status="interrupted", source="locks", cwd=str(git_repo))
     ws = isolate.prepare(git_repo, task["id"], home(), fresh=True)
     (ws.path / "app.py").write_text("print('fixed')\n")  # the run died before it committed this
     (ws.path / "new.py").write_text("x = 1\n")
     assert cli.main(["dismiss", str(task["id"])]) == 0
-    assert "kept what its worktree held on cauce/task-" in capsys.readouterr().out
+    assert "kept what its worktree held on locks/task-" in capsys.readouterr().out
     branch = isolate.branch_for(task["id"])
     assert git(git_repo, "show", f"{branch}:app.py") == "print('fixed')"
     assert git(git_repo, "show", f"{branch}:new.py") == "x = 1"
     assert isolate.UNVERIFIED in git(git_repo, "log", "-1", "--format=%B", branch)
     assert not ws.path.exists() and store.events_of(task["id"], "branch_kept")
     # Nothing left there: a dismissal of a task with no worktree keeps nothing and says nothing.
-    other = store.create_task("another", status="blocked", source="cauce", cwd=str(git_repo))
+    other = store.create_task("another", status="blocked", source="locks", cwd=str(git_repo))
     assert cli.main(["dismiss", str(other["id"])]) == 0
     assert "kept what" not in capsys.readouterr().out and not isolate.kept(git_repo, other["id"])
 
 
 def test_show_never_says_a_running_task_cost_nothing(capsys, monkeypatch):
-    """`cauce show` printed `cost $0.00 ... final None` for a task 58 minutes into its attempt."""
-    from cauce import usage
+    """`locks show` printed `cost $0.00 ... final None` for a task 58 minutes into its attempt."""
+    from locks import usage
 
     store = Store.open()
-    t = store.create_task("long work", status="running", source="cauce", repo="r", kind="feature")
+    t = store.create_task("long work", status="running", source="locks", repo="r", kind="feature")
     store.add_event(t["id"], "attempt_started", seq=1, cell="sonnet/high")
     store.close()
     monkeypatch.setattr(usage, "running_cost", lambda *a, **k: 2.5)

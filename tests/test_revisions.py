@@ -1,4 +1,4 @@
-"""A role's lessons in one repository, improved by measured trial (`cauce.revisions`)."""
+"""A role's lessons in one repository, improved by measured trial (`locks.revisions`)."""
 from __future__ import annotations
 
 import dataclasses
@@ -7,8 +7,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from cauce import doctor, revisions, roles
-from cauce.store import Store
+from locks import doctor, revisions, roles
+from locks.store import Store
 
 LESSONS = ["Run pytest -q tests before claiming a pass; the suite is the check here.",
            "The exporters live in src/export/, not in src/cli.py."]
@@ -28,7 +28,7 @@ class Editor:
 
 def _task(store: Store, *, role="implementer", repo="r", status="done", first: bool | None = True,
           attempts: int = 1, blockers: int = 0, **brief) -> int:
-    task = store.create_task("t", status=status, source="cauce", repo=repo)
+    task = store.create_task("t", status=status, source="locks", repo=repo)
     store.add_event(task["id"], "planned", kind="implement", role=role)
     store.add_event(task["id"], "briefed", role=role, role_version="abc", **brief)
     if first is not None:
@@ -153,7 +153,7 @@ def test_the_arms_alternate_and_a_resumed_task_keeps_its_arm(store: Store):
     given = {}
     for task_id in range(10, 16):
         text, data = revisions.for_brief(store, "r", "implementer", task_id)
-        store.add_event(store.create_task("t", status="done", source="cauce", repo="r")["id"], "briefed",
+        store.add_event(store.create_task("t", status="done", source="locks", repo="r")["id"], "briefed",
                         role="implementer", **data)
         given[data["revision_arm"]] = text
         assert data["revision_trial"] == cand["id"] and "trial" in data["revision_why"]
@@ -254,12 +254,12 @@ def test_the_records_are_append_only(store: Store):
 
 
 def test_settle_judges_and_proposes_where_work_ended_and_nothing_when_off(store: Store, monkeypatch):
-    monkeypatch.setenv("CAUCE_ROLE_TRIALS", "off")
+    monkeypatch.setenv("LOCKS_ROLE_TRIALS", "off")
     _evidence(store)
     _task(store)
     editor = Editor()
     assert revisions.settle(store, ask=editor) == {"judged": [], "proposed": []}  # off
-    monkeypatch.setenv("CAUCE_ROLE_TRIALS", "on")
+    monkeypatch.setenv("LOCKS_ROLE_TRIALS", "on")
     found = revisions.settle(store, ask=editor)
     assert [r["record"] for r in found["proposed"]] == ["proposed"] and len(editor.asked) == 1
     assert found["proposed"][0]["role_version"] == roles.version(roles.load().get("implementer"))
@@ -270,12 +270,12 @@ def test_settle_judges_and_proposes_where_work_ended_and_nothing_when_off(store:
 
 
 def test_settle_runs_from_evolution_and_never_for_an_investigator(store: Store, monkeypatch):
-    monkeypatch.setenv("CAUCE_ROLE_TRIALS", "off")
-    from cauce import evolution, standards
+    monkeypatch.setenv("LOCKS_ROLE_TRIALS", "off")
+    from locks import evolution, standards
 
     monkeypatch.setattr(standards, "settle", lambda store, now=None: {"ended": 0, "calibrated": [], "judged": []})
     assert "roles" not in evolution.settle(store)
-    monkeypatch.setenv("CAUCE_ROLE_TRIALS", "on")
+    monkeypatch.setenv("LOCKS_ROLE_TRIALS", "on")
     called = []
     monkeypatch.setattr(revisions, "settle", lambda store, now=None: called.append(1) or {"judged": []})
     assert evolution.settle(store)["roles"] == {"judged": []} and called == [1]
@@ -294,8 +294,8 @@ def test_a_claim_keeps_two_settles_from_asking_twice(store: Store):
 
 
 def test_the_overview_and_the_command_show_current_candidate_and_history(store: Store, capsys, monkeypatch):
-    monkeypatch.setenv("CAUCE_ROLE_TRIALS", "off")  # the command says so
-    from cauce import analysis, cli
+    monkeypatch.setenv("LOCKS_ROLE_TRIALS", "off")  # the command says so
+    from locks import analysis, cli
 
     cand = _candidate(store)["id"]
     _arm(store, cand, "candidate", passed=9)
@@ -360,8 +360,8 @@ def test_doctor_names_two_candidates_a_double_verdict_and_a_trial_nobody_got(sto
 
 @pytest.mark.usefixtures("no_verifier")
 def test_a_run_s_brief_records_the_role_s_version_and_follows_the_trial_s_arm(git_repo, store, monkeypatch):
-    from cauce import repo
-    from cauce.orchestrate import run
+    from locks import repo
+    from locks.orchestrate import run
 
     from .test_orchestrate import Script, kind, ok
 
@@ -374,7 +374,7 @@ def test_a_run_s_brief_records_the_role_s_version_and_follows_the_trial_s_arm(gi
     key = repo.key(git_repo)
     store.add_role_revision(at="2026-10-01T00:00:00+00:00", repo=key, role=role, record="proposed",
                             hash=revisions.lessons_hash(LESSONS), lessons=LESSONS, version="0.32.0")
-    monkeypatch.setenv("CAUCE_ROLE_TRIALS", "on")
+    monkeypatch.setenv("LOCKS_ROLE_TRIALS", "on")
     seen = {}
     for name in ("b.py", "c.py"):
         script = Script(ok(), write=name)
@@ -382,7 +382,7 @@ def test_a_run_s_brief_records_the_role_s_version_and_follows_the_trial_s_arm(gi
         data = store.last_event(again.task_id, "briefed")["data"]
         seen[data["revision_arm"]] = LESSONS[0] in script.specs[0].prompt
     assert seen == {"candidate": True, "current": False}
-    monkeypatch.setenv("CAUCE_ROLE_TRIALS", "off")
+    monkeypatch.setenv("LOCKS_ROLE_TRIALS", "off")
     off = run("add the d", git_repo, store, registry={}, launcher=Script(ok(), write="d.py"),
               classifier=kind("implement"))
     assert "revision_arm" not in store.last_event(off.task_id, "briefed")["data"]

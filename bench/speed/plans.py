@@ -24,8 +24,8 @@ from statistics import median
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "src"))
 
-from cauce import grants, launch, orchestrate  # noqa: E402
-from cauce.matrix import Cell  # noqa: E402
+from locks import grants, launch, orchestrate  # noqa: E402
+from locks.matrix import Cell  # noqa: E402
 
 BASE = HERE.parent / "memory" / "hard"
 OUT = HERE / "results-plans.jsonl"

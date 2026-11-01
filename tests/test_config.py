@@ -1,54 +1,54 @@
 from __future__ import annotations
 
-from cauce import config
+from locks import config
 
 
 def test_defaults_file_env_and_flag(_isolated_home):
-    env = {"CAUCE_HOME": str(_isolated_home)}
+    env = {"LOCKS_HOME": str(_isolated_home)}
     assert config.load(env)["livespec"] is True
     assert config.enabled("livespec", env)
     config.save({"livespec": False}, env)
     assert not config.enabled("livespec", env)
-    assert config.enabled("livespec", {**env, "CAUCE_LIVESPEC": "on"})
-    assert not config.enabled("livespec", {**env, "CAUCE_LIVESPEC": "on"}, flag=False)
-    assert not config.enabled("livespec", {**env, "CAUCE_LIVESPEC": "maybe"})  # unparseable env is ignored
+    assert config.enabled("livespec", {**env, "LOCKS_LIVESPEC": "on"})
+    assert not config.enabled("livespec", {**env, "LOCKS_LIVESPEC": "on"}, flag=False)
+    assert not config.enabled("livespec", {**env, "LOCKS_LIVESPEC": "maybe"})  # unparseable env is ignored
 
 
 def test_plugin_options_reach_the_file(_isolated_home):
-    env = {"CAUCE_HOME": str(_isolated_home), "CLAUDE_PLUGIN_OPTION_LIVESPEC": "false"}
+    env = {"LOCKS_HOME": str(_isolated_home), "CLAUDE_PLUGIN_OPTION_LIVESPEC": "false"}
     config.sync_plugin_options(env)
     assert config.load(env)["livespec"] is False
-    config.sync_plugin_options({"CAUCE_HOME": str(_isolated_home), "CLAUDE_PLUGIN_OPTION_LIVESPEC": "true"})
+    config.sync_plugin_options({"LOCKS_HOME": str(_isolated_home), "CLAUDE_PLUGIN_OPTION_LIVESPEC": "true"})
     assert config.load(env)["livespec"] is True
-    config.sync_plugin_options({"CAUCE_HOME": str(_isolated_home)})  # no option: nothing changes
+    config.sync_plugin_options({"LOCKS_HOME": str(_isolated_home)})  # no option: nothing changes
     assert config.load(env)["livespec"] is True
 
 
 def test_a_broken_file_is_the_defaults(_isolated_home):
     _isolated_home.mkdir(parents=True, exist_ok=True)
     (_isolated_home / "config.json").write_text("[not an object")
-    assert config.load({"CAUCE_HOME": str(_isolated_home)}) == config.DEFAULTS
+    assert config.load({"LOCKS_HOME": str(_isolated_home)}) == config.DEFAULTS
     (_isolated_home / "config.json").write_text("[1]")
-    assert config.load({"CAUCE_HOME": str(_isolated_home)}) == config.DEFAULTS
+    assert config.load({"LOCKS_HOME": str(_isolated_home)}) == config.DEFAULTS
 
 
 def test_livespec_wait_is_whole_seconds_from_flag_variable_file_and_default(_isolated_home):
-    env = {"CAUCE_HOME": str(_isolated_home)}
+    env = {"LOCKS_HOME": str(_isolated_home)}
     assert config.livespec_wait(env) == 120
     config.save({"livespec_wait": 30}, env)
     assert config.livespec_wait(env) == 30
-    assert config.livespec_wait({**env, "CAUCE_LIVESPEC_WAIT": "5"}) == 5
-    assert config.livespec_wait({**env, "CAUCE_LIVESPEC_WAIT": "0"}) == 0
+    assert config.livespec_wait({**env, "LOCKS_LIVESPEC_WAIT": "5"}) == 5
+    assert config.livespec_wait({**env, "LOCKS_LIVESPEC_WAIT": "0"}) == 0
     # A value the setting does not take is read as unset: the file's, then the default.
-    assert config.livespec_wait({**env, "CAUCE_LIVESPEC_WAIT": "soon"}) == 30
-    assert config.livespec_wait({**env, "CAUCE_LIVESPEC_WAIT": "-3"}) == 30
+    assert config.livespec_wait({**env, "LOCKS_LIVESPEC_WAIT": "soon"}) == 30
+    assert config.livespec_wait({**env, "LOCKS_LIVESPEC_WAIT": "-3"}) == 30
     config.save({"livespec_wait": True}, env)
     assert config.livespec_wait(env) == 120
 
 
 def test_livespec_wait_reaches_the_file_from_the_plugin_option(_isolated_home):
-    env = {"CAUCE_HOME": str(_isolated_home), "CLAUDE_PLUGIN_OPTION_LIVESPEC_WAIT": "45"}
+    env = {"LOCKS_HOME": str(_isolated_home), "CLAUDE_PLUGIN_OPTION_LIVESPEC_WAIT": "45"}
     config.sync_plugin_options(env)
     assert config.load(env)["livespec_wait"] == 45
-    config.sync_plugin_options({"CAUCE_HOME": str(_isolated_home), "CLAUDE_PLUGIN_OPTION_LIVESPEC_WAIT": "later"})
+    config.sync_plugin_options({"LOCKS_HOME": str(_isolated_home), "CLAUDE_PLUGIN_OPTION_LIVESPEC_WAIT": "later"})
     assert config.load(env)["livespec_wait"] == 45

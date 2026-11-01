@@ -4,10 +4,10 @@ import io
 import json
 from datetime import UTC, datetime, timedelta
 
-from cauce import cli, hooks, scribe
-from cauce.launch import WorkerResult
-from cauce.orchestrate import run
-from cauce.store import home
+from locks import cli, hooks, scribe
+from locks.launch import WorkerResult
+from locks.orchestrate import run
+from locks.store import home
 
 from .test_orchestrate import Script, kind
 from .test_survey import assistant, result, session, tool, user, write
@@ -141,7 +141,7 @@ def test_a_task_a_session_sent_is_briefed_with_its_thread(git_repo, tmp_path, st
     briefed = store.last_event(report.task_id, "briefed")["data"]
     assert briefed["session"]["requests"] == 2 and briefed["context_chars"] > 0
     # Off, or no session: the task's text alone.
-    monkeypatch.setenv("CAUCE_SCRIBE", "off")
+    monkeypatch.setenv("LOCKS_SCRIBE", "off")
     script = Script(WorkerResult(True, None, "ok", "pytest: ok"))
     report = run("Round again", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
                  session_id="sess-1")
@@ -150,7 +150,7 @@ def test_a_task_a_session_sent_is_briefed_with_its_thread(git_repo, tmp_path, st
 
 
 def test_an_investigator_and_an_unreadable_thread_get_no_session_context(git_repo, tmp_path, store, monkeypatch):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     transcript_of(tmp_path, git_repo, sid="sess-2", entries=[user("something the person asked", git_repo)])
     task = {"session_id": "sess-2", "options": json.dumps({"investigation": "inv-1"})}
@@ -187,14 +187,14 @@ def test_a_scribe_that_fails_is_noted_and_the_endings_still_go_out(git_repo, tmp
     path = transcript_of(tmp_path, git_repo, entries=[user("hola", git_repo)])
     working = scribe.update
     monkeypatch.setattr(scribe, "update", lambda *a, **k: 1 / 0)
-    task = store.create_task("queued work", status="done", source="cauce", session_id="s1")
+    task = store.create_task("queued work", status="done", source="locks", session_id="s1")
     store.add_event(task["id"], "finished", status="done")
     answer = hooks.stop(stop_event(path), store)
     assert answer["decision"] == "block" and "#" in answer["reason"]
     assert "ZeroDivisionError" in (home() / hooks.ERROR_LOG).read_text()
     # Turned off: no state is kept at all.
     monkeypatch.setattr(scribe, "update", working)
-    monkeypatch.setenv("CAUCE_SCRIBE", "off")
+    monkeypatch.setenv("LOCKS_SCRIBE", "off")
     hooks.stop(stop_event(path, sid="s2"), store)
     assert scribe.load(home(), "s2") is None
 
@@ -222,8 +222,8 @@ def test_a_fresh_session_after_a_relay_starts_from_the_thread_and_its_work_repor
     path = transcript_of(tmp_path, git_repo, sid="old")
     scribe.update(home(), "old", path)
     queued = store.enqueue("Add the coupon field", repo="k", cwd=str(git_repo), session_id="old")
-    blocked = store.create_task("Migrate totals", status="blocked", source="cauce", session_id="old")
-    done = store.create_task("Old and heard", status="done", source="cauce", session_id="old")
+    blocked = store.create_task("Migrate totals", status="blocked", source="locks", session_id="old")
+    done = store.create_task("Old and heard", status="done", source="locks", session_id="old")
     store.add_event(done["id"], "finished", status="done")
     store.add_event(done["id"], "reported", via="stop")
     scribe.mark_relay(home(), "old", git_repo)
@@ -231,24 +231,24 @@ def test_a_fresh_session_after_a_relay_starts_from_the_thread_and_its_work_repor
              "transcript_path": str(tmp_path / "new.jsonl")}
     answer = hooks.session_start(event, store, home(), {})
     text = answer["hookSpecificOutput"]["additionalContext"]
-    assert "cauce relay: this session continues old" in text
+    assert "locks relay: this session continues old" in text
     assert "Planifica la migración del carrito a centavos" in text and "(correction) no, eso no" in text
-    assert f"#{queued['id']} [queued] Add the coupon field" in text and "2 cauce task(s)" in text
+    assert f"#{queued['id']} [queued] Add the coupon field" in text and "2 locks task(s)" in text
     assert store.get_task(queued["id"])["session_id"] == "new" and store.get_task(blocked["id"])["session_id"] == "new"
     assert store.get_task(done["id"])["session_id"] == "old"
     assert scribe.load(home(), "new")["relayed_from"] == "old"
     # Taken once; a resume never takes one.
     again = hooks.session_start({**event, "session_id": "newer"}, store, home(), {})
-    assert "cauce relay" not in (again or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "locks relay" not in (again or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
     scribe.mark_relay(home(), "old", git_repo)
     resumed = hooks.session_start({**event, "session_id": "x", "source": "resume"}, store, home(), {})
-    assert "cauce relay" not in (resumed or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "locks relay" not in (resumed or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
 
 
 def test_a_relay_from_a_session_the_scribe_never_saw_is_nothing(git_repo, store):
     scribe.mark_relay(home(), "ghost", git_repo)
     answer = hooks.session_start({"session_id": "new", "cwd": str(git_repo), "source": "startup"}, store, home(), {})
-    assert "cauce relay" not in (answer or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "locks relay" not in (answer or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
 
 
 def test_the_relay_text_puts_the_person_s_words_first_and_fits(git_repo):
@@ -266,7 +266,7 @@ def test_the_relay_text_puts_the_person_s_words_first_and_fits(git_repo):
 def test_store_hands_a_session_s_open_work_and_its_workflow_runs_over(store):
     running = store.create_task("going", status="running", source="queue", session_id="a")
     turn = store.create_task("a prompt", status="running", source="hook", session_id="a")
-    unheard = store.create_task("ended unheard", status="failed", source="cauce", session_id="a")
+    unheard = store.create_task("ended unheard", status="failed", source="locks", session_id="a")
     store.add_event(unheard["id"], "finished", status="failed")
     store._conn.execute("INSERT INTO workflow_runs (name, scope, source, definition, session_id, status, created_at, "
                         "updated_at) VALUES ('f', 'bundled', 'x', '{}', 'a', 'active', 'now', 'now')")
@@ -283,17 +283,17 @@ def test_the_relay_command_marks_the_hand_over_from_this_session(git_repo, tmp_p
     monkeypatch.chdir(git_repo)
     assert cli.main(["relay"]) == 1
     assert "no session to relay from here" in capsys.readouterr().err
-    monkeypatch.setenv("CAUCE_SESSION_ID", "sess-9")
+    monkeypatch.setenv("LOCKS_SESSION_ID", "sess-9")
     assert cli.main(["relay"]) == 1
     assert "no thread to hand over yet" in capsys.readouterr().err
     transcript_of(tmp_path, git_repo, sid="sess-9")
     assert cli.main(["relay", "--show"]) == 0
     out = capsys.readouterr().out
-    assert out.startswith("relay ready") and "5 request(s) verbatim" in out and "cauce relay: this session" in out
+    assert out.startswith("relay ready") and "5 request(s) verbatim" in out and "locks relay: this session" in out
     assert scribe.take_relay(home(), "new", git_repo) == "sess-9"
-    # From a terminal, the latest session cauce saw in this repository.
-    monkeypatch.delenv("CAUCE_SESSION_ID")
-    from cauce import repo
+    # From a terminal, the latest session locks saw in this repository.
+    monkeypatch.delenv("LOCKS_SESSION_ID")
+    from locks import repo
 
     store.touch_session("sess-9", str(git_repo), repo.key(git_repo))
     store._conn.commit()
@@ -303,7 +303,7 @@ def test_the_relay_command_marks_the_hand_over_from_this_session(git_repo, tmp_p
 def test_the_hook_entry_point_runs_the_scribe(git_repo, tmp_path, monkeypatch):
     path = transcript_of(tmp_path, git_repo, entries=[user("algo que pedí", git_repo)])
     out = io.StringIO()
-    hooks.main("Stop", io.StringIO(json.dumps(stop_event(path))), out, {"CAUCE_HOME": str(home())})
+    hooks.main("Stop", io.StringIO(json.dumps(stop_event(path))), out, {"LOCKS_HOME": str(home())})
     assert scribe.load(home(), "s1")["requests"][0]["text"] == "algo que pedí"
 
 

@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from cauce import grants
+from locks import grants
 
 
 def test_workers_run_in_auto_mode_and_haiku_bypasses(_isolated_home):
@@ -14,9 +14,9 @@ def test_workers_run_in_auto_mode_and_haiku_bypasses(_isolated_home):
     grants.set_mode("haiku", "acceptEdits", env)
     grants.set_mode("default", "dontAsk", env)
     assert grants.mode_for("haiku", env) == "acceptEdits" and grants.mode_for("opus", env) == "dontAsk"
-    assert grants.mode_for("opus", {**env, "CAUCE_MODE_OPUS": "auto"}) == "auto"
-    assert grants.mode_for("opus", {**env, "CAUCE_MODE": "bypassPermissions"}) == "bypassPermissions"
-    assert grants.mode_for("opus", {**env, "CAUCE_MODE": "plan"}) == "dontAsk"  # never a mode that waits
+    assert grants.mode_for("opus", {**env, "LOCKS_MODE_OPUS": "auto"}) == "auto"
+    assert grants.mode_for("opus", {**env, "LOCKS_MODE": "bypassPermissions"}) == "bypassPermissions"
+    assert grants.mode_for("opus", {**env, "LOCKS_MODE": "plan"}) == "dontAsk"  # never a mode that waits
     grants.set_mode("haiku", None, env)
     grants.set_mode("default", None, env)
     assert grants.mode_for("haiku", env) == "bypassPermissions" and grants.mode_for("opus", env) == "auto"

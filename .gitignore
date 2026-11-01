@@ -8,7 +8,7 @@ dist/
 .ruff_cache/
 .coverage
 .coverage.*
-# livespec's index of this repository (cauce adopts livespec; the index is local state)
+# livespec's index of this repository (locks adopts livespec; the index is local state)
 .mcp-docs/
 
 # Laid by Claude Code when it loads the mod from this folder

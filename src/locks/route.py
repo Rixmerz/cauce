@@ -1,0 +1,259 @@
+"""Which way a request is done: by the session itself, by one worker, or in parts side by side.
+
+locks started by sending work to workers. A worker costs a plan, a worktree, a
+cold start on the code and, for a risky change, a verifier: for a small edit
+the session that already holds the code does it faster, and a single strong
+session is what most work wants. A worker earns its cost when the work is long
+enough to run while the session goes on, or when the session's context is worth
+protecting; parts earn theirs when the work splits into pieces that run at
+once. `choose` reads the request with no model (its kind by rules, its size and
+risk by the plan's own estimate, its listed items, the files and areas it names)
+and the session's context, and says which, with its reasons. It is advice to the
+orchestrating session, which decides; each decision is kept (`routed`) so the
+choice can be measured against how the work went.
+
+Standard library only, no model: the prompt hook runs it.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from pathlib import PurePosixPath
+
+from locks import criteria as criteria_mod
+from locks import points as points_mod
+from locks import risk as risk_mod
+from locks.classify import asks_for_change, by_rules, opens_with_change
+from locks.matrix import READ_ONLY_KINDS
+
+MAIN, WORKER, PARALLEL = "main", "worker", "parallel"
+#: At this size or under, the session does it: a worker's plan and cold start cost more than the work.
+MAIN_POINTS = 2
+#: At this size or over, or touching `PARALLEL_AREAS` areas or more, the work runs in parts.
+PARALLEL_POINTS = 8
+PARALLEL_AREAS = 2
+#: Independent pieces a request lists, each naming its own top-level folder: parts.
+PARALLEL_PIECES = 3
+#: A session whose context is this full keeps it for what needs it: writing work goes to a worker.
+CONTEXT_FULL = 0.6
+#: The turns work of each size takes, at most the worker's measured median: a typo is not a feature.
+TURNS_BY_POINTS = {1: 5, 2: 8, 3: 13, 5: 20, 8: 30, 13: 40}
+#: A request this short is a turn of the conversation, never routed.
+MIN_WORDS = 6
+#: Words that point back into the conversation: the session holds what they mean, a worker does not.
+_DEICTIC = re.compile(r"\b(esto|eso|aquello|lo (?:de|que) (?:arriba|antes|hablamos|dijimos)|"
+                      r"como (?:dijimos|hablamos|antes)|this one|that one|as (?:we )?discussed|the above|"
+                      r"as above|what we (?:said|discussed))\b", re.I)
+#: A request that asks to understand rather than to change: its opening word, or a question.
+_READS = re.compile(r"^\W*(explain|why|what|how|where|when|which|who|review|audit|investigate|analy[sz]e|compare|"
+                    r"summari[sz]e|describe|explica|por qu[eé]|qu[eé]|c[oó]mo|d[oó]nde|cu[aá]l|revisa|audita|"
+                    r"investiga|analiza|compara|resume|describe)\b", re.I)
+
+#: A question about the work (whether, what if, is it worth it), asked mid-text as often as at its end:
+#: a question mark after one of these openings is a turn of the conversation, never work to send.
+_ASKS = re.compile(r"(?:^|[.!?¿]\s*)\W*(?:y |tambi[eé]n |pero |entonces )?(?:se )?(?:podr[ií]a\w*|"
+                   r"deber[ií]a\w*|conviene|vale la pena|realmente|ser[ií]a|tendr[ií]a\w*|habr[ií]a|"
+                   r"qu[eé] (?:pasa|tal|opinas|te parece)|y si|could|should|would|is it worth|what if|"
+                   r"does it make sense|do we need|can we|hay (?:forma|manera)|is there a way)\b[^?]*\?", re.I)
+#: A request whose first sentence is itself a question ("¿lo arreglaste?", "did it pass?").
+_FIRST_ASKS = re.compile(r"^\W*[^.!?\n]{3,}\?")
+
+#: An opening that talks to the session itself: the answer is this conversation's to give.
+#: Spanish informs with an imperative and a pronoun (indícame, muéstrame, explícame); "resume"
+#: is Spanish only before what it sums up ("resume lo que hicimos"), never "resume the task".
+_TALKS = re.compile(r"^\W*(?:habla\w*|h[aá]blame|dime|dinos|d[ií]game|cu[eé]nta(?:me|nos)|"
+                    r"ind[ií]ca(?:me|nos)|mu[eé]stra(?:me|nos)|expl[ií]ca(?:me|nos)|ens[eé][ñn]a(?:me|nos)|"
+                    r"aclara(?:me|nos)|res[uú]me(?:lo|me|nos)|resum[ií]\w*|"
+                    r"resume\s+(?:lo|los|las|el|la|todo|qu[eé]|en|brevemente|c[oó]mo)\b|"
+                    r"(?:lista|enumera)(?:me|nos)?\s+(?:los|las|todos|todas|qu[eé]|cu[aá]l\w*)\b|"
+                    r"responde\w*|contesta\w*|qu[eé] (?:opinas|piensas|te parece)|tell (?:me|us)|"
+                    r"what do you think|summari[sz]e|walk me through)\b", re.I)
+#: A question about where the work stands: what is pending, what is left, how it ended.
+_STATE = re.compile(r"^\W*(?:y |entonces |oye,? )?(?:(?:tienes|tenemos|tengo|hay|queda|quedan|quedo|quedaron)\s+"
+                    r"(?:algo\s+|algunos?\s+|algunas?\s+|cosas\s+|tareas\s+)?(?:pendientes?|por hacer)|"
+                    r"qu[eé] (?:falta|faltan|queda|quedan|qued[oó]|est[aá] pendiente|hay pendiente)|"
+                    r"en qu[eé] (?:qued[oó]|qued[aá]|quedamos|va|vamos|estamos|est[aá])|"
+                    r"c[oó]mo (?:va|vamos|qued[oó]|est[aá] (?:la|el|lo))|"
+                    r"what'?s (?:left|pending|missing)|is (?:there )?anything (?:left|pending)|"
+                    r"where (?:are we|did we leave|do we stand))\b", re.I)
+#: A request for a report back, anywhere in the text ("Necesito que me des todos los errores…",
+#: "dame la lista…"): the session that holds the code and the conversation writes it.
+_REPORT = re.compile(r"(?:^|[.!?:;\n]\s*|,\s*|\b(?:y|and)\s+)\W*(?:"
+                     r"(?:necesito|quiero|quisiera|me gustar[ií]a|podr[ií]as|puedes)\s+(?:que\s+)?"
+                     r"(?:me\s+|nos\s+)?(?:des|digas|indiques|muestres|expliques|cuentes|listes|enumeres|"
+                     r"reportes|resumas|entregues|dar(?:me|nos)|decir(?:me|nos)|indicar(?:me|nos)|"
+                     r"mostrar(?:me|nos)|explicar(?:me|nos)|listar(?:me|nos)|resumir(?:me|nos))|"
+                     r"d[aá](?:me|nos)\s+(?:un|una|el|la|los|las|todos|todas|tu)\b|"
+                     r"(?:dime|ind[ií]ca(?:me|nos)|mu[eé]stra(?:me|nos)|expl[ií]ca(?:me|nos))\b|"
+                     r"(?:i need|i want|i'd like) you to (?:tell|give|list|show|explain|report|summari[sz]e)|"
+                     r"(?:give|tell|show) me (?:a list|all|every|the list|what|which|why|how)|report back)", re.I)
+#: A sentence asking for a report that also asks for a change: the report is how the change is told.
+_REPORT_CHANGES = re.compile(r"\b(?:arregl\w*|corrij\w*|corrig\w*|implement\w*|agreg\w*|a[ñn]ad\w*|"
+                             r"cambi(?:es|ar|a)\b|modifiq\w*|modific\w*|elimin\w*|borr\w*|actualic\w*|"
+                             r"cre(?:es|ar|a)\b|resuelv\w*|fix\w*|add|implement|change|update|remove|build|write)\b",
+                             re.I)
+
+
+def _sentence(text: str, at: int) -> str:
+    start = max(text.rfind(mark, 0, at) for mark in ".!?\n")
+    ends = [i for i in (text.find(mark, at) for mark in ".!?\n") if i >= 0]
+    return text[start + 1:min(ends) if ends else len(text)]
+
+
+def reports(text: str) -> bool:
+    """Whether a request asks for a report back (necesito que me des…, dime…, give me a list…)
+    and no change in that same sentence: a pasted list of observations that asks what is wrong
+    is answered here. A request that opens with a verb of change is an order."""
+    if opens_with_change(text):
+        return False
+    return any(not _REPORT_CHANGES.search(_sentence(text, m.end()))
+               for m in _REPORT.finditer(text))
+
+
+def talks(text: str) -> bool:
+    """Whether a request talks to the session: it opens by doing so (tell me, habla, dime,
+    indícame, explícame, qué opinas…), asks where the work stands (tienes pendientes, qué falta,
+    en qué quedó), or asks for a report back. What it asks is an answer, and the session holding
+    the conversation gives it. A request that opens with a verb of change is an order."""
+    if opens_with_change(text):
+        return False
+    return bool(_TALKS.search(text) or _STATE.search(text)) or reports(text)
+
+
+def asks(text: str) -> bool:
+    """Whether a request is a question about the work rather than the work: an opening
+    of doubt (could, should, what if, vale la pena…) ending in a question mark, at the
+    start or after a sentence, or a first sentence that is a question. A request that
+    opens with a verb of change is an order, whatever it asks after it."""
+    return bool(_ASKS.search(text) or _FIRST_ASKS.search(text)) and not opens_with_change(text)
+
+
+@dataclass(frozen=True)
+class Route:
+    mode: str
+    reasons: tuple[str, ...]
+    kind: str = ""
+    points: int = 0
+    areas: tuple[str, ...] = field(default=())
+
+    def advice(self) -> str:
+        """What the orchestrating session is told; nothing when the session does it, the default."""
+        why = "; ".join(self.reasons)
+        if self.mode == WORKER:
+            return (f"locks route: a worker ({why}). Queue it (locks' `queue` tool, or `locks queue add`) with "
+                    "the request written in full and its check, and go on here; do it yourself instead if it turns "
+                    "out to need this conversation.")
+        if self.mode == PARALLEL:
+            return (f"locks route: in parts, side by side ({why}). Run `locks workflow run feature \"<the request>\"` "
+                    "(it splits by itself), or queue one task per independent piece, each with its own `--surface`, "
+                    "together; what depends on another piece goes `--after` it.")
+        return ""
+
+    def data(self) -> dict:
+        return {"mode": self.mode, "reasons": list(self.reasons), "kind": self.kind, "points": self.points,
+                "areas": list(self.areas)}
+
+
+#: A build request listing this many items, in at least `SPLIT_WORDS` words, is several tasks:
+#: `locks run` and `queue add` ask it split. A list of one-word items is one small task.
+SPLIT_ITEMS, SPLIT_WORDS = 6, 40
+#: The kinds a request is asked split in: work that builds, where one worker outgrows its turns.
+SPLIT_KINDS = frozenset({"feature", "implement"})
+
+
+def split_first(text: str, kind: str | None = None) -> str | None:
+    """Why a request should be sent as several tasks before one worker starts it, or None:
+    a build (`kind`, else read by rules, with no model) that lists `SPLIT_ITEMS` items or
+    more in `SPLIT_WORDS` words or more, is the largest size, or lists `PARALLEL_PIECES`
+    pieces in folders of their own.
+    One worker on all of it outgrows its turns, and the climb that follows (more turns,
+    another model) costs more than the parts would. Pure."""
+    if kind is None:
+        ruled = by_rules(text)
+        kind = asks_for_change(text, ruled).kind if ruled is not None else (
+            "implement" if opens_with_change(text) else None)
+    if kind not in SPLIT_KINDS:
+        return None
+    items = len(criteria_mod.items(text))
+    size = points_mod.of_request(text, kind, risk_mod.of_request(text, kind)).points
+    pieces = listed_pieces(text)
+    why = [f"{items} listed items"] if items >= SPLIT_ITEMS and len(text.split()) >= SPLIT_WORDS else []
+    if size >= max(points_mod.SCALE):
+        why.append(f"{size} points")
+    if pieces >= PARALLEL_PIECES:
+        why.append(f"{pieces} pieces in folders of their own")
+    return ", ".join(why) or None
+
+
+def listed_pieces(text: str) -> int:
+    """How many of the request's listed items name a file in a top-level folder of their own."""
+    tops = set()
+    for item in criteria_mod.items(text):
+        for path in points_mod.named(item):
+            parts = PurePosixPath(path.strip("/")).parts
+            if len(parts) > 1:
+                tops.add(parts[0])
+    return len(tops)
+
+
+def _tokens(n: float) -> str:
+    return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.0f}k"
+
+
+def choose(text: str, *, context_tokens: int | None = None, context_share: float | None = None,
+           footprint: tuple[int, int] | None = None) -> Route:
+    """The way to do a request, with its reasons. Pure: everything it weighs is the request's
+    words, the session's context (its tokens and how full it is) and what a worker attempt
+    reads here as measured (`footprint`: median tokens and turns, `Store.worker_footprint`).
+
+    Every turn a session takes re-reads its whole context, so work done here reads about
+    the worker's turns times the session's context; a worker reads its own measured
+    footprint, cold start included. The cheaper of the two is the way, once the request is
+    work at all: reading, and what points back into the conversation, stay here; what splits
+    runs in parts."""
+    words = len(text.split())
+    if words < MIN_WORDS:
+        return Route(MAIN, ("a turn of the conversation",))
+    if talks(text):
+        return Route(MAIN, ("it talks to this session, which answers it",))
+    if asks(text):
+        return Route(MAIN, ("a question about the work, for this conversation to answer",))
+    ruled = by_rules(text)
+    # With no rule and no model, a question or an opening of reading is reading; else a build.
+    kind = asks_for_change(text, ruled).kind if ruled is not None else (
+        "explore" if (_READS.search(text) or text.rstrip().endswith("?")) and not opens_with_change(text)
+        else "implement")
+    risk = risk_mod.of_request(text, kind)
+    size = points_mod.of_request(text, kind, risk)
+    areas = tuple(sorted({area for area, _ in risk_mod.areas(risk)}))
+    pieces = listed_pieces(text)
+    base = dict(kind=kind, points=size.points, areas=areas)
+    if kind in READ_ONLY_KINDS:
+        return Route(MAIN, (f"{kind}: reading, which the session holding the code does best",), **base)
+    if size.points >= PARALLEL_POINTS or len(areas) >= PARALLEL_AREAS or pieces >= PARALLEL_PIECES:
+        why = [f"{size.points} points"] if size.points >= PARALLEL_POINTS else []
+        if len(areas) >= PARALLEL_AREAS:
+            why.append(f"{len(areas)} areas ({', '.join(areas)})")
+        if pieces >= PARALLEL_PIECES:
+            why.append(f"{pieces} listed pieces in separate folders")
+        return Route(PARALLEL, tuple(why), **base)
+    if _DEICTIC.search(text):
+        return Route(MAIN, ("it points back into this conversation, which a worker does not see",), **base)
+    if footprint and context_tokens:
+        measured_tokens, measured_turns = footprint
+        # Each turn re-reads its context: a worker's measured reading per turn against this session's.
+        turns = min(TURNS_BY_POINTS.get(size.points, measured_turns), measured_turns) or 1
+        here, there = turns * context_tokens, turns * measured_tokens // max(measured_turns, 1)
+        said = (f"done here it reads about {_tokens(here)} tokens ({turns} turns over this session's "
+                f"{_tokens(context_tokens)} context), a worker about {_tokens(there)} at its measured "
+                f"{_tokens(measured_tokens // max(measured_turns, 1))} a turn")
+        if there < here:
+            return Route(WORKER, (said, f"{size.points} points of {kind}"), **base)
+        return Route(MAIN, (said,), **base)
+    full = context_share is not None and context_share >= CONTEXT_FULL
+    if size.points <= MAIN_POINTS and not full:
+        return Route(MAIN, (f"{size.points} points: smaller than a worker's start-up",), **base)
+    if full:
+        return Route(WORKER, (f"this session's context is {context_share:.0%} full: keep it for what needs it",
+                              f"{size.points} points of {kind}"), **base)
+    return Route(WORKER, (f"{size.points} points of {kind}: long enough to run while the session goes on",), **base)

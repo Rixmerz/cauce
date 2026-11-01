@@ -1,5 +1,5 @@
 {
-  "name": "cauce",
+  "name": "locks",
   "version": "0.67.0",
   "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
   "author": {
@@ -24,7 +24,7 @@
     "livespec_wait": {
       "type": "number",
       "title": "Seconds to wait for livespec's index",
-      "description": "Before a worker starts, cauce indexes or refreshes the repository's livespec index (incrementally) and waits this long for it, so the worker orients by specs and symbols instead of opening files. Past it the task starts without the index and says so; the index keeps building for the next one. 0 never waits.",
+      "description": "Before a worker starts, locks indexes or refreshes the repository's livespec index (incrementally) and waits this long for it, so the worker orients by specs and symbols instead of opening files. Past it the task starts without the index and says so; the index keeps building for the next one. 0 never waits.",
       "default": 120
     },
     "parallel": {
@@ -36,37 +36,37 @@
     "autowork": {
       "type": "boolean",
       "title": "Start queued work at once",
-      "description": "A task queued with ++ starts the repository's dispatcher right away, so it runs in a worker without anyone typing cauce work. Off: queued work waits for cauce work.",
+      "description": "A task queued with ++ starts the repository's dispatcher right away, so it runs in a worker without anyone typing locks work. Off: queued work waits for locks work.",
       "default": true
     },
     "names": {
       "type": "boolean",
       "title": "Haiku names sessions",
-      "description": "Haiku names each session of an enrolled project after what it has been asked, in .cauce/sessions.json. A name you edit there is kept.",
+      "description": "Haiku names each session of an enrolled project after what it has been asked, in .locks/sessions.json. A name you edit there is kept.",
       "default": true
     },
     "notes": {
       "type": "boolean",
       "title": "Project notes",
-      "description": "Each project keeps notes of what it knows, by topic (business, code, decisions, conventions, environment), linked to each other and to the code they are about. Workers that pass add what they learned and sessions add what they established every few turns and before compacting (Haiku files them); workers get the relevant notes in their brief, and sessions read them with cauce recall.",
+      "description": "Each project keeps notes of what it knows, by topic (business, code, decisions, conventions, environment), linked to each other and to the code they are about. Workers that pass add what they learned and sessions add what they established every few turns and before compacting (Haiku files them); workers get the relevant notes in their brief, and sessions read them with locks recall.",
       "default": true
     },
     "scribe": {
       "type": "boolean",
       "title": "The scribe keeps each session's thread",
-      "description": "At the end of every turn cauce reads what the session's transcript gained, without a model and without touching the session: your requests verbatim, the files it wrote, the calls that failed and what passed after. Work the session sends gets the part of that thread it needs in its brief, the project's notes are filed every few turns instead of only at a compaction, and /cauce:relay hands the thread to a fresh session. Off: workers get only the task's text.",
+      "description": "At the end of every turn locks reads what the session's transcript gained, without a model and without touching the session: your requests verbatim, the files it wrote, the calls that failed and what passed after. Work the session sends gets the part of that thread it needs in its brief, the project's notes are filed every few turns instead of only at a compaction, and /locks:relay hands the thread to a fresh session. Off: workers get only the task's text.",
       "default": true
     },
     "wake": {
       "type": "boolean",
       "title": "Wake the session when queued work ends",
-      "description": "With Claude Code's mods: when a task this session queued ends while the session is idle, cauce starts a turn with its notice, so the session tells you and continues without waiting for your next message. Off: the notice waits for the end of a turn or your next message.",
+      "description": "With Claude Code's mods: when a task this session queued ends while the session is idle, locks starts a turn with its notice, so the session tells you and continues without waiting for your next message. Off: the notice waits for the end of a turn or your next message.",
       "default": true
     },
     "prune": {
       "type": "boolean",
       "title": "Delete merged branches",
-      "description": "A branch cauce kept for a task (cauce/task-N) is deleted once its work landed: merged into another branch, squash-merged (HEAD holds every file it changed), or holding only tool artifacts. Never one checked out or one a stopped task may resume from; its tip stays on the task's events. Off: branches stay until you delete them.",
+      "description": "A branch locks kept for a task (locks/task-N) is deleted once its work landed: merged into another branch, squash-merged (HEAD holds every file it changed), or holding only tool artifacts. Never one checked out or one a stopped task may resume from; its tip stays on the task's events. Off: branches stay until you delete them.",
       "default": true
     },
     "plugins": {
@@ -84,7 +84,7 @@
     "trust": {
       "type": "boolean",
       "title": "Check less where the record earned it",
-      "description": "Skip-lot sampling of the independent check: a cell (repository, kind and the worker's cell) whose checks came clean ten times in a row has its medium changes made by a cheap cell checked one pass in two, then one in four, never fewer; one blocker returns it to every pass. A high risk is checked every time, and cauce's own check always runs. Off: every such pass is checked.",
+      "description": "Skip-lot sampling of the independent check: a cell (repository, kind and the worker's cell) whose checks came clean ten times in a row has its medium changes made by a cheap cell checked one pass in two, then one in four, never fewer; one blocker returns it to every pass. A high risk is checked every time, and locks' own check always runs. Off: every such pass is checked.",
       "default": true
     },
     "probation": {
@@ -96,7 +96,7 @@
     "evidence": {
       "type": "boolean",
       "title": "Hold workers to what their tools measure",
-      "description": "A worker handed layout-inspector for a change to rendered UI, or rastro, must show a call of that tool that went through before its pass counts, read from cauce's log of its calls, never from its words: the first time it goes back to the same worker, the second it waits on the orchestrator with its work kept. Each repository tries it in turns with free work and keeps it only where the passes it held drew fewer blockers from the independent check. Off: the tools stay a hint.",
+      "description": "A worker handed layout-inspector for a change to rendered UI, or rastro, must show a call of that tool that went through before its pass counts, read from locks' log of its calls, never from its words: the first time it goes back to the same worker, the second it waits on the orchestrator with its work kept. Each repository tries it in turns with free work and keeps it only where the passes it held drew fewer blockers from the independent check. Off: the tools stay a hint.",
       "default": true
     },
     "race": {
@@ -131,14 +131,14 @@
     },
     "overlap": {
       "type": "boolean",
-      "title": "Run the independent check beside cauce's check",
-      "description": "When a writing attempt passes and its change needs the independent verifier, the verifier starts at once, beside cauce's own check of the work, instead of after it: both read the same change, the verifier is told the check is running and not to run it itself, and a check that fails stops it (its cost is kept). Never for a task that starts services. Off: the verifier waits for the check.",
+      "title": "Run the independent check beside locks' check",
+      "description": "When a writing attempt passes and its change needs the independent verifier, the verifier starts at once, beside locks' own check of the work, instead of after it: both read the same change, the verifier is told the check is running and not to run it itself, and a check that fails stops it (its cost is kept). Never for a task that starts services. Off: the verifier waits for the check.",
       "default": true
     },
     "late_verifier": {
       "type": "boolean",
       "title": "Run the independent check after the ending",
-      "description": "A task that is no workflow step, answers no review rows and that no queued work waits on ends as soon as cauce's own check passes; its independent verifier then reads the branch it kept. A blocker it shows reopens the task (stopped for review, its work kept), and the session hears of it as a new ending. Off: the ending waits for the verifier, and its blockers earn a correction in the same run.",
+      "description": "A task that is no workflow step, answers no review rows and that no queued work waits on ends as soon as locks' own check passes; its independent verifier then reads the branch it kept. A blocker it shows reopens the task (stopped for review, its work kept), and the session hears of it as a new ending. Off: the ending waits for the verifier, and its blockers earn a correction in the same run.",
       "default": true
     },
     "specs": {
@@ -156,7 +156,7 @@
     "role_trials": {
       "type": "boolean",
       "title": "Improve each role's lessons by trial",
-      "description": "Once a role's workers met enough dead ends and verifier blockers in a repository, Haiku proposes a short list of lessons for that role there (the role's file is never touched). The role's tasks alternate with and without it until each side has 10 first tries; it is kept only where it passed first no worse and did better on one measure, and reverted if it later makes pass-first worse. `cauce roles revisions` shows them. Off: the role's own text alone.",
+      "description": "Once a role's workers met enough dead ends and verifier blockers in a repository, Haiku proposes a short list of lessons for that role there (the role's file is never touched). The role's tasks alternate with and without it until each side has 10 first tries; it is kept only where it passed first no worse and did better on one measure, and reverted if it later makes pass-first worse. `locks roles revisions` shows them. Off: the role's own text alone.",
       "default": true
     },
     "note_trials": {
@@ -180,31 +180,31 @@
     "habit_review": {
       "type": "boolean",
       "title": "Review new habits with a worker",
-      "description": "A habit cauce newly finds in a project (an edit followed by the same check, again and again) is reviewed by a read-only worker: whether the tool is here, a command scoped to the edited file, run and timed. Its ending gives the install line, which the session puts to you; nothing is installed without your yes. Off: habits wait for `cauce habits`.",
+      "description": "A habit locks newly finds in a project (an edit followed by the same check, again and again) is reviewed by a read-only worker: whether the tool is here, a command scoped to the edited file, run and timed. Its ending gives the install line, which the session puts to you; nothing is installed without your yes. Off: habits wait for `locks habits`.",
       "default": true
     },
     "habit_auto": {
       "type": "boolean",
       "title": "Install reviewed habits on their own",
-      "description": "A habit the review worker proposes is installed by cauce once its own check passes: one simple command that runs the habit's program, passes on clean code at HEAD in a temporary worktree, finishes within 30 s and writes nothing. The ending says what was installed and the line that removes it; a habit that fails three times in a row, or keeps running past 60 s, turns itself off. Off: the session asks you before each install.",
+      "description": "A habit the review worker proposes is installed by locks once its own check passes: one simple command that runs the habit's program, passes on clean code at HEAD in a temporary worktree, finishes within 30 s and writes nothing. The ending says what was installed and the line that removes it; a habit that fails three times in a row, or keeps running past 60 s, turns itself off. Off: the session asks you before each install.",
       "default": true
     },
     "engram": {
       "type": "boolean",
       "title": "Read the team's engram memory",
-      "description": "When an engram server runs (its session hook starts one, or `engram serve`), cauce searches the task's words in the project engram resolves for the checkout and puts the hits in the brief, and hands workers engram's MCP server read-only: saves, updates and deletes are refused by a guard, and every call stays in this project. cauce never opens engram's database itself. Off: engram is left alone.",
+      "description": "When an engram server runs (its session hook starts one, or `engram serve`), locks searches the task's words in the project engram resolves for the checkout and puts the hits in the brief, and hands workers engram's MCP server read-only: saves, updates and deletes are refused by a guard, and every call stays in this project. locks never opens engram's database itself. Off: engram is left alone.",
       "default": true
     },
     "engram_write": {
       "type": "boolean",
       "title": "Save what workers learned in engram",
-      "description": "What a passing worker learned (the facts cauce keeps in its own notes: never a secret, never a failed attempt's, never text marked <private>) is also saved in engram as learning observations of the project, one session per task, so your team's agents find it. Off by default: it writes to a store that is not cauce's.",
+      "description": "What a passing worker learned (the facts locks keeps in its own notes: never a secret, never a failed attempt's, never text marked <private>) is also saved in engram as learning observations of the project, one session per task, so your team's agents find it. Off by default: it writes to a store that is not locks'.",
       "default": false
     },
     "compact": {
       "type": "string",
       "title": "Compact at the right moment",
-      "description": "cauce decides when a session should compact (a large context, at a break between tasks, while the prompt cache is warm, never while this session's run holds the checkout) and what /compact should keep, read from your requests verbatim and the session's open work. orchestrator: the orchestrating session is told at that moment and decides itself, compacting with the cauce compact tool (on that advice or on its own), with what it asks to keep. suggest: the mod shows you the /compact line to paste. auto: the mod has Claude Code compact with those instructions between turns; a build never seen to run it falls back to suggest and says so once. off: Claude Code's own auto-compaction alone.",
+      "description": "locks decides when a session should compact (a large context, at a break between tasks, while the prompt cache is warm, never while this session's run holds the checkout) and what /compact should keep, read from your requests verbatim and the session's open work. orchestrator: the orchestrating session is told at that moment and decides itself, compacting with the locks compact tool (on that advice or on its own), with what it asks to keep. suggest: the mod shows you the /compact line to paste. auto: the mod has Claude Code compact with those instructions between turns; a build never seen to run it falls back to suggest and says so once. off: Claude Code's own auto-compaction alone.",
       "options": [
         "orchestrator",
         "suggest",
@@ -215,14 +215,14 @@
     },
     "delegate": {
       "type": "boolean",
-      "title": "Let the session start cauce work without asking",
-      "description": "With Claude Code's mods: when Claude Code would ask you before the session queues or resumes a cauce task, the mod lets it through, so the orchestrator hands out work without waiting on you. A rule or a setting that denies it still denies it, an organization's limits still hold, and a resume the session starts still refuses what only you may clear (a Fable approval, a permission rule, keeping one). Off: you approve each queue and resume.",
+      "title": "Let the session start locks work without asking",
+      "description": "With Claude Code's mods: when Claude Code would ask you before the session queues or resumes a locks task, the mod lets it through, so the orchestrator hands out work without waiting on you. A rule or a setting that denies it still denies it, an organization's limits still hold, and a resume the session starts still refuses what only you may clear (a Fable approval, a permission rule, keeping one). Off: you approve each queue and resume.",
       "default": true
     },
     "max_parallel": {
       "type": "string",
       "title": "Workers at once",
-      "description": "The most workers this machine runs at once, every repository's together. auto: no ceiling; cauce starts at what the machine can hold (its CPUs, free memory and free disk), adds one when work waits and the last tasks ended with no limit, and halves on a rate limit, an overloaded API, a worker the machine starved, or low memory or disk. A number: your ceiling, and the level still adapts under it. Each repository with work is reserved its share, and lends what it does not use. Cost never moves it.",
+      "description": "The most workers this machine runs at once, every repository's together. auto: no ceiling; locks starts at what the machine can hold (its CPUs, free memory and free disk), adds one when work waits and the last tasks ended with no limit, and halves on a rate limit, an overloaded API, a worker the machine starved, or low memory or disk. A number: your ceiling, and the level still adapts under it. Each repository with work is reserved its share, and lends what it does not use. Cost never moves it.",
       "default": "auto"
     }
   },

@@ -1,7 +1,7 @@
 """Does a plan for parts need `max` effort, or does `xhigh` give parts as good, sooner?
 
 Real: the plan step of `feature-parallel` asked of one worker (`LaunchSpec.parts`), read strictly
-by cauce's own `launch.read_parts`, on `bench/memory/hard` and the build of `build.py`.
+by locks' own `launch.read_parts`, on `bench/memory/hard` and the build of `build.py`.
 
     python bench/speed/plan.py run opus/xhigh,opus/max 3 3
     python bench/speed/plan.py report
@@ -21,8 +21,8 @@ sys.path.insert(0, str(HERE.parents[1] / "src"))
 
 import build  # noqa: E402
 
-from cauce import grants, launch, workflows  # noqa: E402
-from cauce.matrix import Cell  # noqa: E402
+from locks import grants, launch, workflows  # noqa: E402
+from locks.matrix import Cell  # noqa: E402
 
 
 def one(cell: str) -> dict:

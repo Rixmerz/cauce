@@ -1,10 +1,10 @@
-"""Branches of `cauce.survey` the survey suite leaves unread."""
+"""Branches of `locks.survey` the survey suite leaves unread."""
 from __future__ import annotations
 
 import subprocess
 from pathlib import Path
 
-from cauce import repo, survey
+from locks import repo, survey
 
 from .conftest import git
 from .test_survey import assistant, result, session, tool, user, write

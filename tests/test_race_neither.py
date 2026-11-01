@@ -1,7 +1,7 @@
 """A race neither side won is counted as one, and the rung's try is a first try of its own."""
 from __future__ import annotations
 
-from cauce import racing, standards
+from locks import racing, standards
 
 
 def _row(cell, passed, failure=None, move=None):

@@ -4,12 +4,12 @@ import json
 
 import pytest
 
-from cauce import after, cli, dispatch, flow, stops, workflows
-from cauce.escalate import Failure
-from cauce.launch import WorkerResult
-from cauce.orchestrate import Options, run
-from cauce.store import Store
-from cauce.ui import api
+from locks import after, cli, dispatch, flow, stops, workflows
+from locks.escalate import Failure
+from locks.launch import WorkerResult
+from locks.orchestrate import Options, run
+from locks.store import Store
+from locks.ui import api
 
 from .conftest import git
 from .test_orchestrate import Script, bad, kind, ok
@@ -17,7 +17,7 @@ from .test_workflows import CHAIN, _runner, _save
 
 
 def _queue(store: Store, where, text: str, after_task: int | None = None) -> dict:
-    """`cauce queue add` as a person types it, and the task it queued."""
+    """`locks queue add` as a person types it, and the task it queued."""
     args = ["queue", "add", text, "--repo", str(where), "--json"]
     if after_task is not None:
         args += ["--after", str(after_task)]
@@ -58,7 +58,7 @@ def test_work_queued_after_a_task_waits_for_it_and_starts_on_the_branch_it_kept(
     assert shown[0]["waits"] == f"waits for #{first['id']} to pass"
 
     report = _ran(store, first, git_repo, ok("totals"), write="totals.py")
-    assert report.status == "done" and report.branch == f"cauce/task-{first['id']}"
+    assert report.status == "done" and report.branch == f"locks/task-{first['id']}"
     tip = git(git_repo, "rev-parse", report.branch)
     freed = store.get_task(second["id"])
     assert not after.held(freed) and json.loads(freed["options"])["base"] == tip
@@ -76,7 +76,7 @@ def test_work_queued_after_a_task_waits_for_it_and_starts_on_the_branch_it_kept(
     done = run(freed["body"], git_repo, store, flow.queued_options(freed, Options()), registry={},
                launcher=launcher, classifier=kind("implement"), task_id=second["id"])
     assert done.status == "done" and "totals.py" in seen[0]  # it starts on what the first one kept
-    line = (f"queued after #{first['id']}, which passed: this starts on cauce/task-{first['id']} ({tip[:12]}), "
+    line = (f"queued after #{first['id']}, which passed: this starts on locks/task-{first['id']} ({tip[:12]}), "
             "the branch it kept; nothing is merged or rebased")
     assert line in done.plan.reasons
     assert line in store.last_event(second["id"], "planned")["data"]["reasons"]
@@ -103,7 +103,7 @@ def test_held_work_stays_held_while_what_it_waits_for_stopped_and_a_resume_to_a_
 
 
 def test_held_work_says_how_the_work_it_waits_for_stopped_by_its_cause(git_repo, store):
-    first = store.create_task("fix the cart", status="blocked", source="cauce", repo="r", cwd=str(git_repo))
+    first = store.create_task("fix the cart", status="blocked", source="locks", repo="r", cwd=str(git_repo))
     stops.record(store, first["id"], stops.Stop("review", "the independent check still finds problems"))
     held = store.enqueue("then the invoice", repo="r", cwd=str(git_repo), options={"after": {"task": first["id"]}})
     assert dispatch.waiting(store, held).startswith(f"waits for #{first['id']}, which stopped as review")
@@ -135,14 +135,14 @@ def test_dismissing_or_cancelling_held_work_takes_it_off_the_queue(git_repo, sto
 
 def test_dismissing_what_held_work_waits_for_takes_it_off_the_queue_and_tells_its_session(
         git_repo, store, kicks, capsys, monkeypatch):
-    monkeypatch.setenv("CAUCE_SESSION_ID", "s-1")
+    monkeypatch.setenv("LOCKS_SESSION_ID", "s-1")
     first = _queue(store, git_repo, "migrate the totals table")
     held = _queue(store, git_repo, "read the new totals", after_task=first["id"])
     _ran(store, first, git_repo, bad(Failure.CODE_BUG, "the migration fails"), max_attempts=1)
     stopped = store.get_task(first["id"])
     assert stopped["status"] != "done" and after.held(store.get_task(held["id"]))
     # the ending of what it waits for says so
-    from cauce import hooks
+    from locks import hooks
 
     notice, _ = hooks.endings(store, "s-1")
     assert f"1 queued task(s) wait for it to pass: #{held['id']} read the new totals" in notice
@@ -152,19 +152,19 @@ def test_dismissing_what_held_work_waits_for_takes_it_off_the_queue_and_tells_it
     store._conn.commit()
     gone = store.get_task(held["id"])
     stop = stops.of(store, gone)
-    assert gone["status"] == "cancelled" and stop.cause == after.ABANDONED and stop.who == "cauce"
+    assert gone["status"] == "cancelled" and stop.cause == after.ABANDONED and stop.who == "locks"
     assert f"it waited for #{first['id']} to pass, which left the board" in stop.reason
     assert not after.hold(gone) and _picked(store) == []
     assert stops.of(store, store.get_task(first["id"])).extra["took_along"] == [held["id"]]
     # its session hears of it as an ending, with the resume that starts it on the base
     notice, ids = hooks.endings(store, "s-1")
-    assert held["id"] in ids and f"cauce resume {held['id']}" in notice
+    assert held["id"] in ids and f"locks resume {held['id']}" in notice
     view = stops.view(store, gone)
-    assert view["next"] == f"cauce resume {held['id']}" and view["todo"].startswith("it never started")
+    assert view["next"] == f"locks resume {held['id']}" and view["todo"].startswith("it never started")
 
 
 def test_a_resume_starts_held_work_that_lost_what_it_waited_for_on_the_base(git_repo, store, kicks):
-    first = store.create_task("fix the cart", status="blocked", source="cauce", repo="r", cwd=str(git_repo))
+    first = store.create_task("fix the cart", status="blocked", source="locks", repo="r", cwd=str(git_repo))
     held = store.enqueue("then the invoice", repo="r", cwd=str(git_repo), options={"after": {"task": first["id"]}})
     stops.dismiss(store, store.get_task(first["id"]), via="cli")
     assert store.get_task(held["id"])["status"] == "cancelled"
@@ -176,7 +176,7 @@ def test_a_resume_starts_held_work_that_lost_what_it_waited_for_on_the_base(git_
         return monkeypatch_run(text, where, store_, options, registry={}, launcher=Script(ok()),
                                classifier=kind("implement"), **kw)
 
-    import cauce.orchestrate as orchestrate_mod
+    import locks.orchestrate as orchestrate_mod
 
     real = orchestrate_mod.run
     orchestrate_mod.run = fake
@@ -203,10 +203,10 @@ def test_held_work_follows_the_task_that_superseded_what_it_waited_for(git_repo,
 
 
 def test_held_work_behind_a_task_whose_change_landed_starts_on_the_base(git_repo, store, kicks):
-    first = store.create_task("add the totals module", status="running", source="cauce", cwd=str(git_repo), repo="r")
+    first = store.create_task("add the totals module", status="running", source="locks", cwd=str(git_repo), repo="r")
     stops.record(store, first["id"], stops.Stop("died", "its process went away"))
     held = store.enqueue("use the totals", repo="r", cwd=str(git_repo), options={"after": {"task": first["id"]}})
-    branch = f"cauce/task-{first['id']}"
+    branch = f"locks/task-{first['id']}"
     git(git_repo, "checkout", "-q", "-b", branch)
     (git_repo / "totals.py").write_text("totals\n")
     git(git_repo, "add", "-A")
@@ -243,7 +243,7 @@ def test_a_chain_is_released_one_link_at_a_time(git_repo, store, kicks):
     _ran(store, store.get_task(b["id"]), git_repo, ok(), write="api.py")
     assert not after.held(store.get_task(c["id"])) and _picked(store) == [c["id"]]
     # each link starts on the one before it, which holds the links before that
-    b_tip = git(git_repo, "rev-parse", f"cauce/task-{b['id']}")
+    b_tip = git(git_repo, "rev-parse", f"locks/task-{b['id']}")
     assert json.loads(store.get_task(c["id"])["options"])["base"] == b_tip
 
 
@@ -251,7 +251,7 @@ def test_a_chain_is_released_one_link_at_a_time(git_repo, store, kicks):
 
 
 def test_a_missing_or_failed_task_or_run_is_refused_when_queued(git_repo, store, capsys):
-    failed = store.create_task("x", status="failed", source="cauce", repo="r", cwd=str(git_repo))
+    failed = store.create_task("x", status="failed", source="locks", repo="r", cwd=str(git_repo))
     stops.record(store, failed["id"], stops.Stop("attempts", "6 attempts without a pass"))
     turn = store.create_task("a question", status="done", source="hook", repo="r", cwd=str(git_repo))
     store._conn.commit()
@@ -392,7 +392,7 @@ def test_a_workflow_run_after_one_that_stopped_says_where_it_stopped(git_repo, s
         workflows.start(store, "chain", git_repo, {"goal": "more"}, after_run=first["id"])
     workflows.cancel(store, first["id"])
     assert dispatch.waiting(store, held) == (
-        f"waits for run #{first['id']}, which stopped as cancelled: `cauce dismiss {held['id']}` drops this")
+        f"waits for run #{first['id']}, which stopped as cancelled: `locks dismiss {held['id']}` drops this")
 
 
 def test_a_workflow_run_released_with_nothing_kept_reads_its_changes_from_head_as_it_is_now(git_repo, store, kicks):
@@ -416,6 +416,6 @@ def test_held_work_whose_task_or_run_no_longer_exists_says_so(git_repo, store):
     on_task = store.enqueue("then the invoice", repo="r", cwd=str(git_repo), options={"after": {"task": 9999}})
     on_run = store.enqueue("then the receipt", repo="r", cwd=str(git_repo), options={"after": {"run": 9998}})
     assert dispatch.waiting(store, on_task) == (
-        f"waits for #9999, which no longer exists: `cauce dismiss {on_task['id']}` drops this")
+        f"waits for #9999, which no longer exists: `locks dismiss {on_task['id']}` drops this")
     assert dispatch.waiting(store, on_run) == (
-        f"waits for run #9998, which no longer exists: `cauce dismiss {on_run['id']}` drops this")
+        f"waits for run #9998, which no longer exists: `locks dismiss {on_run['id']}` drops this")

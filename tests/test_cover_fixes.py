@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import subprocess
 
-from cauce import ci, notes
+from locks import ci, notes
 
 
 def test_an_empty_flow_mapping_in_a_ci_file_is_an_empty_mapping_never_text():

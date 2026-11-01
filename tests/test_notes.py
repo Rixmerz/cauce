@@ -7,16 +7,16 @@ from pathlib import Path
 
 import pytest
 
-from cauce import cli, hooks, notes, project
-from cauce.adapters.livespec import Livespec
-from cauce.store import Store
+from locks import cli, hooks, notes, project
+from locks.adapters.livespec import Livespec
+from locks.store import Store
 
 from .conftest import git
 from .livespec_fixture import build
 
 
 def _key(where: Path) -> str:
-    from cauce import repo
+    from locks import repo
 
     return repo.key(where)
 
@@ -115,7 +115,7 @@ def test_the_index_is_a_few_lines_and_says_how_to_read_more(store: Store):
               author="person", filed_by="person")
     store.update_note(a, state="review", state_reason="x changed")
     text = notes.index_text(store, "p")
-    assert "keeps 2 note(s)" in text and "business 1 (1 to review)" in text and "cauce recall" in text
+    assert "keeps 2 note(s)" in text and "business 1 (1 to review)" in text and "locks recall" in text
     assert "Latest: #" in text and "one of: business, code, decisions, conventions, environment." in text
     line = notes.line(notes.expand(store, [a])[0])
     assert "(TO REVIEW: x changed)" in line
@@ -168,7 +168,7 @@ def test_a_note_about_code_goes_to_review_when_the_code_changes(store: Store, gi
 
 def test_work_on_an_unmerged_branch_is_not_a_change_until_it_lands(store: Store, git_repo: Path):
     key = _key(git_repo)
-    git(git_repo, "checkout", "-qb", "cauce/task-1")
+    git(git_repo, "checkout", "-qb", "locks/task-1")
     (git_repo / "app.py").write_text("print('new')\n")
     git(git_repo, "commit", "-qam", "branch work")
     branch_head = git(git_repo, "rev-parse", "HEAD")
@@ -192,19 +192,19 @@ def test_a_fact_naming_a_symbol_is_anchored_to_it_read_only(store: Store, git_re
     db = build(git_repo, project_root=git_repo.resolve())
     before = db.read_bytes()
     adapter = Livespec(env={"PATH": "", "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path / "cc"),
-                            "CAUCE_HOME": str(tmp_path / "h")})
+                            "LOCKS_HOME": str(tmp_path / "h")})
     status = adapter.inspect(git_repo)
     found = adapter.symbols_named("charge_card retries are idempotent; test_parse_amount covers it", status)
     assert found == [("src.billing.charge_card", "src/billing.py")]
     assert adapter.symbols_named("nothing here", status) == []
-    from cauce.adapters import Status
+    from locks.adapters import Status
 
     assert adapter.symbols_named("charge_card", Status("livespec", "absent")) == []
     assert db.read_bytes() == before
     # through the setting: off gives no lookup; on and indexed gives one
     assert notes.livespec_symbols(git_repo) is None
-    env = {"CAUCE_LIVESPEC": "on", "PATH": "", "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path / "cc"),
-           "CAUCE_HOME": str(tmp_path / "h")}
+    env = {"LOCKS_LIVESPEC": "on", "PATH": "", "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path / "cc"),
+           "LOCKS_HOME": str(tmp_path / "h")}
     lookup = notes.livespec_symbols(git_repo, env)
     assert lookup("charge_card") == [("src.billing.charge_card", "src/billing.py")]
     assert notes.livespec_symbols(tmp_path, env) is None
@@ -384,11 +384,11 @@ def test_extract_notes_runs_once_per_session(git_repo: Path, tmp_path, monkeypat
     answer = {"facts": [{"text": "The staging database is reset every night at 3am", "topic": "environment",
                          "title": "Staging resets nightly", "duplicate_of": None, "links": [], "paths": [],
                          "new_topic": None}]}
-    monkeypatch.setattr("cauce.classify.ask_haiku", _ask(answer))
+    monkeypatch.setattr("locks.classify.ask_haiku", _ask(answer))
     assert cli.main(["extract-notes", "s1", str(transcript), str(git_repo)]) == 0
     assert "kept #1 [environment] Staging resets nightly" in capsys.readouterr().out
-    from cauce import dispatch
-    from cauce.store import home
+    from locks import dispatch
+    from locks.store import home
 
     with dispatch.hold(home(), "notes:s2"):
         assert cli.main(["extract-notes", "s2", str(transcript), str(git_repo)]) == 0
@@ -405,11 +405,11 @@ def test_sessions_get_the_index_matching_notes_and_keep_what_they_said(store: St
               filed_by="person")
     start = {"session_id": "s", "cwd": str(git_repo), "source": "compact"}
     assert hooks.session_start(start, store, tmp_path / "root", {}, adapters=[]) is None  # notes are off
-    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
     assert hooks.session_start(start, store, tmp_path / "root", {}, adapters=[]) is None  # not enrolled
     project.enroll(git_repo)
     context = hooks.session_start(start, store, tmp_path / "root", {}, adapters=[])["hookSpecificOutput"]
-    assert "cauce notes: this project keeps 1 note(s)" in context["additionalContext"]
+    assert "locks notes: this project keeps 1 note(s)" in context["additionalContext"]
 
     prompt = {"session_id": "s", "prompt_id": "p1", "cwd": str(git_repo),
               "prompt": "why is every price stored in cents in the checkout"}
@@ -424,12 +424,12 @@ def test_sessions_get_the_index_matching_notes_and_keep_what_they_said(store: St
     transcript.write_text("{}\n")
     event = {"session_id": "s", "transcript_path": str(transcript), "cwd": str(git_repo)}
     popen = lambda argv, **kw: started.append((argv, kw))  # noqa: E731
-    env = {**__import__("os").environ, "CAUCE_NOTES": "on"}
+    env = {**__import__("os").environ, "LOCKS_NOTES": "on"}
     assert hooks.keep_notes(event, tmp_path / "root", env, popen=popen)
     argv, kw = started[0]
-    assert argv[1:] == ["-m", "cauce", "extract-notes", "s", str(transcript), str(git_repo)]
-    assert kw["start_new_session"] and "CAUCE_SESSION_ID" not in kw["env"]
-    assert not hooks.keep_notes(event, tmp_path / "root", {**env, "CAUCE_NOTES": "off"}, popen=popen)
+    assert argv[1:] == ["-m", "locks", "extract-notes", "s", str(transcript), str(git_repo)]
+    assert kw["start_new_session"] and "LOCKS_SESSION_ID" not in kw["env"]
+    assert not hooks.keep_notes(event, tmp_path / "root", {**env, "LOCKS_NOTES": "off"}, popen=popen)
     assert not hooks.keep_notes({**event, "transcript_path": str(tmp_path / "none")}, tmp_path / "root", env,
                                 popen=popen)
     assert not hooks.keep_notes({**event, "cwd": str(tmp_path)}, tmp_path / "root", env, popen=popen)
@@ -438,7 +438,7 @@ def test_sessions_get_the_index_matching_notes_and_keep_what_they_said(store: St
         raise OSError("no fork")
 
     assert not hooks.keep_notes(event, tmp_path / "root", env, popen=broken)
-    from cauce import dispatch
+    from locks import dispatch
 
     with dispatch.hold(tmp_path / "root", "notes:s"):
         assert not hooks.keep_notes(event, tmp_path / "root", env, popen=popen)
@@ -459,10 +459,10 @@ def test_the_plugin_declares_the_new_hooks_and_the_setting():
 
 
 def test_the_hook_process_answers_precompact_with_nothing(tmp_path, git_repo):
-    env = {"CAUCE_HOME": str(tmp_path / "h"), "CAUCE_NOTES": "off", "PATH": "/usr/bin:/bin",
+    env = {"LOCKS_HOME": str(tmp_path / "h"), "LOCKS_NOTES": "off", "PATH": "/usr/bin:/bin",
            "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
     event = json.dumps({"session_id": "s", "transcript_path": "/nope", "cwd": str(git_repo)})
-    proc = subprocess.run([sys.executable, "-m", "cauce", "hook", "PreCompact"], input=event, capture_output=True,
+    proc = subprocess.run([sys.executable, "-m", "locks", "hook", "PreCompact"], input=event, capture_output=True,
                           text=True, env=env, check=False)
     assert proc.returncode == 0 and proc.stdout == ""
 
@@ -494,7 +494,7 @@ def test_a_worker_s_note_starts_as_a_candidate_and_its_line_says_it_is_unproven(
 
 def test_a_candidate_is_proven_by_later_tasks_that_passed_their_first_try(store: Store, monkeypatch):
     # The proof by passes alone, as with the trial off (`notes.PROVE_AFTER`); the trial has its own tests.
-    monkeypatch.setenv("CAUCE_NOTE_TRIALS", "off")
+    monkeypatch.setenv("LOCKS_NOTE_TRIALS", "off")
     from .test_standards import finished
 
     writer = finished(store, ("sonnet/medium", 1))
@@ -508,7 +508,7 @@ def test_a_candidate_is_proven_by_later_tasks_that_passed_their_first_try(store:
     assert notes.weigh(store) == {"current": [], "dropped": []}
     assert store.get_note(note)["state"] == notes.CANDIDATE
     # A task still running says nothing yet.
-    running = store.create_task("x", status="running", source="cauce", repo="r", kind="implement")
+    running = store.create_task("x", status="running", source="locks", repo="r", kind="implement")
     _briefed(store, running["id"], note)
     assert notes.weigh(store)["current"] == []
     second = finished(store, ("sonnet/medium", 0, "turns_exhausted", "more_turns"), ("sonnet/medium", 1))
@@ -546,8 +546,8 @@ def test_a_candidate_whose_readers_failed_their_first_try_is_dropped_and_one_pas
 
 def test_settle_weighs_the_candidates(store: Store, monkeypatch):
     # The proof by passes alone, as with the trial off (`notes.PROVE_AFTER`); the trial has its own tests.
-    monkeypatch.setenv("CAUCE_NOTE_TRIALS", "off")
-    from cauce import evolution
+    monkeypatch.setenv("LOCKS_NOTE_TRIALS", "off")
+    from locks import evolution
 
     from .test_standards import finished
 
@@ -559,8 +559,8 @@ def test_settle_weighs_the_candidates(store: Store, monkeypatch):
 
 
 def test_the_notes_view_and_cli_show_a_candidate_with_its_word(store: Store, git_repo, capsys):
-    from cauce import repo
-    from cauce.ui import api
+    from locks import repo
+    from locks.ui import api
 
     key = repo.key(git_repo)
     note = store.add_note(key, "code", "Totals", "Totals are rounded half up", author="worker", filed_by="haiku",
@@ -574,7 +574,7 @@ def test_the_notes_view_and_cli_show_a_candidate_with_its_word(store: Store, git
 
 
 def test_security_alerts_are_read_from_what_a_worker_learned_and_found_with_secrets_masked():
-    from cauce.notes import security_alerts
+    from locks.notes import security_alerts
 
     found = security_alerts(
         ["The design tokens live in assets/styles.css", "Usage tokens are counted per model in usage.py",
