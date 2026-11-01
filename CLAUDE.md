@@ -42,7 +42,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
 | `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
 | `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `trust`, `probation`, `evidence`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `specs`, `tracer`, `habit_review`, `habit_auto`, `role_trials`, `note_trials`, `methods`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number; `livespec_wait`, seconds, 0 never waits), copied from plugin options by SessionStart |
+| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `trust`, `probation`, `evidence`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `specs`, `tracer`, `habit_review`, `habit_auto`, `role_trials`, `note_trials`, `recall_fusion`, `methods`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number; `livespec_wait`, seconds, 0 never waits), copied from plugin options by SessionStart |
 | `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets, and the jobs a person quieted per repository |
 | `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
 | `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
@@ -57,12 +57,14 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
 | `src/cauce/revisions.py` | a role's lessons per repository, improved by measured trial: proposed by Haiku from the role's dead ends and verifier blockers there, tried in alternating arms, adopted, dropped or reverted, every record appended to `role_revisions`; `cauce roles revisions` reads it |
+| `src/cauce/arms.py` | two arms tried in turns until each has enough first tries, then the one that did no worse: the shape methods and the recall order share (`tally`, `pick`); no model |
 | `src/cauce/methods.py` | how a kind's workers are briefed to work, tried against its absence: a diagnosis protocol for `debug-unclear`, a pre-mortem for `plan` whose `Risks:` reach the independent check of the steps after it; arms per repository (`method_arm`); no model |
 | `src/cauce/racing.py` | whether racing a first try paid, per repository and kind: each race read from its attempts (rung, start, neither), the rung's wins and the time to pass against climbs, the judgement `race_cell` and `cauce stats` read; no model |
 | `src/cauce/cells.py` | where a lesson belongs: the area a path or a change is in, the role that met it, or everyone (`scope`); the text a failure is kept and matched by (a workflow step's goal, never its template); the cell's primer (how its workers got oriented) and its trial; no model |
 | `src/cauce/doctor.py` | `cauce doctor`: states the store should never hold, each a bug that shipped turned into a query (broken: stuck now; suspect: over the last days); read only, no model; SessionStart names what is broken |
 | `bench/review/` | the review benchmark: real review chains (one review, two blind ones, two with different purposes, a classifier before a quality check) on a change with planted bugs, matched by `analyze.py`; what it measured is in its README |
 | `bench/speed/kinds.py` | whether Haiku does `refactor` and `test` work as right as their first rung: real workers on the memory bench's pricing engine, a refactor judged by its layout and prices kept, tests judged by mutants killed (real money: run on purpose) |
+| `bench/speed/methods.py` | whether the diagnosis method helps an unclear bug: real workers on the pricing engine with a planted bug told only by its symptom, with and without `methods`' lines (real money: run on purpose) |
 | `bench/memory/` | the memory benchmark: real workers on a small pricing engine, judged by hidden tests, cold against briefed with a teacher's memory; what it measured is in its README (real money: run on purpose) |
 | `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away; constraints, the rules a change must meet, briefed apart as requirements |
 | `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
@@ -86,6 +88,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
 | `src/cauce/services.py` | the servers a task needs up (`--service 'cmd@port'`): started in the task's directory, waited for, stopped with their process group when the run ends |
 | `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified; `at_base`, a temporary worktree at a task's base for comparing its check |
+| `scripts/release_notes.py`, `.github/workflows/release.yml` | a version that reaches main with CI green is tagged `v<version>` and released with its CHANGELOG section, by itself; one already tagged is left alone, and a person tags an older one by hand (`workflow_dispatch`); stdlib, no model |
 | `commands/orchestration.md` | the one entry point a user types |
 | `commands/habits.md` | review the habit candidates for this repository and install the ones the person picks |
 | `commands/workflow.md` | make, change, copy, run and watch workflows |
@@ -479,7 +482,8 @@ yields the default kind, not a guess.
   tries like any, and only the start-cell rule makes it the start (`standards.rungs_of`); a start
   there climbs into the ladder (`Plan.ladder` is `matrix.reach`). It is judged as any change, and
   also reverted when a passed point costs more on it than before it (`standards.PROBATION_COSTLIER`):
-  a cheaper cell that climbs is cheaper only in name. Tests run with `CAUCE_PROBATION=off`.
+  a cheaper cell that climbs is cheaper only in name; and when a passed point takes more than
+  `standards.PROBATION_SLOWER` times as long (`bench/speed/kinds.py`: Haiku five times slower). Tests run with `CAUCE_PROBATION=off`.
 - A task that stops on a point (`spec`, `decision`) because its surfaces kept it from the
   cause (it changed a path outside them, or its worker says so and names one,
   `orchestrate._widen`) keeps those paths on its stop (`widen`), and its next step is
@@ -744,7 +748,8 @@ yields the default kind, not a guess.
   capability of `capabilities.md` the flow belongs to; its CORRECT lines are read as the template writes
   them (the success path's items with the lines under them, the failure table's CORRECT column found by its
   header, never the header row), and the method's files are carried up to
-  `tracer.BRIEF_CHARS`, the rest said by count. Its phases that need the person (contract, empathy, scope)
+  `tracer.BRIEF_CHARS`; what does not fit is named by section with its lines (`text.outline`,
+  `path:start-end`, up to `tracer.OUTLINE_CHARS`), the rest said by count. Its phases that need the person (contract, empathy, scope)
   stay in the session; `tracer-slice` is the bundled workflow for one slice.
 - What livespec's index says a change reaches (`adapter.assess`: specs touched, callers outside it) goes in
   the independent check's brief as where to probe, data, never findings (`orchestrate._impact`); whether
@@ -1044,7 +1049,11 @@ yields the default kind, not a guess.
   (`dispatch.recover`, from the hooks and `cauce endings`: `cauce resume --unattended`
   in the worktree it left, with more turns for one that outgrew them, within
   `AUTO_RESUME_WITHIN_S`, at most `AUTO_RESUMES`, with `autowork` on). Its stop is no
-  ending handed to a session; a second one is the orchestrator's. A stop that needs
+  ending handed to a session; a second one is the orchestrator's. A death names its crash: the last
+  exception line its run wrote to its log (`flow.crash_line`, from where that run began in
+  `work/task-N.log`), kept on its stop with the log's path; one that repeats the crash of its last
+  death says so and is never resumed on its own (`repeated`): it is cauce's failure, not the work's,
+  and a resume repeats it. A stop that needs
   judgment or a person (review, permission, approval, a wrong task) is never resumed so. The analysis reads
   the time from an attempt that never finished to its run's end as `lost_s`, never
   as other.
@@ -1153,7 +1162,12 @@ yields the default kind, not a guess.
   worse; one with no pass after `notes.DISPROVE_AFTER` failed is dropped at once. With
   the trial off, `notes.PROVE_AFTER` passes make it current. A later attempt's brief
   also carries the notes anchored to the files the work changed so far
-  (`orchestrate._later_notes`). A person's note and
+  (`orchestrate._later_notes`). When the code a task touches and its words find different
+  notes, the brief's order is on trial (`notes.recall_arm`, the `recall_fusion` setting,
+  `briefed.recall_arm`): reciprocal rank fusion of the two lists (`notes.fused`) against
+  anchored first, kept where its arm passed first tries no less often. A worker names the
+  notes it relied on (`notes_used`); only notes its brief carried are kept, on
+  `attempt_finished`, and `cauce stats` shows them, observed, never a verdict or a trial. A person's note and
   Haiku's from a conversation are current as written. Haiku files under topics that
   exist and never invents a link; without Haiku a fact is kept by its words.
   A fact that looks like a secret is never kept.

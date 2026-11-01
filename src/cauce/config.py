@@ -101,6 +101,10 @@ DEFAULTS: dict[str, Any] = {
     # alternate between carrying it and going without it, and it becomes current only where the
     # ones that carried it passed their first try no less often (`notes.arms`, `notes.weigh`).
     "note_trials": True,
+    # A brief's notes come by reciprocal rank fusion of the ones its code and its words found, so a
+    # note both find comes first; tried in turns against anchored-first order, and kept where its
+    # arm passed first tries no less often (`notes.fused`, `notes.recall_arm`).
+    "recall_fusion": True,
     # A method a kind's workers are briefed to follow (a diagnosis protocol for unclear bugs, a
     # pre-mortem for plans), tried in turns against its absence and kept where it did no worse
     # (`cauce.methods`).

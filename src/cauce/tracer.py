@@ -19,7 +19,7 @@ import re
 from itertools import groupby
 from pathlib import Path
 
-from cauce.text import clip, fold, words
+from cauce.text import clip, fold, outline, words
 
 FOLDER = Path("docs") / "tracer"
 #: The method's files a worker reads before any code, in this order, and what each holds.
@@ -27,6 +27,8 @@ FILES = (("audiences.md", "Audience profiles"), ("identity.md", "Identity guidel
          ("floors.md", "Component floors"), ("anti-patterns.md", "Anti-pattern catalogue"))
 #: The most of the method one brief carries; what is left out is said by count, with where it is.
 BRIEF_CHARS = 8000
+#: The most of a brief the index of what did not fit takes (`text.outline`); further sections are counted.
+OUTLINE_CHARS = 2000
 
 
 def present(repo_dir: Path) -> bool:
@@ -35,7 +37,8 @@ def present(repo_dir: Path) -> bool:
 
 def _read(path: Path) -> str:
     try:
-        return path.read_text(encoding="utf-8", errors="replace").strip()
+        # Right-stripped only: a section index names lines (`text.outline`), which leading blank lines would shift.
+        return path.read_text(encoding="utf-8", errors="replace").rstrip()
     except OSError:
         return ""
 
@@ -120,11 +123,12 @@ def flows_for(repo_dir: Path, text: str) -> list[Path]:
     return out
 
 
-def _sections(repo_dir: Path, text: str) -> list[tuple[str, str]]:
-    found = [(f"{title} ({(FOLDER / name).as_posix()})", _read(repo_dir / FOLDER / name)) for name, title in FILES]
-    found += [(f"Critical flow ({path.relative_to(repo_dir).as_posix()})", _read(path))
+def _sections(repo_dir: Path, text: str) -> list[tuple[str, str, str]]:
+    """Each method file a brief carries: its title, its path from the repository, its text."""
+    found = [(title, (FOLDER / name).as_posix(), _read(repo_dir / FOLDER / name)) for name, title in FILES]
+    found += [("Critical flow", path.relative_to(repo_dir).as_posix(), _read(path))
               for path in flows_for(repo_dir, text)]
-    return [(title, body) for title, body in found if body]
+    return [(title, rel, body) for title, rel, body in found if body]
 
 
 def brief_lines(repo_dir: Path, text: str) -> list[str]:
@@ -136,15 +140,29 @@ def brief_lines(repo_dir: Path, text: str) -> list[str]:
              "people who use it, checked through the interface they use, never only that tests pass. Read these "
              "before any code. Never fill a detail they leave open with the most common solution: say it in your "
              "result instead. Each CORRECT line of a flow below is part of what your work must meet."]
-    room, left = BRIEF_CHARS, 0
-    for title, body in sections:
+    room, left, index = BRIEF_CHARS, 0, []
+    for title, rel, body in sections:
         if room <= 200:
             left += 1
+            index += outline(rel, body) or [f"{title} ({rel})"]
             continue
         shown = clip(body, room)
         room -= len(shown)
-        lines.append(f"{title}:\n{shown}")
-    if left:
+        lines.append(f"{title} ({rel}):\n{shown}")
+        if len(shown) < len(body):
+            # What did not fit is named by section with its lines, so the worker reads only the part it needs.
+            index += outline(rel, body, after=shown.count("\n"))
+    if index:
+        fits, room = [], OUTLINE_CHARS
+        for entry in index:
+            if len(entry) + 1 > room:
+                break
+            fits.append(entry)
+            room -= len(entry) + 1
+        more = len(index) - len(fits)
+        lines.append("Not shown above, by section (read the lines you need):\n" + "\n".join(f"- {e}" for e in fits)
+                     + (f"\n{more} more section(s) in `{FOLDER.as_posix()}/`." if more else ""))
+    elif left:
         lines.append(f"{left} more of the method's files did not fit here: read them in `{FOLDER.as_posix()}/`.")
     if not flows_for(repo_dir, text) and (repo_dir / FOLDER / "flows").is_dir():
         lines.append(f"No critical flow under `{FOLDER.as_posix()}/flows/` is named by this request: read the "

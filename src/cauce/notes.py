@@ -45,6 +45,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from cauce import arms as arms_mod
 from cauce import repo, workspaces
 from cauce.store import Store, home
 from cauce.text import fold, reads_alike, title_of, words
@@ -479,6 +480,34 @@ def arms(store: Store, found: Sequence[Mapping[str, Any]]) -> tuple[list[dict], 
     return ([n for n in found if int(n["id"]) not in out_ids], [n for n in found if int(n["id"]) in out_ids])
 
 
+#: The `briefed` event's key for the order a brief's notes came in (`recall_arm`).
+RECALL_KEY = "recall_arm"
+RECALL_ARMS = ("fused", "ordered")
+#: First tries per arm before the recall order's trial decides.
+RECALL_TRIAL = 6
+
+
+def recall_on(env: Mapping[str, str] | None = None) -> bool:
+    from cauce import config
+
+    return config.enabled("recall_fusion", os.environ if env is None else env)
+
+
+def recall_trial(store: Store, repo: str | None) -> dict[str, dict[str, Any]]:
+    """Per arm of the recall order's trial: its tasks and first tries passed."""
+    rows = [{"arm": r["arm"], "tries": 1, "passed": r["passed_first"]} for r in store.arm_trial(repo, RECALL_KEY)]
+    return arms_mod.tally(rows, RECALL_ARMS)
+
+
+def recall_arm(store: Store, repo: str | None, task_id: int) -> tuple[str, str]:
+    """Whether this brief's notes come by reciprocal rank fusion of what the code and the words
+    found, or anchored first, and why: in turns until each arm has `RECALL_TRIAL` first tries, then
+    fusion only where its arm passed no less often. Asked only when the two orders differ."""
+    if repo is None:
+        return "fused", "no repository to run a trial in"
+    return arms_mod.pick(recall_trial(store, repo), RECALL_ARMS, task_id, RECALL_TRIAL, "recall order")
+
+
 def anchored_to(store: Store, project: str, paths: Iterable[str], skip: Iterable[int] = ()) -> list[dict]:
     """The live notes anchored to these paths, but the ones in `skip`: what a later attempt's brief
     adds once the work changed files the first brief could not name."""
@@ -561,18 +590,24 @@ def recall(
     hops: int = 1,
     states: Sequence[str] = LIVE,
     strict: bool = False,
+    fuse: bool = False,
 ) -> list[dict]:
     """The notes a question or a task needs, each with why it was picked: those
     anchored to the code it touches, those that match it in its topic, and the
     notes those link to, one step away. With neither a query nor paths, the
     latest of the topic. `strict` keeps only notes sharing several words with
-    the query, for a hook that must not put loose matches in front of a model."""
+    the query, for a hook that must not put loose matches in front of a model. `fuse` orders the
+    notes found by the code and by the words by reciprocal rank fusion (`fused`), so a note both
+    find comes first and the words' best is not cut by every anchored one; else anchored first."""
     chosen: dict[int, str] = {}
+    by_code: list[int] = []
+    by_words: list[int] = []
     paths = list(dict.fromkeys(paths))
     anchored = store.notes_at(project, paths)
     for note in store.notes(project, states=states, ids=anchored):
         about = sorted({a["path"] for a in store.note_anchors([note["id"]]) if a["path"] in set(paths)})
         chosen.setdefault(int(note["id"]), "about " + ", ".join(about[:3]))
+        by_code.append(int(note["id"]))
     if query.strip():
         ranked = store.search_notes(project, query, limit=50)
         rows = {n["id"]: n for n in store.notes(project, topics=in_topics, states=states, ids=ranked)}
@@ -583,11 +618,15 @@ def recall(
                 continue
             if strict and len(wanted & set(words(f"{note['title']} {note['text']}"))) < min(3, len(wanted)):
                 continue
+            if note_id in chosen and note_id in by_code:
+                chosen[note_id] += " and matches the question"
             chosen.setdefault(note_id, "matches the question")
+            by_words.append(int(note_id))
     elif not anchored:
         for note in store.notes(project, topics=in_topics, states=states, limit=limit):
             chosen.setdefault(int(note["id"]), "latest in its topic")
-    picked = list(chosen)[:limit]
+    picked = (fused([by_code, by_words], [i for i in chosen if i not in by_code and i not in by_words])
+              if fuse else list(chosen))[:limit]
     if hops > 0 and picked:
         extra = max(2, limit // 2)
         for edge in store.note_links(picked):
@@ -605,6 +644,21 @@ def recall(
             picked.append(other)
             extra -= 1
     return expand(store, picked, chosen)
+
+
+#: Reciprocal rank fusion's constant (Cormack et al., 2009): a list's first places count, its tail barely.
+RRF_K = 60
+
+
+def fused(lists: Sequence[Sequence[int]], rest: Sequence[int] = ()) -> list[int]:
+    """The ids of several ranked lists by reciprocal rank fusion, each scored the sum of
+    1/(`RRF_K` + rank) over the lists it is in, ties in the order first seen; `rest` after them."""
+    score: dict[int, float] = {}
+    for ranked in lists:
+        for rank, nid in enumerate(ranked, 1):
+            score[nid] = score.get(nid, 0.0) + 1.0 / (RRF_K + rank)
+    order = list(score)
+    return sorted(order, key=lambda nid: (-score[nid], order.index(nid))) + [n for n in rest if n not in score]
 
 
 def expand(store: Store, ids: Sequence[int], why: Mapping[int, str] | None = None) -> list[dict]:

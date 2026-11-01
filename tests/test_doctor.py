@@ -349,3 +349,19 @@ def test_the_doctor_filters_the_index_findings_to_one_repository(store: Store, g
     mine = doctor.check(store, days=0, repo=repo.key(git_repo), livespec=_livespec(tmp_path))
     elsewhere = doctor.check(store, days=0, repo="github.com/x/y", livespec=_livespec(tmp_path))
     assert [f.rule for f in mine] == ["index-missing"] and elsewhere == []
+
+
+def test_a_run_that_died_after_its_attempt_passed_is_suspect(store: Store):
+    task = store.create_task("docs", status="interrupted", source="cauce", repo="r")
+    store.add_event(task["id"], "attempt_finished", seq=1, passed=True, version="0.63.0")
+    store.add_event(task["id"], "finished", status="interrupted", version="0.63.0",
+                    stop={"cause": "died", "by": "cauce", "reason": "its process exited with 1"})
+    failed = store.create_task("build", status="interrupted", source="cauce", repo="r")
+    store.add_event(failed["id"], "attempt_finished", seq=1, passed=False, version="0.63.0")
+    store.add_event(failed["id"], "finished", status="interrupted", version="0.63.0", stop={"cause": "died"})
+    old = store.create_task("old", status="interrupted", source="cauce", repo="r")
+    store.add_event(old["id"], "attempt_finished", seq=1, passed=True, version="0.62.0")
+    store.add_event(old["id"], "finished", status="interrupted", version="0.62.0", stop={"cause": "died"})
+    found = rules(store, now=LATER, alive=lambda pid: True)["died-after-a-pass"]
+    assert [(f.severity, f.task_id) for f in found] == [(doctor.SUSPECT, task["id"]), (doctor.FIXED, old["id"])]
+    assert "died after its attempt 1 passed" in found[0].what

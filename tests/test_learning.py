@@ -3,6 +3,7 @@ absence, the notes of the files a later attempt changed, a method tried in arms,
 pre-mortem handed to the checks after it, and a loop's round that moved nothing kept as such."""
 from __future__ import annotations
 
+from dataclasses import replace as dataclasses_replace
 from datetime import datetime
 
 from cauce import flow, loops, methods, notes, orchestrate
@@ -202,3 +203,97 @@ def test_a_plan_is_told_the_change_its_task_names_is_for_the_work_after_it(tmp_p
     assert orchestrate.PLAN_CHANGE in planned and "`fail` with `spec_bug` when the task asks" not in planned
     read = orchestrate.brief("Explore the export", "explore", tmp_path, [], [], None, writes=False)
     assert "`fail` with `spec_bug` when the task asks for a change" in read
+
+
+# --- the order of a brief's notes, what workers relied on, long files by section ---------------------
+
+
+def test_reciprocal_rank_fusion_puts_a_note_both_lists_found_first():
+    assert notes.fused([[1, 2, 3], [4, 3, 5]]) == [3, 1, 4, 2, 5]
+    assert notes.fused([[1], []], rest=[9, 1]) == [1, 9]
+
+
+def test_recall_fuses_what_the_code_and_the_words_found(store: Store):
+    a = store.add_note("r", "code", "Cache", "The totals cache is warmed nightly", author="person", filed_by="person")
+    b = store.add_note("r", "code", "Export", "Exports stream rows in batches of 500 rows each", author="person",
+                       filed_by="person")
+    store.add_anchor(a, "cache.py")
+    plain = [n["id"] for n in notes.recall(store, "r", "exports stream rows batches", paths=["cache.py"], limit=1)]
+    fused = [n["id"] for n in notes.recall(store, "r", "exports stream rows batches", paths=["cache.py"], limit=2,
+                                           fuse=True)]
+    assert plain == [a] and set(fused) == {a, b}
+
+
+def test_the_recall_order_alternates_then_stays_where_it_did_no_worse(store: Store):
+    def task(side: str, passed: bool) -> None:
+        t = store.create_task("t", status="done", source="cauce", repo="r", kind="implement")
+        store.add_attempt(t["id"], cell="sonnet/medium", max_turns=30, passed=int(passed), input_tokens=10)
+        store.add_event(t["id"], "briefed", recall_arm=side)
+
+    assert notes.recall_arm(store, "r", 0)[0] == "fused"
+    task("fused", True)
+    assert notes.recall_arm(store, "r", 0)[0] == "ordered"
+    for n in range(notes.RECALL_TRIAL):
+        task("fused", n < 2)
+        task("ordered", True)
+    side, why = notes.recall_arm(store, "r", 0)
+    assert side == "ordered" and why.startswith("the recall order lost its trial here")
+    assert notes.recall_trial(store, "r")["ordered"]["passed"] == notes.RECALL_TRIAL
+
+
+def test_a_brief_whose_code_and_words_found_different_notes_records_its_order(git_repo, store: Store, monkeypatch):
+    from cauce import repo
+
+    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setenv("CAUCE_RECALL_FUSION", "on")
+    key = repo.key(git_repo)
+    for n in range(7):
+        anchored = store.add_note(key, "code", f"App {n}", f"app.py detail number {n}", author="person",
+                                  filed_by="person")
+        store.add_anchor(anchored, "app.py")
+    store.add_note(key, "code", "Greeting", "The greeting banner prints hello in the app", author="person",
+                   filed_by="person")
+    report = run("Change the greeting banner in app.py so it prints hello", git_repo, store, registry={},
+                 launcher=Script(ok(), write="app.py"), classifier=kind("implement"))
+    briefed = store.events_of(report.task_id, "briefed")[0]["data"]
+    assert briefed[notes.RECALL_KEY] in notes.RECALL_ARMS and briefed["recall_why"]
+
+
+def test_a_worker_s_notes_used_are_kept_only_for_notes_its_brief_carried(git_repo, store: Store, monkeypatch):
+    from cauce import analysis, launch, repo
+
+    assert launch.notes_used({"notes_used": [12, "#13", "x", True, 12]}) == (12, 13)
+    assert launch.notes_used({"notes_used": "12"}) == ()
+    monkeypatch.setenv("CAUCE_NOTES", "on")
+    key = repo.key(git_repo)
+    note = store.add_note(key, "code", "Greeting", "The greeting prints hi", author="person", filed_by="person")
+    store.add_anchor(note, "app.py")
+    done = dataclasses_replace(ok(), notes_used=(note, 999))
+    report = run("Change the greeting in app.py", git_repo, store, registry={}, launcher=Script(done, write="app.py"),
+                 classifier=kind("implement"))
+    finished_attempt = store.events_of(report.task_id, "attempt_finished")[0]["data"]
+    assert finished_attempt["notes_used"] == [note]
+    said = analysis.compute(store, days=0, repo=key)["notes_used"]
+    assert said["tasks"] == 1 and said["relied_on"] == 1 and said["pass_first_naming"] == 1.0
+    assert "workers said they relied on 1" in analysis.text(analysis.compute(store, days=0, repo=key))
+
+
+def test_an_outline_names_each_section_with_its_lines():
+    from cauce.text import outline
+
+    body = "# A\nx\n## B\ny\n```\n# not a heading\n```\n# C\nz\n"
+    assert outline("f.md", body) == ["A (f.md:1-7)", "  B (f.md:3-7)", "C (f.md:8-9)"]
+    assert outline("f.md", body, after=3) == ["C (f.md:8-9)"]
+
+
+def test_method_files_that_do_not_fit_are_named_by_section(tmp_path, monkeypatch):
+    from cauce import tracer
+
+    folder = tmp_path / "docs" / "tracer"
+    folder.mkdir(parents=True)
+    long = "# Audience\n" + "\n".join(f"line {n} of who uses it" for n in range(400)) + "\n## Edge readers\nmore\n"
+    (folder / "audiences.md").write_text(long)
+    monkeypatch.setattr(tracer, "BRIEF_CHARS", 600)
+    lines = tracer.brief_lines(tmp_path, "anything")
+    index = next(line for line in lines if line.startswith("Not shown above, by section"))
+    assert "Edge readers (docs/tracer/audiences.md:402-403)" in index

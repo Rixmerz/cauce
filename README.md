@@ -338,6 +338,10 @@ A worker's note starts as a candidate and earns its place against its absence: t
 is recalled for take turns carrying it and going without it, and it becomes current only
 where the ones that carried it passed their first try no less often (the `note_trials`
 setting). A later attempt also reads the notes anchored to the files the work changed so far.
+When the code a task touches and its words find different notes, the order they reach the
+brief in is on trial too: rank fusion, where a note both find comes first, against the anchored
+ones first. Workers say which notes they relied on, and `cauce stats` shows it beside how
+their first tries went: observed, never a verdict.
 
 And read back in four places: every worker's brief gets the project's notes
 that match its task (one link away); a prompt that matches notes gets them in
@@ -1354,6 +1358,10 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m ruff check .
 .venv/bin/python -m coverage run -m pytest && .venv/bin/python -m coverage report
 ```
+
+A release is cut by merging a version bump: once CI passes on `main`, the `release` workflow tags
+`v<version>` and publishes that version's CHANGELOG section. To tag a version from before that
+workflow, run it from the Actions tab with the version and its commit.
 
 ## License
 

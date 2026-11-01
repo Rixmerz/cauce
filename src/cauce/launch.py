@@ -164,6 +164,7 @@ When you are done, end your reply with exactly one fenced block:
   "evidence": "the command you ran to check it and its real output, verbatim",
   "learned": ["a durable fact about this project that you confirmed and the next person would want"],
   "orientation": ["what you had to find before your first change: a file, a command, a trap"],
+  "notes_used": [12],
   "constraints": ["a rule a failing check showed this work must meet, that no file here states"],
   "criteria": [{{"id": "S1", "met": true, "evidence": "what shows it"}}],
   "findings": [{{"where": "path:line", "what": "the problem",
@@ -228,6 +229,8 @@ When you are done, end your reply with exactly one fenced block:
   there: where the code for it lives (`path` and what it holds), the command
   that checks it, a trap you hit. Only what you used; never a secret. `[]`
   when you needed nothing.
+- `notes_used`: the numbers of the notes from this project's memory in your brief
+  (`#12`) that you relied on; `[]` when none helped or none were given.
 - `constraints`: only when a check failed on this task (its output is above)
   and showed a rule the work must meet that nothing in the repository says (a
   policy, a limit, a case CI enforces): the rule in one line, and the check line
@@ -414,6 +417,8 @@ class WorkerResult:
     learned: tuple[str, ...] = ()
     #: What the worker had to find before its first change, for the next one of its cell.
     orientation: tuple[str, ...] = ()
+    #: The project notes of its brief the worker says it relied on: observed, never a verdict.
+    notes_used: tuple[int, ...] = ()
     #: Rules a failing check of this task showed the work must meet (`notes.CONSTRAINT`).
     constraints: tuple[str, ...] = ()
     #: The one line the worker proposes as the commit's subject; "" when it gave none.
@@ -718,6 +723,7 @@ def parse(
     evidence = str(block.get("evidence") or "")[:4000]
     common["learned"] = learned(block)
     common["orientation"] = orientation(block)
+    common["notes_used"] = notes_used(block)
     common["constraints"] = learned({"learned": block.get("constraints")})
     common["commit"] = commit_subject(block)
     common["report"] = report_block(text)
@@ -1075,6 +1081,19 @@ def orientation(block: Mapping[str, Any]) -> tuple[str, ...]:
         return ()
     found = [" ".join(x.split())[:ORIENTATION_CHARS] for x in raw if isinstance(x, str) and x.strip()]
     return tuple(dict.fromkeys(found))[:MAX_ORIENTATION]
+
+
+def notes_used(block: Mapping[str, Any]) -> tuple[int, ...]:
+    """The note numbers a result block says the worker relied on: whole numbers, `12` or `"#12"`."""
+    raw = block.get("notes_used")
+    if not isinstance(raw, list):
+        return ()
+    found = []
+    for item in raw:
+        text = str(item).strip().lstrip("#") if isinstance(item, int | str) and not isinstance(item, bool) else ""
+        if text.isdigit():
+            found.append(int(text))
+    return tuple(dict.fromkeys(found))[:50]
 
 
 #: The longest commit subject kept; a longer one is cut at a word.

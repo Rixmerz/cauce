@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+## [0.63.0] - 2026-10-31
+
+### Added
+
+- **The order of a brief's notes is on trial** (the `recall_fusion` setting): when the code a task
+  touches and its words find different notes, the brief orders them by reciprocal rank fusion (a
+  note both find comes first, and the words' best match is no longer cut by every anchored note)
+  or anchored first, in turns per repository, and keeps fusion only where its first tries passed
+  no less often. `cauce stats` shows the trial.
+- **Workers name the notes they relied on** (`notes_used` in the result block): only notes their
+  brief carried are kept, and `cauce stats` shows how many of the notes briefed were relied on and
+  how first tries went where one was named. Observed, never a verdict.
+- **Long TRACER files go by section**: what does not fit in the brief is named by heading with its
+  lines (`docs/tracer/floors.md:40-88`), so the worker reads only the part it needs, instead of
+  a count of files left out.
+- **`cauce doctor` names a run that died after its attempt passed** (`died-after-a-pass`): the
+  ending failed, not the work, as with the empty commit fixed in 0.62.0.
+- **Releases tag themselves**: a version that reaches `main` with CI green is tagged `v<version>` and
+  released with its CHANGELOG section (`.github/workflows/release.yml`, `scripts/release_notes.py`);
+  an older version is tagged by hand from the Actions tab, on the commit a person names.
+- **A worker that died names its crash**: the last exception line its run wrote to its log is in the
+  stop's reason, beside the log's path, where it said only "exited with 1". One that dies of the
+  same crash again says so and is never resumed on its own: it is cauce's failure, and a resume
+  repeats it.
+- **The Analysis screen shows the order of a brief's notes and the notes workers relied on.**
+- **`bench/speed/methods.py`**: on a planted bug told only by its symptom, Haiku with the diagnosis
+  method was right 4 of 4 times, without it 2 of 4 (both misses claimed a pass).
+
+### Changed
+
+- **A probation start is also reverted when a passed point takes more than twice as long** on the
+  cheaper cell (`standards.PROBATION_SLOWER`): Haiku was as right as the first rung of `refactor`
+  and `test`, but about five times slower.
+- **A request that opens by asking for a plan is a plan** ("Plan how to migrate…", "Planifica…"):
+  it fell to the default build.
+
 ## [0.62.0] - 2026-10-31
 
 ### Fixed

@@ -21,6 +21,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from cauce import arms as arms_mod
 from cauce import config
 from cauce.store import Store
 
@@ -78,19 +79,14 @@ def _first_tries_after(store: Store, task_id: int) -> list[bool]:
 
 def trial(store: Store, repo: str | None, method: Method) -> dict[str, dict[str, Any]]:
     """Per arm: the tasks in it and how many first tries passed (a pre-mortem's: of the steps after it)."""
-    out: dict[str, dict[str, Any]] = {a: {"tasks": 0, "tries": 0, "passed": 0} for a in ARMS}
+    rows = []
     for row in store.arm_trial(repo, KEY):
-        name, _, arm = str(row["arm"]).partition(":")
-        if name != method.name or arm not in out:
+        name, _, side = str(row["arm"]).partition(":")
+        if name != method.name:
             continue
-        side = out[arm]
-        side["tasks"] += 1
         tries = _first_tries_after(store, int(row["task_id"])) if method.kind == "plan" else [row["passed_first"]]
-        side["tries"] += len(tries)
-        side["passed"] += sum(bool(t) for t in tries)
-    for side in out.values():
-        side["rate"] = round(side["passed"] / side["tries"], 3) if side["tries"] else None
-    return out
+        rows.append({"arm": side, "tries": len(tries), "passed": sum(bool(t) for t in tries)})
+    return arms_mod.tally(rows, ARMS)
 
 
 def arm(store: Store, repo: str | None, method: Method, task_id: int) -> tuple[str, str]:
@@ -98,15 +94,7 @@ def arm(store: Store, repo: str | None, method: Method, task_id: int) -> tuple[s
     with fewer tasks next; after it, where its arm did no worse than the arm without it."""
     if repo is None:
         return "with", "no repository to run a trial in"
-    found = trial(store, repo, method)
-    w, wo = found["with"], found["without"]
-    if min(w["tries"], wo["tries"]) < TRIAL:
-        pick = ARMS[task_id % 2] if w["tasks"] == wo["tasks"] else "with" if w["tasks"] < wo["tasks"] else "without"
-        return pick, f"the {method.name} trial here ({w['tries']} with, {wo['tries']} without, {TRIAL} each)"
-    said = f"first tries passed {w['rate']:.0%} with it and {wo['rate']:.0%} without"
-    if w["rate"] >= wo["rate"]:
-        return "with", f"the {method.name} won its trial here: {said}"
-    return "without", f"the {method.name} lost its trial here: {said}"
+    return arms_mod.pick(trial(store, repo, method), ARMS, task_id, TRIAL, method.name)
 
 
 _RISKS = re.compile(r"^[ \t]*\**risks\**[ \t]*:[ \t]*(.*)$", re.IGNORECASE | re.MULTILINE)

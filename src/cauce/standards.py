@@ -29,7 +29,8 @@ reverted the same way (`_judge_skip`). No model decides any of it, and money mov
 nothing but one thing: a start the calibration moved onto a kind's probation cell, below its
 ladder (`matrix.PROBATION`, tried on trial by `trust.probation_arm`), is reverted when a point
 that passed costs more on it than on the rung it replaced (`PROBATION_COSTLIER`): a cheaper cell
-that climbs is cheaper only in name. Moving onto it is the start-cell rule's alone.
+that climbs is cheaper only in name; and so when a point takes more than `PROBATION_SLOWER` times as
+long there. Moving onto it is the start-cell rule's alone.
 """
 from __future__ import annotations
 
@@ -65,6 +66,10 @@ REVERT_MARGIN = 0.2
 #: How much more a passed point may cost on a probation start than on the rung it replaced before
 #: the start is reverted: nothing more. The cheaper cell is there to cost less for the same work.
 PROBATION_COSTLIER = 1.0
+#: How many times as long a passed point may take on a probation start as on the rung it replaced
+#: before the start is reverted: on bench/speed/kinds.py Haiku was as right as the first rung at a
+#: fifth of the cost and about five times the wall time, and a cell that much slower is no saving.
+PROBATION_SLOWER = 2.0
 #: Failures that say nothing of the work: an attempt that ended only so is no first try.
 NO_VERDICT = frozenset({"environment", "permission"})
 #: The moves after which an attempt goes on with the same cell's try: room, or a launch that broke.
@@ -568,6 +573,12 @@ def _costlier(change: Mapping[str, Any], before: Mapping[str, Any], then: Mappin
         then["cost_per_point"] is not None and then["cost_per_point"] > before["cost_per_point"] * PROBATION_COSTLIER
 
 
+def _slower(change: Mapping[str, Any], before: Mapping[str, Any], then: Mapping[str, Any]) -> bool:
+    """Whether a probation start made a passed point take more than `PROBATION_SLOWER` times as long."""
+    return _onto_probation(change) and bool(before["time_per_point_s"]) and bool(then["time_per_point_s"]) and \
+        then["time_per_point_s"] > before["time_per_point_s"] * PROBATION_SLOWER
+
+
 def _usd(value: float | None) -> str:
     return "—" if value is None else f"${value:.3f}"
 
@@ -639,12 +650,14 @@ def judge(store: Store, repo: str, *, now: datetime | None = None) -> list[dict[
         before, then = metrics([t for t in band if t.ended_at < change["at"]][-WINDOW:]), metrics(after)
         fell = before["pass_first"] is not None and then["pass_first"] is not None and \
             round(before["pass_first"] - then["pass_first"], 6) > REVERT_MARGIN
-        worse = fell or _costlier(change, before, then)
+        dearer, slower = _costlier(change, before, then), _slower(change, before, then)
+        worse = fell or dearer or slower
         verdict = "reverted" if worse else "kept"
         reason = (f"pass-first {_pct(before['pass_first'])} in the {before['tasks']} tasks before, "
                   f"{_pct(then['pass_first'])} in the {then['tasks']} after"
                   + (f"; a passed point cost {_usd(before['cost_per_point'])} before, "
-                     f"{_usd(then['cost_per_point'])} after" if _onto_probation(change) else ""))
+                     f"{_usd(then['cost_per_point'])} after, and took {_secs(before['time_per_point_s'])} before, "
+                     f"{_secs(then['time_per_point_s'])} after" if _onto_probation(change) else ""))
         store.add_verdict(at=at, change_id=change["id"], verdict=verdict, window_before=before, window_after=then,
                           reason=reason, version=__version__)
         if worse:
@@ -652,7 +665,8 @@ def judge(store: Store, repo: str, *, now: datetime | None = None) -> list[dict[
                     old_value=change["new_value"], new_value=change["old_value"], reverts=change["id"],
                     rule=f"revert #{change['id']}: " + (
                         f"it made pass-first worse by more than {REVERT_MARGIN:.0%}" if fell else
-                        "a passed point costs more on the probation cell than on the rung it replaced")
+                        "a passed point costs more on the probation cell than on the rung it replaced" if dearer else
+                        f"a passed point takes more than {PROBATION_SLOWER:g} times as long on the probation cell")
                     + f" ({reason})",
                     evidence={"before": before, "after": then, "margin": REVERT_MARGIN})
             value = change["old_value"]

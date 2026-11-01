@@ -62,6 +62,19 @@ function capabilitiesSection(rows) {
 }
 
 // A trial in two arms: what each arm measured, and where it stands now.
+// The notes briefs carried and the ones workers said they relied on: observed, never a verdict.
+function notesUsedSection(n) {
+  if (!n) return [];
+  return [h("h2", { class: "section" }, "Notes workers relied on"),
+    h("p", { class: "empty" }, "What the workers said, observed: never a verdict on a note."),
+    h("table", {}, head("measured", "value"),
+      h("tr", {}, h("td", {}, "tasks briefed with notes"), h("td", {}, String(n.tasks))),
+      h("tr", {}, h("td", {}, "notes carried · relied on"),
+        h("td", {}, `${n.carried} · ${n.relied_on} (${pct(n.relied_rate)})`)),
+      h("tr", {}, h("td", {}, "first tries passed: a note named · none named"),
+        h("td", {}, `${pct(n.pass_first_naming)} · ${pct(n.pass_first_silent)}`)))];
+}
+
 function armsSection(title, about, arms, names, said, now) {
   if (!arms || !names.some((n) => (arms[n] || {}).tasks)) return [];
   return [h("h2", { class: "section" }, title), h("p", { class: "empty" }, about),
@@ -231,6 +244,11 @@ export async function renderAnalysis(ctx) {
       + "call of that tool that went through before its pass counts. Tried in turns with free work; kept where its passes "
       + "drew fewer blockers from the independent check.", r.evidence, ["gate", "free"],
       (a) => `${a.tasks} tasks · ${a.blocked}/${a.read} blocked (${pct(a.blocked_rate)})`, r.evidence_now),
+    armsSection("The order of a brief's notes", "When the code a task touches and its words find different notes, the "
+      + "brief orders them by rank fusion (a note both find comes first) or anchored first, in turns; fusion stays where "
+      + "its first tries passed no less often.", r.recall, ["fused", "ordered"],
+      (a) => `${a.tasks} tasks · ${a.passed}/${a.tries} first tries (${pct(a.rate)})`, r.recall_now),
+    notesUsedSection(r.notes_used),
     Object.entries(r.methods || {}).map(([name, arms]) => armsSection(`The ${name} method`,
       "A method its kind's workers are briefed to follow, tried in turns against its absence.", arms, ["with", "without"],
       (a) => `${a.tasks} tasks · ${a.passed}/${a.tries} first tries (${pct(a.rate)})`, (r.methods_now || {})[name])),

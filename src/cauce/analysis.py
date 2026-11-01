@@ -29,6 +29,7 @@ from cauce import cells as cells_mod
 from cauce import evidence as evidence_mod
 from cauce import launch, racing, revisions, trunks, trust, usage, workflows
 from cauce import methods as methods_mod
+from cauce import notes as notes_mod
 from cauce.store import Store
 
 #: The phases of a run, in the order they happen. The first four come before its own wall
@@ -331,6 +332,36 @@ def _grouped(found: Sequence[Mapping[str, Any]], key: str) -> list[dict[str, Any
                   key=lambda row: (-row["runs"], row[key]))
 
 
+def notes_relied_on(events: Sequence[Mapping[str, Any]], task_ids: set[int]) -> dict[str, Any] | None:
+    """What the notes in briefs were worth to the workers, in their words (`attempt_finished.notes_used`)
+    against what each first brief carried (`notes.BRIEFED`): the tasks briefed with notes, the
+    notes they carried, the ones a worker said it relied on, and how often first tries passed when one was
+    named against when none was. Observed, never a trial and never a verdict; None when no brief had notes."""
+    briefed: dict[int, set[int]] = {}
+    used: dict[int, set[int]] = defaultdict(set)
+    first: dict[int, bool] = {}
+    for e in events:
+        tid = int(e["task_id"])
+        if tid not in task_ids:
+            continue
+        data = e["data"] or {}
+        if e["kind"] == "briefed" and tid not in briefed and data.get(notes_mod.BRIEFED):
+            briefed[tid] = {int(n) for n in data[notes_mod.BRIEFED]}
+        elif e["kind"] == "attempt_finished":
+            used[tid] |= {int(n) for n in data.get("notes_used") or ()}
+            first.setdefault(tid, bool(data.get("passed")))
+    if not briefed:
+        return None
+    named = [t for t in briefed if used[t]]
+    silent = [t for t in briefed if not used[t]]
+    carried = sum(len(ids) for ids in briefed.values())
+    relied = sum(len(used[t] & briefed[t]) for t in briefed)
+    return {"tasks": len(briefed), "carried": carried, "relied_on": relied, "relied_rate": _share(relied, carried),
+            "tasks_naming": len(named),
+            "pass_first_naming": _share(sum(first.get(t, False) for t in named), len(named)),
+            "pass_first_silent": _share(sum(first.get(t, False) for t in silent), len(silent))}
+
+
 def capabilities_used(events: Sequence[Mapping[str, Any]], task_ids: set[int]) -> list[dict[str, Any]]:
     """Per capability a worker was handed (`attempt_finished.capability_calls`): the attempts that had
     it, the ones that called it at all and the ones whose calls went through, and how often the
@@ -546,6 +577,10 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "trust": trust.report(store, repo),
         # Each capability workers were handed and whether they called it (observed), and the evidence trial.
         "capabilities": capabilities_used(events, {r["task"] for r in found}),
+        # The notes briefs carried and the ones workers said they relied on (observed, never a verdict).
+        "notes_used": notes_relied_on(events, {r["task"] for r in found}),
+        "recall": notes_mod.recall_trial(store, repo),
+        "recall_now": notes_mod.recall_arm(store, repo, 0)[1] if repo else None,
         "evidence": evidence_mod.trial(store, repo),
         "evidence_now": evidence_mod.arm(store, repo, 0)[1] if repo else None,
         # Each method a kind's workers may be briefed to follow, and its trial (`cauce.methods`).
@@ -760,6 +795,19 @@ def text(report: Mapping[str, Any]) -> str:
                              f"({_rate(row['called_rate'])})  through {row['through']:>4}  never called "
                              f"{row['never_called']:>4}  passed called {_rate(row['pass_when_called'])} / silent "
                              f"{_rate(row['pass_when_silent'])}")
+        if relied := report.get("notes_used"):
+            lines += ["", f"notes in briefs: {relied['tasks']} task(s) carried {relied['carried']}, workers said they "
+                      f"relied on {relied['relied_on']} ({_rate(relied['relied_rate'])}); first tries passed "
+                      f"{_rate(relied['pass_first_naming'])} where a worker named one, "
+                      f"{_rate(relied['pass_first_silent'])} where none did (observed)"]
+        order = report.get("recall") or {}
+        if any(side.get("tasks") for side in order.values()):
+            lines += ["", "the order of a brief's notes (its trial; tasks, first tries passed):"]
+            for side, row in order.items():
+                lines.append(f"  {side:<8} tasks {row['tasks']:>4}  first tries {row['passed']}/{row['tries']} "
+                             f"({_rate(row['rate'])})")
+            if report.get("recall_now"):
+                lines.append(f"  now: {report['recall_now']}")
         held = report.get("evidence") or {}
         if any(arm.get("tasks") for arm in held.values()):
             lines += ["", "holding work to evidence (its trial; tasks, read by the independent check, blocked):"]

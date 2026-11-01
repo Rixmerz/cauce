@@ -1,0 +1,63 @@
+name: release
+
+# A version that reaches main with its checks green is tagged and released by itself: the tag is
+# `v<version>` from pyproject.toml on the commit CI passed, and the notes are that version's
+# CHANGELOG section. A version already tagged is left alone, so every later push is a no-op.
+# `workflow_dispatch` tags an older version on the commit a person names (one released before
+# this workflow existed); it still reads the notes from the CHANGELOG and refuses a tag that exists.
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "the version to tag, as the CHANGELOG writes it (0.61.0); empty: pyproject's"
+        required: false
+      ref:
+        description: "the commit to tag; empty: the head of main"
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || inputs.ref || 'main' }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Read the version and its notes
+        id: read
+        env:
+          WANTED: ${{ inputs.version }}
+        run: |
+          version="${WANTED:-$(python scripts/release_notes.py version)}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          python scripts/release_notes.py notes "$version" > "$RUNNER_TEMP/notes.md"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then
+            echo "due=false" >> "$GITHUB_OUTPUT"
+            echo "v$version is tagged already: nothing to do"
+          else
+            echo "due=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Tag and release
+        if: steps.read.outputs.due == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.read.outputs.version }}
+          SHA: ${{ steps.read.outputs.sha }}
+        run: gh release create "v$VERSION" --target "$SHA" --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md"

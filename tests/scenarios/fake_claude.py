@@ -11,6 +11,8 @@ worker was given. An action:
 
 - `{"pass": true, "write": {path: text}, "block": {...}}`: writes the files in its directory
   and answers a passing result block (merged with `block`: parts, findings...).
+- `"commit": "subject"` beside `write`: the worker commits what it wrote itself, as a real one may;
+  `"litter": {path: text}` then leaves files untracked after that commit (a tool's `__pycache__`).
 - `{"turns": true, "write": {...}}`: writes, then ends out of turns.
 - `{"die": true}`: kills the process that started it (cauce's `run-queued`) and itself, as a
   machine that ran out of memory would.
@@ -25,6 +27,7 @@ import json
 import os
 import re
 import signal
+import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -70,6 +73,13 @@ def main() -> int:
                               "host": {k: os.environ[k] for k in HOST if k in os.environ},
                               "worker_task": os.environ.get("CAUCE_WORKER_TASK")}) + "\n")
     for path, text in (action.get("write") or {}).items():
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(text)
+    if action.get("commit"):
+        subprocess.run(["git", "add", "-A"], check=True)
+        subprocess.run(["git", "-c", "user.name=w", "-c", "user.email=w@w", "commit", "-qm", action["commit"]],
+                       check=True)
+    for path, text in (action.get("litter") or {}).items():
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_text(text)
     if action.get("die"):
