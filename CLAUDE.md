@@ -1226,7 +1226,8 @@ yields the default kind, not a guess.
   `Livespec.reach`, asked by locks and put in a writing brief as data); else the pass is gated on
   evidence locks reads (`locks.evidence`); a hint alone is the weakest. A requirement (`evidence.REQUIRED`)
   names a neighbour and when its use is owed: layout-inspector on writing work whose change touches
-  rendered UI (`capabilities.UI_FILES`), rastro on writing work it was handed for. A worker held to
+  rendered UI (`capabilities.renders`: a `UI_FILES` path that is no test, fixture, example, documentation
+  or tool output such as a coverage report), rastro on writing work it was handed for. A worker held to
   it is told so in its brief as a requirement (`brief_line`); a pass with no call of that
   neighbour's tools that went through in the task's attempts (`tool_events.ok`, never the worker's
   words) is held back (`evidence_owed`): the first time the same cell goes on in its own session told

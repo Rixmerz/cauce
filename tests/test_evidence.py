@@ -91,6 +91,45 @@ def test_what_is_owed_is_read_from_the_calls_that_went_through(store: Store):
     assert evidence.shape(evidence.handed(["rastro"])).startswith("evidence: no call of rastro went through")
 
 
+def test_a_change_with_nothing_to_render_owes_no_measurement(store: Store):
+    # Issue #115: a validator's `.tsx` fixtures and a coverage report's HTML matched the UI patterns,
+    # so work in a repository with nothing to render was held to layout-inspector.
+    task = store.create_task("t", status="running", source="locks")["id"]
+    names = ["layout-inspector"]
+    nothing_rendered = ["src/rules.ts", "tests/fixtures/page.tsx", "test/fixtures/bad.jsx", "coverage/index.html",
+                        "src/rules.test.tsx", "examples/demo.html", "docs/guide.html", "dist/app.css",
+                        "src/__snapshots__/view.tsx", "node_modules/x/y.css"]
+    assert evidence.owed(store, task, 1, names, nothing_rendered, "feature") == []
+    for rendered in ("components/Card.tsx", "src/App.tsx", "styles/site.css", "index.html", "routes/home.tsx"):
+        assert caps.renders(rendered), rendered
+        assert [r.capability for r in evidence.owed(store, task, 1, names, [rendered], "feature")] == [
+            "layout-inspector"]
+
+
+@pytest.mark.usefixtures("no_verifier")
+def test_a_feature_in_a_repo_with_no_ui_is_judged_on_its_check(git_repo, store: Store, monkeypatch):
+    # The issue's shape: layout-inspector is handed to a feature, the repository renders nothing, and
+    # the pass that wrote code and a test fixture of type `.tsx` stands on its check, at once.
+    _held(monkeypatch)
+    handed = {"layout-inspector": caps.Capability("layout-inspector", {"command": "li"}, when=("feature",),
+                                                  hint="measure the page")}
+
+    def worker(spec):
+        calls.append(spec)
+        (spec.target_dir / "src").mkdir(exist_ok=True)
+        (spec.target_dir / "tests" / "fixtures").mkdir(parents=True, exist_ok=True)
+        (spec.target_dir / "src" / "rules.ts").write_text("rules\n")
+        (spec.target_dir / "tests" / "fixtures" / "page.tsx").write_text("fixture\n")
+        return passing()
+
+    calls: list = []
+    report = run("Add the validator rules", git_repo, store, registry=handed, launcher=worker,
+                 classifier=kind("feature"))
+    assert "layout-inspector" in calls[0].mcp_servers
+    assert report.status == "done" and len(calls) == 1
+    assert not store.events_of(report.task_id, "evidence_owed")
+
+
 def _held(monkeypatch):
     monkeypatch.setenv("LOCKS_EVIDENCE", "on")
     monkeypatch.setattr(evidence, "arm", lambda store, repo, task_id: ("gate", "held for the test"))

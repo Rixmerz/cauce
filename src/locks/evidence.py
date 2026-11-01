@@ -3,7 +3,8 @@ tool-call log, never from the worker's words; and whether holding workers to it 
 
 A hint in a worker's system prompt is the weakest way to have a tool used: a worker may read
 it and never call the tool. A requirement (`REQUIRED`) names a neighbour and when its use is
-owed: layout-inspector on writing work whose change touches rendered UI (`capabilities.UI_FILES`),
+owed: layout-inspector on writing work whose change touches rendered UI (`capabilities.renders`: a
+`UI_FILES` path that is no test, fixture, example, documentation or tool output),
 rastro on writing work it was handed for. A passing attempt that owes one is held back when no
 call of that neighbour's tools went through in the task's attempts so far (`owed`, from
 `tool_events`, its `ok`): the first time the same cell goes on in its own session, told what to
@@ -95,7 +96,7 @@ def owed(store: Store, task_id: int, nth: int, names: Sequence[str], changed: Se
         habits.load_events(store)
     out = []
     for r in handed(names):
-        if r.ui_only and not any(capabilities.matches(p, capabilities.UI_FILES) for p in changed):
+        if r.ui_only and not any(capabilities.renders(p) for p in changed):
             continue
         prefix = f"mcp__{r.capability}__"
         if not any(store.tool_counts(task_id, n, prefix, ok_only=True) for n in range(1, nth + 1)):

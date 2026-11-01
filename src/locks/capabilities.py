@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -40,6 +41,21 @@ from typing import Any
 #: What rendered UI is, for a capability that `touches` "ui": the files a page is drawn from.
 UI_FILES = ("components/**", "islands/**", "routes/**", "pages/**", "app/**/*.tsx", "src/**/*.tsx",
             "*.css", "*.scss", "*.sass", "*.less", "*.tsx", "*.jsx", "*.vue", "*.svelte", "*.astro", "*.html")
+
+
+#: Paths that match `UI_FILES` and render nothing a person sees: tests and their fixtures, examples,
+#: documentation, and what a tool wrote (coverage reports, build output, dependencies). A validator's
+#: `.tsx` fixture or a coverage run's `index.html` is no page to measure.
+NOT_RENDERED = re.compile(
+    r"(^|/)(tests?|__tests__|__fixtures__|__snapshots__|fixtures?|testdata|spec|e2e|examples?|docs?|"
+    r"coverage|htmlcov|\.nyc_output|dist|build|out|\.next|\.nuxt|\.svelte-kit|node_modules|vendor)/"
+    r"|\.(test|spec|stories)\.\w+$|(^|/)test_[^/]*$|_test\.\w+$")
+
+
+def renders(path: str) -> bool:
+    """Whether a changed path is rendered UI: it matches `UI_FILES` and is not a test, a fixture,
+    an example, documentation or a tool's output (`NOT_RENDERED`)."""
+    return matches(path, UI_FILES) and not NOT_RENDERED.search(path)
 
 
 def matches(path: str, patterns: Sequence[str]) -> bool:
