@@ -21,6 +21,11 @@ worker was given. An action:
 - `{"limit": "text"}`: writes, then ends as the CLI does when the account's usage limit turns
   the session away (`is_error`, subtype `success`, the text as its result).
 
+A question to Haiku (`--json-schema`) is answered with `structured_output`: the first rule
+whose `match` is found in its system prompt or its text and that gives `"structured": {...}`,
+else the smallest object the schema allows (each required field: an enum's first value, an
+empty string or list, false, 0), as the real CLI answers one.
+
 Every answer carries a session id: the one `--resume` names, else the host's when it
 inherited one (the real CLI does so), else a new one.
 """
@@ -53,6 +58,33 @@ def next_action(script: list[dict], brief: str, state: Path) -> tuple[int, dict]
     return -1, {"pass": True}
 
 
+def minimal(schema: dict):
+    """The smallest value a JSON schema allows: what a model that says little would answer."""
+    if "enum" in schema:
+        return schema["enum"][0]
+    kind = schema.get("type")
+    if isinstance(kind, list):
+        kind = next((k for k in kind if k != "null"), "null")
+    if kind == "object":
+        props = schema.get("properties") or {}
+        return {k: minimal(props.get(k) or {}) for k in schema.get("required", list(props))}
+    return {"array": [], "string": "", "boolean": False, "integer": 0, "number": 0, "null": None}.get(kind, "")
+
+
+def structured(argv: list[str], text: str, script: list[dict]) -> int:
+    schema = json.loads(argv[argv.index("--json-schema") + 1])
+    said = (argv[argv.index("--system-prompt") + 1] if "--system-prompt" in argv else "") + "\n" + text
+    answer = next((r["structured"] for r in script if "structured" in r and re.search(r["match"], said)),
+                  None)
+    with open(os.environ["FAKE_CLAUDE_LOG"], "a") as log:
+        log.write(json.dumps({"argv": argv[:2], "haiku": True, "answered": answer is not None,
+                              "worker_task": os.environ.get("CAUCE_WORKER_TASK")}) + "\n")
+    print(json.dumps({"is_error": False, "result": "", "structured_output": answer or minimal(schema),
+                      "session_id": str(uuid.uuid4()), "num_turns": 1, "total_cost_usd": 0.0,
+                      "usage": {"input_tokens": 10, "cache_read_input_tokens": 0, "output_tokens": 5}}))
+    return 0
+
+
 def main() -> int:
     argv = sys.argv[1:]
     if argv == ["--help"]:
@@ -63,7 +95,11 @@ def main() -> int:
     for flag in ("--append-system-prompt-file",):
         if flag in argv:
             brief += Path(argv[argv.index(flag) + 1]).read_text()
-    script = json.loads(Path(os.environ["FAKE_CLAUDE_SCRIPT"]).read_text())
+    script_path = Path(os.environ["FAKE_CLAUDE_SCRIPT"])
+    script = json.loads(script_path.read_text()) if script_path.exists() else []
+    if "--json-schema" in argv:
+        return structured(argv, brief, script)
+    script = [r for r in script if "do" in r]
     rule, action = next_action(script, brief, Path(os.environ["FAKE_CLAUDE_SCRIPT"] + ".state"))
     # As the real CLI does: a session it inherits from the host is the one it reports.
     inherited = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID")
@@ -73,7 +109,8 @@ def main() -> int:
     with open(os.environ["FAKE_CLAUDE_LOG"], "a") as log:
         log.write(json.dumps({"argv": argv, "rule": rule, "action": action, "cwd": os.getcwd(),
                               "host": {k: os.environ[k] for k in HOST if k in os.environ},
-                              "worker_task": os.environ.get("CAUCE_WORKER_TASK")}) + "\n")
+                              "worker_task": os.environ.get("CAUCE_WORKER_TASK"),
+                              "attempt": os.environ.get("CAUCE_WORKER_ATTEMPT")}) + "\n")
     for path, text in (action.get("write") or {}).items():
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_text(text)

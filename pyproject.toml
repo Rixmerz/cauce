@@ -46,6 +46,10 @@ ignore = ["S101", "S603", "S607", "RUF001", "RUF002", "RUF003"]
 [tool.coverage.run]
 source = ["cauce"]
 branch = true
+# The scenarios and the hooks run cauce as real processes (`bin/cauce`, `python -m cauce`):
+# measured too, so the fast path and the dispatcher count.
+patch = ["subprocess"]
+parallel = true
 
 [tool.coverage.report]
 fail_under = 95

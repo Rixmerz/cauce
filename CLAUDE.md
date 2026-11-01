@@ -108,10 +108,17 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 ```bash
 .venv/bin/python -m ruff check .
 .venv/bin/python -m coverage run -m pytest
+.venv/bin/python -m coverage combine
 .venv/bin/python -m coverage report
+CAUCE_TEST_ALL_ON=1 .venv/bin/python -m pytest tests/test_scenarios.py
 claude plugin validate .
 claude plugin test .
 ```
+
+Coverage measures the processes the tests start too (`patch = ["subprocess"]`): `combine` gathers them.
+`CAUCE_TEST_ALL_ON=1` is the profile where every adaptive setting stays as a person gets it, with the
+fake `claude` on PATH (it answers Haiku's questions from their schema): the unit tests turn each
+setting on alone, and the bugs live where they meet. A new setting goes in `conftest.SWITCHES`.
 
 `claude plugin validate .` also reads the mod. In the hooks module, `$` stays
 in the file: helpers that take it are declared at its top level, and imported

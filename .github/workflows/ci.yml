@@ -18,7 +18,23 @@ jobs:
       - run: python -m pip install -e '.[dev]'
       - run: python -m ruff check .
       - run: python -m coverage run -m pytest
+      # The processes the scenarios and hooks start are measured into files of their own.
+      - run: python -m coverage combine
       - run: python -m coverage report
+
+  all-on:
+    # Every adaptive setting on, as a person gets them, with a fake `claude`: where features meet.
+    # The unit tests turn each one on alone; this is the profile real use runs in.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e '.[dev]'
+      - run: python -m pytest tests/test_scenarios.py
+        env:
+          CAUCE_TEST_ALL_ON: "1"
 
   plugin:
     # The plugin as Claude Code loads it: its manifest, its commands and the mod's own tests,

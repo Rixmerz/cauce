@@ -15,9 +15,8 @@ from datetime import UTC, datetime
 from cauce import signature
 
 PHASES = ("exploring", "implementing", "checking")
-#: How much of the log's tail is read, and how many of the attempt's last calls weigh.
+#: How much of the log's tail is read.
 TAIL_BYTES = 256 * 1024
-LAST = 6
 _CHECKS = ("test", "pytest", "jest", "vitest", "mocha", "tsc", "lint", "ruff", "mypy", "eslint", "build", "check",
            "cargo:test", "go:test", "go:vet", "clippy", "coverage", "rspec", "phpunit")
 
@@ -49,11 +48,6 @@ def _calls(task_id: int, attempt: int | None, env: Mapping[str, str] | None) -> 
         if isinstance(e, dict) and e.get("task_id") == task_id and (attempt is None or e.get("attempt") == attempt):
             out.append(e)
     return out
-
-
-def recent(task_id: int, attempt: int | None, env: Mapping[str, str] | None = None) -> list[str]:
-    """The signatures of the attempt's last calls, oldest first."""
-    return [str(e.get("sig") or "") for e in _calls(task_id, attempt, env)][-LAST:]
 
 
 #: How many of an attempt's last calls the task page shows.

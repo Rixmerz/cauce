@@ -521,5 +521,3 @@ def resume_args(task_id: int, shown: dict[str, Any] | None, *, keep: bool = Fals
     return base
 
 
-def resume_label(cause: str | None) -> str:
-    return {"permission": "Allow & resume", "approval": "Approve & resume"}.get(str(cause), "Resume")
