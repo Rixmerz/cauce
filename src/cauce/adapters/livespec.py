@@ -654,6 +654,72 @@ class Livespec:
             proc.kill()
             proc.wait()
 
+    def list_tools(self, workspace: Path, *, timeout_s: float = 60.0) -> set[str]:
+        """The tools the livespec cauce runs here serves (`tools/list`), asked as any MCP client does.
+        Raises LivespecError."""
+        server = self.server()
+        if server is None:
+            raise LivespecError("no livespec to ask")
+        argv = [str(server["command"]), *[str(a) for a in server.get("args", [])]]
+        env = {**self.env, **{str(k): str(v) for k, v in (server.get("env") or {}).items()}, "CAUCE_HOOKS_OFF": "1"}
+        try:
+            proc = self.popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              text=True, env=env, cwd=str(workspace))
+        except OSError as exc:
+            raise LivespecError(f"livespec did not start: {exc}") from exc
+        cut = threading.Timer(timeout_s, proc.kill)
+        cut.start()
+        try:
+            _ask(proc, 1, "initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
+                                         "clientInfo": {"name": "cauce", "version": "0"}})
+            proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+            proc.stdin.flush()
+            listed = _ask(proc, 2, "tools/list", {})
+        except (OSError, ValueError) as exc:
+            raise LivespecError(f"livespec did not answer: {exc}") from exc
+        finally:
+            cut.cancel()
+            proc.kill()
+            proc.wait()
+        tools = listed.get("tools") if isinstance(listed, dict) else None
+        if not isinstance(tools, list):
+            raise LivespecError("tools/list: no tools in its answer")
+        return {str(t["name"]) for t in tools if isinstance(t, dict) and t.get("name")}
+
+    def _tools_path(self) -> Path:
+        return home(self.env) / "work" / "livespec-tools.json"
+
+    def missing_tools(self, version: str | None, workspace: Path) -> frozenset[str] | None:
+        """The tools cauce names (`TOOLS`) that a livespec release newer than the one this adapter was
+        checked against (`PINNED`) does not serve: read from its own `tools/list` once per release and
+        kept in the cauce home. Empty for the checked release or an older one (`MINIMUM_VERSION` is
+        their floor); None when a newer one's tools could not be read, which briefs as for `PINNED`."""
+        found, checked = _version_tuple(version), _version_tuple(PINNED)
+        if found is None or checked is None or found <= checked:
+            return frozenset()
+        try:
+            kept = json.loads(self._tools_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            kept = {}
+        if not isinstance(kept, dict):
+            kept = {}
+        if isinstance(kept.get(version), list):
+            names = {str(n) for n in kept[version]}
+        else:
+            try:
+                names = self.list_tools(workspace)
+            except LivespecError:
+                return None
+            kept[str(version)] = sorted(names)
+            with contextlib.suppress(OSError):
+                self._tools_path().parent.mkdir(parents=True, exist_ok=True)
+                self._tools_path().write_text(json.dumps(kept, indent=1), encoding="utf-8")
+        return frozenset(TOOLS - names)
+
+    def _missing_for(self, status: Status) -> frozenset[str] | None:
+        root = status.data.get("root") if isinstance(status.data, Mapping) else None
+        return self.missing_tools(status.version, Path(root)) if root else frozenset()
+
     def validate_openspec(self, repo_dir: Path, *, strict: bool = False, timeout_s: float = 120.0) -> dict[str, Any]:
         """The structural check of the repository's OpenSpec specs, by livespec's own
         `validate_openspec`, run on a temporary copy of `openspec/` and nothing else: that tool
@@ -701,7 +767,10 @@ class Livespec:
                                      (int(status.data["project"]),)).fetchone()[0]
         except sqlite3.Error:
             return ()
-        return orientation(kind, has_specs=bool(specs))
+        lines = orientation(kind, has_specs=bool(specs))
+        missing = self._missing_for(status)
+        # A worker is never told to call a tool this release does not serve.
+        return tuple(line for line in lines if not missing or not set(_named_tools(line)) & missing)
 
     def brief(self, text: str, repo_dir: Path, status: Status) -> Briefing:
         if not status.present:
@@ -713,8 +782,9 @@ class Livespec:
         except sqlite3.Error as exc:
             return Briefing(reasons=(f"livespec index unreadable while briefing: {exc}",))
         reached = len({*symbols, *(c for e in entries for c in e["caller_ids"])})
+        release = self._release_note(status)
         if not entries:
-            return Briefing(reached=reached)
+            return Briefing(reasons=release, reached=reached)
         lines = [f"Code map from livespec ({status.detail}). Read it before searching:"]
         raise_rungs, critical, reasons = 0, False, []
         for e in entries:
@@ -732,7 +802,20 @@ class Livespec:
                 reasons.append(f"livespec: {e['qname']} has {e['callers']} callers")
         if reasons:
             raise_rungs = 1
-        return Briefing(tuple(lines), raise_rungs, critical, tuple(dict.fromkeys(reasons)), reached)
+        # What this release lacks is said after the rule above: it raises no rung.
+        return Briefing(tuple(lines), raise_rungs, critical, tuple(dict.fromkeys([*reasons, *release])), reached)
+
+    def _release_note(self, status: Status) -> tuple[str, ...]:
+        """The plan's line when the livespec here is newer than the one this adapter was checked against
+        and does not serve every tool cauce names, or its tools could not be read; nothing otherwise."""
+        missing = self._missing_for(status)
+        if missing is None:
+            return (f"livespec: v{status.version} is newer than the {PINNED} cauce was checked against and its "
+                    f"tools could not be read; briefed as for {PINNED}",)
+        if missing:
+            return (f"livespec: v{status.version} does not serve {', '.join(sorted(missing))}; they are left out "
+                    "of the brief",)
+        return ()
 
     def symbols_named(self, text: str, status: Status) -> list[tuple[str, str]]:
         """The symbols a text names outright, as (qualified name, path): what a
@@ -877,10 +960,18 @@ class Livespec:
 
         own = manifests.read("livespec", self.env)
         what = (own.hint_for(kind) if own else "") or _HINTS.get(kind, _HINTS["implement"])
+        status = self.inspect(root)
+        if lacking := sorted((self._missing_for(status) or frozenset()) & set(_named_tools(what))):
+            what += f" (not served by livespec v{status.version}: {', '.join(lacking)}; do not call them)"
         where = f'pass workspace="{root}" on every call'
         if workdir.resolve() != root:
             where += f"; the index describes the base commit there, your edits are in {workdir}"
         return f"{what}; {where}."
+
+
+def _named_tools(text: str) -> list[str]:
+    """The livespec tools a line of guidance names."""
+    return [w for w in re.findall(r"[a-z][a-z_]+", text) if w in TOOLS]
 
 
 def orientation(kind: str, *, has_specs: bool = True) -> tuple[str, ...]:

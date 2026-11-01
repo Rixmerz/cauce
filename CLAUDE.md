@@ -91,6 +91,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/services.py` | the servers a task needs up (`--service 'cmd@port'`): started in the task's directory, waited for, stopped with their process group when the run ends |
 | `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified; `at_base`, a temporary worktree at a task's base for comparing its check |
 | `scripts/bump.py` | a new version in every file that names it at once (`__init__.py`, `pyproject.toml`, `uv.lock`, the plugin and marketplace manifests), the CHANGELOG's `[Unreleased]` closed under it; nothing written when one file is off or the notes are empty |
+| `scripts/livespec_check.py`, `.github/workflows/livespec-pin.yml` | the livespec cauce runs kept current: every week a release on PyPI newer than `PINNED` is pinned, verified against a real index of this repository (the index read, a brief, a change's reach, every tool cauce names served, `validate_openspec`), and proposed as a draft pull request once the suite passed with it; stdlib, no model |
 | `scripts/release_notes.py`, `.github/workflows/release.yml` | a version that reaches main with CI green is tagged `v<version>` and released with its CHANGELOG section, by itself; one already tagged is left alone, and a person tags an older one by hand (`workflow_dispatch`); stdlib, no model |
 | `commands/orchestration.md` | the one entry point a user types |
 | `commands/habits.md` | review the habit candidates for this repository and install the ones the person picks |
@@ -819,7 +820,13 @@ yields the default kind, not a guess.
   checkout, their index or livespec's registry of projects.
   What `uvx` runs when no plugin entry and no `livespec` on PATH is used is `Livespec.pin()`: the
   release in the newest installed livespec plugin's own manifest (`.claude-plugin/plugin.json`,
-  never one `unpublished()` holds), else `PINNED`.
+  never one `unpublished()` holds), else `PINNED`. A release newer than `PINNED` (a plugin's, or one
+  on PATH) is taken, and checked: its own `tools/list` is read once per release and kept in the cauce
+  home (`Livespec.missing_tools`); an orientation line naming a tool it does not serve is not told,
+  the hint names it as not served, and the plan says so (`_release_note`, never a raised rung). Tools
+  that cannot be read brief as for `PINNED` and are asked again next time. `PINNED` itself moves by a
+  reviewed pull request the weekly `livespec-pin` workflow opens only after `scripts/livespec_check.py
+  verify` and the suite passed on it: never an unpinned fetch.
 - Tests run with `CAUCE_LIVESPEC=off` and an empty `CLAUDE_CONFIG_DIR`; a
   test that wants livespec builds the fixture index in `tests/livespec_fixture.py`.
 - A dispatch decision fails closed: no answer from Haiku means the task
