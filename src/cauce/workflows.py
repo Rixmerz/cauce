@@ -1581,9 +1581,8 @@ def _queue_step(store: Store, run: Mapping[str, Any], defn: Mapping[str, Any], s
         body += (f"\n\nThis is step {step['id']!r} of the workflow {defn['name']!r}. What the steps before it "
                  "found and did (their changes are already in this checkout):\n" + _quoted("\n".join(notes)))
     if step.get("memory"):
-        attached = memory_text(store, run["repo"], step["memory"])
-        if attached:
-            body += "\n\n" + attached
+        # Never empty: `normalize` drops an empty `memory`, and each reference writes a line.
+        body += "\n\n" + memory_text(store, run["repo"], step["memory"])
     if options.get("loop"):
         from cauce import loops
 

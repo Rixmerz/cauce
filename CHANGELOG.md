@@ -15,6 +15,11 @@
 - **`cauce ui` did not prune for its first hour after a machine booted.** Its first prune waited
   until `time.monotonic()` passed `PRUNE_EVERY_S`, and that clock counts from the boot. The first
   pass now prunes. Found by the new coverage tests on a fresh CI runner.
+- **Work held `--after` a task in another worktree of the same local repository started on the
+  base.** With no `origin`, a checkout's key is its path, so two worktrees of one repository read
+  as two repositories; the work got the other checkout as an `--add-dir` instead of starting on the
+  kept branch. They now count as one when they share a git store (`after._store_of`). Found by the
+  coverage pass.
 - **API keys were not masked** (`notes._SECRET`, used for check tails, notes, briefs, the scribe, the
   survey and compaction digests). Anthropic (`sk-ant-api03-…`) and OpenAI (`sk-proj-…`) keys carry
   dashes, and the pattern took letters and digits only, so they went through whole. It now also
