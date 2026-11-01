@@ -201,7 +201,7 @@ test('queue passes the check, a known kind only, and the session', async ($, on)
   const answer = await call($, 'queue', { task: 'Add the volume discount to cart.total', verify: 'npm test', kind: 'hack' })
   expect(answer.result).toContain('queued #4 — Add the discount. A worker takes it now.')
   // a kind it does not have queues the task anyway, and the model hears why it was dropped
-  expect(answer.result).toContain('The kind "hack" is not one of locks\'s')
+  expect(answer.result).toContain('The kind "hack" is not one of locks\'')
   const i = seen.argv.findIndex(a => a[0] === 'queue')
   expect(seen.argv[i]).toEqual(['queue', 'add', 'Add the volume discount to cart.total', '--repo', '/work/shop',
     '--json', '--verify', 'npm test'])
@@ -449,7 +449,7 @@ test('suggest: the line is shown to the person once, never sent to the model', a
   expect(compactionCalls(seen)[0]).toEqual(['compaction', 'next', '--session', 'sess-1', '--version', '2.1.302', '--json'])
 })
 
-test('orchestrator: locks\'s moment is advice the session gets, once; it decides', async ($, on) => {
+test('orchestrator: locks\' moment is advice the session gets, once; it decides', async ($, on) => {
   let calls = 0
   const advice = 'locks [compaction #7]: this looks like a good moment to compact this session (…). It is your call.'
   const { seen, clock } = await started($, on, {

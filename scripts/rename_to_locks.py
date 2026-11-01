@@ -44,7 +44,7 @@ RULES: list[tuple[str, re.Pattern[str], Any]] = [
     ("trailer (Cauce-…)", re.compile(r"\bCauce-(?=Task|Verified|Check-Output)"), "Locks-"),
     ("ui header (X-Cauce-Token)", re.compile(r"X-Cauce-Token"), "X-Locks-Token"),
     ("command (cauce <verb>)", re.compile(r"\bcauce(?= [a-z][a-z-]+\b)"), "locks"),
-    ("possessive (cauce's)", re.compile(r"\bcauce's\b"), "locks'"),
+    ("possessive (cauce's)", re.compile(r"\bcauce(\\?)'s\b"), r"locks\1'"),
     ("Capitalized (Cauce)", re.compile(r"Cauce"), "Locks"),
     ("upper case (CAUCE)", re.compile(r"CAUCE"), "LOCKS"),
     ("prose and identifiers (cauce)", re.compile(r"cauce"), "locks"),
@@ -73,7 +73,7 @@ CHANGELOG = "CHANGELOG.md"
 RENAME_NOTE = ("> The project was named cauce until it was renamed Locks; the entries of released versions "
                "below keep the old name. <!-- legacy-name: history -->")
 
-#: uv.lock: only the editable package's own name line.
+#: uv.lock: only the editable package's own name line (the rest is the resolver's, never rewritten).
 UV_LOCK = "uv.lock"
 
 #: The old command, kept: it hands every argument to bin/locks and says, once, that it is Locks now.
@@ -146,7 +146,7 @@ def left_in(path: str, text: str) -> list[tuple[int, str]]:
     for number, line in enumerate(text.splitlines(), 1):
         if path == CHANGELOG and re.match(r"## \[\d", line):
             released = True
-        if released or MARKER in line:
+        if released or MARKER in line or (path == UV_LOCK and line.strip() != f'name = "{OLD}"'):
             continue
         rest = line
         for pattern, _why in KEEP_PATTERNS:
