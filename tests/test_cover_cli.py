@@ -684,7 +684,11 @@ def test_habits_install_outside_a_repository_takes_a_habit_of_every_repository(t
         store.close()
     assert cli.main(["habits", "list", "--all"]) == 0
     cid = capsys.readouterr().out.splitlines()[1].split()[0]
-    fresh = tmp_path / "fresh"  # no directory yet, so no project to key a habit of its own to
+    missing = tmp_path / "missing"  # a typo is refused, never made a directory with settings in it
+    assert cli.main(["habits", "install", cid, "--command", "true", "--repo", str(missing)]) == 2
+    assert "is not a directory" in capsys.readouterr().err and not missing.exists()
+    fresh = tmp_path / "fresh"  # a folder that is no repository: no project to key a habit of its own to
+    fresh.mkdir()
     assert cli.main(["habits", "install", cid, "--command", "true", "--repo", str(fresh)]) == 0
     assert capsys.readouterr().out.startswith("installed habit #1: after edit:.py, run `true`")
     assert "PostToolUse" in (fresh / ".claude" / "settings.local.json").read_text()
@@ -1060,11 +1064,10 @@ def _ended(store: Store, title: str, status: str, session: str = "s", **data) ->
     return store.get_task(task["id"])
 
 
-def test_endings_read_without_marking_are_a_display(store):
+def test_endings_are_delivered_once(store):
     task = _ended(store, "write docs", "done", final_cell="haiku")
-    shown = hooks._endings(store, "s", via="stop", mark=False)
-    assert f"#{task['id']} [done] write docs" in shown
-    assert hooks._endings(store, "s", via="stop") is not None  # still there to deliver
+    shown = hooks._endings(store, "s", via="stop")
+    assert shown is not None and f"#{task['id']} [done] write docs" in shown
     assert hooks._endings(store, "s", via="stop") is None
 
 

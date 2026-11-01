@@ -20,6 +20,8 @@
   as two repositories; the work got the other checkout as an `--add-dir` instead of starting on the
   kept branch. They now count as one when they share a git store (`after._store_of`). Found by the
   coverage pass.
+- **`cauce habits install --repo` with a folder that does not exist made it**, and wrote
+  `.claude/settings.local.json` inside. A missing folder is a typo: it is now refused.
 - **API keys were not masked** (`notes._SECRET`, used for check tails, notes, briefs, the scribe, the
   survey and compaction digests). Anthropic (`sk-ant-api03-…`) and OpenAI (`sk-proj-…`) keys carry
   dashes, and the pattern took letters and digits only, so they went through whole. It now also

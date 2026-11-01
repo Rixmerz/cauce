@@ -2252,6 +2252,13 @@ def cmd_habits(args: argparse.Namespace) -> int:
     store = Store.open()
     try:
         if args.habits_command == "install":
+            where = Path(args.repo or os.getcwd())
+            if not where.is_dir():
+                # A habit writes the folder's own settings: a folder that is not there is a typo,
+                # never one to make (it wrote `.claude/settings.local.json` into a new directory).
+                print(f"cauce: {where} is not a directory; install a habit in an existing repository",
+                      file=sys.stderr)
+                return 2
             # What `list` showed here, or a habit of several repositories offered to this one.
             found = {c.id: c for c in _candidates(store, args.days)}
             key = _habit_repo(args.repo)
