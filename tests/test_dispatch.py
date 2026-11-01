@@ -325,7 +325,7 @@ def test_the_process_handle_starts_run_queued(store: Store, tmp_path, monkeypatc
             started.update(argv=argv, **kw)
 
     monkeypatch.setattr(flow.subprocess, "Popen", Proc)
-    flow._Process(store.get_task(task["id"]), tmp_path, store, flow.Options(use_model_classifier=False))
+    flow._Process(store.get_task(task["id"]), tmp_path, store, flow.orchestrate.Options(use_model_classifier=False))
     assert started["argv"][1:] == ["-m", "cauce", "run-queued", str(task["id"]), "--no-model"]
     assert started["cwd"] == str(tmp_path)
 

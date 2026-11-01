@@ -682,7 +682,7 @@ def test_a_running_attempt_s_phase_is_read_from_its_last_calls():
     assert phase.of(1, 1) == "checking" and phase.of(1, None) == "checking" and phase.of(1, 2) is None
     assert phase.kind_of("write:ts") == "implementing" and phase.kind_of("bash:ls") == "exploring"
     # A worker reads again after it writes: the write, out of its last calls, still counts.
-    log([(3, 1, "write:py")] + [(3, 1, "read:py")] * (phase.LAST + 2))
+    log([(3, 1, "write:py")] + [(3, 1, "read:py")] * 8)
     assert phase.of(3, 1) == "implementing"
 
 
