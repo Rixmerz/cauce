@@ -286,7 +286,11 @@ OLD = {"where": "old.py", "what": "was always so", "evidence_class": "determinis
 
 @pytest.fixture
 def verifier_on(monkeypatch):
+    """The independent check as it runs inline: after cauce's own check and before the ending. A
+    test of its form beside the check (`overlap`) or after the ending (`late_verifier`) turns that on."""
     monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("CAUCE_OVERLAP", "off")
+    monkeypatch.setenv("CAUCE_LATE_VERIFIER", "off")
 
 
 def test_a_risky_pass_is_checked_and_its_findings_earn_one_correction(git_repo, store, verifier_on):
@@ -818,6 +822,7 @@ def _ledger_run(git_repo, store, results, monkeypatch):
     return started, seen, {t["workflow_step"]: t for t in store.run_tasks(started["id"])}
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_the_dual_review_fixes_only_what_is_confirmed_and_rechecks_each_row(git_repo, store, monkeypatch):
     from cauce import workflows
 
@@ -904,6 +909,7 @@ def test_what_the_refuter_cannot_decide_goes_to_the_person(git_repo, store, monk
     assert workflows.status(store, started["id"])["state"] == "waits on the orchestrator"
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_rows_still_open_after_two_rounds_go_to_the_person(git_repo, store, monkeypatch):
     results = [_reviewed("a", ("cart.py:10", "total ignores the discount", "deterministic", "introduced")),
                _reviewed("b"), ok("fixed"), _decides("no", F1="not_fixed"), ok("again"),
@@ -1029,6 +1035,7 @@ def test_a_step_a_blind_review_follows_runs_no_verifier_of_its_own(git_repo, sto
     assert orchestrate.Options(reviewed_next=True).stored()["reviewed_next"] is True
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_pass_keeps_the_verdict_it_was_held_to(git_repo, store):
     answered = WorkerResult(True, None, "done", "1 passed", cost_usd=0.1,
                             criteria=({"id": "S1", "met": True, "evidence": "  the   export test passes "},

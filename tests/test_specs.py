@@ -38,6 +38,7 @@ def test_drift_counts_the_code_commits_since_the_specs_last_changed(git_repo):
     assert specs.drift(git_repo).behind and "code commit(s) ago" in specs.drift(git_repo).text()
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_writing_worker_is_told_to_keep_the_specs_and_the_ending_offers_to_catch_them_up(git_repo, store):
     _behind(git_repo)
     script = Script(ok(), write="app.py")
@@ -69,6 +70,7 @@ def test_a_change_that_wrote_a_spec_or_a_reading_task_hears_nothing(git_repo, st
     assert "OpenSpec" not in script.specs[0].prompt
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_with_the_setting_off_specs_are_only_read(git_repo, store, monkeypatch):
     _behind(git_repo)
     monkeypatch.setenv("CAUCE_SPECS", "off")
@@ -91,6 +93,7 @@ class _Builder:
         return ok()
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_spec_first_build_that_wrote_no_spec_goes_back_to_its_worker_once(git_repo, store):
     _behind(git_repo, code_commits=1)
     specs.set_first(store, repo.key(git_repo), True)

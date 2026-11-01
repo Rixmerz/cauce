@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from cauce import config, tracer, workflows
 from cauce.orchestrate import run
 
@@ -82,6 +84,7 @@ def test_a_writing_worker_reads_the_method_and_the_check_holds_the_change_to_its
     assert any(r.startswith("tracer: ") for r in planned["reasons"])
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_reading_task_or_the_setting_off_leaves_the_method_out(git_repo, store, monkeypatch):
     _tracer(git_repo)
     script = Script(passing("found it"))
@@ -163,6 +166,7 @@ def test_a_ui_change_gets_layout_inspector_in_its_check_without_the_method(git_r
     assert not any(r.startswith("layout-inspector: ") for r in planned)
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_the_plan_says_once_why_a_ui_change_is_checked_without_layout_inspector(git_repo, store):
     # An empty registry is the plugin absent, whatever this machine has installed.
     first = run("fix the cart colours in Cart.tsx", git_repo, store, registry={},
@@ -180,6 +184,7 @@ def test_the_plan_says_once_why_a_ui_change_is_checked_without_layout_inspector(
     assert any("the `plugins` setting is off" in r for r in store.last_event(off.task_id, "planned")["data"]["reasons"])
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_the_plan_says_nothing_of_layout_inspector_for_work_that_is_no_ui(git_repo, store):
     report = run("fix the cart total in app.py", git_repo, store, registry={},
                  launcher=Script(passing(), write="app.py"), classifier=kind("implement"))

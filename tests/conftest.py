@@ -27,7 +27,8 @@ SWITCHES = (
 
 
 @pytest.fixture(autouse=True)
-def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def _isolated_home(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory,
+                   monkeypatch: pytest.MonkeyPatch) -> Path:
     """Every test gets its own cauce home. Never bypass this: a test writing to
     the real database would put fake dead ends in front of real sessions."""
     home = tmp_path / "cauce-home"
@@ -45,13 +46,16 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     if ALL_ON:
         for name in SWITCHES:
             monkeypatch.delenv(name, raising=False)
-        fake_bin = tmp_path / "fake-bin"
-        fake_bin.mkdir(exist_ok=True)
+        # Beside the test's tree, never in it: a test that walks `tmp_path` as a project
+        # would find the fake `claude`, its script or its log among the project's files.
+        fake = tmp_path_factory.mktemp("fake-claude")
+        fake_bin = fake / "bin"
+        fake_bin.mkdir()
         (fake_bin / "claude").write_text(f"#!/bin/sh\nexec {sys.executable} {FAKE_CLAUDE} \"$@\"\n")
         (fake_bin / "claude").chmod(0o755)
         monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
-        monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(tmp_path / "fake-script.json"))
-        monkeypatch.setenv("FAKE_CLAUDE_LOG", str(tmp_path / "fake-calls.jsonl"))
+        monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(fake / "script.json"))
+        monkeypatch.setenv("FAKE_CLAUDE_LOG", str(fake / "calls.jsonl"))
     else:
         for name in SWITCHES:
             monkeypatch.setenv(name, "off")
@@ -126,3 +130,11 @@ def git_repo(tmp_path: Path) -> Path:
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "init")
     return repo
+
+
+@pytest.fixture
+def no_verifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    """For a test that drives a run with a fixed list of worker results and is about something
+    else: the independent check (and its forms, beside the check and after the ending) is one
+    more worker per pass, which the list does not script."""
+    monkeypatch.setenv("CAUCE_VERIFIER", "off")

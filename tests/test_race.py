@@ -58,6 +58,7 @@ def files(git_repo, branch):
                           capture_output=True, text=True, check=True).stdout.split()
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_the_rung_that_passes_first_is_kept_and_the_start_is_stopped(git_repo, store, racing):
     launcher = Racing(**{START.label: ("slow.py", 0.4, ok("slow")), RUNG.label: ("fast.py", 0.0, ok("fast"))})
     report = run("add the export", git_repo, store, registry={}, launcher=launcher, classifier=kind("implement"),
@@ -85,6 +86,7 @@ def home_worktrees():
     return home() / "worktrees"
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_the_start_that_passes_first_is_kept_and_the_rung_is_recorded_after_it(git_repo, store, racing):
     launcher = Racing(**{START.label: ("start.py", 0.0, ok("start")), RUNG.label: ("rung.py", 0.4, ok("rung"))})
     report = run("add the export", git_repo, store, registry={}, launcher=launcher, classifier=kind("implement"))

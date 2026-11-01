@@ -6,6 +6,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from cauce import flow
 from cauce.matrix import Cell
 from cauce.orchestrate import Options
@@ -126,6 +128,7 @@ def test_the_reset_a_limit_stop_keeps_is_the_one_its_resume_waits_for(git_repo, 
     assert flow.limited_until(store) == stop.extra["resets_at"]
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_the_base_a_finished_event_keeps_is_what_the_ending_reads_moved_files_from(git_repo, store):
     """`orchestrate` keeps the work's base on its `finished` event; `hooks._found_before` reads
     what the checkout's branch changed since from that field alone."""

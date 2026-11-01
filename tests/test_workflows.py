@@ -1054,6 +1054,7 @@ def test_only_an_integrate_step_waits_on_a_step_run_in_parts():
     assert [s["id"] for s in joined["steps"]] == ["plan", "build", "join", "review"]
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_step_fans_out_into_one_task_per_part_and_what_needs_it_waits_for_all(git_repo, store: Store, kicks):
     _save(FANNED, git_repo)
     started = workflows.start(store, "fanned", git_repo, {"goal": "the orders view\n- it pages by 50"})
@@ -1090,6 +1091,7 @@ def test_a_step_fans_out_into_one_task_per_part_and_what_needs_it_waits_for_all(
     assert status["points"] == sum(each.values())
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_part_that_stops_stops_the_run_and_a_retry_runs_only_the_parts_that_did_not_pass(
         git_repo, store: Store, kicks, capsys, monkeypatch):
     _save(FANNED, git_repo)
@@ -1125,6 +1127,7 @@ def test_a_part_that_stops_stops_the_run_and_a_retry_runs_only_the_parts_that_di
     assert status["state"] == "done" and [p["tries"] for p in status["steps"][1]["parts"]] == [1, 2]
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_work_queued_after_a_run_stopped_at_a_part_is_told_a_retry_that_runs(git_repo, store: Store, kicks):
     import re
 

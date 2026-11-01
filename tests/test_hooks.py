@@ -287,9 +287,11 @@ def test_stop_counts_what_the_turn_cost(store: Store, tmp_path):
     assert store.usage_by_model(days=100000)[0]["output_tokens"] == 42
 
 
-def test_work_a_session_sent_is_reported_to_it_once_when_it_ends(store: Store, git_repo):
+def test_work_a_session_sent_is_reported_to_it_once_when_it_ends(store: Store, git_repo, monkeypatch):
     """A queued task finished while the main session waited on nothing: nothing
     told it to tell the person, continue or relaunch."""
+    # A stop that outgrew its turns is resumed on its own first with autowork (`dispatch.recover`).
+    monkeypatch.setenv("CAUCE_AUTOWORK", "off")
     from cauce import stops
 
     done = store.create_task("write the changelog", status="running", source="cauce", session_id="s",

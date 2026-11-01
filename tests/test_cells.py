@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from cauce import cells, hooks
 from cauce.store import Store
 
@@ -209,6 +211,7 @@ def test_stats_show_the_primer_s_trial(store: Store):
     assert "without it  tasks    1  first   0%  calls before the first change p50 9" in said
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_run_leaves_its_orientation_and_the_next_run_s_brief_follows_its_arm(git_repo, store, monkeypatch):
     import dataclasses
 
