@@ -1175,17 +1175,18 @@ def run(
         before = store.get_task(task_id)
         if before["status"] == "queued" and not store.last_event(task_id, "finished"):
             queued_s = _seconds_since(before["created_at"])
-        store.update_task(task_id, status="running", source="cauce",
+        # Running and whose process it is, in one write: between two, a sweep read a running task with
+        # no pid as dead and stopped a resume that had just started (it then died unseen).
+        store.update_task(task_id, status="running", source="cauce", pid=os.getpid(),
                           cost_usd=float(before["cost_usd"] or 0) + c.cost_usd, **fields)
         task = store.get_task(task_id)
     else:
         # Run from a session's own Bash (`CAUCE_SESSION_ID` set), the text is the main
         # session's, not something a person typed.
-        task = store.create_task(text, status="running", source="cauce", cost_usd=c.cost_usd,
+        task = store.create_task(text, status="running", source="cauce", cost_usd=c.cost_usd, pid=os.getpid(),
                                  author="orchestrator" if session_id else "person",
                                  session_id=session_id, options=json.dumps(options.stored()), **fields)
     report = Report(task["id"], "running", the_plan, cost_usd=c.cost_usd)
-    store.update_task(task["id"], pid=os.getpid())
     say = progress or (lambda line: None)
     # Said as it happens: a run in a background shell is otherwise silent until
     # its report, and silence reads as a run that never started.

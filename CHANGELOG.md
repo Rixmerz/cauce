@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **A sweep could stop a run that had just started.** A run was marked running and given its pid
+  in two writes, and a sweep between them (a turn's end, the dispatcher) read a running task with no
+  pid as dead. An automatic resume stopped so went on unseen and, when it died for real, nobody
+  noticed: the task stayed interrupted with no crash named. Running and the pid are now one write.
+  New doctor rule: `swept-before-its-pid`. Found by the all-on CI run.
 - **The independent check could write into the work it read.** Its write tools are taken away,
   but a shell writes too, and what it wrote was committed on the kept branch as the work. Its
   worktree is now snapshotted before it runs, and anything it changed is put back afterwards
