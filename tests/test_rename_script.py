@@ -59,7 +59,7 @@ def test_the_rename_moves_rewrites_keeps_what_it_must_and_is_idempotent(tmp_path
                                                         "FENCE = 'locks-result'\n")
     readme = (root / "README.md").read_text()
     assert readme == ("# locks\n\nRun `locks run`. Read from locks' log; .locks/ holds it. "
-                      "See https://github.com/Rixmerz/cauce.\nLocks-Task: #1 and X-Locks-Token\n")
+                      "See https://github.com/Rixmerz/locks.\nLocks-Task: #1 and X-Locks-Token\n")
     assert (root / "hooks/locks.tsx").read_text() == ("const T = 'mcp__locks__queue' // /locks:init\n"
                                                      "const S = 'locks\\''\n")
     assert (root / "keep.py").read_text() == "OLD = 'cauce'  # legacy-name: on purpose\n"

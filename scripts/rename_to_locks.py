@@ -32,6 +32,7 @@ MARKER = "legacy-name"
 #: The rewrite rules, most specific first. Each is (name, pattern, replacement); every match of
 #: one rule is counted under its name, and a later rule only sees what earlier ones left.
 RULES: list[tuple[str, re.Pattern[str], Any]] = [
+    ("repository (Rixmerz/cauce)", re.compile(r"Rixmerz/cauce\b"), "Rixmerz/locks"),
     ("import (from/import cauce)", re.compile(r"\b(from cauce(?=\.\w| import\b)|import cauce(?![\w'.-]))"),
      lambda m: m.group(1).replace(OLD, NEW)),
     ("module path (cauce.x)", re.compile(r"\bcauce(?=\.[a-z_])"), "locks"),
@@ -51,10 +52,7 @@ RULES: list[tuple[str, re.Pattern[str], Any]] = [
 ]
 
 #: Text kept as it is wherever it appears, with why.
-KEEP_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"Rixmerz/cauce\b"),
-     "the GitHub repository's own name: renaming the repository is the owner's, and GitHub redirects once it is"),
-]
+KEEP_PATTERNS: list[tuple[re.Pattern[str], str]] = []
 
 #: Whole files never rewritten (and never reported), with why.
 KEEP_FILES: dict[str, str] = {
