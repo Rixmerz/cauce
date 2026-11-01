@@ -120,8 +120,12 @@ MAX_FACT = 1000
 MAX_FACTS = 8
 #: Text in a fact that looks like a secret keeps the fact out: notes are put
 #: in front of models and shown in the UI.
-_SECRET = re.compile(r"(sk-[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{8,}|github_pat_\w{8,}|xox[bap]-[\w-]{8,}|"
-                     r"AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY|\b[0-9a-f]{40,}\b|password\s*[:=]\s*\S+)",
+#: API keys are written with dashes inside (`sk-ant-api03-…`, `sk-proj-…`): a pattern of letters and
+#: digits alone let every Anthropic and OpenAI key through (found by `tests/test_fuzz.py`).
+_SECRET = re.compile(r"(sk-[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|github_pat_\w{8,}|"
+                     r"xox[abposr]-[\w-]{8,}|AKIA[0-9A-Z]{12,}|AIza[0-9A-Za-z_-]{30,}|"
+                     r"-----BEGIN [A-Z ]*PRIVATE KEY|\b[0-9a-f]{40,}\b|password\s*[:=]\s*\S+|"
+                     r"bearer\s+[A-Za-z0-9._~+/-]{20,})",
                      re.IGNORECASE)
 
 _PRIVATE = re.compile(r"<private>.*?</private>", re.IGNORECASE | re.DOTALL)

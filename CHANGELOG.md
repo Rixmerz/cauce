@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **API keys were not masked** (`notes._SECRET`, used for check tails, notes, briefs, the scribe, the
+  survey and compaction digests). Anthropic (`sk-ant-api03-…`) and OpenAI (`sk-proj-…`) keys carry
+  dashes, and the pattern took letters and digits only, so they went through whole. It now also
+  covers GitHub's `gho_`/`ghs_`/`ghu_`/`ghr_` tokens, Google API keys and `Bearer` tokens. Found by
+  the new fuzz tests.
+- **A tool call's signature could hold its argument.** A file tool kept whatever followed the
+  last dot of its path as the file's type, and a shell token whose quotes could not be split showed
+  a secret's shape once cleaned. A type is now a real extension (short, plain) or `other`, and a
+  cleaned shell signature with a secret's shape is `bash:unknown`.
+- **`cauce doctor` took 33 s, and so did SessionStart, on a store of 3000 runs**: two index rules
+  read every run's folder with git, one process per run. Each folder is now read once, about 1 s.
+
+### Changed
+
+- **Commands and hooks start faster.** A command imported the whole run loop before doing anything.
+  The run loop now loads only where a command runs work (`cauce.lazy`), and git's answers about a
+  folder are kept per process, checked with `stat` before reuse. `cauce tasks` went from 251 to
+  ~165 ms; `board`, which the mod runs every 15 s per session, from 236 to ~190 ms; SessionStart
+  went from 25 git processes to 14.
+- **A plan finds a task's kind and brings its neighbours' indexes current side by side.** A real
+  plan took 13.7 s doing Haiku's classification (~4 s) and livespec's index (9 s) one after the
+  other; it now waits for the longer of the two.
+- **livespec pinned at 0.35.0**, checked against a real index of this repository.
+- **Tests:**
+  - `CAUCE_TEST_ALL_ON=1` runs the suite with every adaptive setting as a person gets it, with a
+    fake `claude` that also answers Haiku's schema questions; CI runs the scenarios in that profile.
+  - Coverage now counts the processes tests start.
+  - `tests/test_fuzz.py` feeds every reader of outside text the fragments that broke readers before.
+
 ## [0.65.0] - 2026-11-01
 
 ### Added

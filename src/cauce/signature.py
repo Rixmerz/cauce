@@ -19,6 +19,8 @@ from typing import Any
 
 _ALLOWED = re.compile(r"[^a-z0-9:._-]")
 _TOKEN = re.compile(r"^(sk-|ghp_|gho_|github_pat_)|^[0-9a-fA-F]{20,}$|^[A-Za-z0-9+/]{20,}={0,2}$")
+#: A secret's shape in a cleaned signature, or a run of letters and digits no program name has.
+_LEAK = re.compile(r"(sk-|gh[pousr]_|github_pat_|akia)|[a-z0-9]{24,}")
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 #: Programs whose first argument is the real verb: `git commit`, `npm test`.
 _TWO_WORD = frozenset({
@@ -61,7 +63,22 @@ def _bash_signature(command: str) -> str:
             if not token.startswith("-"):
                 words.append(token)
                 break
-    return "bash:" + (_clean("-".join(words)) or "unknown")
+    found = _clean("-".join(words))
+    # Checked again once cleaned: a token whose quotes `shlex` could not split (`"'ghp_…`) is a
+    # secret's shape only after the cleaning strips them (found by `tests/test_fuzz.py`).
+    return "bash:unknown" if not found or _LEAK.search(found) else "bash:" + found
+
+
+#: A file's type as a signature keeps it: a real extension is short and plain. Anything after a
+#: dot is not one (`notes.final draft`, a token after a dot): kept, it would carry the argument.
+_EXTENSION = re.compile(r"^\.[A-Za-z0-9]{1,10}$")
+
+
+def _suffix(path: str) -> str:
+    suffix = Path(path).suffix
+    if not suffix:
+        return "noext"
+    return _clean(suffix) if _EXTENSION.match(suffix) and not _TOKEN.search(suffix[1:]) else "other"
 
 
 def signature(tool: str, tool_input: Mapping[str, Any] | None) -> str:
@@ -70,7 +87,7 @@ def signature(tool: str, tool_input: Mapping[str, Any] | None) -> str:
         return _bash_signature(str(tool_input.get("command") or ""))
     if tool in _FILE_TOOLS:
         path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
-        return f"{_FILE_TOOLS[tool]}:{_clean(Path(path).suffix) or 'noext'}"
+        return f"{_FILE_TOOLS[tool]}:{_suffix(path)}"
     if tool.startswith("mcp__"):
         return "mcp:" + _clean(tool[5:].replace("__", "."))
     return _clean(tool) or "unknown"
