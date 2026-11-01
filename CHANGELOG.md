@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.69.1] - 2026-11-01
+
 ### Changed
 
 - **The repository is `Rixmerz/locks`.** The plugin manifest points there; GitHub redirects the old
