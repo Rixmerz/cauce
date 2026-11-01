@@ -143,12 +143,14 @@ class UIServer(ThreadingHTTPServer):
         """The sweep, in the server, on a timer — never because a page is open.
         And the check for a newer cauce, which takes this server's place."""
         store = Store(self.root / "cauce.db")
-        pruned_at = 0.0
+        # Never pruned yet: the first pass prunes. `time.monotonic()` counts from the machine's boot,
+        # so a 0.0 start skipped pruning for the first hour after a boot (a fresh CI runner).
+        pruned_at: float | None = None
         try:
             while not self.stop_event.wait(SWEEP_EVERY_S):
                 try:
                     flow.sweep(store)
-                    if time.monotonic() - pruned_at >= PRUNE_EVERY_S:
+                    if pruned_at is None or time.monotonic() - pruned_at >= PRUNE_EVERY_S:
                         pruned_at = time.monotonic()
                         flow.prune(store)
                     newer = newer_install(os.environ)

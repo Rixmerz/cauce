@@ -12,6 +12,9 @@
 - **SessionStart resumed a dead task whose work had already landed.** It ran the automatic resume
   before reading what landed, so a worker ran on merged work while the task was dismissed. It now
   reads what landed first, as the Stop hook already did. New doctor rule: `resumed-after-it-landed`.
+- **`cauce ui` did not prune for its first hour after a machine booted.** Its first prune waited
+  until `time.monotonic()` passed `PRUNE_EVERY_S`, and that clock counts from the boot. The first
+  pass now prunes. Found by the new coverage tests on a fresh CI runner.
 - **API keys were not masked** (`notes._SECRET`, used for check tails, notes, briefs, the scribe, the
   survey and compaction digests). Anthropic (`sk-ant-api03-…`) and OpenAI (`sk-proj-…`) keys carry
   dashes, and the pattern took letters and digits only, so they went through whole. It now also

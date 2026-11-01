@@ -1146,3 +1146,20 @@ def test_serve_says_when_it_is_ready(_isolated_home):
     finally:
         srv.stop_event.set()
         srv.server_close()
+
+
+def test_housekeeping_prunes_on_its_first_pass_on_a_machine_booted_a_minute_ago(_isolated_home, monkeypatch):
+    """`time.monotonic()` counts from the machine's boot: a first prune held until it passed
+    `PRUNE_EVERY_S` skipped pruning for the first hour after a boot (a fresh CI runner)."""
+    srv = _bare_server(_isolated_home)
+    prunes = []
+    monkeypatch.setattr(server.time, "monotonic", lambda: 60.0)
+    monkeypatch.setattr(server, "SWEEP_EVERY_S", 0.01)
+    monkeypatch.setattr(server.flow, "sweep", lambda store: None)
+    monkeypatch.setattr(server.flow, "prune", lambda store: prunes.append(1) or srv.stop_event.set())
+    monkeypatch.setattr(server, "newer_install", lambda env: None)
+    try:
+        srv.housekeeping()
+    finally:
+        srv.server_close()
+    assert prunes == [1]
