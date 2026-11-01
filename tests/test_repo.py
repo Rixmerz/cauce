@@ -10,15 +10,15 @@ from .conftest import git
 @pytest.mark.parametrize(
     "url",
     [
-        "git@github.com:Rixmerz/cauce.git",
-        "https://github.com/Rixmerz/cauce",
-        "https://github.com/Rixmerz/cauce.git/",
-        "ssh://git@github.com/Rixmerz/cauce.git",
-        "https://user:token@GitHub.com:443/Rixmerz/cauce.git",
+        "git@github.com:Rixmerz/locks.git",
+        "https://github.com/Rixmerz/locks",
+        "https://github.com/Rixmerz/locks.git/",
+        "ssh://git@github.com/Rixmerz/locks.git",
+        "https://user:token@GitHub.com:443/Rixmerz/locks.git",
     ],
 )
 def test_one_repository_one_key(url):
-    assert repo.normalize_remote(url) == "github.com/Rixmerz/cauce"
+    assert repo.normalize_remote(url) == "github.com/Rixmerz/locks"
 
 
 def test_unparseable_remote_is_kept():

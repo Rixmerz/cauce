@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **The repository is `Rixmerz/locks`.** The plugin manifest points there; GitHub redirects the old
+  address. `scripts/rename_to_locks.py` rewrites the repository's name too, so `--check` no longer
+  keeps it.
+
 ## [0.69.0] - 2026-11-01
 
 ### Changed
