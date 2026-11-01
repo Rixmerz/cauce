@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.66.0] - 2026-11-01
+
 ### Fixed
 
 - **A sweep could stop a run that had just started.** A run was marked running and given its pid
@@ -34,6 +36,10 @@
   one (`ci.read`).
 - **A checkout with no commit read `HEAD` as its commit** when notes were reviewed (`git rev-parse`
   prints it and fails); it now has none.
+- **A race whose rung only met the environment was decided by the rung's broken launch.** Its
+  attempt was appended after the start's, and the next move reads the last attempt: the task
+  retried at the rung's cell and stopped as "the environment failed twice" instead of climbing from
+  the start's failure. The rung's attempt now goes before the start's. Found by the coverage pass.
 - **API keys were not masked** (`notes._SECRET`, used for check tails, notes, briefs, the scribe, the
   survey and compaction digests). Anthropic (`sk-ant-api03-…`) and OpenAI (`sk-proj-…`) keys carry
   dashes, and the pattern took letters and digits only, so they went through whole. It now also
@@ -64,6 +70,8 @@
     fixture and single switches); no assertion was weakened.
   - Coverage now counts the processes tests start.
   - `tests/test_fuzz.py` feeds every reader of outside text the fragments that broke readers before.
+  - Coverage went from 95% to 99% of lines and branches (every module at 100% but a few lines
+    nothing can reach), with tests that assert behaviour; the floor is now 99.
 
 ## [0.65.0] - 2026-11-01
 
