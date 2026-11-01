@@ -32,6 +32,7 @@ import json
 import os
 import re
 import shlex
+import sqlite3
 import subprocess
 import time
 from collections import Counter, defaultdict
@@ -88,8 +89,8 @@ def load_events(store: Store, env: Mapping[str, str] | None = None) -> int:
                     store.add_tool_event(**{k: record.get(k) for k in (
                         "ts", "session_id", "task_id", "attempt", "tool", "sig", "arg_hash", "ok")})
                     count += 1
-                except (ValueError, TypeError):
-                    continue
+                except (ValueError, TypeError, sqlite3.IntegrityError):
+                    continue  # a line without what a call keeps (its time, its signature) is no call
         store.set_transcript_offset(str(path), offset)
     return count
 

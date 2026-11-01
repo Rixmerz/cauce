@@ -39,6 +39,7 @@ from typing import Any
 
 from cauce import (
     after,
+    behavior,
     cells,
     ci,
     config,
@@ -1790,6 +1791,8 @@ def run(
                             # Every capability it was handed, and the calls of its tools (`evidence.calls`).
                             **({"capability_calls": evidence_mod.calls(store, task["id"], nth, selection.names)}
                                if selection.names else {}),
+                            # How its worker worked, from its own tool calls (`cauce.behavior`): observed.
+                            **({"behavior": shown} if (shown := behavior.of_attempt(store, task["id"], nth)) else {}),
                             # What cauce's check said where it failed: shown by `cauce show`, the board and
                             # the ending, and handed to the next attempt's brief.
                             **({"check_tail": result.check_tail} if result.check_tail else {}),
@@ -3317,6 +3320,9 @@ def _check_spec(*, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec, wo
                                     if config.enabled("tracer", os.environ) else (), since=since),
         verdicts=fixing, verdict_words=ledger_mod.WORDS["recheck"] if fixing else (),
         cell=vcell, max_turns=min(spec.max_turns, VERIFIER_TURNS),
+        # Its calls are never the worker's: the log keeps them under no attempt, so what a worker used
+        # (`evidence.owed`, `capability_calls`, `behavior`) is read from its own calls alone.
+        env=_verifier_env(spec.env),
         # Its own session, never the worker's: it reads the request and the diff, not the work's account.
         resume_session="", fork_session=False, resume_note="", persist_session=False,
         timeout_s=launch.timeout_for(min(spec.max_turns, VERIFIER_TURNS)),
@@ -3329,6 +3335,15 @@ def _check_spec(*, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec, wo
                             if not r.startswith("mcp__") or r.removeprefix("mcp__") in measuring)
         + tuple(f"mcp__{name}" for name in [*touched.servers, *(index or {})]))
     return check, vcell
+
+
+def _verifier_env(env: Mapping[str, str]) -> dict[str, str]:
+    """A worker's environment for the independent check of its attempt: the same task (it starts no
+    cauce work), its attempt marked as the check's, which the tool-call log keeps as no attempt."""
+    out = dict(env)
+    if out.get("CAUCE_WORKER_ATTEMPT"):
+        out["CAUCE_WORKER_ATTEMPT"] = out["CAUCE_WORKER_ATTEMPT"] + "-verify"
+    return out
 
 
 def _judged(result: launch.WorkerResult, verdict: launch.WorkerResult, *, vcell: Cell, wall_s: float,

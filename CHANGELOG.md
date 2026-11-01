@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+## [0.65.0] - 2026-11-01
+
+### Added
+
+- **How a worker worked, per attempt** (`cauce.behavior`, `attempt_finished.behavior`): read from
+  its own tool calls, never their arguments. It keeps:
+  - calls, and the calls that failed;
+  - calls per phase;
+  - calls and seconds before the first write;
+  - the checks it ran itself, and its fix loops;
+  - whether it ended on a write no check followed;
+  - rereads of a file, the longest run of the same call, the longest silence, active time;
+  - calls by tool family.
+
+  `cauce stats` and the Analysis screen add the profiles up by kind and outcome (passing workers
+  beside failing ones) and by cell. Each run gains `calls`, `failed_calls`, `check_runs`,
+  `fix_cycles` and `calls_before_edit` (in `--runs --csv` too). `cauce stats --attempts [--csv]`
+  exports one record per attempt with its cell, outcome, time, tokens, cost and profile, for an
+  analysis outside cauce. Observed, never a rule's input.
+
+### Fixed
+
+- **The independent check's tool calls were counted as its worker's.** The check ran with the
+  worker's attempt number, so the calls it made with a measuring tool counted toward the attempt's
+  `capability_calls`. They also counted toward the evidence gate of that task's later attempts.
+  The check's calls are now logged under no attempt (`orchestrate._verifier_env`).
+- **A malformed line in the tool-call log stopped reading the log** (a line without a time
+  raised an integrity error). Such a line is now skipped.
+
 ## [0.64.0] - 2026-11-01
 
 ### Changed

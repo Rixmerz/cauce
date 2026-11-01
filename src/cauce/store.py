@@ -1147,6 +1147,15 @@ class Store:
             out.append({"task_id": task_id, "seq": seq, "calls": int(calls), "passed": bool(done and done[0])})
         return out
 
+    def attempt_calls(self, task_id: int, attempt: int) -> list[dict]:
+        """An attempt's worker's tool calls, oldest first: when, the tool, its signature, its
+        argument's hash and whether it went through (`behavior.profile`)."""
+        rows = self._conn.execute(
+            "SELECT ts, tool, sig, arg_hash, ok FROM tool_events WHERE task_id = ? AND attempt = ? ORDER BY id",
+            (task_id, attempt))
+        return [{"ts": ts, "tool": tool, "sig": sig, "arg_hash": arg_hash, "ok": ok}
+                for ts, tool, sig, arg_hash, ok in rows]
+
     def tool_counts(self, task_id: int, attempt: int, prefix: str, *, ok_only: bool = False) -> dict[str, int]:
         """How many times an attempt's worker called each tool whose name starts with `prefix`
         (`mcp__livespec__`), by the name after it; `ok_only`, only the calls that went through."""

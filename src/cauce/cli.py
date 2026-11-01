@@ -1787,11 +1787,18 @@ def cmd_survey(args: argparse.Namespace) -> int:
 
 def cmd_stats(args: argparse.Namespace) -> int:
     """Where cauce's time and money go, read from the store: no model."""
+    from datetime import UTC, datetime, timedelta
+
     from cauce import analysis
 
     key = repo.key(Path(args.repo).resolve()) if args.repo else None
     store = Store.open()
     try:
+        if args.attempts:
+            since = (datetime.now(UTC) - timedelta(days=args.days)).isoformat(timespec="seconds") if args.days else ""
+            rows = analysis.attempts(*store.runs_since(since, repo=key), since=since)
+            sys.stdout.write(analysis.attempts_csv(rows) if args.csv else analysis.as_json(rows) + "\n")
+            return 0
         report = analysis.compute(store, days=args.days, repo=key, keep_runs=None if args.runs else 20)
     finally:
         store.close()
@@ -2770,7 +2777,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", help="only this repository (default: every one)")
     p.add_argument("--json", action="store_true", help="everything, as JSON")
     p.add_argument("--runs", action="store_true", help="one record per run instead of the summary (JSON)")
-    p.add_argument("--csv", action="store_true", help="with --runs: CSV, for a spreadsheet")
+    p.add_argument("--attempts", action="store_true", help="one record per attempt with how its worker worked "
+                   "(its tool calls: before the first write, checks, fix loops, rereads, repeats, gaps), as JSON")
+    p.add_argument("--csv", action="store_true", help="with --runs or --attempts: CSV, for a spreadsheet")
     p.add_argument("--expensive", action="store_true", help="the runs that cost the most for their kind, and why")
     p.set_defaults(func=cmd_stats)
     p = sub.add_parser("trust", help="what the independent check's record says of each cell: clean checks, where "
