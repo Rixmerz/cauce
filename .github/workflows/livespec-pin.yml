@@ -1,0 +1,63 @@
+name: livespec pin
+
+# Keeps the livespec cauce runs current, checked before it is taken. Every week (or by hand): when
+# PyPI has a release newer than the adapter's PINNED, move the pin, verify that release against a real
+# index of this repository (scripts/livespec_check.py verify: the index read, a brief, a change's
+# reach, every tool cauce names served, validate_openspec), run the whole suite, and open a draft
+# pull request with the result. Nothing merges by itself: the person does.
+# A pull request opened with the workflow's own token starts no other workflow (GitHub's rule):
+# the checks it needs have already run here, and a push to it runs CI as usual.
+
+on:
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v6
+      - run: python -m pip install -e '.[dev]'
+      - name: A newer livespec?
+        id: newer
+        run: |
+          if version="$(python scripts/livespec_check.py newer)"; then
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Already proposed?
+        id: open
+        if: steps.newer.outputs.version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="livespec-pin/${{ steps.newer.outputs.version }}"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then echo "exists=1" >> "$GITHUB_OUTPUT"; fi
+      - name: Bump, verify, test
+        if: steps.newer.outputs.version && !steps.open.outputs.exists
+        run: |
+          python scripts/livespec_check.py bump "${{ steps.newer.outputs.version }}"
+          python scripts/livespec_check.py verify
+          python -m pytest -q
+      - name: Open the pull request
+        if: steps.newer.outputs.version && !steps.open.outputs.exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${{ steps.newer.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${{ steps.open.outputs.branch }}"
+          git commit -am "Pin livespec $version, checked against a real index of this repository"
+          git push -u origin "${{ steps.open.outputs.branch }}"
+          gh pr create --draft --title "Pin livespec $version" \
+            --body "PyPI has livespec $version. \`scripts/livespec_check.py verify\` passed against a real index of this repository (the index read, a brief, a change's reach, every tool cauce names served, validate_openspec), and the suite passed with it."

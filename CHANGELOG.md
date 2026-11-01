@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **A newer livespec is taken and checked, not trusted.** When the livespec cauce runs (a plugin's,
+  or one on PATH) is newer than the release it was checked against, its own tools are read once per
+  release and kept. A tool cauce names that it does not serve is left out of the orientation, named
+  in the hint as not served, and said in the plan; tools that cannot be read brief as for the checked
+  release. Before, a release that renamed a tool left workers told to call one that was not there.
+- **The pinned livespec keeps itself current** (`.github/workflows/livespec-pin.yml`,
+  `scripts/livespec_check.py`). Every week, a release on PyPI newer than the pin is pinned and
+  verified against a real index of this repository: the index read, a brief, a change's reach, every
+  tool named served, and `validate_openspec`. Once the suite passes with it, the workflow opens a
+  draft pull request. It is never merged or fetched unpinned by itself.
+
 ## [0.67.0] - 2026-11-01
 
 ### Changed
