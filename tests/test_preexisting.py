@@ -642,6 +642,7 @@ def _move_the_base(repo) -> str:
     return git(repo, "rev-parse", "HEAD")
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_base_that_cannot_tell_is_read_against_the_last_known_base_result(git_repo, store, monkeypatch):
     check = UNSURE.format(more="")
     monkeypatch.setenv("BASE_TELLS", "1")

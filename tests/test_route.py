@@ -79,7 +79,8 @@ def test_the_prompt_hook_advises_and_keeps_each_decision(store: Store, git_repo,
     monkeypatch.setattr(store, "worker_footprint", lambda key: FOOTPRINT)
     event = {"session_id": "s", "prompt": MEDIUM, "prompt_id": "p", "cwd": str(git_repo),
              "transcript_path": str(transcript)}
-    assert hooks.user_prompt_submit(event, store) is None  # the setting is off in tests
+    monkeypatch.setenv("CAUCE_ROUTE", "off")
+    assert hooks.user_prompt_submit(event, store) is None  # with the setting off, nothing
     monkeypatch.setenv("CAUCE_ROUTE", "on")
     out = hooks.user_prompt_submit({**event, "prompt_id": "p2"}, store)
     said = out["hookSpecificOutput"]["additionalContext"]

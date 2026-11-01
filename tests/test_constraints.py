@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from cauce import notes, repo
 from cauce.escalate import Failure
 from cauce.launch import WorkerResult
@@ -79,6 +81,7 @@ def test_every_worker_and_the_verifier_are_told_the_project_s_constraints(git_re
     assert "Constraints" not in verifier_brief("x", "implement", git_repo, "abc", ["app.py"])
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_rule_a_failing_check_taught_is_kept_as_a_constraint(git_repo, store: Store, monkeypatch):
     monkeypatch.setenv("CAUCE_NOTES", "on")
     taught = WorkerResult(True, None, "done", "1 passed", constraints=(f"{POLICY} (CI: POL-7)",))
@@ -92,6 +95,7 @@ def test_a_rule_a_failing_check_taught_is_kept_as_a_constraint(git_repo, store: 
     assert noted and noted[0]["notes"][0]["kind"] == notes.CONSTRAINT
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_rule_no_check_showed_is_kept_as_a_fact(git_repo, store: Store, monkeypatch):
     monkeypatch.setenv("CAUCE_NOTES", "on")
     asked = []

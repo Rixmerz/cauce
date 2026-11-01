@@ -39,6 +39,7 @@ def _picked(store: Store) -> list[int]:
 # --- held until it passes, then released on what it kept ----------------------------------
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_work_queued_after_a_task_waits_for_it_and_starts_on_the_branch_it_kept(git_repo, store, kicks, capsys):
     first = _queue(store, git_repo, "add the totals module")
     capsys.readouterr()
@@ -187,6 +188,7 @@ def test_a_resume_starts_held_work_that_lost_what_it_waited_for_on_the_base(git_
     assert store.get_task(held["id"])["status"] == "done"
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_held_work_follows_the_task_that_superseded_what_it_waited_for(git_repo, store, kicks):
     first = _queue(store, git_repo, "add the totals module")
     held = _queue(store, git_repo, "use the totals in the report", after_task=first["id"])
@@ -228,6 +230,7 @@ def test_cancelling_a_run_takes_the_work_queued_after_it_off_the_queue(git_repo,
     assert f"run #{started['id']}" in stops.of(store, gone).reason
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_chain_is_released_one_link_at_a_time(git_repo, store, kicks):
     a = _queue(store, git_repo, "add the schema")
     b = _queue(store, git_repo, "add the API on the schema", after_task=a["id"])
@@ -268,6 +271,7 @@ def test_a_missing_or_failed_task_or_run_is_refused_when_queued(git_repo, store,
                                                       status="cancelled")["id"])
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_work_queued_after_work_that_passed_starts_at_once_on_its_branch_or_the_base_once_merged(
         git_repo, store, capsys):
     done = run("add the totals module", git_repo, store, registry={}, launcher=Script(ok(), write="totals.py"),
@@ -291,6 +295,7 @@ def test_work_queued_after_work_that_passed_starts_at_once_on_its_branch_or_the_
         after.released_line(store, gone["id"]))
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_work_in_another_repository_waits_and_starts_on_its_own_base_reading_the_other(
         git_repo, store, kicks, tmp_path):
     other = tmp_path / "library"

@@ -254,10 +254,11 @@ def test_the_records_are_append_only(store: Store):
 
 
 def test_settle_judges_and_proposes_where_work_ended_and_nothing_when_off(store: Store, monkeypatch):
+    monkeypatch.setenv("CAUCE_ROLE_TRIALS", "off")
     _evidence(store)
     _task(store)
     editor = Editor()
-    assert revisions.settle(store, ask=editor) == {"judged": [], "proposed": []}  # off in tests
+    assert revisions.settle(store, ask=editor) == {"judged": [], "proposed": []}  # off
     monkeypatch.setenv("CAUCE_ROLE_TRIALS", "on")
     found = revisions.settle(store, ask=editor)
     assert [r["record"] for r in found["proposed"]] == ["proposed"] and len(editor.asked) == 1
@@ -269,6 +270,7 @@ def test_settle_judges_and_proposes_where_work_ended_and_nothing_when_off(store:
 
 
 def test_settle_runs_from_evolution_and_never_for_an_investigator(store: Store, monkeypatch):
+    monkeypatch.setenv("CAUCE_ROLE_TRIALS", "off")
     from cauce import evolution, standards
 
     monkeypatch.setattr(standards, "settle", lambda store, now=None: {"ended": 0, "calibrated": [], "judged": []})
@@ -292,6 +294,7 @@ def test_a_claim_keeps_two_settles_from_asking_twice(store: Store):
 
 
 def test_the_overview_and_the_command_show_current_candidate_and_history(store: Store, capsys, monkeypatch):
+    monkeypatch.setenv("CAUCE_ROLE_TRIALS", "off")  # the command says so
     from cauce import analysis, cli
 
     cand = _candidate(store)["id"]
@@ -355,6 +358,7 @@ def test_doctor_names_two_candidates_a_double_verdict_and_a_trial_nobody_got(sto
 # --- a run's brief -------------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_run_s_brief_records_the_role_s_version_and_follows_the_trial_s_arm(git_repo, store, monkeypatch):
     from cauce import repo
     from cauce.orchestrate import run

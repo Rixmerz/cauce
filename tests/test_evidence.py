@@ -122,6 +122,7 @@ def test_a_ui_pass_with_no_measurement_goes_back_once_then_to_the_orchestrator(g
     assert counted == {"layout-inspector": {"calls": 0, "ok": 0}}
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_ui_pass_that_measured_stands(git_repo, store: Store, monkeypatch):
     _ui_repo(git_repo)
     _held(monkeypatch)
@@ -137,6 +138,7 @@ def test_a_ui_pass_that_measured_stands(git_repo, store: Store, monkeypatch):
     assert report.status == "done" and not store.events_of(report.task_id, "evidence_owed")
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_free_work_is_never_held_back_and_its_calls_are_still_counted(git_repo, store: Store, monkeypatch):
     _ui_repo(git_repo)
     monkeypatch.setenv("CAUCE_EVIDENCE", "on")
@@ -236,6 +238,7 @@ def test_correct_lines_that_do_not_fit_are_said_by_count(git_repo, monkeypatch):
 
 @pytest.mark.parametrize("setting", ["evidence"])
 def test_the_setting_turns_it_off(setting, monkeypatch):
+    monkeypatch.setenv("CAUCE_EVIDENCE", "off")
     assert not evidence.enabled()
     monkeypatch.setenv("CAUCE_EVIDENCE", "on")
     assert evidence.enabled()

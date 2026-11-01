@@ -143,8 +143,9 @@ def _plan(store, arm):
 
 
 def test_a_trial_runs_only_where_the_first_rung_passes_and_its_arms_alternate(store: Store, monkeypatch):
+    monkeypatch.setenv("CAUCE_PROBATION", "off")
     many(store, 6, ("sonnet/medium", 1))
-    assert _arm(store) == (None, "")  # probation is off in tests
+    assert _arm(store) == (None, "")  # probation is off
     monkeypatch.setenv("CAUCE_PROBATION", "on")
     monkeypatch.setenv("CAUCE_VERIFIER", "on")
     arm, why = _arm(store)
@@ -188,6 +189,7 @@ def test_a_trial_ends_once_its_cell_was_tried_enough_or_lost_early(store: Store,
 def test_the_calibration_moves_onto_the_probation_cell_only_by_its_own_rule(store: Store, monkeypatch):
     many(store, 6, ("sonnet/medium", 1))
     many(store, 5, ("haiku/high", 1))
+    monkeypatch.setenv("CAUCE_PROBATION", "off")
     assert standards.calibrate(store, "r", now=NOW) == []  # off: the ladder's first rung is the floor
     monkeypatch.setenv("CAUCE_PROBATION", "on")
     change, = standards.calibrate(store, "r", now=NOW)

@@ -92,6 +92,7 @@ def test_the_model_that_served_is_recorded_and_a_pin_reaches_the_worker(git_repo
     assert not any("workers last ran" in r for r in dry.plan.reasons)
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_first_try_pass_leaves_a_branch(git_repo, store):
     script = Script(ok(), write="feature.py")
     report = run("add the feature", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
@@ -108,6 +109,7 @@ def test_a_first_try_pass_leaves_a_branch(git_repo, store):
     assert "passed at sonnet/medium" in report.text()
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_shallow_failures_climb_effort_and_keep_the_work(git_repo, store):
     seen = []
 
@@ -284,6 +286,7 @@ def test_turns_asked_for_never_pass_the_ceiling(git_repo, store):
     assert any("5000 turns were asked for" in r for r in report.plan.reasons)
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_history_moves_the_next_start(git_repo, store):
     for _ in range(3):
         script = Script(bad(Failure.CODE_BUG, "a"), bad(Failure.CODE_BUG, "b"), ok(), write="f.py")
@@ -343,6 +346,7 @@ def _livespec(tmp_path, *, runner=None, popen=None):
                     **({"popen": popen} if popen else {}))
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_livespec_runs_through_the_whole_flow(git_repo, store, tmp_path):
     from .livespec_fixture import build
 
@@ -611,6 +615,7 @@ def test_review_of_critical_code_is_reviewed_as_critical(git_repo, store, tmp_pa
 def test_the_switch_turns_livespec_off_everywhere(git_repo, store, monkeypatch):
     from cauce import orchestrate as o
 
+    monkeypatch.setenv("CAUCE_ENGRAM", "off")  # the other neighbour adopted, its own switch
     monkeypatch.setenv("CAUCE_LIVESPEC", "on")
     assert [a.name for a in o.adopted(Options(), None)] == ["livespec"]
     assert o.adopted(Options(livespec=False), None) == []
@@ -677,6 +682,7 @@ def test_a_cancel_in_the_middle_of_an_attempt_keeps_what_it_did(git_repo, store)
     assert finished["tip"] == git(git_repo, "rev-parse", report.branch).strip()
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_the_fix_that_worked_is_anchored_to_its_commit_and_costs_inform_the_next_plan(git_repo, store):
     script = Script(bad(Failure.CODE_BUG, "missed it"), ok("fixed", cost=0.4), write="f.py")
     report = run("fix the parser", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
@@ -804,6 +810,7 @@ def test_a_run_in_a_folder_of_several_repositories_is_read_in_each_while_it_runs
     assert store.final_event(report.task_id)["data"]["in_place"] == ["api", "web"]
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_later_attempt_in_a_folder_of_repositories_still_reads_the_work_of_the_earlier_ones(tmp_path, store):
     """The repositories' starting point is the run's, taken once: a second attempt begins on what the
     first wrote in the person's checkouts, which is the task's work and not what they already had."""
@@ -848,6 +855,7 @@ def test_work_that_failed_is_dropped_and_the_report_says_so(git_repo, store):
     assert "changed (from git)" not in report.text()
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_resumed_task_continues_on_its_branch_with_its_history_in_the_brief(git_repo, store):
     first = run("create the routes", git_repo, store, registry={}, launcher=Script(refused(), write="routes.js"),
                 classifier=kind("implement"))
@@ -877,6 +885,7 @@ def test_a_resumed_task_continues_on_its_branch_with_its_history_in_the_brief(gi
     assert [a["seq"] for a in store.attempts(first.task_id)] == [1, 2]
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_new_task_never_builds_on_a_branch_of_its_number_another_store_left(git_repo, store):
     task = store.create_task("create the routes", status="queued", source="cauce")
     branch = f"cauce/task-{task['id']}"
@@ -1051,6 +1060,7 @@ def test_a_reading_task_is_told_its_findings_are_the_answer_and_stops_when_cells
     assert "resuming would only repeat them" in report.text() and "cauce resume" not in report.text()
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_passing_worker_s_learned_facts_are_filed_and_later_workers_read_them(git_repo, store, monkeypatch):
     from cauce import notes
 
@@ -1283,6 +1293,7 @@ def test_a_feature_starts_with_more_turns_and_a_pin_still_wins(git_repo, store):
     assert not any("starts with 120 turns" in r for r in report.plan.reasons)
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_more_turns_continue_the_worker_s_own_session_in_its_worktree(git_repo, store):
     out = WorkerResult(False, Failure.TURNS_EXHAUSTED, "used all 30 turns", cost_usd=0.1, session_id="sess-1")
     lines = []
@@ -1304,6 +1315,7 @@ def test_more_turns_continue_the_worker_s_own_session_in_its_worktree(git_repo, 
     assert f"cauce: #{report.task_id} attempt 2 continues attempt 1's session (sess-1)" in lines
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_continued_session_is_told_the_check_that_failed_after_it_ran_out(git_repo, store):
     out = WorkerResult(False, Failure.TURNS_EXHAUSTED, "used all 30 turns", cost_usd=0.1, session_id="sess-1")
     script = Script(out, ok(), write="half.py")
@@ -1317,6 +1329,7 @@ def test_a_continued_session_is_told_the_check_that_failed_after_it_ran_out(git_
     assert first.resume_note == ""
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_an_answer_of_the_wrong_form_is_asked_again_in_the_same_session_and_climbs_nothing(git_repo, store):
     out = WorkerResult(False, Failure.INCONCLUSIVE, "the worker did not answer with exactly one result block",
                        cost_usd=0.1, session_id="sess-1", shape="its answer did not hold exactly one result block")
@@ -1332,6 +1345,7 @@ def test_an_answer_of_the_wrong_form_is_asked_again_in_the_same_session_and_clim
     assert moved["axis"] == "retry" and moved["continued"] is True and moved["version"] == __version__
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_more_turns_without_a_session_start_fresh_and_say_why(git_repo, store):
     out = WorkerResult(False, Failure.TURNS_EXHAUSTED, "ran past its time", cost_usd=0.1)
     lines = []
@@ -1344,6 +1358,7 @@ def test_more_turns_without_a_session_start_fresh_and_say_why(git_repo, store):
     assert f"cauce: #{report.task_id} attempt 2 starts fresh: attempt 1 kept no session to continue" in lines
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_more_effort_on_the_same_model_continues_its_session_as_a_fork(git_repo, store):
     shallow = WorkerResult(False, Failure.CODE_BUG, "2 tests fail", evidence="FAIL test_total: 3 != 4",
                            cost_usd=0.1, session_id="sess-1")
@@ -1370,6 +1385,7 @@ def test_more_effort_on_the_same_model_continues_its_session_as_a_fork(git_repo,
     assert f"cauce: #{report.task_id} attempt 2 continues attempt 1's session (sess-1) at sonnet/high" in lines
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_fork_the_cli_refuses_starts_fresh_and_says_so(git_repo, store):
     shallow = WorkerResult(False, Failure.CODE_BUG, "2 tests fail", cost_usd=0.1, session_id="sess-1")
     refused = WorkerResult(True, None, "fixed", "1 passed", cost_usd=0.1, session_id="sess-2",
@@ -1386,6 +1402,7 @@ def test_a_fork_the_cli_refuses_starts_fresh_and_says_so(git_repo, store):
             "No conversation found") in lines
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_move_to_another_model_or_a_retry_never_inherits_the_session(git_repo, store):
     wrong = WorkerResult(False, Failure.APPROACH, "rewrote the wrong module", cost_usd=0.1, session_id="sess-1")
     broke = WorkerResult(False, Failure.ENVIRONMENT, "no JSON", transient=True, session_id="sess-2")
@@ -1579,6 +1596,7 @@ def test_a_cancel_while_waiting_for_the_checkout_stops_the_run(git_repo, store, 
     assert report.status == "cancelled"
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_run_in_a_worktree_never_waits_for_the_checkout(git_repo, store):
     from cauce import isolate
     from cauce.store import home
@@ -1733,6 +1751,7 @@ def test_a_validation_that_says_it_is_read_only_is_read_as_one(git_repo, store):
     assert len(report.cells) == 2
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_the_kept_commit_carries_the_line_the_worker_proposed(git_repo, store):
     script = Script(WorkerResult(True, None, "routes.js serves /health", "1 passed", commit="Serve a health route"),
                     write="routes.js")
@@ -1757,6 +1776,7 @@ def test_work_a_reset_throws_away_is_kept_on_a_ref_and_the_brief_says_so(git_rep
     assert report.branch is None and git(git_repo, "for-each-ref", "refs/cauce/aside") == ""
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_task_naming_uncommitted_files_is_warned_and_carry_brings_them(git_repo, store):
     (git_repo / "app.py").write_text("print('work in progress')\n")
     said = []
@@ -1863,6 +1883,7 @@ def _dropped(summary="the session errored: API Error: Connection error."):
     return WorkerResult(False, Failure.ENVIRONMENT, summary, transient=True, network="Connection error", cost_usd=0.1)
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_network_drop_waits_and_goes_on_from_the_work_it_kept(git_repo, store, monkeypatch):
     from cauce import orchestrate
 
@@ -2022,6 +2043,7 @@ JOIN = {"branches": [{"part": "api", "task": 901, "branch": "cauce/task-901"},
         "contract": "- main() prints one line"}
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_conflict_makes_the_integrate_step_a_worker_told_the_files_the_branch_and_the_contract(git_repo, store):
     from .conftest import git
 
@@ -2049,6 +2071,7 @@ def test_a_conflict_makes_the_integrate_step_a_worker_told_the_files_the_branch_
     assert git(git_repo, "show", f"{report.branch}:app.py") == "print('api and web')"
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_new_model_on_a_conflicting_join_starts_from_the_parts_that_joined_cleanly(git_repo, store):
     from .conftest import git
 
@@ -2075,6 +2098,7 @@ def test_a_new_model_on_a_conflicting_join_starts_from_the_parts_that_joined_cle
     assert "Join the api part" in git(git_repo, "log", "--format=%s", report.branch)
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_clean_join_whose_check_fails_goes_to_a_worker_with_the_output(git_repo, store):
     base = _two_branches(git_repo, conflict=False)
     told = []
@@ -2112,6 +2136,7 @@ def test_an_integrate_step_with_a_branch_that_is_gone_stops_for_the_environment(
 
 # --- points: a task's size, estimated when planned and measured when it ends -------------------
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_task_is_scored_when_planned_and_measured_when_it_ends(git_repo, store):
     text = "Add the export:\n- a CSV writer\n- a header row\n- an --out flag\n- a test for it"
     report = run(text, git_repo, store, registry={}, launcher=Script(bad(Failure.CODE_BUG), ok(), write="export.py"),
@@ -2193,6 +2218,7 @@ def test_work_done_that_names_one_decision_is_kept_and_never_called_failed(git_r
     assert report.status == "replan" and report.stop.cause == "spec"
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_passing_worker_that_names_a_security_problem_raises_an_alert_with_the_secret_masked(git_repo, store):
     from cauce import hooks
 
@@ -2346,6 +2372,7 @@ def test_lines_a_repository_hears_on_every_task_are_said_once_a_day(git_repo, st
     assert "(1 note(s) this repository already heard today left out: `cauce show 7` keeps them)" in text
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_problem_its_task_left_open_is_solved_when_a_resume_passes_its_first_attempt(git_repo, store):
     first = run("fix the ble race in the scanner", git_repo, store, Options(max_attempts=1), registry={},
                 launcher=Script(bad(Failure.CODE_BUG, "the race is in the scanner callback")),
@@ -2358,6 +2385,7 @@ def test_a_problem_its_task_left_open_is_solved_when_a_resume_passes_its_first_a
     assert store.problem(problem["id"])["state"] == "solved"
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_later_task_whose_text_matched_an_open_problem_solves_it(git_repo, store):
     key = __import__("cauce.repo", fromlist=["key"]).key(git_repo)
     problem = store.open_problem("esp-now frames dropped on the macos bridge", repo=key,

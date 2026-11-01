@@ -492,7 +492,9 @@ def test_a_worker_s_note_starts_as_a_candidate_and_its_line_says_it_is_unproven(
     assert store.get_note(kept)["state"] == "current" and "unproven" not in notes.line(notes.expand(store, [kept])[0])
 
 
-def test_a_candidate_is_proven_by_later_tasks_that_passed_their_first_try(store: Store):
+def test_a_candidate_is_proven_by_later_tasks_that_passed_their_first_try(store: Store, monkeypatch):
+    # The proof by passes alone, as with the trial off (`notes.PROVE_AFTER`); the trial has its own tests.
+    monkeypatch.setenv("CAUCE_NOTE_TRIALS", "off")
     from .test_standards import finished
 
     writer = finished(store, ("sonnet/medium", 1))
@@ -542,7 +544,9 @@ def test_a_candidate_whose_readers_failed_their_first_try_is_dropped_and_one_pas
     assert notes.recall(store, "r", "cache cron") == []
 
 
-def test_settle_weighs_the_candidates(store: Store):
+def test_settle_weighs_the_candidates(store: Store, monkeypatch):
+    # The proof by passes alone, as with the trial off (`notes.PROVE_AFTER`); the trial has its own tests.
+    monkeypatch.setenv("CAUCE_NOTE_TRIALS", "off")
     from cauce import evolution
 
     from .test_standards import finished
