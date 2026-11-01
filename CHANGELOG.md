@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- **The independent check could write into the work it read.** Its write tools are taken away,
+  but a shell writes too, and what it wrote was committed on the kept branch as the work. Its
+  worktree is now snapshotted before it runs, and anything it changed is put back afterwards
+  (`orchestrate._read_only`, a `verifier_wrote` event), leaving the worker's own uncommitted work
+  untouched.
+- **SessionStart resumed a dead task whose work had already landed.** It ran the automatic resume
+  before reading what landed, so a worker ran on merged work while the task was dismissed. It now
+  reads what landed first, as the Stop hook already did. New doctor rule: `resumed-after-it-landed`.
 - **API keys were not masked** (`notes._SECRET`, used for check tails, notes, briefs, the scribe, the
   survey and compaction digests). Anthropic (`sk-ant-api03-…`) and OpenAI (`sk-proj-…`) keys carry
   dashes, and the pattern took letters and digits only, so they went through whole. It now also
@@ -28,8 +36,10 @@
   other; it now waits for the longer of the two.
 - **livespec pinned at 0.35.0**, checked against a real index of this repository.
 - **Tests:**
-  - `CAUCE_TEST_ALL_ON=1` runs the suite with every adaptive setting as a person gets it, with a
-    fake `claude` that also answers Haiku's schema questions; CI runs the scenarios in that profile.
+  - `CAUCE_TEST_ALL_ON=1` runs the whole suite with every adaptive setting as a person gets it,
+    with a fake `claude` that also answers Haiku's schema questions; CI runs it on every push.
+    82 tests that silently relied on a setting being off now declare it (the `no_verifier`
+    fixture and single switches); no assertion was weakened.
   - Coverage now counts the processes tests start.
   - `tests/test_fuzz.py` feeds every reader of outside text the fragments that broke readers before.
 

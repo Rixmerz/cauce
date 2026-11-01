@@ -378,3 +378,20 @@ def test_a_run_that_died_after_its_attempt_passed_is_suspect(store: Store):
     found = rules(store, now=LATER, alive=lambda pid: True)["died-after-a-pass"]
     assert [(f.severity, f.task_id) for f in found] == [(doctor.SUSPECT, task["id"]), (doctor.FIXED, old["id"])]
     assert "died after its attempt 1 passed" in found[0].what
+
+
+def test_a_task_resumed_on_its_own_after_its_work_landed_is_suspect(store: Store):
+    def died_resumed_landed(version: str, *, resumed: bool = True) -> int:
+        task = store.create_task("work", status="dismissed", source="cauce", repo="r")["id"]
+        store.add_event(task, "finished", status="interrupted", version=version, stop={"cause": "died"})
+        if resumed:
+            store.add_event(task, "auto_resumed", after="its process is gone", cause="died")
+        store.add_event(task, "finished", status="dismissed", version=version,
+                        stop={"cause": "landed", "by": "cauce", "reason": "its change is already in main"})
+        return task
+
+    now = died_resumed_landed("0.66.0")
+    died_resumed_landed("0.66.0", resumed=False)
+    old = died_resumed_landed("0.65.0")
+    found = rules(store, now=LATER, alive=lambda pid: True)["resumed-after-it-landed"]
+    assert [(f.severity, f.task_id) for f in found] == [(doctor.SUSPECT, now), (doctor.FIXED, old)]

@@ -562,6 +562,27 @@ def changed_since(path: Path, commit: str) -> list[str] | None:
     return sorted(p for p in names if p and not is_artifact(p))
 
 
+def put_back(path: Path, commit: str, paths: Sequence[str]) -> list[str]:
+    """These paths of a worktree as a `snapshot` of it held them: a file it held is written back,
+    one it did not is removed. What could not be put back is returned."""
+    left: list[str] = []
+    for name in paths:
+        held = subprocess.run(["git", "cat-file", "-e", f"{commit}:{name}"], cwd=str(path),
+                              capture_output=True, check=False).returncode == 0
+        target = path / name
+        try:
+            if held:
+                blob = subprocess.run(["git", "show", f"{commit}:{name}"], cwd=str(path), capture_output=True,
+                                      check=True).stdout
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(blob)
+            elif target.is_file() or target.is_symlink():
+                target.unlink()
+        except (OSError, subprocess.CalledProcessError):
+            left.append(name)
+    return left
+
+
 def fingerprint(path: Path) -> dict[str, str] | None:
     """Every file of a worktree that differs from its HEAD (tracked or not), with the blob
     git would make of it ("" when deleted): taken before and after cauce runs a check, to

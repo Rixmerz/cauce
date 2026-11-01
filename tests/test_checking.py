@@ -1277,3 +1277,25 @@ def test_the_independent_check_is_told_what_the_code_index_says_the_change_reach
     assert report.status == "done"
     verifier = script.specs[1].prompt
     assert "code index says this change reaches" in verifier and "SPEC-7" in verifier
+
+
+def test_what_the_independent_check_writes_in_the_work_it_reads_is_put_back(git_repo, store, verifier_on):
+    """The check reads: its write tools are taken away, but a shell writes too. What it wrote in the
+    worktree is put back as it was before it ran, so the kept branch holds the worker's work alone."""
+    from .conftest import git
+
+    def launcher(spec):
+        if spec.env.get("CAUCE_WORKER_ATTEMPT", "").endswith("-verify"):
+            (spec.target_dir / "app.py").write_text("the check's edit\n")
+            (spec.target_dir / "probe.py").write_text("print('probe')\n")
+            return check("pass")
+        (spec.target_dir / "app.py").write_text("the worker's fix\n")
+        return passing()
+
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=launcher, classifier=kind("implement"))
+    assert report.status == "done"
+    wrote = store.events_of(report.task_id, "verifier_wrote")
+    assert wrote and set(wrote[0]["data"]["files"]) == {"app.py", "probe.py"} and wrote[0]["data"]["left"] == []
+    branch = isolate.branch_for(report.task_id)
+    assert git(git_repo, "show", f"{branch}:app.py") == "the worker's fix"
+    assert "probe.py" not in git(git_repo, "ls-tree", "--name-only", branch)

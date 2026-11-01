@@ -1743,6 +1743,8 @@ def run(
                         "check runs after its ending")
                 elif needed:
                     store.add_event(task["id"], "stage", seq=nth, stage="verifier")
+                    # The check reads: what it writes in the work it reads is put back (`_read_only`).
+                    read_from = isolate.snapshot(workspace.path) if workspace is not None else None
                     result, review_stop, ledger, corrections, open_blockers = _independent_check(
                         result, text=text, kind=the_plan.kind, cell=cell, spec=spec, workdir=workdir,
                         base=base_commit, changed=so_far, risk=the_plan.risk, ledger=ledger,
@@ -1754,6 +1756,8 @@ def run(
                         index=_index_servers(the_plan, repo_dir, workdir), snapshots=workspace is not None,
                         sampled=sampled.why if sampled is not None else "")
                     ahead = None
+                    if workspace is not None and read_from is not None:
+                        _read_only(workspace.path, read_from, store, task["id"], nth, say)
             if ahead is not None:
                 # cauce's check failed (or the change needs no check now): what ran beside it is dropped.
                 stopped = ahead.stop()
@@ -3345,6 +3349,24 @@ def _check_spec(*, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec, wo
                             if not r.startswith("mcp__") or r.removeprefix("mcp__") in measuring)
         + tuple(f"mcp__{name}" for name in [*touched.servers, *(index or {})]))
     return check, vcell
+
+
+def _read_only(path: Path, read_from: str, store: Store, task_id: int, nth: int,
+               say: Callable[[str], None]) -> list[str]:
+    """What the independent check wrote in the worktree it read, put back as it was before it ran:
+    its write tools are taken away, but a shell writes too, and what it wrote would be committed as
+    the work. Said and kept as a `verifier_wrote` event; never a verdict. Never fails a run."""
+    try:
+        wrote = isolate.changed_since(path, read_from) or []
+        if not wrote:
+            return []
+        left = isolate.put_back(path, read_from, wrote)
+    except Exception:  # a guard never costs the run it guards
+        return []
+    store.add_event(task_id, "verifier_wrote", seq=nth, files=wrote[:200], n=len(wrote), left=left[:50])
+    say(f"cauce: #{task_id} the independent check wrote {len(wrote)} file(s) in the work it read; put back"
+        + (f", {len(left)} could not be" if left else ""))
+    return wrote
 
 
 def _verifier_env(env: Mapping[str, str]) -> dict[str, str]:
