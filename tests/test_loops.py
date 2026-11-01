@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from cauce import capabilities, cli, flow, hooks, loop_cli, loops, mcp_guard
-from cauce.store import Store, home
+from locks import capabilities, cli, flow, hooks, loop_cli, loops, mcp_guard
+from locks.store import Store, home
 
 from .test_orchestrate import ok
 from .test_workflows import _runner, _save
@@ -26,7 +26,7 @@ def _loop(cwd, **over) -> loops.Loop:
     return loop
 
 
-def test_a_loop_is_checked_and_kept_in_the_cauce_home(tmp_path):
+def test_a_loop_is_checked_and_kept_in_the_locks_home(tmp_path):
     with pytest.raises(loops.LoopError) as bad:
         loops.normalize({"name": "Bad Name", "direction": "sideways", "mode": "loud", "target": 3,
                          "hours": "21-8", "variants": ["only one"], "stale": 0})
@@ -187,13 +187,13 @@ def test_a_round_waits_its_turn_and_a_loop_s_ending_reaches_its_session_once(tmp
 
 
 def test_the_outbound_guard_holds_acting_tools_to_the_loop(tmp_path):
-    env = {"CAUCE_HOME": str(home()), "CAUCE_OUTBOUND_ACTS": "send_message,reply"}
+    env = {"LOCKS_HOME": str(home()), "LOCKS_OUTBOUND_ACTS": "send_message,reply"}
     assert mcp_guard.outbound("search", {}, env) == (None, {})
     assert "only in a round of a loop" in mcp_guard.outbound("send_message", {}, env)[0]
-    env["CAUCE_LOOP"] = "ghost"
+    env["LOCKS_LOOP"] = "ghost"
     assert "cannot be read" in mcp_guard.outbound("send_message", {}, env)[0]
     loop = _loop(tmp_path, exclude=["boss@acme.com"], per_hour=2, hours="8-21")
-    env["CAUCE_LOOP"] = "leads"
+    env["LOCKS_LOOP"] = "leads"
     assert "is a draft" in mcp_guard.outbound("send_message", {"to": "x@y.z"}, env)[0]
     loop.mode = "act"
     loops.save(loop)
@@ -216,13 +216,13 @@ def test_a_capability_s_acting_tools_run_behind_the_guard(tmp_path):
                                 "docs": {"server": {"command": "docs-mcp"}}}))
     registry = capabilities.load(path)
     server = registry["mail"].server
-    assert server["args"][:4] == ["-m", "cauce.mcp_guard", "outbound", "--"] and server["args"][4:] == [
+    assert server["args"][:4] == ["-m", "locks.mcp_guard", "outbound", "--"] and server["args"][4:] == [
         "mail-mcp", "serve"]
-    assert server["env"]["CAUCE_OUTBOUND_ACTS"] == "send_message"
+    assert server["env"]["LOCKS_OUTBOUND_ACTS"] == "send_message"
     chosen = capabilities.select(registry, "implement")
     told = capabilities.for_loop(chosen, "leads", home())
-    assert told.servers["mail"]["env"]["CAUCE_LOOP"] == "leads" and "env" not in told.servers["docs"]
-    assert "CAUCE_LOOP" not in capabilities.for_loop(chosen, None, home()).servers["mail"]["env"]
+    assert told.servers["mail"]["env"]["LOCKS_LOOP"] == "leads" and "env" not in told.servers["docs"]
+    assert "LOCKS_LOOP" not in capabilities.for_loop(chosen, None, home()).servers["mail"]["env"]
     for wrong in ({"acts": []}, "send", {"acts": [3]}):
         path.write_text(json.dumps({"mail": {"server": {"command": "m"}, "outbound": wrong}}))
         with pytest.raises(capabilities.RegistryError, match="outbound"):
@@ -268,7 +268,7 @@ def test_the_cli_makes_shows_and_moves_a_loop(tmp_path, monkeypatch, capsys):
     assert cli.main(["loop", "show", "nope"]) == 2
     assert cli.main(["loop", "rm", "leads"]) == 0 and loops.names() == []
     # a worker starts no loop
-    monkeypatch.setenv("CAUCE_WORKER_TASK", "7")
+    monkeypatch.setenv("LOCKS_WORKER_TASK", "7")
     assert cli.main(["loop", "start", "leads"]) != 0
 
 
@@ -280,12 +280,12 @@ def test_the_runner_starts_detached_once_and_looks_until_the_loop_stops(tmp_path
         started.append((argv, kw["start_new_session"]))
         return SimpleNamespace(pid=99)
 
-    assert loops.launch("leads", {"CAUCE_HOME": str(home())}, popen=popen) == 99
+    assert loops.launch("leads", {"LOCKS_HOME": str(home())}, popen=popen) == 99
     assert started[0][0][-2:] == ["loop-runner", "leads"] and started[0][1]
     assert not loops.alive(None) and not loops.alive("x") and loops.alive(os.getpid())
     monkeypatch.setattr(loops, "alive", lambda pid: True)
     with pytest.raises(loops.LoopError, match="running already"):
-        loops.launch("leads", {"CAUCE_HOME": str(home())}, popen=popen)
+        loops.launch("leads", {"LOCKS_HOME": str(home())}, popen=popen)
     seen = iter(["started", "waiting", "stopped"])
     slept = []
     assert loops.run_forever("leads", sleep=slept.append, tick_fn=lambda store, name, env=None: next(seen)) == \

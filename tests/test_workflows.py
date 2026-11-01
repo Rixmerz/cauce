@@ -4,11 +4,11 @@ import json
 
 import pytest
 
-from cauce import cli, flow, project, workflows
-from cauce.escalate import Failure
-from cauce.launch import WorkerResult
-from cauce.orchestrate import Options, run
-from cauce.store import Store
+from locks import cli, flow, project, workflows
+from locks.escalate import Failure
+from locks.launch import WorkerResult
+from locks.orchestrate import Options, run
+from locks.store import Store
 
 from .test_orchestrate import bad, kind, ok
 
@@ -61,11 +61,11 @@ def test_a_definition_is_checked_and_completed():
             {"id": "a", "prompt": "do {other}", "kind": "nope", "allow_tools": ["Bash(*)"]},
             {"id": "a", "prompt": "", "needs": ["z"], "start": "gpt/high", "max_turns": 0}]})
     said = str(err.value)
-    for part in ("allow_tools", "flags of `cauce workflow run`", "{other}", "no kind 'nope'", "used twice",
+    for part in ("allow_tools", "flags of `locks workflow run`", "{other}", "no kind 'nope'", "used twice",
                  "needs a prompt", "'z'", "no cell", "max_turns is a whole number from 1"):
         assert part in said
-    # A step an older cauce saved with a dollar budget still loads; the key is dropped, even a bad value.
-    # Turns over the ceiling (an older cauce took any number) read as the ceiling.
+    # A step an older locks saved with a dollar budget still loads; the key is dropped, even a bad value.
+    # Turns over the ceiling (an older locks took any number) read as the ceiling.
     old = workflows.normalize({"name": "old", "inputs": ["goal"], "steps": [
         {"id": "a", "prompt": "do {goal}", "kind": "implement", "budget_usd": 2.0, "max_turns": 300},
         {"id": "b", "prompt": "check", "kind": "review-routine", "needs": ["a"], "budget_usd": -1}]})
@@ -144,7 +144,7 @@ def test_a_run_goes_on_by_itself_each_step_on_the_work_before_it(git_repo, store
     assert "- build (task #" in polish["prompt"] and "no problems" in polish["prompt"]
 
     status = workflows.status(store, started["id"])
-    assert status["state"] == "done" and status["branch"] == f"cauce/task-{status['steps'][2]['task']}"
+    assert status["state"] == "done" and status["branch"] == f"locks/task-{status['steps'][2]['task']}"
     assert [s["state"] for s in status["steps"]] == ["done", "done", "done"]
     tasks = store.run_tasks(started["id"])
     assert all(t["session_id"] == "s1" for t in tasks)
@@ -153,7 +153,7 @@ def test_a_run_goes_on_by_itself_each_step_on_the_work_before_it(git_repo, store
     # The session hears of the run once, at its end: not of each step it went past.
     assert [t["id"] for t in store.unreported("s1")] == [tasks[-1]["id"]]
     # A watcher sees the run, and each step's task says which run it belongs to.
-    from cauce.ui import api
+    from locks.ui import api
 
     seen_now = api.overview(store, hours=1)
     assert [w["id"] for w in seen_now["workflows"]] == [started["id"]]
@@ -163,10 +163,10 @@ def test_a_run_goes_on_by_itself_each_step_on_the_work_before_it(git_repo, store
 
 def test_a_run_says_its_first_steps_warnings_and_an_ending_repeats_them(git_repo, store: Store, kicks, capsys,
                                                                         monkeypatch):
-    from cauce import hooks
+    from locks import hooks
 
     monkeypatch.chdir(git_repo)
-    monkeypatch.setenv("CAUCE_SESSION_ID", "s1")
+    monkeypatch.setenv("LOCKS_SESSION_ID", "s1")
     _save({"name": "look", "inputs": ["page"], "steps": [
         {"id": "edit", "prompt": "Change {page}", "kind": "implement"},
         {"id": "see", "prompt": "Open {page} in the browser and fix what is off", "kind": "implement",
@@ -213,7 +213,7 @@ def test_a_run_s_add_dir_reaches_every_step_and_a_retry(git_repo, store: Store, 
     again = workflows.retry(store, run_id, "b")
     assert json.loads(again["options"])["add_dirs"] == [str(beside.resolve())]
     # The try it replaces offers nothing to resume, and no session hears of it as an ending.
-    from cauce import stops
+    from locks import stops
 
     old = store.get_task(second["id"])
     stop = stops.of(store, old)
@@ -224,7 +224,7 @@ def test_a_run_s_add_dir_reaches_every_step_and_a_retry(git_repo, store: Store, 
 
 def test_a_plan_that_cannot_be_foreseen_never_undoes_the_start_of_a_run(git_repo, store: Store, kicks, capsys,
                                                                        monkeypatch):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     def broken(*args, **kwargs):
         raise ValueError("the registry is unreadable")
@@ -246,7 +246,7 @@ def test_a_plan_that_cannot_be_foreseen_never_undoes_the_start_of_a_run(git_repo
 
 def test_the_warning_of_a_step_the_engine_went_past_is_said_by_the_run_s_next_ending(git_repo, store: Store,
                                                                                       kicks):
-    from cauce import hooks
+    from locks import hooks
 
     _save({"name": "look", "steps": [
         {"id": "see", "prompt": "Open the settings page in the browser and fix what is off", "kind": "implement"},
@@ -391,7 +391,7 @@ def test_the_cli_reads_writes_files_and_says_where_a_stopped_run_waits(git_repo,
     assert cli.main(["workflow", "status", str(run_id)]) == 0
     out = capsys.readouterr().out
     assert "waits on the orchestrator" in out and "✓ build" in out and f"retry {run_id} <step>" in out
-    assert "work so far: branch cauce/task-" in out
+    assert "work so far: branch locks/task-" in out
     assert cli.main(["workflow", "status", "--all", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)[0]["state"] == "waits on the orchestrator"
     assert cli.main(["overview"]) == 0
@@ -402,7 +402,7 @@ def test_the_cli_reads_writes_files_and_says_where_a_stopped_run_waits(git_repo,
 
 
 def test_a_step_carries_the_memory_attached_to_it(git_repo, store: Store, kicks):
-    from cauce import repo
+    from locks import repo
 
     key = repo.key(git_repo.resolve())
     zone = store.add_note(key, "conventions", "Zones", "Zone ids are UTC offsets, never city names.",
@@ -454,7 +454,7 @@ def test_a_step_carries_the_memory_attached_to_it(git_repo, store: Store, kicks)
 
 
 def test_the_cli_attaches_and_clears_memory(git_repo, store: Store, kicks, capsys, monkeypatch):
-    from cauce import repo
+    from locks import repo
 
     monkeypatch.chdir(git_repo)
     note = store.add_note(repo.key(git_repo.resolve()), "zones", "Zones", "UTC offsets.", author="person",
@@ -533,7 +533,7 @@ def test_a_global_workflow_in_use_is_held_and_its_changes_wait(git_repo, tmp_pat
 
 
 def test_a_step_runs_as_the_role_it_names_only_when_the_project_s_team_has_it(git_repo, store: Store, kicks):
-    from cauce import repo, teams
+    from locks import repo, teams
 
     with pytest.raises(workflows.WorkflowError, match="role is a role's name"):
         workflows.normalize({"name": "x", "steps": [{"id": "a", "prompt": "p", "role": "Bad Name"}]})
@@ -562,7 +562,7 @@ def test_a_step_runs_as_the_role_it_names_only_when_the_project_s_team_has_it(gi
 
 
 def test_a_step_role_in_the_team_is_the_one_it_runs_as(git_repo, store):
-    from cauce.orchestrate import Options
+    from locks.orchestrate import Options
 
     dry = run("x", git_repo, store, Options(dry_run=True, step_role="security-auditor"), registry={},
               classifier=kind("review-critical"))
@@ -575,7 +575,7 @@ def test_a_step_role_in_the_team_is_the_one_it_runs_as(git_repo, store):
 
 
 def test_what_the_steps_before_said_is_context_never_the_step_s_criteria(git_repo, store: Store, kicks):
-    from cauce import criteria
+    from locks import criteria
 
     _save(CHAIN, git_repo)
     started = workflows.start(store, "chain", git_repo, {"goal": "the export"})
@@ -603,12 +603,12 @@ def test_a_review_step_is_blind_and_the_step_after_it_gets_its_findings_as_recor
 
 def test_a_review_of_a_change_checks_the_spec_links_where_workers_were_told_to_make_them(
         git_repo, store: Store, kicks, monkeypatch):
-    from cauce import specs
+    from locks import specs
 
     from .livespec_fixture import build
     from .test_specs import _spec_repo
 
-    monkeypatch.setenv("CAUCE_LIVESPEC", "on")
+    monkeypatch.setenv("LOCKS_LIVESPEC", "on")
     _spec_repo(git_repo)
     build(git_repo)
     _save(CHAIN, git_repo)
@@ -725,7 +725,7 @@ def test_a_flag_a_command_does_not_take_says_what_was_meant(capsys):
     assert "--allw: did you mean --allow?" in said and "--input name=value" in said
     with pytest.raises(SystemExit):
         cli.main(["run", "fix it", "--input", "goal=x"])
-    assert "--input is taken by cauce workflow run, cauce loop add, not by `cauce run`" in capsys.readouterr().err
+    assert "--input is taken by locks workflow run, locks loop add, not by `locks run`" in capsys.readouterr().err
 
 
 def test_the_status_says_how_far_each_run_got_in_a_line(git_repo, store: Store, kicks, capsys, monkeypatch):
@@ -748,13 +748,13 @@ def test_the_status_says_how_far_each_run_got_in_a_line(git_repo, store: Store, 
     out = capsys.readouterr().out
     assert "goal: Build the export" in out and brief.strip() not in out
     # A step a line: its state and task, cell, attempts, cost and branch.
-    assert "done #1 · sonnet/medium · attempt 1 · $0.10 · branch cauce/task-1" in out
+    assert "done #1 · sonnet/medium · attempt 1 · $0.10 · branch locks/task-1" in out
     assert cli.main(["workflow", "status", str(started["id"]), "--full"]) == 0
     assert brief.strip() in capsys.readouterr().out
 
 
 def test_the_status_says_what_a_held_back_step_waits_for(git_repo, store: Store, kicks, capsys, monkeypatch):
-    from cauce import dispatch
+    from locks import dispatch
 
     monkeypatch.chdir(git_repo)
     _save(CHAIN, git_repo)
@@ -772,8 +772,8 @@ def test_the_status_says_what_a_held_back_step_waits_for(git_repo, store: Store,
 
 
 def test_a_running_step_says_its_attempt_and_the_files_it_touched_so_far(git_repo, store: Store):
-    from cauce import isolate
-    from cauce.store import home
+    from locks import isolate
+    from locks.store import home
 
     from .conftest import git
 
@@ -790,7 +790,7 @@ def test_a_running_step_says_its_attempt_and_the_files_it_touched_so_far(git_rep
 
 
 def test_the_run_check_reaches_a_step_with_no_kind_once_it_is_known_to_write(git_repo, store: Store):
-    from cauce.orchestrate import Options
+    from locks.orchestrate import Options
 
     # A step classified into a writing kind runs the run's check, and a red one is no pass.
     red = run("add the export", git_repo, store, Options(run_verify="exit 1", max_attempts=1), registry={},
@@ -811,18 +811,18 @@ def test_a_kindless_step_carries_the_run_check_and_the_dry_run_says_so(git_repo,
     out = capsys.readouterr().out
     assert "checked by `npm test` if it writes" in out
     # An alias reads as its topic; a topic the project lacks is added before a note can fill it.
-    assert "topic 'style' holds no note" in out and "`cauce note --topic conventions" in out
-    assert "cauce notes topic add contracts" in out
+    assert "topic 'style' holds no note" in out and "`locks note --topic conventions" in out
+    assert "locks notes topic add contracts" in out
     assert cli.main(["workflow", "run", "plain", "the export", "--verify", "npm test"]) == 0
     (task,) = store.run_tasks(store.list_runs()[0]["id"])
     assert json.loads(task["options"])["run_verify"] == "npm test"
     capsys.readouterr()
     assert cli.main(["workflow", "status", "--repo", str(git_repo / "nowhere")]) == 0
-    assert capsys.readouterr().out.splitlines() == ["no workflow run here; `cauce workflow list` shows what can run"]
+    assert capsys.readouterr().out.splitlines() == ["no workflow run here; `locks workflow list` shows what can run"]
 
 
 def test_the_line_of_a_run_names_the_step_that_waits_on_the_person():
-    from cauce import workflow_cli
+    from locks import workflow_cli
 
     line = workflow_cli._run_line({"id": 7, "name": "dual", "state": "waits on the orchestrator", "cost_usd": 1.0,
                                    "waiting": ["a"], "steps": [
@@ -832,7 +832,7 @@ def test_the_line_of_a_run_names_the_step_that_waits_on_the_person():
 
 
 def test_a_resumed_step_counts_the_files_of_its_final_ending_not_an_attempts(git_repo, store: Store):
-    from cauce import workflow_cli
+    from locks import workflow_cli
 
     task = store.create_task("build it", status="interrupted", source="queue", cwd=str(git_repo))
     for _ in range(2):
@@ -841,7 +841,7 @@ def test_a_resumed_step_counts_the_files_of_its_final_ending_not_an_attempts(git
     store.update_task(task["id"], status="done")
     files = [f"src/f{i}.ts" for i in range(106)]
     # The run kept the head of the list; the count is the whole of it.
-    store.add_event(task["id"], "finished", status="done", branch="cauce/task-1", changed=files[:100], changed_n=106)
+    store.add_event(task["id"], "finished", status="done", branch="locks/task-1", changed=files[:100], changed_n=106)
     found = workflows.progress(store, {"cwd": str(git_repo)}, store.get_task(task["id"]))
     assert found["files_n"] == 106 and len(found["files"]) == 100
     assert "106 file(s): src/f0.ts, src/f1.ts, src/f2.ts +103" in workflow_cli._step_line(
@@ -894,8 +894,8 @@ TWO = {"name": "two", "inputs": ["goal"], "steps": [
 
 def test_a_step_says_how_far_its_branch_is_behind_the_base_and_nothing_is_merged(git_repo, store: Store, kicks,
                                                                                  capsys, monkeypatch):
-    from cauce import hooks
-    from cauce.ui import api
+    from locks import hooks
+    from locks.ui import api
 
     from .conftest import git
 
@@ -930,7 +930,7 @@ def test_a_step_says_how_far_its_branch_is_behind_the_base_and_nothing_is_merged
     assert {e["data"]["when"] for e in store.events_of(build["id"], "behind_base")} == {"start", "end"}
     status = workflows.status(store, started["id"], detail=True)
     assert [s.get("behind") for s in status["steps"]] == [said, said]
-    # the board reads what was kept, the ending notice says it, and so does `cauce workflow status`
+    # the board reads what was kept, the ending notice says it, and so does `locks workflow status`
     board = api.workflows_view(store, started["repo"])["runs"][0]
     assert [s.get("behind") for s in board["steps"]] == [said, said]
     notice, _ = hooks.endings(store, "s1")
@@ -1075,7 +1075,7 @@ def test_a_step_fans_out_into_one_task_per_part_and_what_needs_it_waits_for_all(
         assert "\n".join(f"> {line}" for line in CONTRACT.splitlines()) in task["body"]
         assert "> - it pages by 50" in task["body"]
         assert f"[fanned#{started['id']} build/{part['id']}]" in task["title"]
-    from cauce import criteria
+    from locks import criteria
 
     # A part's criteria are its own prompt's items, never the whole request's nor what the plan said.
     assert criteria.items(api["body"]) == ["GET /orders lists them", "GET /orders/1 is one"]
@@ -1110,7 +1110,7 @@ def test_a_part_that_stops_stops_the_run_and_a_retry_runs_only_the_parts_that_di
     assert cli.main(["workflow", "status", str(started["id"])]) == 0
     out = capsys.readouterr().out
     assert "    ✓ api" in out and "    ! web" in out and "replan #" in out
-    from cauce.ui import api as ui_api
+    from locks.ui import api as ui_api
 
     board = ui_api.workflows_view(store, started["repo"])["runs"][0]
     assert [p["id"] for p in board["steps"][1]["parts"]] == ["api", "web"]
@@ -1131,7 +1131,7 @@ def test_a_part_that_stops_stops_the_run_and_a_retry_runs_only_the_parts_that_di
 def test_work_queued_after_a_run_stopped_at_a_part_is_told_a_retry_that_runs(git_repo, store: Store, kicks):
     import re
 
-    from cauce import after
+    from locks import after
 
     _save(FANNED, git_repo)
     started = workflows.start(store, "fanned", git_repo, {"goal": "the orders view"})
@@ -1144,7 +1144,7 @@ def test_work_queued_after_a_run_stopped_at_a_part_is_told_a_retry_that_runs(git
         after.target(store, run_id=started["id"])
     said = str(refused.value)
     assert "step 'build' (part web" in said
-    run_id, step = re.search(r"`cauce workflow retry (\d+) (\S+)`", said).groups()
+    run_id, step = re.search(r"`locks workflow retry (\d+) (\S+)`", said).groups()
     # The command it names is one that runs: the step, whose stopped parts go again.
     assert workflows.retry(store, int(run_id), step)["parts_retried"][0][0] == "web"
 
@@ -1175,7 +1175,7 @@ def test_parts_whose_surfaces_overlap_stop_the_run_at_the_plan_with_the_paths_na
     assert workflows.advance(store, store.get_task(plan_task["id"])) == []
     plan_task = store.get_task(plan_task["id"])
     assert plan_task["status"] == "replan" and len(store.run_tasks(started["id"])) == 1
-    from cauce import stops
+    from locks import stops
 
     stop = stops.of(store, plan_task)
     assert stop.cause == "parts" and "api's api/** and web's api/web/**" in stop.reason
@@ -1210,11 +1210,11 @@ def test_an_integrate_step_joins_the_parts_with_no_worker_when_they_merge_cleanl
     assert opts["integrate"]["contract"] == CONTRACT
     # Its base is the commit the parts started from, and the request is context in its brief.
     assert opts["base"] == store.last_event(api["id"], "attempt_started")["data"]["base"]
-    assert "> - it pages by 50" in join["body"] and "api — cauce/task-" in join["body"]
+    assert "> - it pages by 50" in join["body"] and "api — locks/task-" in join["body"]
     ended = store.final_event(join["id"])["data"]
-    assert ended["branch"] == f"cauce/task-{join['id']}" and ended["changed"] == ["api/api.py", "web/web.py"]
-    assert store.last_event(join["id"], "integrated")["data"]["merged"] == [f"cauce/task-{api['id']}",
-                                                                          f"cauce/task-{web['id']}"]
+    assert ended["branch"] == f"locks/task-{join['id']}" and ended["changed"] == ["api/api.py", "web/web.py"]
+    assert store.last_event(join["id"], "integrated")["data"]["merged"] == [f"locks/task-{api['id']}",
+                                                                          f"locks/task-{web['id']}"]
     subjects = git(git_repo, "log", "--format=%s", "--merges", ended["branch"]).splitlines()
     assert subjects == ["Join the web part", "Join the api part"]
     # The review reads the combined diff, blind, in a worktree that holds both parts.
@@ -1227,7 +1227,7 @@ ORDERED = ({**PLAN_PARTS[0]}, {**PLAN_PARTS[1], "after": "api"})
 
 
 def test_a_part_that_builds_on_another_waits_for_it_and_starts_from_what_it_kept(git_repo, store: Store, kicks):
-    from cauce import after
+    from locks import after
 
     _save(JOINED, git_repo)
     started = workflows.start(store, "joined", git_repo, {"goal": "the orders view"})
@@ -1249,7 +1249,7 @@ def test_a_part_that_builds_on_another_waits_for_it_and_starts_from_what_it_kept
 
 
 def test_a_retried_part_takes_the_parts_held_behind_it_along(git_repo, store: Store, kicks):
-    from cauce import after
+    from locks import after
 
     _save(JOINED, git_repo)
     started = workflows.start(store, "joined", git_repo, {"goal": "the orders view"})
@@ -1283,7 +1283,7 @@ def test_an_integrate_step_of_one_branch_passes_and_what_follows_starts_from_it(
 
 def test_the_bundled_feature_parallel_plans_builds_in_parts_joins_and_reviews_like_feature(git_repo, store: Store,
                                                                                            kicks):
-    from cauce import matrix
+    from locks import matrix
 
     defn = workflows.load("feature-parallel", git_repo, "bundled")
     steps = {s["id"]: s for s in defn["steps"]}
@@ -1479,7 +1479,7 @@ def test_the_run_command_says_it_fans_out_and_whole_keeps_one_build(git_repo, st
     monkeypatch.setattr(workflows, "fanned", lambda name, *a, **kw: ("feature-parallel", "runs as feature-parallel"))
     assert cli.main(["workflow", "run", "feature", "the export", "--dry-run"]) == 0
     out = capsys.readouterr().out
-    assert out.startswith("cauce: runs as feature-parallel") and "feature-parallel would run here" in out
+    assert out.startswith("locks: runs as feature-parallel") and "feature-parallel would run here" in out
     assert cli.main(["workflow", "run", "feature", "the export", "--dry-run", "--whole"]) == 0
     assert capsys.readouterr().out.startswith("feature would run here")
     assert cli.main(["workflow", "run", "feature", "the export", "--json"]) == 0
@@ -1519,7 +1519,7 @@ def test_a_later_fix_round_starts_from_what_the_round_before_it_kept(git_repo, s
 
 
 def test_a_step_whose_branch_was_deleted_brings_it_back_or_stops(git_repo, store: Store, kicks, monkeypatch):
-    from cauce import isolate
+    from locks import isolate
 
     from .conftest import git
 
@@ -1541,7 +1541,7 @@ def test_a_step_whose_branch_was_deleted_brings_it_back_or_stops(git_repo, store
 
     def advance(store, task, env=None, kick=None):
         if task and task.get("workflow_step") == "build" and task["status"] == "done":
-            git(git_repo, "branch", "-D", f"cauce/task-{task['id']}")
+            git(git_repo, "branch", "-D", f"locks/task-{task['id']}")
         return real(store, task, env, kick)
 
     monkeypatch.setattr(workflows, "advance", advance)
@@ -1549,7 +1549,7 @@ def test_a_step_whose_branch_was_deleted_brings_it_back_or_stops(git_repo, store
     build, polish = store.run_tasks(started["id"])
     # The polish step started on the build's work: the branch was put back at the tip it kept.
     assert saw == [False, True] and polish["status"] == "done"
-    assert store.last_event(build["id"], "branch_restored")["data"]["branch"] == f"cauce/task-{build['id']}"
+    assert store.last_event(build["id"], "branch_restored")["data"]["branch"] == f"locks/task-{build['id']}"
 
     # A branch that cannot be put back stops the run with the reason, never a start on the base.
     started = workflows.start(store, "two", git_repo, {"goal": "the import"})
@@ -1610,7 +1610,7 @@ def test_the_status_of_one_run_is_a_line_a_step_with_why_a_step_stopped(
     goal = next(line for line in out.splitlines() if line.startswith("  goal: "))
     assert len(goal) <= len("  goal: ") + 100 and goal.endswith("…") and brief.strip() not in out
     build = next(line for line in out.splitlines() if " build " in line)
-    assert "done #" in build and "attempt 1" in build and "$0.10" in build and "branch cauce/task-" in build
+    assert "done #" in build and "attempt 1" in build and "$0.10" in build and "branch locks/task-" in build
     review = next(line for line in out.splitlines() if " check " in line)
     assert "stopped: " in review
     # The goal whole only when asked for.
@@ -1647,15 +1647,15 @@ def test_what_each_blind_review_added_beside_the_other_is_measured(git_repo, sto
     rows = {r["step"]: r for r in workflows.reviewer_yield(store)}
     assert {k: (r["runs"], r["rows"], r["alone"], r["alone_kept"]) for k, r in rows.items()} == {
         "review-a": (1, 2, 1, 1), "review-b": (1, 1, 0, 0)}
-    from cauce import analysis
+    from locks import analysis
     said = analysis.text(analysis.compute(store, days=0))
     assert "blind reviews beside another" in said and "review-b" in said
 
 
 def test_a_re_check_the_fix_s_own_check_already_answered_runs_no_worker(git_repo, store: Store, kicks, monkeypatch):
-    from cauce import orchestrate
+    from locks import orchestrate
 
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
     monkeypatch.setattr(orchestrate.risk_mod, "needs_verifier", lambda risk, cheap=False: True)
     found = ({"where": "src/chart.py:3", "what": "the total skips the last line", "evidence_class": "deterministic",
               "cause": "introduced", "proof": "python3 -c 'print(total([1, 2]))' prints 1"},)
@@ -1690,9 +1690,9 @@ def test_a_re_check_the_fix_s_own_check_already_answered_runs_no_worker(git_repo
 
 
 def test_a_row_the_fix_s_check_finds_open_earns_the_fix_a_correction(git_repo, store: Store, kicks, monkeypatch):
-    from cauce import orchestrate
+    from locks import orchestrate
 
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
     monkeypatch.setattr(orchestrate.risk_mod, "needs_verifier", lambda risk, cheap=False: True)
     found = ({"where": "src/chart.py:3", "what": "the total skips the last line", "evidence_class": "deterministic",
               "cause": "introduced", "proof": "python3 -c 'print(total([1, 2]))' prints 1"},)

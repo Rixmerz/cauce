@@ -1,5 +1,5 @@
 ---
-description: Review the habits cauce found — edits followed by the same check, again and again — and install the ones worth it in this repository as hooks, after you pick them
+description: Review the habits locks found — edits followed by the same check, again and again — and install the ones worth it in this repository as hooks, after you pick them
 ---
 
 A habit is a sequence the sessions repeat: an edit of a file type, then the
@@ -10,14 +10,14 @@ command, and when the command fails the session reads its output at once,
 instead of spending a turn running it. Your job: find which candidates are
 worth that here, show them to the person, and install the ones they pick.
 
-When `cauce` alone is not found (exit 127), it is
-`${CLAUDE_PLUGIN_ROOT}/bin/cauce`; call it by that path.
+When `locks` alone is not found (exit 127), it is
+`${CLAUDE_PLUGIN_ROOT}/bin/locks`; call it by that path.
 
 ## 1. Read what there is
 
 ```bash
-cauce habits list --json      # this repository's candidates, and those other repositories share
-cauce habits status --json    # installed habits: where, runs, failures, on or off
+locks habits list --json      # this repository's candidates, and those other repositories share
+locks habits status --json    # installed habits: where, runs, failures, on or off
 ```
 
 Run them in the repository: habits are per project. `list` mines this
@@ -42,12 +42,12 @@ A candidate is worth installing here only when all of these hold:
 - **It is fast and touches nothing.** It runs after every edit and the
   session waits for it (110 seconds at most). A type check, a linter, a
   formatter, or the tests of what changed (`--onlyChanged`,
-  `--findRelatedTests`) are, and the edited file's path is in `$CAUCE_EDITED`
-  for a command scoped to it (`ruff check "$CAUCE_EDITED"`); the whole suite, a build, an install, a deploy,
+  `--findRelatedTests`) are, and the edited file's path is in `$LOCKS_EDITED`
+  for a command scoped to it (`ruff check "$LOCKS_EDITED"`); the whole suite, a build, an install, a deploy,
   anything that writes outside the working tree or talks to the network are
   not. A formatter rewrites the file the session just edited: say so.
 - **It is not here already.** The same command on the same file type in
-  `status` for this repository is installed; `cauce habits install` says so
+  `status` for this repository is installed; `locks habits install` says so
   and installs nothing, but do not offer it.
 - **It passes now.** Run the command once. A check that fails before any edit
   would fail after each one and turn itself off after three: tell the person
@@ -78,11 +78,11 @@ Install only what the person picked — a hook runs a shell command after
 every edit, and that is their call, never yours:
 
 ```bash
-cauce habits install <candidate id> --command "<command>" --repo <top of the checkout>
-cauce habits uninstall <habit id>
+locks habits install <candidate id> --command "<command>" --repo <top of the checkout>
+locks habits uninstall <habit id>
 ```
 
-Then say what is installed and where, and that `cauce habits uninstall <id>`
+Then say what is installed and where, and that `locks habits uninstall <id>`
 removes any of them. A session that does not run a new hook yet picks it up
 when it starts again.
 
@@ -90,5 +90,5 @@ when it starts again.
 
 - Install a habit the person did not pick, or a command they did not see.
 - Install in a repository other than this one: run the skill there.
-- Edit `.claude/settings.local.json` by hand; `cauce habits install` and
-  `uninstall` keep it and cauce's record in step.
+- Edit `.claude/settings.local.json` by hand; `locks habits install` and
+  `uninstall` keep it and locks' record in step.

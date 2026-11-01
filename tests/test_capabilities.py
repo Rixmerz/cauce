@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from cauce import capabilities as caps
+from locks import capabilities as caps
 
 
 def write(tmp_path: Path, data) -> Path:
@@ -80,7 +80,7 @@ def test_an_entry_named_after_a_neighbour_takes_what_it_does_not_declare(tmp_pat
         "layout-inspector": {"server": {"command": "layout-inspector"}, "when": ["implement", "feature"]},
         "browser": {"server": {"command": "npx", "args": ["-y", "@playwright/mcp@latest"]}, "when": ["test"]},
     })
-    off = {"CAUCE_PLUGINS": "off"}
+    off = {"LOCKS_PLUGINS": "off"}
     registry = caps.load_all(old, env=off)
     inspector = registry["layout-inspector"]
     assert inspector.measures and inspector.touches and inspector.when == ("implement", "feature")

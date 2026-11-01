@@ -2,24 +2,24 @@ from __future__ import annotations
 
 import pytest
 
-from cauce import isolate
+from locks import isolate
 
 from .conftest import git
 
 
 def test_a_passed_task_leaves_one_branch_and_the_checkout_untouched(git_repo, tmp_path):
     ws = isolate.prepare(git_repo, 7, tmp_path / "home")
-    assert ws.branch == "cauce/task-7" and ws.path.is_dir()
+    assert ws.branch == "locks/task-7" and ws.path.is_dir()
     (ws.path / "feature.py").write_text("x = 1\n")
     assert isolate.has_changes(ws)
-    assert isolate.finish(ws, keep=True, message="cauce task #7") == "cauce/task-7"
+    assert isolate.finish(ws, keep=True, message="locks task #7") == "locks/task-7"
     assert not ws.path.exists()
     assert not (git_repo / "feature.py").exists()
-    assert "feature.py" in git(git_repo, "show", "--name-only", "cauce/task-7")
+    assert "feature.py" in git(git_repo, "show", "--name-only", "locks/task-7")
 
 
 def test_a_worker_that_committed_its_work_and_left_only_artifacts_keeps_its_branch(git_repo, tmp_path):
-    # A real Haiku docs worker committed README.md itself and left __pycache__ behind: cauce's own
+    # A real Haiku docs worker committed README.md itself and left __pycache__ behind: locks' own
     # commit had nothing staged once the artifacts were dropped, and the run died on it twice.
     ws = isolate.prepare(git_repo, 16, tmp_path / "home")
     (ws.path / "README.md").write_text("# docs\n")
@@ -27,9 +27,9 @@ def test_a_worker_that_committed_its_work_and_left_only_artifacts_keeps_its_bran
     git(ws.path, "commit", "-q", "-m", "Document it")
     (ws.path / "__pycache__").mkdir()
     (ws.path / "__pycache__" / "calc.pyc").write_bytes(b"\0")
-    assert isolate.finish(ws, keep=True, message="Document it") == "cauce/task-16"
-    assert git(git_repo, "log", "-1", "--format=%s", "cauce/task-16") == "Document it"
-    assert "__pycache__" not in git(git_repo, "show", "--name-only", "cauce/task-16")
+    assert isolate.finish(ws, keep=True, message="Document it") == "locks/task-16"
+    assert git(git_repo, "log", "-1", "--format=%s", "locks/task-16") == "Document it"
+    assert "__pycache__" not in git(git_repo, "show", "--name-only", "locks/task-16")
 
 
 def test_reset_discards_a_wrong_approach(git_repo, tmp_path):
@@ -46,7 +46,7 @@ def test_a_failed_task_leaves_nothing(git_repo, tmp_path):
     ws = isolate.prepare(git_repo, 9, tmp_path / "home")
     (ws.path / "x.py").write_text("x\n")
     assert isolate.finish(ws, keep=False, message="m") is None
-    assert "cauce/task-9" not in git(git_repo, "branch", "--list")
+    assert "locks/task-9" not in git(git_repo, "branch", "--list")
 
 
 def test_a_pass_that_changed_nothing_keeps_no_branch(git_repo, tmp_path):
@@ -88,8 +88,8 @@ def test_a_worktree_gets_the_checkouts_dependencies_and_local_settings_never_com
     (ws.path / " spaced.js").write_text("y\n")
     (ws.path / "app.py").write_text("changed\n")
     assert isolate.changed(ws) == (" spaced.js", "app.py", "feature.js")
-    assert isolate.finish(ws, keep=True, message="m") == "cauce/task-11"
-    files = git(git_repo, "ls-tree", "-r", "--name-only", "cauce/task-11").split()
+    assert isolate.finish(ws, keep=True, message="m") == "locks/task-11"
+    files = git(git_repo, "ls-tree", "-r", "--name-only", "locks/task-11").split()
     assert "feature.js" in files and "app.py" in files
     assert not any("node_modules" in f or "settings.local" in f for f in files)
     assert (git_repo / "node_modules" / "left-pad" / "index.js").exists()
@@ -110,17 +110,17 @@ def test_a_kept_branch_is_where_a_resumed_task_continues(git_repo, tmp_path):
     ws = isolate.prepare(git_repo, 13, tmp_path / "home")
     assert isolate.kept(git_repo, 13)  # the branch exists while it runs
     (ws.path / "half.py").write_text("half\n")
-    assert isolate.finish(ws, keep=True, message="cauce task #13 (unverified, blocked)") == "cauce/task-13"
+    assert isolate.finish(ws, keep=True, message="locks task #13 (unverified, blocked)") == "locks/task-13"
     assert isolate.kept(git_repo, 13)
     again = isolate.prepare(git_repo, 13, tmp_path / "home")
     assert (again.path / "half.py").read_text() == "half\n"
     assert again.base == git(git_repo, "rev-parse", "HEAD")
     assert isolate.has_changes(again)  # the kept work alone keeps the branch
-    assert isolate.finish(again, keep=True, message="m") == "cauce/task-13"
+    assert isolate.finish(again, keep=True, message="m") == "locks/task-13"
 
 
 def test_a_run_in_a_folder_holds_the_checkouts_inside_it(tmp_path):
-    from cauce import isolate
+    from locks import isolate
 
     (tmp_path / "api" / ".git").mkdir(parents=True)
     (tmp_path / "web" / ".git").mkdir(parents=True)
@@ -146,8 +146,8 @@ def test_a_kept_branch_never_commits_tool_artifacts(git_repo, tmp_path):
     (ws.path / ".playwright-mcp" / "page.yml").write_text("snapshot")
     assert not isolate.has_changes(ws)
     (ws.path / "fix.py").write_text("x = 1\n")
-    assert isolate.finish(ws, keep=True, message="m") == "cauce/task-14"
-    shown = git(git_repo, "show", "--name-only", "cauce/task-14")
+    assert isolate.finish(ws, keep=True, message="m") == "locks/task-14"
+    shown = git(git_repo, "show", "--name-only", "locks/task-14")
     assert "fix.py" in shown
     assert ".playwright-mcp" not in shown
 
@@ -159,8 +159,8 @@ def test_an_index_a_worker_built_in_its_worktree_is_no_work_and_is_never_committ
     assert not isolate.has_changes(ws)
     (ws.path / "fix.py").write_text("x = 1\n")
     assert isolate.changed(ws) == ("fix.py",)
-    assert isolate.finish(ws, keep=True, message="m") == "cauce/task-15"
-    assert ".mcp-docs" not in git(git_repo, "show", "--name-only", "cauce/task-15")
+    assert isolate.finish(ws, keep=True, message="m") == "locks/task-15"
+    assert ".mcp-docs" not in git(git_repo, "show", "--name-only", "locks/task-15")
 
 
 def test_a_commit_message_reads_as_the_change_with_the_task_in_its_trailers():
@@ -169,12 +169,12 @@ def test_a_commit_message_reads_as_the_change_with_the_task_in_its_trailers():
                           status="blocked")
     subject, body, trailers = msg.split("\n\n")
     assert subject == "Use the brand palette in the admin theme" and body == "theme.css now reads tokens"
-    assert trailers.splitlines() == ["Cauce-Task: #1144", "Cauce-Verified: no (blocked)"]
+    assert trailers.splitlines() == ["Locks-Task: #1144", "Locks-Verified: no (blocked)"]
     done = isolate.message(7, title="x " * 60, summary="")
     assert not done.split("\n\n")[0].endswith("…") and len(done.split("\n\n")[0]) <= isolate.SUBJECT_CHARS
-    assert done.split("\n\n")[-1] == "Cauce-Task: #7"
+    assert done.split("\n\n")[-1] == "Locks-Task: #7"
     assert isolate.message(8, title="", subject="key sk-abcdefghijklmnop").startswith("key [secret]")
-    assert isolate.message(9, title="").startswith("Work of cauce task #9")
+    assert isolate.message(9, title="").startswith("Work of locks task #9")
     long = isolate.message(10, title="t", subject="word " * 30, summary="s " * 600)
     assert len(long.splitlines()[0]) <= isolate.SUBJECT_CHARS and long.split("\n\n")[-2].endswith("…")
 
@@ -189,7 +189,7 @@ def test_a_commit_subject_never_ends_in_an_ellipsis_and_the_whole_text_goes_in_t
         assert " ".join(parts[1].split()) == long and parts[2] == "the work"
     # A line that fits is the worker's, as proposed, and adds nothing to the body.
     fits = isolate.message(47, title=long, subject="Add the client portal", summary="")
-    assert fits.split("\n\n") == ["Add the client portal", "Cauce-Task: #47"]
+    assert fits.split("\n\n") == ["Add the client portal", "Locks-Task: #47"]
     # No space to cut at: the limit is the cut, still no ellipsis.
     assert len(isolate.message(48, title="", subject="x" * 200).splitlines()[0]) == isolate.SUBJECT_CHARS
 
@@ -207,17 +207,17 @@ def test_a_cut_subject_ends_on_neither_a_dangling_word_nor_an_open_parenthesis()
 def test_work_kept_unverified_under_the_old_subject_is_still_read_as_such(git_repo, tmp_path):
     ws = isolate.prepare(git_repo, 14, tmp_path / "home")
     (ws.path / "half.py").write_text("half\n")
-    isolate.finish(ws, keep=True, message="cauce task #14 (unverified, blocked): half")
+    isolate.finish(ws, keep=True, message="locks task #14 (unverified, blocked): half")
     again = isolate.prepare(git_repo, 14, tmp_path / "home")
     isolate.finish(again, keep=True, message=isolate.message(14, title="half"))
-    assert git(git_repo, "log", "-1", "--format=%s", "cauce/task-14") == "half"  # it passed since: said so
+    assert git(git_repo, "log", "-1", "--format=%s", "locks/task-14") == "half"  # it passed since: said so
 
 
 def test_a_resume_after_its_process_died_continues_in_the_worktree_it_left(git_repo, tmp_path):
     ws = isolate.prepare(git_repo, 15, tmp_path / "home")
     (ws.path / "half.py").write_text("x = 1\n")  # the process dies here: no finish
     again = isolate.prepare(git_repo, 15, tmp_path / "home")
-    assert again.path == ws.path and again.branch == "cauce/task-15"
+    assert again.path == ws.path and again.branch == "locks/task-15"
     assert (again.path / "half.py").read_text() == "x = 1\n"
     assert again.base == git(git_repo, "rev-parse", "HEAD").strip()
 
@@ -244,7 +244,7 @@ def test_a_resume_mends_a_branch_whose_newest_commit_a_full_disk_lost(git_repo, 
     _lose(git_repo, lost)
     again = isolate.prepare(git_repo, 16, tmp_path / "home")
     assert again.base == git(git_repo, "rev-parse", "HEAD")
-    assert git(git_repo, "rev-parse", "refs/heads/cauce/task-16") == good
+    assert git(git_repo, "rev-parse", "refs/heads/locks/task-16") == good
     assert (again.path / "half.py").read_text() == "x = 1\n"
     if died:
         # The lost commit's files stay where the run left them, as changes to commit.
@@ -256,13 +256,13 @@ def test_a_branch_with_nothing_readable_stops_the_resume_in_a_line(git_repo, tmp
     lost = _commit_in(ws.path, "half.py", "x = 1\n")
     _lose(git_repo, lost)
     # Its reflog's only other commit is gone too: nothing to go back to.
-    (git_repo / ".git" / "logs" / "refs" / "heads" / "cauce" / "task-17").unlink()
+    (git_repo / ".git" / "logs" / "refs" / "heads" / "locks" / "task-17").unlink()
     with pytest.raises(isolate.IsolationError) as err:
         isolate.prepare(git_repo, 17, tmp_path / "home")
     said = str(err.value)
-    assert said.startswith("the kept branch cauce/task-17 cannot be read after a git failure (")
+    assert said.startswith("the kept branch locks/task-17 cannot be read after a git failure (")
     assert "fsck" in said and "\n" not in said
-    assert git(git_repo, "rev-parse", "refs/heads/cauce/task-17") == lost  # kept as it was
+    assert git(git_repo, "rev-parse", "refs/heads/locks/task-17") == lost  # kept as it was
 
 
 def test_a_base_that_took_in_the_branch_s_own_work_under_another_commit_is_not_ahead_of_it(git_repo):
@@ -319,11 +319,11 @@ def test_a_base_that_cannot_be_read_is_refused_never_replaced_by_head(git_repo, 
 
 def test_a_task_that_never_ran_sets_aside_a_branch_of_its_name_and_starts_on_its_base(git_repo, tmp_path):
     head = git(git_repo, "rev-parse", "HEAD").strip()
-    git(git_repo, "checkout", "-q", "-b", "cauce/task-21")
+    git(git_repo, "checkout", "-q", "-b", "locks/task-21")
     old = _commit_in(git_repo, "foreign.py", "another store's work\n").strip()
     git(git_repo, "checkout", "-q", "-")
     ws = isolate.prepare(git_repo, 21, tmp_path / "home", fresh=True)
-    assert ws.set_aside == f"cauce/foreign/task-21-{old[:12]}"
+    assert ws.set_aside == f"locks/foreign/task-21-{old[:12]}"
     assert ws.base == head and not (ws.path / "foreign.py").exists()
     # nothing is lost, and the set-aside branch is no kept branch of any task
     assert git(git_repo, "rev-parse", ws.set_aside).strip() == old
@@ -353,7 +353,7 @@ def test_finishing_removes_what_git_left_of_the_worktree(git_repo, tmp_path):
     (ws.path / ".angular" / "blob").write_text("x")
     git(git_repo, "worktree", "remove", "--force", str(ws.path))
     (ws.path / ".angular").mkdir(parents=True)  # a dev server wrote again while it went
-    isolate.finish(ws, keep=False, message="cauce task #12")
+    isolate.finish(ws, keep=False, message="locks task #12")
     assert not ws.path.exists()
 
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from cauce import hooks, route
-from cauce.store import Store
+from locks import hooks, route
+from locks.store import Store
 
 SMALL = "Fix the typo in the README heading of the install section"
 MEDIUM = ("Add a --json flag to the export command in src/cli/export.py that prints the rows as JSON, "
@@ -27,7 +27,7 @@ def test_a_short_turn_reading_and_the_conversation_stay_with_the_session():
 
 def test_large_or_spread_work_runs_in_parts():
     found = route.choose(BIG, context_tokens=50_000, footprint=FOOTPRINT)
-    assert found.mode == route.PARALLEL and "cauce workflow run feature" in found.advice()
+    assert found.mode == route.PARALLEL and "locks workflow run feature" in found.advice()
     pieces = ("Do these:\n- update src/api/users.py for the new field\n- update web/views/users.tsx to show it\n"
               "- update docs/guide/users.md to describe it")
     assert route.choose(pieces).mode == route.PARALLEL
@@ -61,7 +61,7 @@ def test_without_a_measure_size_and_a_full_context_decide():
 def test_a_worker_s_footprint_is_measured_from_its_attempts(store: Store):
     assert store.worker_footprint("r") is None
     for i in range(6):
-        task = store.create_task(f"t{i}", status="done", source="cauce", repo="r")
+        task = store.create_task(f"t{i}", status="done", source="locks", repo="r")
         store.add_event(task["id"], "attempt_finished", input_tokens=1_000_000 * (i + 1), turns=10 + i)
     assert store.worker_footprint("r") == (4_000_000, 13)
     assert store.worker_footprint("elsewhere") == (4_000_000, 13)  # anywhere, when the repository has too few
@@ -69,7 +69,7 @@ def test_a_worker_s_footprint_is_measured_from_its_attempts(store: Store):
 
 
 def test_the_prompt_hook_advises_and_keeps_each_decision(store: Store, git_repo, tmp_path, monkeypatch):
-    from cauce import project
+    from locks import project
 
     project.enroll(git_repo)
     transcript = tmp_path / "t.jsonl"
@@ -79,12 +79,12 @@ def test_the_prompt_hook_advises_and_keeps_each_decision(store: Store, git_repo,
     monkeypatch.setattr(store, "worker_footprint", lambda key: FOOTPRINT)
     event = {"session_id": "s", "prompt": MEDIUM, "prompt_id": "p", "cwd": str(git_repo),
              "transcript_path": str(transcript)}
-    monkeypatch.setenv("CAUCE_ROUTE", "off")
+    monkeypatch.setenv("LOCKS_ROUTE", "off")
     assert hooks.user_prompt_submit(event, store) is None  # with the setting off, nothing
-    monkeypatch.setenv("CAUCE_ROUTE", "on")
+    monkeypatch.setenv("LOCKS_ROUTE", "on")
     out = hooks.user_prompt_submit({**event, "prompt_id": "p2"}, store)
     said = out["hookSpecificOutput"]["additionalContext"]
-    assert said.startswith("cauce route: a worker (done here it reads about")
+    assert said.startswith("locks route: a worker (done here it reads about")
     routed = store.session_events("s", ("routed",))[-1]["data"]
     assert routed["mode"] == "worker" and routed["context_tokens"] == 600_000 and routed["worker_tokens"] == 2_300_000
     # The session does it: kept, and nothing is said.
@@ -115,7 +115,7 @@ def test_a_question_about_the_work_stays_with_the_session_and_an_order_with_one_
 
 
 def test_a_request_that_talks_to_the_session_stays_with_it():
-    said = "Habla en español y dime si falta mergear algo o testear la nueva versión de cauce en los repositorios"
+    said = "Habla en español y dime si falta mergear algo o testear la nueva versión de locks en los repositorios"
     found = route.choose(said, context_tokens=600_000, footprint=FOOTPRINT)
     assert found.mode == route.MAIN and found.reasons == ("it talks to this session, which answers it",)
     assert route.talks("Tell me why the dispatcher waited on the second task before starting it")
@@ -149,7 +149,7 @@ def test_informing_imperatives_questions_about_state_and_reports_back_stay_with_
 
 
 def test_a_merge_with_review_words_is_work_not_reading():
-    merge = ("Integra la rama cauce/task-1394 en cauce/task-1400 con cherry-pick y resuelve conflictos; son los "
+    merge = ("Integra la rama locks/task-1394 en locks/task-1400 con cherry-pick y resuelve conflictos; son los "
              "arreglos de la auditoría de seguridad")
     found = route.choose(merge, context_tokens=600_000, footprint=FOOTPRINT)
     assert found.kind == "implement" and found.mode != route.MAIN
@@ -174,7 +174,7 @@ def test_the_corpus_of_real_requests_goes_where_each_belongs():
 
 
 def test_a_reading_kind_a_session_gave_an_order_in_the_corpus_is_widened():
-    from cauce.orchestrate import Options, _caller_kind
+    from locks.orchestrate import Options, _caller_kind
 
     corpus = json.loads((Path(__file__).parent / "corpus" / "requests.json").read_text())["requests"]
     given = [item for item in corpus if "given_kind" in item]

@@ -7,8 +7,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from cauce import hooks, stops
-from cauce.store import Store
+from locks import hooks, stops
+from locks.store import Store
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -88,17 +88,17 @@ def test_session_start_lists_unfinished_work_dead_ends_and_swallowed_errors(stor
     lost = store.create_task("a subagent that never said it ended", status="running", source="delegation",
                              session_id="s")
     stops.record(store, lost["id"], stops.Stop("turn", "the session's subagent ended without its ending"))
-    cut = store.create_task("a worker that died", status="running", source="cauce", session_id="s")
+    cut = store.create_task("a worker that died", status="running", source="locks", session_id="s")
     stops.record(store, cut["id"], stops.Stop("died", "no sign of life"))
     context = hooks.session_start(event, store, root)["hookSpecificOutput"]["additionalContext"]
     assert "never said it ended" not in context and f"#{cut['id']} [interrupted] a worker that died" in context
-    blocked = store.create_task("create the routes", status="running", source="cauce", session_id="s", cwd="/x")
+    blocked = store.create_task("create the routes", status="running", source="locks", session_id="s", cwd="/x")
     stops.record(store, blocked["id"], stops.Stop("permission", "the worker was refused Bash(node a.js)",
                                                   denied=("Bash(node a.js)",)))
     context = hooks.session_start(event, store, root)["hookSpecificOutput"]["additionalContext"]
     assert f"#{blocked['id']} [blocked] create the routes" in context
     assert "stopped by your permission settings: the worker was refused Bash(node a.js)" in context
-    assert f"cauce resume {blocked['id']} --allow 'Bash(node:*)'" in context
+    assert f"locks resume {blocked['id']} --allow 'Bash(node:*)'" in context
     # Nothing is left waiting on the person: the session carries it and asks them for the rule.
     assert "yours to carry" in context and "next (ask the person for it here)" in context
     again = hooks.session_start({**event, "source": "startup"}, store, root)["hookSpecificOutput"]
@@ -108,7 +108,7 @@ def test_session_start_lists_unfinished_work_dead_ends_and_swallowed_errors(stor
 
 
 def test_main_answers_on_stdout_and_never_raises(tmp_path):
-    env = {"CAUCE_HOME": str(tmp_path / "h")}
+    env = {"LOCKS_HOME": str(tmp_path / "h")}
     out = io.StringIO()
     event = {"session_id": "s", "prompt": "write the docs", "prompt_id": "1"}
     assert hooks.main("UserPromptSubmit", io.StringIO(json.dumps(event)), out, env) == 0
@@ -117,28 +117,28 @@ def test_main_answers_on_stdout_and_never_raises(tmp_path):
     assert hooks.main("Stop", io.StringIO("[]"), out, env) == 0
     assert hooks.main("Stop", io.StringIO("not json"), out, env) == 0
     assert "JSONDecodeError" in (tmp_path / "h" / hooks.ERROR_LOG).read_text()
-    assert hooks.main("Stop", io.StringIO("not json"), out, {**env, "CAUCE_HOOKS_OFF": "1"}) == 0
+    assert hooks.main("Stop", io.StringIO("not json"), out, {**env, "LOCKS_HOOKS_OFF": "1"}) == 0
     assert (tmp_path / "h" / hooks.ERROR_LOG).read_text().count("--- ") == 1
 
 
 def test_the_launcher_runs_a_hook_as_its_own_process(tmp_path):
     """The contract is 'never take the session down', so it is tested the way
-    Claude Code runs it: a separate interpreter, through bin/cauce."""
-    env = {**os.environ, "CAUCE_HOME": str(tmp_path / "h")}
-    proc = subprocess.run([str(ROOT / "bin" / "cauce"), "hook", "SessionStart"], input="garbage",
+    Claude Code runs it: a separate interpreter, through bin/locks."""
+    env = {**os.environ, "LOCKS_HOME": str(tmp_path / "h")}
+    proc = subprocess.run([str(ROOT / "bin" / "locks"), "hook", "SessionStart"], input="garbage",
                           capture_output=True, text=True, env=env, check=False)
     assert proc.returncode == 0 and proc.stdout == ""
     event = json.dumps({"session_id": "s", "prompt": "add a cache layer to the api", "prompt_id": "1"})
-    proc = subprocess.run([str(ROOT / "bin" / "cauce"), "hook", "UserPromptSubmit"], input=event,
+    proc = subprocess.run([str(ROOT / "bin" / "locks"), "hook", "UserPromptSubmit"], input=event,
                           capture_output=True, text=True, env=env, check=False)
     assert proc.returncode == 0
-    store = Store(tmp_path / "h" / "cauce.db")
+    store = Store(tmp_path / "h" / "locks.db")
     assert store.list_tasks()[0]["title"] == "add a cache layer to the api"
     store.close()
 
 
 def test_session_start_freshens_an_adopted_index_in_the_background(store, git_repo, tmp_path):
-    from cauce.adapters import ABSENT, PRESENT, Status
+    from locks.adapters import ABSENT, PRESENT, Status
 
     class Fake:
         name = "livespec"
@@ -160,8 +160,8 @@ def test_session_start_freshens_an_adopted_index_in_the_background(store, git_re
     event = {"session_id": "s", "cwd": str(git_repo), "source": "startup"}
     stranger = Fake(ABSENT)
     hooks.session_start(event, store, root, {}, adapters=[stranger])
-    assert not stranger.started  # a repository that does not use cauce is left alone
-    from cauce import project
+    assert not stranger.started  # a repository that does not use locks is left alone
+    from locks import project
 
     project.enroll(git_repo)
     for fake, word in ((Fake(ABSENT), "indexing"), (Fake(PRESENT, stale=True), "refreshing")):
@@ -175,23 +175,23 @@ def test_session_start_freshens_an_adopted_index_in_the_background(store, git_re
 
 
 def test_session_start_copies_plugin_options(store, tmp_path):
-    from cauce import config
+    from locks import config
 
-    env = {"CAUCE_HOME": str(tmp_path / "h"), "CLAUDE_PLUGIN_OPTION_LIVESPEC": "false"}
+    env = {"LOCKS_HOME": str(tmp_path / "h"), "CLAUDE_PLUGIN_OPTION_LIVESPEC": "false"}
     hooks.session_start({"session_id": "s"}, store, tmp_path / "h", env, adapters=[])
     assert config.load(env)["livespec"] is False
 
 
-def test_session_start_puts_cauce_on_the_sessions_path(store, tmp_path):
+def test_session_start_puts_locks_on_the_sessions_path(store, tmp_path):
     plugin = tmp_path / "plugin"
     (plugin / "bin").mkdir(parents=True)
-    (plugin / "bin" / "cauce").write_text("#!/bin/sh\n")
-    (plugin / "bin" / "cauce").chmod(0o755)
+    (plugin / "bin" / "locks").write_text("#!/bin/sh\n")
+    (plugin / "bin" / "locks").chmod(0o755)
     env_file = tmp_path / "session.env"
     env = {"CLAUDE_PLUGIN_ROOT": str(plugin), "PATH": "/usr/bin", "CLAUDE_ENV_FILE": str(env_file)}
     assert hooks.session_start({"session_id": "s"}, store, tmp_path / "h", env, adapters=[]) is None
     first, line = env_file.read_text().splitlines(keepends=True)
-    assert first == "export CAUCE_SESSION_ID=s\n"  # `cauce run` typed in the session is that session's
+    assert first == "export LOCKS_SESSION_ID=s\n"  # `locks run` typed in the session is that session's
     assert line.startswith("export PATH=") and str(plugin / "bin") in line and line.endswith(':"$PATH"\n')
     # Already resolvable: the path is not written twice.
     on_path = {**env, "PATH": str(plugin / "bin")}
@@ -200,7 +200,7 @@ def test_session_start_puts_cauce_on_the_sessions_path(store, tmp_path):
     # No env file: the model is given the full path.
     bare = {"CLAUDE_PLUGIN_ROOT": str(plugin), "PATH": "/usr/bin"}
     context = hooks.session_start({"session_id": "s"}, store, tmp_path / "h", bare, adapters=[])
-    assert str(plugin / "bin" / "cauce") in context["hookSpecificOutput"]["additionalContext"]
+    assert str(plugin / "bin" / "locks") in context["hookSpecificOutput"]["additionalContext"]
     unwritable = {**bare, "CLAUDE_ENV_FILE": str(tmp_path / "missing" / "x.env")}
     context = hooks.session_start({"session_id": "s"}, store, tmp_path / "h", unwritable, adapters=[])
     assert "not on PATH" in context["hookSpecificOutput"]["additionalContext"]
@@ -211,25 +211,25 @@ def test_session_start_puts_cauce_on_the_sessions_path(store, tmp_path):
 
 
 def test_the_launcher_follows_a_symlink_and_names_a_missing_python(tmp_path):
-    link = tmp_path / "cauce"
-    link.symlink_to(ROOT / "bin" / "cauce")
-    env = {**os.environ, "CAUCE_HOME": str(tmp_path / "h")}
+    link = tmp_path / "locks"
+    link.symlink_to(ROOT / "bin" / "locks")
+    env = {**os.environ, "LOCKS_HOME": str(tmp_path / "h")}
     proc = subprocess.run([str(link), "matrix"], capture_output=True, text=True, env=env, check=False)
     assert proc.returncode == 0 and proc.stdout
     proc = subprocess.run([str(link), "matrix"], capture_output=True, text=True, check=False,
-                          env={**env, "CAUCE_PYTHON": "no-such-python3"})
+                          env={**env, "LOCKS_PYTHON": "no-such-python3"})
     assert proc.returncode == 127 and "no-such-python3 not found" in proc.stderr
     old = shutil.which("python3.10")
     if old:
         # A person's choice is kept: an interpreter too old says so in one line,
         # not an import traceback.
         proc = subprocess.run([str(link), "matrix"], capture_output=True, text=True, check=False,
-                              env={**env, "CAUCE_PYTHON": old})
+                              env={**env, "LOCKS_PYTHON": old})
         assert proc.returncode == 1 and "needs Python 3.11+" in proc.stderr and "Traceback" not in proc.stderr
         # A bare old python3 hands over to a newer one beside it.
         if any(shutil.which(name) for name in ("python3.11", "python3.12", "python3.13", "python3.14")):
-            bare = {k: v for k, v in env.items() if k != "CAUCE_PYTHON"}
-            proc = subprocess.run([old, "-m", "cauce", "matrix"], capture_output=True, text=True, check=False,
+            bare = {k: v for k, v in env.items() if k != "LOCKS_PYTHON"}
+            proc = subprocess.run([old, "-m", "locks", "matrix"], capture_output=True, text=True, check=False,
                                   env={**bare, "PYTHONPATH": str(ROOT / "src")})
             assert proc.returncode == 0 and "debug-unclear" in proc.stdout
 
@@ -240,7 +240,7 @@ def test_double_plus_queues_without_a_turn(store: Store, git_repo):
     task = store.list_tasks()[0]
     assert task["status"] == "queued" and task["body"] == "write the release notes"
     assert task["repo"] == str(git_repo.resolve())
-    assert prompt(store, "++", prompt_id="p2")["reason"].startswith('cauce: "++ <task>"')
+    assert prompt(store, "++", prompt_id="p2")["reason"].startswith('locks: "++ <task>"')
 
 
 def test_a_turn_with_a_subagent_still_running_is_not_done(store: Store):
@@ -291,37 +291,37 @@ def test_work_a_session_sent_is_reported_to_it_once_when_it_ends(store: Store, g
     """A queued task finished while the main session waited on nothing: nothing
     told it to tell the person, continue or relaunch."""
     # A stop that outgrew its turns is resumed on its own first with autowork (`dispatch.recover`).
-    monkeypatch.setenv("CAUCE_AUTOWORK", "off")
-    from cauce import stops
+    monkeypatch.setenv("LOCKS_AUTOWORK", "off")
+    from locks import stops
 
-    done = store.create_task("write the changelog", status="running", source="cauce", session_id="s",
+    done = store.create_task("write the changelog", status="running", source="locks", session_id="s",
                              cwd=str(git_repo), final_cell="sonnet/low")
-    store.add_event(done["id"], "finished", status="done", branch="cauce/task-1", final_cell="sonnet/low",
+    store.add_event(done["id"], "finished", status="done", branch="locks/task-1", final_cell="sonnet/low",
                     changed=["CHANGELOG.md"])
     store.update_task(done["id"], status="done", result="Wrote the 0.5.0 entry.")
-    big = store.create_task("reduce the app to four modules", status="running", source="cauce", session_id="s",
+    big = store.create_task("reduce the app to four modules", status="running", source="locks", session_id="s",
                             cwd=str(git_repo))
     stops.record(store, big["id"], stops.Stop("turns", "the task does not fit even the raised turn budget"))
     store.add_event(big["id"], "finished", status="replan", changed=[f"src/f{i}.ts" for i in range(7)],
                     stop=stops.Stop("turns", "the task does not fit even the raised turn budget").data())
-    answer = store.create_task("where is slug defined?", status="running", source="cauce", session_id="s",
+    answer = store.create_task("where is slug defined?", status="running", source="locks", session_id="s",
                                cwd=str(git_repo), final_cell="haiku")
     store.add_event(answer["id"], "finished", status="done", final_cell="haiku")
     store.update_task(answer["id"], status="done", result="slug.js:1")
-    other = store.create_task("not this session's", status="failed", source="cauce", session_id="t")
+    other = store.create_task("not this session's", status="failed", source="locks", session_id="t")
     store.add_event(other["id"], "finished", status="failed")
-    store.create_task("still going", status="running", source="cauce", session_id="s")
+    store.create_task("still going", status="running", source="locks", session_id="s")
 
     out = hooks.stop({"session_id": "s"}, store)
     assert out["decision"] == "block"
     notice = out["reason"]
-    assert "#1 [done] write the changelog" in notice and "its work is on branch cauce/task-1" in notice
+    assert "#1 [done] write the changelog" in notice and "its work is on branch locks/task-1" in notice
     assert "git diff" not in notice
     assert "the worker says: Wrote the 0.5.0 entry." in notice and "changed: CHANGELOG.md" in notice
     assert "passed at haiku; it changed nothing\n  the worker says: slug.js:1" in notice
-    assert f"#{big['id']} [replan]" in notice and "stopped by cauce's rules" in notice
+    assert f"#{big['id']} [replan]" in notice and "stopped by locks' rules" in notice
     assert "src/f0.ts, src/f1.ts, src/f2.ts, src/f3.ts, src/f4.ts and 2 more" in notice
-    assert f"cauce resume {big['id']} --max-turns 120" in notice
+    assert f"locks resume {big['id']} --max-turns 120" in notice
     assert "not this session's" not in notice and "still going" not in notice
     assert hooks.stop({"session_id": "s"}, store) is None  # once
     # a later ending reaches the next prompt instead
@@ -333,7 +333,7 @@ def test_work_a_session_sent_is_reported_to_it_once_when_it_ends(store: Store, g
 
 
 def test_an_old_ending_is_not_brought_back(store: Store):
-    t = store.create_task("long ago", status="done", source="cauce", session_id="s")
+    t = store.create_task("long ago", status="done", source="locks", session_id="s")
     store._conn.execute("INSERT INTO events (task_id, ts, kind, data) VALUES (?, ?, 'finished', '{}')",
                         (t["id"], "2020-01-01T00:00:00+00:00"))
     assert store.unreported("s") == []
@@ -345,7 +345,7 @@ def _died(store: Store, task_id: int) -> None:
 
 
 def test_an_ending_with_no_worktree_names_the_repositories_it_changed_in_place(store: Store):
-    t = store.create_task("edit both repos", status="running", source="cauce", session_id="s")
+    t = store.create_task("edit both repos", status="running", source="locks", session_id="s")
     store.update_task(t["id"], status="done", final_cell="sonnet/medium")
     store.add_event(t["id"], "finished", status="done", final_cell="sonnet/medium", isolated=False,
                     changed=["api/routes.js", "web/app.ts"], changed_n=2, in_place=["api", "web"])
@@ -356,7 +356,7 @@ def test_an_ending_with_no_worktree_names_the_repositories_it_changed_in_place(s
 
 def test_a_resumed_task_is_told_with_its_last_ending_never_an_earlier_one(store: Store):
     # Task died twice, then a resume ran to a pass: the notice is the pass's.
-    t = store.create_task("add the portal", status="interrupted", source="cauce", session_id="s")
+    t = store.create_task("add the portal", status="interrupted", source="locks", session_id="s")
     _died(store, t["id"])
     _died(store, t["id"])
     store.update_task(t["id"], status="running")
@@ -366,10 +366,10 @@ def test_a_resumed_task_is_told_with_its_last_ending_never_an_earlier_one(store:
     assert store.unreported("s") == []
     assert hooks.endings(store, "s") == (None, [])
     changed = [f"src/f{i}.ts" for i in range(106)]
-    store.add_event(t["id"], "finished", status="done", final_cell="sonnet/xhigh", branch="cauce/task-1",
+    store.add_event(t["id"], "finished", status="done", final_cell="sonnet/xhigh", branch="locks/task-1",
                     changed=changed[:50], changed_n=106)
     notice = hooks.endings(store, "s", claim="stop")[0]
-    assert "passed at sonnet/xhigh; its work is on branch cauce/task-1, merged only on the person's word" in notice
+    assert "passed at sonnet/xhigh; its work is on branch locks/task-1, merged only on the person's word" in notice
     assert "changed nothing" not in notice and "and 98 more" in notice
     assert store.unreported("s") == []
 
@@ -411,11 +411,11 @@ def test_a_subagent_s_report_joins_the_task_that_delegated_it(store: Store, tmp_
     assert not [t for t in store.list_tasks() if t["session_id"] == "t"]
 
 
-def test_cauce_s_own_notices_are_no_turn_and_a_lost_turn_is_nothing_to_resume(store: Store, capsys):
-    from cauce import cli
+def test_locks_s_own_notices_are_no_turn_and_a_lost_turn_is_nothing_to_resume(store: Store, capsys):
+    from locks import cli
 
     notice = hooks.ENDINGS_HEADER + "\n#21 [done] add median"
-    for text in (notice, "The cauce plugin sent a message: " + notice):
+    for text in (notice, "The locks plugin sent a message: " + notice):
         assert hooks.user_prompt_submit({"session_id": "s", "prompt": text}, store) is None
     assert store.list_tasks(source=("hook",)) == []
     hooks.user_prompt_submit({"session_id": "s", "prompt": "y ahora que resultado da?", "prompt_id": "p1"}, store)
@@ -424,7 +424,7 @@ def test_cauce_s_own_notices_are_no_turn_and_a_lost_turn_is_nothing_to_resume(st
     assert turn["status"] == "failed"
     stop = stops.of(store, turn)
     assert stop.cause == "turn" and stop.reason == "server_error" and "nothing to resume" in stops.what_to_do(stop)
-    store.create_task("real work", status="done", source="cauce", kind="docs")
+    store.create_task("real work", status="done", source="locks", kind="docs")
     assert cli.main(["tasks", "--all"]) == 0
     out = capsys.readouterr().out
     assert "real work" in out and "resultado" not in out
@@ -466,13 +466,13 @@ def test_an_ending_names_what_was_already_broken_and_the_bugfix_that_would_take_
     lines = hooks._found_before(store, store.get_task(last["id"]))
     assert lines[0].startswith("  it found 1 problem(s) that were already there")
     assert "lib/tax.py:12: rounds half down" in lines[1] and f"--after run:{run['id']}" in lines[1]
-    assert "cauce workflow run bugfix 'rounds half down (lib/tax.py:12)'" in lines[1]
-    alone = store.create_task("x", status="done", source="cauce", session_id="s")
+    assert "locks workflow run bugfix 'rounds half down (lib/tax.py:12)'" in lines[1]
+    alone = store.create_task("x", status="done", source="locks", session_id="s")
     many = [{**old, "where": f"f{i}.py"} for i in range(5)]
     store.add_event(alone["id"], "finished", status="done", findings=many)
     found = hooks._found_before(store, store.get_task(alone["id"]))
     assert f"--after task:{alone['id']}" in found[1] and found[-1].startswith("    and 2 more")
-    plain = store.create_task("y", status="done", source="cauce", session_id="s")
+    plain = store.create_task("y", status="done", source="locks", session_id="s")
     store.add_event(plain["id"], "finished", status="done")
     assert hooks._found_before(store, store.get_task(plain["id"])) == []
 
@@ -482,17 +482,17 @@ def test_an_ending_names_other_work_that_changes_the_same_files(store: Store, gi
 
     def kept(text: str, status: str, changed: list[str]) -> dict:
         task = store.create_task(text, status=status, source="queue", session_id="s", repo="r", cwd=str(git_repo))
-        git(git_repo, "branch", f"cauce/task-{task['id']}")
-        store.add_event(task["id"], "finished", status=status, changed=changed, branch=f"cauce/task-{task['id']}")
+        git(git_repo, "branch", f"locks/task-{task['id']}")
+        store.add_event(task["id"], "finished", status=status, changed=changed, branch=f"locks/task-{task['id']}")
         return task
 
     beside = kept("add the curriculum API", "done", ["src/api.service.spec.ts", "src/api.service.ts"])
     elsewhere = kept("add the forum", "done", ["src/forum.ts"])
-    running = store.create_task("add the admin screens", status="running", source="cauce", repo="r",
+    running = store.create_task("add the admin screens", status="running", source="locks", repo="r",
                                 cwd=str(git_repo))
     store.add_attempt(running["id"], cell="sonnet/medium", max_turns=40, passed=0,
                       changed_paths=["src/api.service.spec.ts"])
-    unkept = store.create_task("gone", status="done", source="cauce", repo="r", cwd=str(git_repo))
+    unkept = store.create_task("gone", status="done", source="locks", repo="r", cwd=str(git_repo))
     store.add_event(unkept["id"], "finished", status="done", changed=["src/api.service.spec.ts"], branch="x")
     mine = kept("add the student screens", "done", ["src/api.service.spec.ts", "src/student.ts"])
     ended = {**store.get_task(mine["id"]), "finished_data": store.final_event(mine["id"])["data"]}
@@ -512,7 +512,7 @@ def test_a_passing_ending_carries_its_verdict_so_the_session_never_redoes_the_wo
             "check": {"command": "npm test", "passed": True}, "independent": {"ran": True, "passed": True},
             "attempts": 1}
     lines = hooks.verdict_lines(full)
-    assert lines[0] == "  check: `npm test` passed, run by cauce in its worktree"
+    assert lines[0] == "  check: `npm test` passed, run by locks in its worktree"
     assert "  S1 met: test_export passes" in lines and "  S2 met: no evidence given" in lines
     assert "  independent check: passed" in lines
     assert lines[-1].endswith("open the diff only if the person asks") and "do not re-read" in lines[-1]
@@ -543,8 +543,8 @@ def test_a_command_line_flag_or_a_bare_slash_command_is_no_turn(store: Store, tm
     assert f"#{real['id']} [running]" in text and f"#{old['id']}" not in text
 
 
-def test_a_session_hears_once_that_a_newer_cauce_is_installed(tmp_path):
-    from cauce import __version__
+def test_a_session_hears_once_that_a_newer_locks_is_installed(tmp_path):
+    from locks import __version__
 
     from .test_link import _plugin
 
@@ -554,9 +554,9 @@ def test_a_session_hears_once_that_a_newer_cauce_is_installed(tmp_path):
     assert hooks._newer_plugin(tmp_path, "s", env) is None
     _plugin(config, "999.0.0")
     said = hooks._newer_plugin(tmp_path, "s", env)
-    assert said.startswith(f"cauce: cauce 999.0.0 is installed, and this session loaded {__version__}")
+    assert said.startswith(f"locks: locks 999.0.0 is installed, and this session loaded {__version__}")
     assert "/reload-plugins --force" in said
-    assert "/cauce:relay" in said
+    assert "/locks:relay" in said
     assert hooks._newer_plugin(tmp_path, "s", env) is None  # once
     assert hooks._newer_plugin(tmp_path, "t", env) is not None  # each session hears it
     _plugin(config, "999.1.0")
@@ -567,19 +567,19 @@ def test_many_endings_at_once_tell_each_pass_in_one_line(store: Store):
     verdict = {"check": {"command": "npm test"}, "criteria": [{"id": "S1", "met": True}, {"id": "S2", "met": False}],
                "independent": {"ran": True, "passed": True}}
     for n in range(4):
-        t = store.create_task(f"task {n}", status="done", source="cauce", session_id="s")
-        store.add_event(t["id"], "finished", status="done", final_cell="sonnet/high", branch=f"cauce/task-{t['id']}",
+        t = store.create_task(f"task {n}", status="done", source="locks", session_id="s")
+        store.add_event(t["id"], "finished", status="done", final_cell="sonnet/high", branch=f"locks/task-{t['id']}",
                         verdict=verdict, changed=["a.py"])
     notice, ids = hooks.endings(store, "s")
     assert len(ids) == 4 and "4 ended: 4 passed, 0 stopped" in notice
-    assert notice.count("passed at sonnet/high, on branch cauce/task-") == 4
+    assert notice.count("passed at sonnet/high, on branch locks/task-") == 4
     assert "`npm test` passed, 1/2 criteria met, independent check passed; changed 1 file(s)" in notice
-    assert "this verdict is cauce's own record" not in notice
+    assert "this verdict is locks' own record" not in notice
     assert hooks.verdict_summary(None) == "no verdict kept"
 
 
 def test_problems_already_there_that_the_work_fixed_are_not_offered(store: Store):
-    task = store.create_task("write tests for the radio drivers", status="done", source="cauce", session_id="s")
+    task = store.create_task("write tests for the radio drivers", status="done", source="locks", session_id="s")
     old = {"where": "src/radio/mac.ts:40", "what": "drops the last frame", "evidence_class": "deterministic",
            "cause": "pre-existing", "proof": "deno test radio_test.ts"}
     marked = {**old, "where": "src/radio/nrf24.ts:9", "what": "reads the wrong register", "fixed": True}
@@ -597,7 +597,7 @@ def test_problems_already_there_that_the_work_fixed_are_not_offered(store: Store
 
 
 def test_a_finding_keeps_fixed_only_when_the_worker_says_true():
-    from cauce import findings
+    from locks import findings
 
     read = findings.read({"findings": [{"where": "a.py", "what": "x", "fixed": True},
                                        {"where": "b.py", "what": "y", "fixed": "yes"}]})
@@ -605,7 +605,7 @@ def test_a_finding_keeps_fixed_only_when_the_worker_says_true():
 
 
 def test_older_installs_left_in_the_cache_are_named_once_with_how_to_remove_them(tmp_path):
-    from cauce import __version__
+    from locks import __version__
 
     from .test_link import _plugin
 
@@ -615,7 +615,7 @@ def test_older_installs_left_in_the_cache_are_named_once_with_how_to_remove_them
     assert hooks._older_installs(tmp_path, env) is None
     _plugin(config, "0.1.0")
     said = hooks._older_installs(tmp_path, env)
-    assert said.startswith("cauce: older cauce installs remain in Claude Code's plugin cache (0.1.0)")
+    assert said.startswith("locks: older locks installs remain in Claude Code's plugin cache (0.1.0)")
     assert "rm -rf " in said and "0.1.0" in said.split("rm -rf ")[1]
     assert hooks._older_installs(tmp_path, env) is None  # once per set
     _plugin(config, "999.0.0")
@@ -629,7 +629,7 @@ def test_problems_already_there_in_files_changed_since_are_not_offered(store: St
     (git_repo / "landing.md").write_text("binaries are published\n")
     git(git_repo, "add", "-A")
     git(git_repo, "commit", "-qm", "landed after the work started")
-    task = store.create_task("write tests for the radio", status="done", source="cauce", session_id="s",
+    task = store.create_task("write tests for the radio", status="done", source="locks", session_id="s",
                              cwd=str(git_repo), repo="r")
     old = {"where": "landing.md:1", "what": "says no binaries are published", "evidence_class": "deterministic",
            "cause": "pre-existing", "proof": "git ls-remote --tags"}
@@ -638,7 +638,7 @@ def test_problems_already_there_in_files_changed_since_are_not_offered(store: St
     store.add_event(task["id"], "finished", status="done", findings=[old, other, open_one], changed=["tests/t.ts"],
                     base=base)
     # other passing work here changed src/ble.ts after this one started
-    fixer = store.create_task("fix ble", status="done", source="cauce", repo="r")
+    fixer = store.create_task("fix ble", status="done", source="locks", repo="r")
     store.add_event(fixer["id"], "finished", status="done", changed=["src/ble.ts"])
     lines = hooks._found_before(store, store.get_task(task["id"]))
     assert lines[0].startswith("  it found 1 problem(s)") and "src/board.ts:3" in lines[1]
@@ -650,9 +650,9 @@ def test_problems_already_there_in_files_changed_since_are_not_offered(store: St
 
 
 def test_a_session_start_and_a_prompt_keep_the_version_the_session_s_hooks_run(store, tmp_path):
-    from cauce import __version__, link
+    from locks import __version__, link
 
-    hooks.session_start({"session_id": "s1"}, store, tmp_path / "h", {"CAUCE_HOME": str(tmp_path / "h")}, adapters=[])
+    hooks.session_start({"session_id": "s1"}, store, tmp_path / "h", {"LOCKS_HOME": str(tmp_path / "h")}, adapters=[])
     assert link.session_loaded(tmp_path / "h", "s1") == __version__
     link.record_loaded(store.path.parent, "s2", "0.1.0")
     hooks.user_prompt_submit({"session_id": "s2", "prompt": "hola", "prompt_id": "p"}, store)

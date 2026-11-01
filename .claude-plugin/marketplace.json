@@ -1,15 +1,15 @@
 {
-  "name": "cauce-dev",
-  "description": "Local development marketplace for a clone of cauce.",
+  "name": "locks-dev",
+  "description": "Local development marketplace for a clone of locks.",
   "owner": {
     "name": "Rixmerz"
   },
   "plugins": [
     {
-      "name": "cauce",
+      "name": "locks",
       "source": "./",
       "description": "One core for Claude Code: routes each task to the right model, effort and capabilities, escalates on evidence, and remembers what failed across repositories.",
-      "version": "0.68.0"
+      "version": "0.69.0"
     }
   ]
 }

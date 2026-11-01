@@ -1,11 +1,11 @@
-"""Branches of `cauce.notes` the notes suite leaves unread."""
+"""Branches of `locks.notes` the notes suite leaves unread."""
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from cauce import notes
-from cauce.store import Store
+from locks import notes
+from locks.store import Store
 
 from .conftest import git
 from .test_learning import _briefed
@@ -57,10 +57,10 @@ def test_confirming_leaves_an_anchor_no_checkout_here_holds(store: Store, tmp_pa
 
 
 def test_a_task_s_first_brief_is_the_one_its_notes_are_read_from(store: Store):
-    task = store.create_task("t", status="done", source="cauce", repo="r", kind="implement")
+    task = store.create_task("t", status="done", source="locks", repo="r", kind="implement")
     _briefed(store, task["id"], carried=[1, 2], withheld=[3])
     _briefed(store, task["id"], carried=[9], withheld=[9])
-    other = store.create_task("u", status="done", source="cauce", repo="r", kind="implement")
+    other = store.create_task("u", status="done", source="locks", repo="r", kind="implement")
     store.add_event(other["id"], "briefed", session=None)  # a brief that kept no list
     assert notes.carried(store) == {task["id"]: {1, 2}}
     assert notes.withheld(store) == {task["id"]: {3}}
@@ -71,7 +71,7 @@ def test_with_no_repository_the_recall_order_is_fused():
 
 
 def test_a_candidate_every_reader_failed_is_dropped_under_the_trial_too(store: Store, monkeypatch):
-    monkeypatch.setenv("CAUCE_NOTE_TRIALS", "on")
+    monkeypatch.setenv("LOCKS_NOTE_TRIALS", "on")
     lone = store.add_note("r", "code", "t", "The cache is warmed by a cron job", author="worker", filed_by="haiku",
                           state=notes.CANDIDATE)
     for _ in range(notes.DISPROVE_AFTER):
@@ -130,7 +130,7 @@ def test_no_notes_make_no_brief_and_an_index_can_leave_the_latest_out(store: Sto
     assert notes.brief_lines([]) == []
     store.add_note("p", "code", "Cart", "The cart rounds once.", author="person", filed_by="person")
     text = notes.index_text(store, "p", latest=0)
-    assert text.startswith("cauce notes: this project keeps 1 note(s)") and "Latest:" not in text
+    assert text.startswith("locks notes: this project keeps 1 note(s)") and "Latest:" not in text
 
 
 def test_a_duplicate_haiku_names_takes_its_links_without_a_checkout(store: Store, git_repo: Path):

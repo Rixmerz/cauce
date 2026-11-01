@@ -5,8 +5,8 @@ import json
 
 import pytest
 
-from cauce import cells, hooks
-from cauce.store import Store
+from locks import cells, hooks
+from locks.store import Store
 
 from .test_hooks import prompt
 
@@ -14,7 +14,7 @@ from .test_hooks import prompt
 def test_a_path_is_in_one_area_and_a_change_in_its_specific_ones():
     assert cells.of_path("islands/Board.tsx") == "ui" and cells.of_path("src/auth/login.py") == "security"
     assert cells.of_path("migrations/0003_add.sql") == "data" and cells.of_path("tests/test_x.py") == "tests"
-    assert cells.of_path("docs/guide.md") == "docs" and cells.of_path("src/cauce/flow.py") == "code"
+    assert cells.of_path("docs/guide.md") == "docs" and cells.of_path("src/locks/flow.py") == "code"
     # A feature's tests and docs travel with it: its area is where the work was.
     assert cells.of_paths(["islands/Board.tsx", "tests/test_board.py", "README.md"]) == ("ui",)
     assert cells.of_paths(["src/x.py", "tests/test_x.py"]) == ("code",)
@@ -80,11 +80,11 @@ def test_the_prompt_hook_tells_the_session_only_what_is_shared(store: Store):
 def test_a_workflow_step_is_matched_by_its_goal_never_its_template(store: Store):
     run = store.create_run(name="feature", scope="bundled", source="x", definition="{}",
                            inputs=json.dumps({"goal": "Export invoices as CSV from the admin list"}))
-    step = store.create_task("[feature#1 build] Build it, with its tests", status="done", source="cauce",
+    step = store.create_task("[feature#1 build] Build it, with its tests", status="done", source="locks",
                              repo="r", workflow_run=run["id"])
     assert cells.memory_text(store, step) == "Export invoices as CSV from the admin list"
     empty = store.create_run(name="feature", scope="bundled", source="x", definition="{}", inputs="{}")
-    other = store.create_task("plain text", status="done", source="cauce", repo="r", workflow_run=empty["id"])
+    other = store.create_task("plain text", status="done", source="locks", repo="r", workflow_run=empty["id"])
     assert cells.memory_text(store, other) == "plain text"
     assert cells.memory_text(store, {"title": "t"}) == "t"
 
@@ -103,11 +103,11 @@ def test_a_word_every_problem_holds_is_no_match(store: Store):
 
 
 def test_fixes_recorded_before_scopes_get_theirs_once(store: Store):
-    task = store.create_task("fix the login redirect", status="done", source="cauce", repo="r", kind="bugfix")
+    task = store.create_task("fix the login redirect", status="done", source="locks", repo="r", kind="bugfix")
     store.add_event(task["id"], "planned", kind="bugfix", role="debugger")
     store.add_attempt(task["id"], cell="sonnet/high", max_turns=80, passed=0, failure="code_bug",
                       changed_paths=json.dumps(["src/auth/redirect.py", "tests/test_redirect.py"]))
-    bare = store.create_task("tidy the parser", status="done", source="cauce", repo="r", kind="refactor")
+    bare = store.create_task("tidy the parser", status="done", source="locks", repo="r", kind="refactor")
     p = store.open_problem("login redirect", repo="r")
     store.add_fix(p, "a", "failed", repo="r", task_id=task["id"])
     store.add_fix(p, "b", "failed", repo="r", task_id=bare["id"])
@@ -120,7 +120,7 @@ def test_fixes_recorded_before_scopes_get_theirs_once(store: Store):
 
 
 def test_settling_scopes_the_old_fixes(store: Store):
-    from cauce import evolution
+    from locks import evolution
 
     evolution.settle(store)
     assert store.meta(cells.BACKFILL_KEY) == "0"
@@ -131,7 +131,7 @@ def test_settling_scopes_the_old_fixes(store: Store):
 
 
 def _oriented(store: Store, lines, *, role, areas, repo="r"):
-    task = store.create_task("t", status="done", source="cauce", repo=repo)
+    task = store.create_task("t", status="done", source="locks", repo=repo)
     return task, cells.record_orientation(store, task["id"], lines, role=role, areas=areas)
 
 
@@ -163,7 +163,7 @@ def test_a_primer_holds_each_line_once_and_at_most_its_size(store: Store):
 
 
 def _trial_task(store: Store, arm: str, *, passed: bool, calls: int, repo="r"):
-    task = store.create_task("t", status="done", source="cauce", repo=repo)
+    task = store.create_task("t", status="done", source="locks", repo=repo)
     store.add_event(task["id"], "briefed", primer_arm=arm)
     store.add_event(task["id"], "briefed", primer_arm="ignored")  # a resume's brief: the first one counts
     store.add_attempt(task["id"], cell="sonnet/medium", max_turns=80, passed=int(passed), input_tokens=1000 + calls)
@@ -197,7 +197,7 @@ def test_the_primer_s_trial_alternates_then_keeps_the_winner(store: Store):
 
 
 def test_stats_show_the_primer_s_trial(store: Store):
-    from cauce import analysis
+    from locks import analysis
 
     task = _trial_task(store, "primer", passed=True, calls=3)
     _trial_task(store, "control", passed=False, calls=9)
@@ -215,11 +215,11 @@ def test_stats_show_the_primer_s_trial(store: Store):
 def test_a_run_leaves_its_orientation_and_the_next_run_s_brief_follows_its_arm(git_repo, store, monkeypatch):
     import dataclasses
 
-    from cauce.orchestrate import run
+    from locks.orchestrate import run
 
     from .test_orchestrate import Script, kind, ok
 
-    monkeypatch.setenv("CAUCE_PRIMER", "on")
+    monkeypatch.setenv("LOCKS_PRIMER", "on")
     oriented = dataclasses.replace(ok(), orientation=("the export lives in src/export.py; run pytest -q tests",))
     first = Script(oriented, write="export.py")
     report = run("add the export", git_repo, store, registry={}, launcher=first, classifier=kind("implement"))
@@ -234,7 +234,7 @@ def test_a_run_leaves_its_orientation_and_the_next_run_s_brief_follows_its_arm(g
         seen[briefed["primer_arm"]] = "src/export.py" in script.specs[0].prompt
         assert briefed["primer_lines"] == 1 and "trial" in briefed["primer_why"]
     assert seen == {"primer": True, "control": False}
-    monkeypatch.setenv("CAUCE_PRIMER", "off")
+    monkeypatch.setenv("LOCKS_PRIMER", "off")
     off = Script(ok(), write="other.py")
     done = run("add the other", git_repo, store, registry={}, launcher=off, classifier=kind("implement"))
     assert "primer_arm" not in store.last_event(done.task_id, "briefed")["data"]

@@ -26,8 +26,8 @@ sys.path.insert(0, str(HERE.parents[1] / "src"))
 
 import harness  # noqa: E402
 
-from cauce import ledger  # noqa: E402
-from cauce.orchestrate import verifier_brief  # noqa: E402
+from locks import ledger  # noqa: E402
+from locks.orchestrate import verifier_brief  # noqa: E402
 
 ROWS = [("src/tally/money.py:18", "split drops the remainder: its shares do not add up to the amount"),
         ("src/tally/rules/loyalty.py:19", "loyalty takes its percent with the legacy `percent`, not the house `pct`"),

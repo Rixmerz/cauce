@@ -9,9 +9,9 @@ from datetime import datetime
 
 import pytest
 
-from cauce import after, cli, loops, stops, workflows
-from cauce import workflow_cli as wc
-from cauce.store import Store
+from locks import after, cli, loops, stops, workflows
+from locks import workflow_cli as wc
+from locks.store import Store
 
 from .conftest import git
 
@@ -32,7 +32,7 @@ def test_a_hold_unreadable_options_hold_nothing():
 
 
 def test_a_caveat_names_the_other_repository_and_this_one_s_run_of_the_same_number(store: Store):
-    theirs = store.create_task("their work", status="done", source="cauce", repo="other")
+    theirs = store.create_task("their work", status="done", source="locks", repo="other")
     assert after.caveat(store, {"task": theirs["id"]}, "other") is None  # this repository's own
     said = after.caveat(store, {"task": theirs["id"]}, "mine")
     assert said == (f"#{theirs['id']} is a task in other: this starts on this repository's base, and reads "
@@ -52,7 +52,7 @@ def test_a_caveat_names_the_other_repository_and_this_one_s_run_of_the_same_numb
 
 
 def test_held_work_on_a_task_in_another_repository_that_stopped_says_how(store: Store):
-    other = store.create_task("x" * 120, status="blocked", source="cauce", repo="other")
+    other = store.create_task("x" * 120, status="blocked", source="locks", repo="other")
     stops.record(store, other["id"], stops.Stop("review", "the verifier found a blocker"))
     task = _held(store, {"task": other["id"]}, repo="mine")
     line = after.waiting(store, task)
@@ -81,7 +81,7 @@ def test_another_worktree_of_the_same_repository_is_the_same_repository(git_repo
 
 
 def test_a_task_released_meanwhile_is_not_released_again(store: Store, monkeypatch):
-    first = store.create_task("first", status="done", source="cauce", repo="r")
+    first = store.create_task("first", status="done", source="locks", repo="r")
     task = _held(store, {"task": first["id"]})
     stale = dict(task)
     # Another process released it between the listing and the write: the transaction reads it again.
@@ -221,7 +221,7 @@ def test_a_summary_counts_what_waits_past_fifteen_and_names_a_round_stopped_for_
     told = loops.summary("leads").splitlines()
     assert "  waits on the person (17):" in told
     assert "    - round 1: item 14" in told and "    - round 1: item 15" not in told
-    assert "    … 2 more: `cauce loop show leads --all`" in told
+    assert "    … 2 more: `locks loop show leads --all`" in told
     assert told[-1] == "  round 1 stopped for the person: #4 permission"
     assert "  cost: USD 1.25" in told
 
@@ -250,7 +250,7 @@ def test_the_cli_takes_named_inputs_and_starts_an_acting_loop_without_the_draft_
     capsys.readouterr()
     monkeypatch.setattr(loops, "launch", lambda name, env: 77)
     assert cli.main(["loop", "start", "leads"]) == 0
-    assert capsys.readouterr().out == "loop leads running (pid 77); `cauce loop show leads` says how it goes.\n"
+    assert capsys.readouterr().out == "loop leads running (pid 77); `locks loop show leads` says how it goes.\n"
 
 
 # --- workflow_cli: how runs and definitions are said ----------------------------------------
@@ -276,9 +276,9 @@ def test_a_run_line_with_no_step_is_its_head_and_names_an_older_last_commit():
 
 
 def test_a_compact_step_says_its_tries_sub_run_answer_and_why_it_was_skipped():
-    assert wc._compact_step({"state": "done", "task": 2, "tries": 3, "cost_usd": 0.25, "kept_branch": "cauce/task-2",
-                             "subrun": 8}) == ("done #2 · try 3 · $0.25 · branch cauce/task-2 · runs run #8 "
-                                               "(`cauce workflow status 8`)")
+    assert wc._compact_step({"state": "done", "task": 2, "tries": 3, "cost_usd": 0.25, "kept_branch": "locks/task-2",
+                             "subrun": 8}) == ("done #2 · try 3 · $0.25 · branch locks/task-2 · runs run #8 "
+                                               "(`locks workflow status 8`)")
     assert wc._compact_step({"state": "done", "task": 5, "answer": "yes", "options": ["yes", "no"]}) == \
         "done #5 · $0.00 · answered yes"
     assert wc._compact_step({"state": "done", "skipped": "when check is findings: it was clean"}) == \
@@ -318,7 +318,7 @@ def _wf(*args: str) -> int:
 
 def test_the_cli_lists_a_broken_definition_shows_a_bundled_one_and_refuses_what_is_no_json(
         git_repo, monkeypatch, capsys, tmp_path):
-    from cauce.store import home
+    from locks.store import home
 
     monkeypatch.chdir(git_repo)
     folder = home() / "workflows"
@@ -334,7 +334,7 @@ def test_the_cli_lists_a_broken_definition_shows_a_bundled_one_and_refuses_what_
     bad = tmp_path / "bad.json"
     bad.write_text("{nope")
     assert _wf("save", str(bad)) == 1
-    assert capsys.readouterr().err.startswith("cauce workflow: not JSON: ")
+    assert capsys.readouterr().err.startswith("locks workflow: not JSON: ")
 
 
 def test_the_cli_applies_lists_and_says_no_pending_change(git_repo, monkeypatch, capsys):
@@ -424,7 +424,7 @@ def test_a_run_of_many_features_is_told_so_and_a_dry_run_checks_the_run_it_waits
     monkeypatch.setattr(workflows, "many_features", lambda goal: "this goal lists 7 items")
     assert _wf("run", "ship", "the export", "--dry-run", "--after", "999") == 1
     out, err = capsys.readouterr()
-    assert "cauce: this goal lists 7 items" in out and "there is no workflow run #999" in err
+    assert "locks: this goal lists 7 items" in out and "there is no workflow run #999" in err
 
 
 def test_a_run_queued_after_another_says_what_it_waits_for(git_repo, monkeypatch, capsys, kicks, store: Store):
@@ -492,7 +492,7 @@ def test_an_integrate_step_writes_and_an_empty_memory_is_dropped():
 
 
 def test_a_listing_leaves_out_a_file_that_is_no_workflow_name_and_a_file_that_holds_no_object(tmp_path):
-    from cauce.store import home
+    from locks.store import home
 
     folder = home() / "workflows"
     folder.mkdir(parents=True)
@@ -643,10 +643,10 @@ def test_a_sub_workflow_that_kept_no_branch_passes_its_step_changing_nothing(sto
 
 def test_a_retried_part_after_one_that_passed_starts_from_what_that_one_kept(git_repo, store: Store):
     run = _a_run(store, {"name": "w", "steps": [{"id": "a", "prompt": "p"}]}, cwd=git_repo)
-    git(git_repo, "branch", "cauce/task-90")
-    tip = git(git_repo, "rev-parse", "cauce/task-90")
+    git(git_repo, "branch", "locks/task-90")
+    tip = git(git_repo, "rev-parse", "locks/task-90")
     api = _step_task(store, run, "build")
-    store.add_event(api["id"], "finished", status="done", branch="cauce/task-90")
+    store.add_event(api["id"], "finished", status="done", branch="locks/task-90")
     part = {"id": "web", "after": "api"}
     assert workflows._ordered(store, run, part, {}, {"api": api}) == {"start": tip}
     stopped = _step_task(store, run, "build", status="blocked")
@@ -682,7 +682,7 @@ def test_a_step_with_no_branch_before_it_starts_from_the_run_s_base(store: Store
     fixed = store.create_task("fix", status="done", source="queue")
     store.add_event(fixed["id"], "finished", status="done", branch=None)
     built = store.create_task("a", status="done", source="queue")
-    store.add_event(built["id"], "finished", status="done", branch="cauce/task-1")
+    store.add_event(built["id"], "finished", status="done", branch="locks/task-1")
     assert workflows._kept_tip(store, fixed, str(tmp_path)) is None
     # the fix kept no branch, and the one branch before it is in no checkout here
     assert workflows._base(store, run, defn, "fix", {"fix": fixed, "a": built}) == "abc123"
@@ -744,16 +744,16 @@ def test_a_stopped_step_says_the_branch_it_kept(store: Store):
     run = _a_run(store, {"name": "w", "steps": [{"id": "a", "prompt": "p"}]})
     task = _step_task(store, run, "a", status="blocked")
     stops.record(store, task["id"], stops.Stop("review", "a blocker stands"), result=False)
-    store.add_event(task["id"], "finished", status="blocked", branch="cauce/task-7",
+    store.add_event(task["id"], "finished", status="blocked", branch="locks/task-7",
                     stop=stops.Stop("review", "a blocker stands").data())
     (step,) = workflows.status(store, run["id"])["steps"]
-    assert step["kept_branch"] == "cauce/task-7" and step["stopped"] == "a blocker stands"
-    # A step an older cauce dismissed kept no account of why: its branch is said, no reason made up.
+    assert step["kept_branch"] == "locks/task-7" and step["stopped"] == "a blocker stands"
+    # A step an older locks dismissed kept no account of why: its branch is said, no reason made up.
     old = _a_run(store, {"name": "w", "steps": [{"id": "a", "prompt": "p"}]})
     task = _step_task(store, old, "a", status="dismissed")
-    store.add_event(task["id"], "finished", status="dismissed", branch="cauce/task-8")
+    store.add_event(task["id"], "finished", status="dismissed", branch="locks/task-8")
     (step,) = workflows.status(store, old["id"])["steps"]
-    assert step["kept_branch"] == "cauce/task-8" and "stopped" not in step
+    assert step["kept_branch"] == "locks/task-8" and "stopped" not in step
 
 
 def test_cancelling_a_run_asks_its_running_step_to_stop(store: Store, monkeypatch):
@@ -788,8 +788,8 @@ def test_a_step_never_queued_is_queued_by_a_retry_with_nothing_to_supersede(stor
 @pytest.mark.usefixtures("no_verifier")
 def test_a_part_that_changed_nothing_leaves_one_branch_and_one_area_reviewed_whole(git_repo, store: Store, kicks,
                                                                                     monkeypatch):
-    from cauce import flow
-    from cauce.orchestrate import run as run_task
+    from locks import flow
+    from locks.orchestrate import run as run_task
 
     from .test_orchestrate import kind, ok
     from .test_workflows import JOINED, planned

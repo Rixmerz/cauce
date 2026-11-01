@@ -4,7 +4,7 @@ Real: `dispatch.decide` (Haiku, its schema, no tools) on pairs of tasks in one r
 running one and a queued one. Each pair is labelled by what merging both would do:
 `independent` (different features in different files: starting beside it saves the whole wait)
 or `conflict` (one needs the other's change, or both change the same code: a wrong start costs a
-merge conflict). The question is cauce's own (`dispatch.question`), with the files the running
+merge conflict). The question is locks' own (`dispatch.question`), with the files the running
 task changed so far when the pair gives them.
 
     python bench/speed/dispatch.py current,named 3
@@ -20,7 +20,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "src"))
 
-from cauce import dispatch  # noqa: E402
+from locks import dispatch  # noqa: E402
 
 # (label, running task, its changed files so far or None, queued task)
 PAIRS = [
@@ -92,10 +92,10 @@ PAIRS = [
 
 # Written after the prompt was chosen, from real requests of this repository and a web app's: the held-out set.
 HELD_OUT = [
-    ("independent", "Habits: a reviewed habit installs itself once cauce's own check passes", ["src/cauce/habits.py"],
-     "cauce ui: the task page shows a running worker's phase next to its status badge"),
+    ("independent", "Habits: a reviewed habit installs itself once locks' own check passes", ["src/locks/habits.py"],
+     "locks ui: the task page shows a running worker's phase next to its status badge"),
     ("independent", "Fix the flaky test_flow dispatcher test that races the wake file", ["tests/test_flow.py"],
-     "Add `cauce relay` docs to commands/relay.md"),
+     "Add `locks relay` docs to commands/relay.md"),
     ("independent", "Charts: add the Sankey component and its tests", ["lib/charts/core/sankey.ts"],
      "Portal: the client approves a ticket in QA from its detail page"),
     ("independent", "Implement the GitHub webhook signature check (X-Hub-Signature-256)", ["lib/server/github.ts"],
@@ -104,11 +104,11 @@ HELD_OUT = [
      "Survey: read each repository's commit history for reverts"),
     ("independent", "Implementa la rotación de llaves con deno task rotate-key", ["scripts/rotate-key.ts"],
      "Ajusta el espaciado del encabezado de la página de proyectos en el teléfono"),
-    ("conflict", "Add the `overlap` setting: the verifier starts beside cauce's check in orchestrate.py",
-     ["src/cauce/orchestrate.py", "src/cauce/config.py"],
+    ("conflict", "Add the `overlap` setting: the verifier starts beside locks' check in orchestrate.py",
+     ["src/locks/orchestrate.py", "src/locks/config.py"],
      "Add the `habit_auto` setting, on by default, copied from plugin options"),
-    ("conflict", "Replace the dispatcher's lock file with an flock per lane in dispatch.py", ["src/cauce/dispatch.py"],
-     "Make `cauce lanes --unpause` start the lane's dispatcher at once under its lock"),
+    ("conflict", "Replace the dispatcher's lock file with an flock per lane in dispatch.py", ["src/locks/dispatch.py"],
+     "Make `locks lanes --unpause` start the lane's dispatcher at once under its lock"),
     ("conflict", "Cotización: cambia el cálculo de HM para usar el plan vigente a la fecha (planIdsAt)",
      ["lib/mecha/quote.ts"], "Agrega al PDF de la cotización el desglose de HM por persona"),
     ("conflict", "Tickets: add the Blocked state and the event that releases it", ["lib/types.ts"],
@@ -157,7 +157,7 @@ BEFORE = (
     "conflicts with, if any."
 )
 PROMPTS = {"current": BEFORE, "named": NAMED, "named2": NAMED2}
-assert NAMED2 == dispatch.SYSTEM_PROMPT, "cauce's prompt is the arm named2"
+assert NAMED2 == dispatch.SYSTEM_PROMPT, "locks' prompt is the arm named2"
 OUT = HERE / "results-dispatch.jsonl"
 
 

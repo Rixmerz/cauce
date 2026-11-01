@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from cauce import cli, criteria, flow, insights, investigate, launch, roles
-from cauce.launch import WorkerResult
-from cauce.matrix import Cell
-from cauce.orchestrate import Options, run
+from locks import cli, criteria, flow, insights, investigate, launch, roles
+from locks.launch import WorkerResult
+from locks.matrix import Cell
+from locks.orchestrate import Options, run
 
 from .test_orchestrate import Script
 from .test_survey import deep_repo, user, write
@@ -68,7 +68,7 @@ def test_start_queues_one_read_only_investigator_per_project_and_plugin_each_in_
     assert len(criteria.items(plugin_task["body"])) == 5 and '"workflow_step_keys"' in plugin_task["body"]
     queued = flow.queued_options(task, Options())
     assert queued.role == "surveyor" and queued.start == Cell("opus", "high") and not queued.keep_learned
-    assert insights.work(store, task["repo"])["tasks"] == 0  # cauce's reading is not the person's work
+    assert insights.work(store, task["repo"])["tasks"] == 0  # locks' reading is not the person's work
     with pytest.raises(investigate.InvestigateError, match="nothing to investigate"):
         investigate.start(store, {"projects": [], "plugins": [], "left_out": []})
     with pytest.raises(ValueError):
@@ -152,16 +152,16 @@ def test_cli_lists_what_was_left_out(git_repo, tmp_path, store, capsys, monkeypa
 
 
 def test_a_report_block_is_read_beside_the_result():
-    text = ('```cauce-report\n{"project": "x"}\n```\n```cauce-result\n'
+    text = ('```locks-report\n{"project": "x"}\n```\n```locks-result\n'
             '{"verdict": "pass", "summary": "read", "evidence": "git log: 3 commits"}\n```')
     assert launch.report_block(text) == {"project": "x"}
-    assert launch.report_block("```cauce-report\nnot json\n```") == {"unparsed": "not json"}
-    assert launch.report_block("```cauce-report\n[1]\n```") == {"unparsed": "[1]"}
+    assert launch.report_block("```locks-report\nnot json\n```") == {"unparsed": "not json"}
+    assert launch.report_block("```locks-report\n[1]\n```") == {"unparsed": "[1]"}
     assert launch.report_block("nothing") is None
 
 
 def test_an_investigator_runs_read_only_keeps_its_report_and_files_nothing(git_repo, store, monkeypatch):
-    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
     script = Script(WorkerResult(True, None, "read every branch", "git log --all: 12 commits",
                                  learned=("Commits use conventional types",), report={"project": "x"}))
     report = run("Investigate this project", git_repo, store,
@@ -178,9 +178,9 @@ def test_an_investigator_runs_read_only_keeps_its_report_and_files_nothing(git_r
 
 def test_the_cost_of_an_investigation_is_estimated_from_earlier_investigators(store):
     for cost in (2.0, 4.0):
-        store.create_task("read it", status="done", source="cauce", cost_usd=cost,
+        store.create_task("read it", status="done", source="locks", cost_usd=cost,
                           options=json.dumps({"investigation": "inv-1"}))
-    store.create_task("a person's task", status="done", source="cauce", cost_usd=50.0)
+    store.create_task("a person's task", status="done", source="locks", cost_usd=50.0)
     found = investigate.estimate(store, 3)
     assert found == {"investigators": 3, "each_usd": 3.0, "total_usd": 9.0, "from": 2}
     said = investigate.estimate_text(found)

@@ -1,6 +1,63 @@
 # Changelog
 
+> The project was named cauce until it was renamed Locks; the entries of released versions below keep the old name. <!-- legacy-name: history -->
+
 ## [Unreleased]
+
+## [0.69.0] - 2026-11-01
+
+### Changed
+
+- **Renamed to Locks.** The project was cauce; it is Locks now, after a canal lock: work climbs <!-- legacy-name -->
+  a ladder of model cells one level at a time, each gate opening only on evidence. The plugin is
+  `locks` (`claude plugin install locks@rixmerz`), the command is `locks`, the slash commands are
+  `/locks:…`, variables are `LOCKS_*`, data lives in `~/.local/share/locks` (XDG respected), a
+  project's folder is `.locks/`, kept branches are `locks/task-N`, workers write a `locks-result`
+  block, commits carry `Locks-Task`, `Locks-Verified` and `Locks-Check-Output`, and the board's
+  header is `X-Locks-Token`. The rename was made by `scripts/rename_to_locks.py` (`--check` lists
+  what is left).
+  What keeps working for a person who had it installed, with nothing to do: <!-- legacy-name -->
+  - every `CAUCE_*` variable they or an older process set reads as its `LOCKS_*`, and a worker <!-- legacy-name -->
+    gets both;
+  - the old home moves to the new one the first time Locks runs, under a lock, with a link left
+    where it was; its database becomes `locks.db` (a link at the old name) only while no other
+    process has it open, and is read under its old name otherwise. A home that cannot move is
+    used where it is, and Locks says so once;
+  - a project's old folder is read where it is and becomes `.locks/` the first time work is
+    written there, its line in the checkout's `.gitignore` rewritten; never two folders;
+  - a task's kept branch of the old name (and its set-aside refs, foreign and merge branches) is
+    renamed, its tip and reflog kept, the first time Locks reads that checkout's branches, so a
+    resume starts from its work; a worktree the old home held is found through the link;
+  - the store's rows of the old name (a task's origin, a stop's author, a verdict's check, a
+    branch named in an ending) are read into the new name once, and again if an old version
+    still running writes more;
+  - old result and report blocks, compaction markers, the old unverified trailer, the board's
+    old token header, the bundled team's old name and the edited-file variable of habits
+    installed before are all still read;
+  - a neighbour's `cauce` block in its `plugin.json` (or a `cauce.json` beside it) is read after <!-- legacy-name -->
+    a `locks` one: livespec, rastro and layout-inspector need no release for this;
+  - `cauce` still runs Locks (the console script, `bin/cauce`, and the shim an older link wrote, <!-- legacy-name -->
+    which SessionStart rewrites) and says once that it is `locks` now.
+  What does not carry over: the board's per-browser choices (its period, scope, last project and
+  notifications are kept under new keys, so each is asked again once); values set in Claude
+  Code's settings screen for the old plugin, which Claude Code keeps per plugin, so set them again
+  for `locks`; permission rules naming the old mod tools (`mcp__cauce__…`), which now are <!-- legacy-name -->
+  `mcp__locks__…`; habits installed by the old plugin run from its folder until it is removed, then
+  install them again with `locks habits`. SessionStart names an old install still present and the
+  line that removes it; Locks never deletes from Claude Code's folder.
+
+### Added
+
+- **A newer livespec is taken and checked, not trusted.** When the livespec locks runs (a plugin's,
+  or one on PATH) is newer than the release it was checked against, its own tools are read once per
+  release and kept. A tool locks names that it does not serve is left out of the orientation, named
+  in the hint as not served, and said in the plan; tools that cannot be read brief as for the checked
+  release. Before, a release that renamed a tool left workers told to call one that was not there.
+- **The pinned livespec keeps itself current** (`.github/workflows/livespec-pin.yml`,
+  `scripts/livespec_check.py`). Every week, a release on PyPI newer than the pin is pinned and
+  verified against a real index of this repository: the index read, a brief, a change's reach, every
+  tool named served, and `validate_openspec`. Once the suite passes with it, the workflow opens a
+  draft pull request. It is never merged or fetched unpinned by itself.
 
 ## [0.68.0] - 2026-11-01
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from cauce import ci
+from locks import ci
 
 from .conftest import git
 
@@ -246,8 +246,8 @@ def test_the_runner_a_check_uses_gives_the_command_for_the_tests_near_a_change(t
 
 
 def test_a_job_quieted_here_is_named_in_no_plan(project, monkeypatch, capsys):
-    from cauce import cli, repo
-    from cauce.store import Store
+    from locks import cli, repo
+    from locks.store import Store
 
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("APP_TRUNCATE", raising=False)

@@ -1,15 +1,15 @@
-"""What a failed check said, kept per attempt (`launch.check_tail`): shown by `cauce show`, the
+"""What a failed check said, kept per attempt (`launch.check_tail`): shown by `locks show`, the
 board's task page and the ending, and handed to the next attempt's brief."""
 from __future__ import annotations
 
 import pytest
 
-from cauce import cli, hooks, launch, orchestrate
-from cauce.escalate import Attempt
-from cauce.matrix import Cell
-from cauce.orchestrate import Options, run
-from cauce.store import Store
-from cauce.ui import api
+from locks import cli, hooks, launch, orchestrate
+from locks.escalate import Attempt
+from locks.matrix import Cell
+from locks.orchestrate import Options, run
+from locks.store import Store
+from locks.ui import api
 
 from .test_orchestrate import Script, kind, ok
 
@@ -78,7 +78,7 @@ def test_an_output_with_nothing_in_it_keeps_nothing():
     assert launch.check_tail(f"{ESC}[0m\n  \n", note="a note alone says nothing of the output") == ""
 
 
-# --- the check cauce runs ---------------------------------------------------------------
+# --- the check locks runs ---------------------------------------------------------------
 
 
 def test_a_red_check_keeps_its_tail_and_a_green_one_keeps_none(tmp_path):
@@ -110,7 +110,7 @@ def failed(git_repo, store: Store):
 def test_the_next_attempt_starts_from_the_actual_failure(failed):
     _, script = failed
     assert len(script.specs) == 2
-    assert "What cauce's own check said when it failed the last attempt" in script.specs[1].prompt
+    assert "What locks' own check said when it failed the last attempt" in script.specs[1].prompt
     assert f"{RED}\n  expected 3 to be 2" in script.specs[1].prompt
 
 
@@ -120,7 +120,7 @@ def test_each_attempt_keeps_the_tail_on_its_finished_event(failed, store: Store)
     assert sorted(tails) == [1, 2]
     for tail in tails.values():
         assert tail.startswith(f"{RED}\n  expected 3 to be 2\n\n")
-        assert "the same check passes: every failure here is this work's" in tail  # cauce's comparison with the base
+        assert "the same check passes: every failure here is this work's" in tail  # locks' comparison with the base
 
 
 def test_show_prints_the_check_s_output_under_its_attempt(failed, capsys):
@@ -147,11 +147,11 @@ def test_the_ending_of_a_failed_task_shows_the_check_s_output(failed, store: Sto
 
 
 def test_an_ending_never_shows_an_earlier_run_s_check_output(store: Store):
-    t = store.create_task("old", status="blocked", source="cauce", repo="r", session_id="s")
+    t = store.create_task("old", status="blocked", source="locks", repo="r", session_id="s")
     store.add_event(t["id"], "attempt_finished", seq=1, check_tail="FAIL old.test.js")
     store.add_event(t["id"], "planned", ladder=["haiku"], start="haiku", reasons=[])
     store.add_event(t["id"], "finished", status="blocked", reason="no sign of life")
-    current = store.create_task("new", status="blocked", source="cauce", repo="r", session_id="s")
+    current = store.create_task("new", status="blocked", source="locks", repo="r", session_id="s")
     store.add_event(current["id"], "planned", ladder=["haiku"], start="haiku", reasons=[])
     store.add_event(current["id"], "attempt_finished", seq=1, check_tail="FAIL new.test.js")
     store.add_event(current["id"], "finished", status="blocked", reason="red")
@@ -161,7 +161,7 @@ def test_an_ending_never_shows_an_earlier_run_s_check_output(store: Store):
 
 
 def test_an_ending_clips_what_it_shows_and_the_show_keeps_all(store: Store, capsys):
-    t = store.create_task("big", status="blocked", source="cauce", repo="r", session_id="s")
+    t = store.create_task("big", status="blocked", source="locks", repo="r", session_id="s")
     store.add_attempt(t["id"], cell="sonnet/high", max_turns=30, passed=0, failure="code_bug", summary="red")
     store.add_event(t["id"], "planned", ladder=["haiku"], start="haiku", reasons=[])
     whole = launch.check_tail(_long_run())
@@ -175,7 +175,7 @@ def test_an_ending_clips_what_it_shows_and_the_show_keeps_all(store: Store, caps
 
 
 def test_a_resume_hands_the_next_worker_the_tail_its_history_kept(store: Store):
-    t = store.create_task("resume me", status="blocked", source="cauce", repo="r")
+    t = store.create_task("resume me", status="blocked", source="locks", repo="r")
     store.add_attempt(t["id"], cell="sonnet/high", max_turns=30, passed=0, failure="code_bug", summary="red")
     store.add_event(t["id"], "attempt_finished", seq=1, check_tail=f"{RED}\n  expected 3 to be 2")
     last = Attempt(Cell.parse("sonnet/high"), 30, False, orchestrate.Failure.CODE_BUG, "red",

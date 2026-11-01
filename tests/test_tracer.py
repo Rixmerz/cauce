@@ -5,8 +5,8 @@ import re
 
 import pytest
 
-from cauce import config, tracer, workflows
-from cauce.orchestrate import run
+from locks import config, tracer, workflows
+from locks.orchestrate import run
 
 from .conftest import git
 from .test_checking import check, passing
@@ -62,7 +62,7 @@ def test_flows_are_named_strictly_by_the_request(git_repo):
 def test_a_writing_worker_reads_the_method_and_the_check_holds_the_change_to_its_correct_lines(
         git_repo, store, monkeypatch):
     _tracer(git_repo)
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
     script = Script(passing(), check("pass"), check("pass"), write="app.py")
     report = run("Fix the payment of the course so learners can find material", git_repo, store, registry={},
                  launcher=script, classifier=kind("implement"))
@@ -78,8 +78,9 @@ def test_a_writing_worker_reads_the_method_and_the_check_holds_the_change_to_its
     assert "real name with a thumbnail" in verifier and "storage key or UUID" in verifier
     assert "first thing to do" in verifier  # a failure path's CORRECT cell
     assert "WORKS (system behaviour)" not in verifier  # the table's header row is no criterion
-    # As a word: a commit hash in the brief may hold the digits "400".
-    assert not re.search(r"\b400\b", verifier)
+    # As a word, outside paths: a commit hash may hold the digits "400", and so may a temporary
+    # folder (`pytest-400`), which failed this once.
+    assert not re.search(r"\b400\b", re.sub(r"/\S+", "", verifier))
     planned = store.last_event(report.task_id, "planned")["data"]
     assert any(r.startswith("tracer: ") for r in planned["reasons"])
 
@@ -90,7 +91,7 @@ def test_a_reading_task_or_the_setting_off_leaves_the_method_out(git_repo, store
     script = Script(passing("found it"))
     run("where do learners find material", git_repo, store, registry={}, launcher=script, classifier=kind("explore"))
     assert "TRACER" not in script.specs[0].prompt
-    monkeypatch.setenv("CAUCE_TRACER", "off")
+    monkeypatch.setenv("LOCKS_TRACER", "off")
     script = Script(passing(), write="app.py")
     run("let learners find material", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
     assert "TRACER" not in script.specs[0].prompt
@@ -140,7 +141,7 @@ def test_a_ui_change_gets_layout_inspector_in_its_check_with_the_method_mapped(g
     _floors(git_repo)
     install("layout-inspector", "0.4.0", manifest={"mcpServers": "./.claude-plugin/mcp.json"},
             files={".claude-plugin/mcp.json": LAYOUT}, skill="layout-inspection")
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
     script = Script(passing(), check("pass"), write="Cart.tsx")
     report = run("fix the cart colours", git_repo, store, launcher=script, classifier=kind("implement"))
     assert report.status == "done"
@@ -154,7 +155,7 @@ def test_a_ui_change_gets_layout_inspector_in_its_check_with_the_method_mapped(g
 def test_a_ui_change_gets_layout_inspector_in_its_check_without_the_method(git_repo, store, monkeypatch):
     install("layout-inspector", "0.4.0", manifest={"mcpServers": "./.claude-plugin/mcp.json"},
             files={".claude-plugin/mcp.json": LAYOUT}, skill="layout-inspection")
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
     script = Script(passing(), check("pass"), write="Cart.tsx")
     report = run("fix the cart colours", git_repo, store, launcher=script, classifier=kind("implement"))
     assert report.status == "done"

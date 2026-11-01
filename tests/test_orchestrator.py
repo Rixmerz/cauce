@@ -4,8 +4,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from cauce import cli, hooks, launch, orchestrator, project, stops
-from cauce.store import Store
+from locks import cli, hooks, launch, orchestrator, project, stops
+from locks.store import Store
 
 
 def _old(hours: float) -> str:
@@ -20,13 +20,13 @@ def test_the_first_session_that_sends_work_orchestrates(store: Store, git_repo: 
     folder = _project(git_repo)
     assert orchestrator.held(folder) is None
     assert orchestrator.sent(store, git_repo, {}) == (False, 0)  # a terminal names no one
-    assert orchestrator.sent(store, git_repo, {"CAUCE_SESSION_ID": "w", "CAUCE_WORKER_TASK": "3"}) == (False, 0)
+    assert orchestrator.sent(store, git_repo, {"LOCKS_SESSION_ID": "w", "LOCKS_WORKER_TASK": "3"}) == (False, 0)
     store.touch_session("a", str(git_repo), "r")
-    assert orchestrator.sent(store, git_repo, {"CAUCE_SESSION_ID": "a"}) == (True, 0)
+    assert orchestrator.sent(store, git_repo, {"LOCKS_SESSION_ID": "a"}) == (True, 0)
     assert orchestrator.held(folder)["session"] == "a" and orchestrator.is_it(folder, "a")
     # Another live session sending work does not take it.
     store.touch_session("b", str(git_repo), "r")
-    assert orchestrator.sent(store, git_repo, {"CAUCE_SESSION_ID": "b"}) == (False, 0)
+    assert orchestrator.sent(store, git_repo, {"LOCKS_SESSION_ID": "b"}) == (False, 0)
     assert orchestrator.held(folder)["session"] == "a"
 
 
@@ -35,9 +35,9 @@ def test_a_quiet_orchestrator_hands_over_with_its_work(store: Store, git_repo: P
     store._conn.execute("INSERT INTO sessions (id, cwd, repo, started_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
                         ("a", str(git_repo), "r", _old(10), _old(8)))
     orchestrator.claim(folder, "a", str(git_repo), via="sent work")
-    waiting = store.create_task("x", status="blocked", source="cauce", repo="r", session_id="a")
+    waiting = store.create_task("x", status="blocked", source="locks", repo="r", session_id="a")
     store.touch_session("b", str(git_repo), "r")
-    assert orchestrator.sent(store, git_repo, {"CAUCE_SESSION_ID": "b"}) == (True, 1)
+    assert orchestrator.sent(store, git_repo, {"LOCKS_SESSION_ID": "b"}) == (True, 1)
     assert store.get_task(waiting["id"])["session_id"] == "b"
     assert orchestrator.held(folder)["via"] == "sent work"
 
@@ -62,10 +62,10 @@ def test_a_clear_in_its_place_takes_the_role_and_resume_keeps_it(store: Store, g
 def test_the_orchestrator_adopts_what_quiet_sessions_left(store: Store, git_repo: Path):
     store._conn.execute("INSERT INTO sessions (id, cwd, repo, started_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
                         ("old", "/x", "r", _old(30), _old(20)))
-    left = store.create_task("x", status="blocked", source="cauce", repo="r", session_id="old")
+    left = store.create_task("x", status="blocked", source="locks", repo="r", session_id="old")
     store.touch_session("live", "/x", "r")
-    kept = store.create_task("y", status="blocked", source="cauce", repo="r", session_id="live")
-    elsewhere = store.create_task("z", status="blocked", source="cauce", repo="other", session_id="old")
+    kept = store.create_task("y", status="blocked", source="locks", repo="r", session_id="live")
+    elsewhere = store.create_task("z", status="blocked", source="locks", repo="other", session_id="old")
     here = store.create_run(name="feature", scope="bundled", source="x", definition="{}", repo="r",
                             session_id="old", status="active")
     there = store.create_run(name="feature", scope="bundled", source="x", definition="{}", repo="other",
@@ -106,8 +106,8 @@ def test_the_cli_shows_claims_and_releases(capsys, monkeypatch, store: Store, gi
     assert "no session orchestrates" in capsys.readouterr().out
     assert cli.main(["orchestrator", "--repo", str(git_repo), "--claim"]) == 1  # needs the session
     orchestrator.claim(folder, "a", str(git_repo), via="sent work")
-    store.create_task("x", status="blocked", source="cauce", repo="r", session_id="a")
-    monkeypatch.setenv("CAUCE_SESSION_ID", "b")
+    store.create_task("x", status="blocked", source="locks", repo="r", session_id="a")
+    monkeypatch.setenv("LOCKS_SESSION_ID", "b")
     capsys.readouterr()
     assert cli.main(["orchestrator", "--repo", str(git_repo), "--claim"]) == 0
     out = capsys.readouterr().out
@@ -118,9 +118,9 @@ def test_the_cli_shows_claims_and_releases(capsys, monkeypatch, store: Store, gi
     assert shown["this_session"] and shown["orchestrator"]["end_reason"] == "clear"
     assert cli.main(["orchestrator", "--repo", str(git_repo)]) == 0
     assert "ended (clear)" in capsys.readouterr().out
-    monkeypatch.setenv("CAUCE_SESSION_ID", "z")
+    monkeypatch.setenv("LOCKS_SESSION_ID", "z")
     assert cli.main(["orchestrator", "--repo", str(git_repo), "--release"]) == 1
-    monkeypatch.setenv("CAUCE_SESSION_ID", "b")
+    monkeypatch.setenv("LOCKS_SESSION_ID", "b")
     assert cli.main(["orchestrator", "--repo", str(git_repo), "--release"]) == 0
 
 
@@ -137,7 +137,7 @@ def test_hooks_hand_the_role_on_and_tell_the_orchestrator(store: Store, git_repo
 
 def test_a_stop_waits_on_the_person_only_for_what_they_clear(store: Store):
     def ended(cause: str, **kw) -> dict:
-        task = store.create_task(cause, status=stops.Stop(cause, "r").status, source="cauce")
+        task = store.create_task(cause, status=stops.Stop(cause, "r").status, source="locks")
         stops.record(store, task["id"], stops.Stop(cause, "r", **kw))
         return store.get_task(task["id"])
 
@@ -153,14 +153,14 @@ def test_a_stop_waits_on_the_person_only_for_what_they_clear(store: Store):
 
 
 def test_the_unattended_limit_is_two_runs(store: Store):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     assert stops.UNATTENDED_ATTEMPTS == 2 * orchestrate.Options().max_attempts == cli.UNATTENDED_ATTEMPTS
 
 
 def test_a_session_dismisses_as_the_orchestrator(capsys, monkeypatch, store: Store):
-    task = store.create_task("x", status="failed", source="cauce")
-    monkeypatch.setenv("CAUCE_SESSION_ID", "a")
+    task = store.create_task("x", status="failed", source="locks")
+    monkeypatch.setenv("LOCKS_SESSION_ID", "a")
     assert cli.main(["dismiss", str(task["id"])]) == 0
     stop = stops.of(store, store.get_task(task["id"]))
     assert stop.who == "orchestrator" and "orchestrating session" in stop.reason

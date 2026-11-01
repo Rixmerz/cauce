@@ -1,8 +1,8 @@
-"""Does the diagnosis method help an unclear bug? (`cauce.methods`, kind `debug-unclear`)
+"""Does the diagnosis method help an unclear bug? (`locks.methods`, kind `debug-unclear`)
 
 Real: one `claude -p` worker per run on a fresh copy of the memory bench's pricing engine
 (`bench/memory/hard`) with one planted bug the request only describes by its symptom ("a cent
-off, sometimes"). The arms are the same request with and without the diagnosis protocol cauce
+off, sometimes"). The arms are the same request with and without the diagnosis protocol locks
 briefs `debug-unclear` workers with (`methods.METHODS["debug-unclear"].lines`). Right when the
 carts `kinds.REFACTOR_CARTS` price exactly as the untouched engine does, the suite passes, and no
 test was changed (the planted bug breaks the suite, so a worker cannot pass by editing it).
@@ -26,8 +26,8 @@ sys.path.insert(0, str(HERE))
 
 import kinds  # noqa: E402
 
-from cauce import grants, launch, methods  # noqa: E402
-from cauce.matrix import Cell  # noqa: E402
+from locks import grants, launch, methods  # noqa: E402
+from locks.matrix import Cell  # noqa: E402
 
 OUT = HERE / "results-methods.jsonl"
 #: The planted bug: half-even rounding where the engine rounds half up, so only ties are a cent off.

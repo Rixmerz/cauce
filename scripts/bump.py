@@ -1,6 +1,6 @@
-"""Move cauce to a new version in every file that names it, at once, and close its CHANGELOG section.
+"""Move locks to a new version in every file that names it, at once, and close its CHANGELOG section.
 
-The version lives in five places (`src/cauce/__init__.py`, `pyproject.toml`, `uv.lock`, the plugin's
+The version lives in five places (`src/locks/__init__.py`, `pyproject.toml`, `uv.lock`, the plugin's
 manifest and the development marketplace) and the CHANGELOG's `[Unreleased]` section becomes the
 new version's, dated today, with an empty `[Unreleased]` above it. Nothing is written unless every
 file holds the current version where it is expected and `[Unreleased]` says something: a release is
@@ -22,9 +22,9 @@ _VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 def current(root: Path = ROOT) -> str:
-    found = re.search(r'^__version__ = "([^"]+)"', (root / "src/cauce/__init__.py").read_text(), re.MULTILINE)
+    found = re.search(r'^__version__ = "([^"]+)"', (root / "src/locks/__init__.py").read_text(), re.MULTILINE)
     if not found:
-        raise SystemExit("src/cauce/__init__.py declares no __version__")
+        raise SystemExit("src/locks/__init__.py declares no __version__")
     return found.group(1)
 
 
@@ -62,12 +62,12 @@ def plan(new: str, root: Path = ROOT, today: str | None = None) -> dict[Path, st
         raise SystemExit(f"{new} is not after the current {old}")
     esc = re.escape(old)
     out: dict[Path, str] = {}
-    init = root / "src/cauce/__init__.py"
+    init = root / "src/locks/__init__.py"
     out[init] = _one(init.read_text(), rf'^__version__ = "({esc})"', new, str(init))
     pyproject = root / "pyproject.toml"
     out[pyproject] = _one(pyproject.read_text(), rf'^version = "({esc})"', new, str(pyproject))
     lock = root / "uv.lock"
-    out[lock] = _one(lock.read_text(), rf'name = "cauce"\nversion = "({esc})"', new, str(lock))
+    out[lock] = _one(lock.read_text(), rf'name = "locks"\nversion = "({esc})"', new, str(lock))
     for name in ("plugin.json", "marketplace.json"):
         path = root / ".claude-plugin" / name
         text = path.read_text()

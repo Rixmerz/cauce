@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from cauce import (
+from locks import (
     capacity,
     dispatch,
     evolution,
@@ -30,8 +30,8 @@ from cauce import (
     usage,
     workspaces,
 )
-from cauce.capacity import Machine
-from cauce.store import Store, home
+from locks.capacity import Machine
+from locks.store import Store, home
 
 from .conftest import git
 from .test_checking import BUG
@@ -170,7 +170,7 @@ def test_a_path_that_cannot_be_resolved_belongs_to_nothing(tmp_path: Path, monke
 
 
 def test_taking_the_role_in_a_folder_that_is_gone_holds_nothing(store: Store, tmp_path: Path):
-    assert orchestrator.take(store, tmp_path / "gone" / ".cauce", "s1", str(tmp_path), via="sent work") == (False, 0)
+    assert orchestrator.take(store, tmp_path / "gone" / ".locks", "s1", str(tmp_path), via="sent work") == (False, 0)
 
 
 def test_workspace_lookups_with_nothing_or_a_bare_checkout(tmp_path: Path, git_repo: Path):
@@ -234,7 +234,7 @@ def test_a_hook_error_that_cannot_be_written_is_lost_quietly(tmp_path: Path):
     try:
         raise RuntimeError("the hook broke")
     except RuntimeError:
-        signature.note_error({"CAUCE_HOME": str(blocker / "inner")})
+        signature.note_error({"LOCKS_HOME": str(blocker / "inner")})
     assert blocker.read_text() == "a file where the home folder should be"
 
 
@@ -363,7 +363,7 @@ def test_a_change_carried_from_a_repository_says_why_and_a_skip_waits_for_its_cl
 def test_a_standard_with_no_time_measured_says_a_dash():
     row = {"kind": "implement", "repo": "r", "band": 3, "start_cell": None, "start_turns": None,
            "measured": {"tasks": 0}}
-    assert evolution._standard_line(row) == ("implement in r, 3 points: starts at cauce's rules with the kind's "
+    assert evolution._standard_line(row) == ("implement in r, 3 points: starts at locks' rules with the kind's "
                                              "turns; over 0 tasks pass-first —, — and — per point")
 
 
@@ -381,7 +381,7 @@ def test_a_typescript_project_names_its_tsconfig_not_its_package(git_repo: Path)
 
 
 def test_a_stopped_attempt_without_a_failure_counts_none(store: Store):
-    task = store.create_task("t", status="blocked", source="cauce", repo="r", kind="implement")
+    task = store.create_task("t", status="blocked", source="locks", repo="r", kind="implement")
     store.add_attempt(task["id"], cell="opus/high", max_turns=10, passed=0)
     store.add_attempt(task["id"], cell="opus/high", max_turns=10, passed=0, failure="code_bug")
     assert insights.work(store, "r")["failures"] == {"code_bug": 1}

@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from cauce import __version__, ci, launch, orchestrate, roles
-from cauce import capabilities as caps
-from cauce.classify import Classification
-from cauce.escalate import MAX_TURNS_CEILING, Failure
-from cauce.launch import WRITE_TOOLS, WorkerResult
-from cauce.matrix import LADDERS, Cell, turns_for
-from cauce.orchestrate import Options, choose_start, run
+from locks import __version__, ci, launch, orchestrate, roles
+from locks import capabilities as caps
+from locks.classify import Classification
+from locks.escalate import MAX_TURNS_CEILING, Failure
+from locks.launch import WRITE_TOOLS, WorkerResult
+from locks.matrix import LADDERS, Cell, turns_for
+from locks.orchestrate import Options, choose_start, run
 
 from .conftest import git
 
@@ -72,7 +72,7 @@ def test_choose_start_rises_with_complexity_and_history_never_falls():
 
 
 def test_the_model_that_served_is_recorded_and_a_pin_reaches_the_worker(git_repo, store, monkeypatch):
-    from cauce import models
+    from locks import models
 
     served = WorkerResult(True, None, "done", "1 passed", served_model="claude-sonnet-5")
     report = run("x", git_repo, store, registry={}, launcher=Script(served), classifier=kind("implement"))
@@ -83,7 +83,7 @@ def test_the_model_that_served_is_recorded_and_a_pin_reaches_the_worker(git_repo
     store.add_usage(message_id="m1", session_id="s", model="claude-sonnet-5-5", output_tokens=1, ts="2099-01-01")
     dry = run("y", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"))
     assert any("workers last ran claude-sonnet-5 for `sonnet` while your sessions use claude-sonnet-5-5" in r
-               and "cauce config model sonnet claude-sonnet-5-5" in r for r in dry.plan.reasons)
+               and "locks config model sonnet claude-sonnet-5-5" in r for r in dry.plan.reasons)
     models.pin("sonnet", "claude-sonnet-5-5")
     script = Script(ok())
     run("z", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
@@ -97,7 +97,7 @@ def test_a_first_try_pass_leaves_a_branch(git_repo, store):
     script = Script(ok(), write="feature.py")
     report = run("add the feature", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
     assert report.status == "done" and report.final_cell == "sonnet/medium"
-    assert report.branch == f"cauce/task-{report.task_id}"
+    assert report.branch == f"locks/task-{report.task_id}"
     assert "feature.py" in git(git_repo, "show", "--name-only", report.branch)
     assert not (git_repo / "feature.py").exists()
     spec = script.specs[0]
@@ -221,7 +221,7 @@ def test_files_the_check_itself_writes_are_said_and_marked_on_the_commit(git_rep
     assert report.status == "done" and report.check_output == ["out/bundle.js"]
     assert "written by the check itself (1, committed as its output" in report.text()
     assert store.last_event(report.task_id, "check_rewrote")["data"]["files"] == ["out/bundle.js"]
-    assert "Cauce-Check-Output: 1 file" in git(git_repo, "log", "-1", "--format=%B", report.branch)
+    assert "Locks-Check-Output: 1 file" in git(git_repo, "log", "-1", "--format=%B", report.branch)
     # a check that writes nothing says nothing
     quiet = run("build it again", git_repo, store, Options(verify="true"), registry={},
                 launcher=Script(ok(), write="other.py"), classifier=kind("implement"))
@@ -334,14 +334,14 @@ def test_rules_only_classification(git_repo, store):
 def _livespec(tmp_path, *, runner=None, popen=None):
     import subprocess as sp
 
-    from cauce.adapters.livespec import Livespec
+    from locks.adapters.livespec import Livespec
 
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
     (bindir / "uvx").write_text("#!/bin/sh\n")
     (bindir / "uvx").chmod(0o755)
     env = {"PATH": str(bindir), "HOME": str(tmp_path), "CLAUDE_CONFIG_DIR": str(tmp_path / "cc"),
-           "CAUCE_HOME": str(tmp_path / "cauce")}
+           "LOCKS_HOME": str(tmp_path / "locks")}
     return Livespec(env=env, runner=runner or (lambda argv, **kw: sp.CompletedProcess(argv, 0, "", "")),
                     **({"popen": popen} if popen else {}))
 
@@ -379,7 +379,7 @@ def test_livespec_runs_through_the_whole_flow(git_repo, store, tmp_path):
 
 
 def test_an_unindexed_repo_is_indexed_in_the_background_and_the_task_starts_at_once(git_repo, store, tmp_path):
-    from cauce.adapters import livespec as ls
+    from locks.adapters import livespec as ls
 
     from .livespec_fixture import build
 
@@ -401,7 +401,7 @@ def test_an_unindexed_repo_is_indexed_in_the_background_and_the_task_starts_at_o
     assert started and started[0][-2:] == ["index-livespec", str(git_repo.resolve())]
     assert "livespec: indexing in the background; this task runs without it" in report.plan.reasons
     assert "Code map from livespec" not in script.specs[0].prompt
-    assert report.status == "done" and lines[0].startswith(f"cauce: task #{report.task_id} started")
+    assert report.status == "done" and lines[0].startswith(f"locks: task #{report.task_id} started")
     # a task planned while that index runs starts no second one
     adapter = _livespec(tmp_path, popen=popen)
     with ls._lock(adapter.lock_path(git_repo), wait_s=0) as (got, _):
@@ -419,7 +419,7 @@ def test_an_unindexed_repo_is_indexed_in_the_background_and_the_task_starts_at_o
 
 
 class _Index:
-    """A `cauce index-livespec` process: `wait` builds the index the fixture describes, or runs out of time."""
+    """A `locks index-livespec` process: `wait` builds the index the fixture describes, or runs out of time."""
 
     def __init__(self, repo_dir, *, late=False):
         self.repo_dir, self.late = repo_dir, late
@@ -434,7 +434,7 @@ class _Index:
 
 
 def test_a_task_waits_for_the_index_before_its_worker_starts(git_repo, store, tmp_path, monkeypatch):
-    monkeypatch.setenv("CAUCE_LIVESPEC_WAIT", "30")
+    monkeypatch.setenv("LOCKS_LIVESPEC_WAIT", "30")
     started = []
 
     def popen(argv, **kw):
@@ -458,7 +458,7 @@ def test_a_task_waits_for_the_index_before_its_worker_starts(git_repo, store, tm
 
 
 def test_past_the_wait_the_task_starts_without_the_index_and_says_so(git_repo, store, tmp_path, monkeypatch):
-    monkeypatch.setenv("CAUCE_LIVESPEC_WAIT", "30")
+    monkeypatch.setenv("LOCKS_LIVESPEC_WAIT", "30")
     started = []
 
     def popen(argv, **kw):
@@ -478,13 +478,13 @@ def test_past_the_wait_the_task_starts_without_the_index_and_says_so(git_repo, s
 
 def test_past_the_wait_a_stale_index_still_reaches_the_worker_and_the_plan_says_it_is_used_as_it_is(
         git_repo, store, tmp_path, monkeypatch):
-    from cauce.adapters import livespec as ls
+    from locks.adapters import livespec as ls
 
     from .livespec_fixture import build
 
     build(git_repo)
     monkeypatch.setattr(ls, "_older_than_head", lambda indexed_at, root: True)
-    monkeypatch.setenv("CAUCE_LIVESPEC_WAIT", "30")
+    monkeypatch.setenv("LOCKS_LIVESPEC_WAIT", "30")
     script = Script(ok())
     report = run("parse_amount rounds wrong", git_repo, store, registry={}, launcher=script,
                  classifier=kind("implement"),
@@ -498,7 +498,7 @@ def test_past_the_wait_a_stale_index_still_reaches_the_worker_and_the_plan_says_
 def test_a_task_in_a_folder_of_repositories_indexes_each_one_and_never_the_folder(store, tmp_path, monkeypatch):
     from .test_livespec_adapter import make_repo
 
-    monkeypatch.setenv("CAUCE_LIVESPEC_WAIT", "30")
+    monkeypatch.setenv("LOCKS_LIVESPEC_WAIT", "30")
     folder = tmp_path / "folder"
     one, two = make_repo(folder, "one"), make_repo(folder, "two")
     started = []
@@ -564,7 +564,7 @@ def test_a_worker_that_writes_in_a_repository_with_specs_is_told_to_link_them_to
 
 
 def test_a_stale_index_is_used_as_it_is_while_one_refresh_runs(git_repo, store, tmp_path, monkeypatch):
-    from cauce.adapters import livespec as ls
+    from locks.adapters import livespec as ls
 
     from .livespec_fixture import build
 
@@ -588,7 +588,7 @@ def test_a_stale_index_is_used_as_it_is_while_one_refresh_runs(git_repo, store, 
 
 def test_a_stale_index_livespec_cannot_refresh_says_so_and_never_claims_a_running_one(
         git_repo, store, tmp_path, monkeypatch):
-    from cauce.adapters import livespec as ls
+    from locks.adapters import livespec as ls
 
     from .livespec_fixture import build
 
@@ -613,13 +613,13 @@ def test_review_of_critical_code_is_reviewed_as_critical(git_repo, store, tmp_pa
 
 
 def test_the_switch_turns_livespec_off_everywhere(git_repo, store, monkeypatch):
-    from cauce import orchestrate as o
+    from locks import orchestrate as o
 
-    monkeypatch.setenv("CAUCE_ENGRAM", "off")  # the other neighbour adopted, its own switch
-    monkeypatch.setenv("CAUCE_LIVESPEC", "on")
+    monkeypatch.setenv("LOCKS_ENGRAM", "off")  # the other neighbour adopted, its own switch
+    monkeypatch.setenv("LOCKS_LIVESPEC", "on")
     assert [a.name for a in o.adopted(Options(), None)] == ["livespec"]
     assert o.adopted(Options(livespec=False), None) == []
-    monkeypatch.setenv("CAUCE_LIVESPEC", "off")
+    monkeypatch.setenv("LOCKS_LIVESPEC", "off")
     assert o.adopted(Options(), None) == []
     assert [a.name for a in o.adopted(Options(livespec=True), None)] == ["livespec"]
 
@@ -664,7 +664,7 @@ def test_a_cancel_requested_between_attempts_stops_the_run(git_repo, store):
 
 
 def test_a_cancel_in_the_middle_of_an_attempt_keeps_what_it_did(git_repo, store):
-    from cauce.orchestrate import Cancelled
+    from locks.orchestrate import Cancelled
 
     def launcher(spec):
         (spec.target_dir / "half.py").write_text("x\n")
@@ -675,7 +675,7 @@ def test_a_cancel_in_the_middle_of_an_attempt_keeps_what_it_did(git_repo, store)
 
     report = run("x", git_repo, store, registry={}, launcher=launcher, classifier=kind("implement"))
     # A cancel stops the work; it never throws away what the worker committed.
-    assert report.status == "cancelled" and report.branch == f"cauce/task-{report.task_id}"
+    assert report.status == "cancelled" and report.branch == f"locks/task-{report.task_id}"
     assert "half.py" in git(git_repo, "show", "--name-only", "--format=", report.branch)
     assert "keeps what it did before the cancel" in report.text()
     finished = store.last_event(report.task_id, "finished")["data"]
@@ -708,16 +708,16 @@ def test_work_a_refusal_stopped_is_kept_unverified_and_the_report_says_what_git_
     assert "The last worker's own account: created the routes" in report.summary
     # Beside the person's rule, only reading the skill folders of the worker's role.
     assert script.specs[0].allowed_tools == ("Bash(npm run build)", f"Read(/{roles.bundled_skills_dir()}/**)")
-    assert report.branch == f"cauce/task-{report.task_id}" and report.changed == ["routes.js"]
+    assert report.branch == f"locks/task-{report.task_id}" and report.changed == ["routes.js"]
     assert "routes.js" in git(git_repo, "show", "--name-only", report.branch)
     message = git(git_repo, "log", "-1", "--format=%B", report.branch)
     # The subject is the change's; the task and its state are trailers a history can read past.
     assert message.splitlines()[0] == "create the training routes"
-    assert f"Cauce-Task: #{report.task_id}" in message and "Cauce-Verified: no (blocked)" in message
+    assert f"Locks-Task: #{report.task_id}" in message and "Locks-Verified: no (blocked)" in message
     assert "created the routes; node was refused" in message
     text = report.text()
     assert "changed (from git): routes.js" in text
-    assert "keeps this task's work, unverified" in text and f"cauce resume {report.task_id}" in text
+    assert "keeps this task's work, unverified" in text and f"locks resume {report.task_id}" in text
     assert "review it, then merge it" not in text
     assert json.loads(store.get_task(report.task_id)["options"])["allow_tools"] == ["Bash(npm run build)"]
     finished = store.last_event(report.task_id, "finished")["data"]
@@ -749,8 +749,8 @@ def test_the_repositorys_check_can_settle_what_a_refused_worker_could_not(git_re
     report = run("create the routes", git_repo, store, Options(verify="true", isolate=False), registry={},
                  launcher=Script(refused()), classifier=kind("implement"))
     assert report.status == "done" and report.changed == ["routes.js"]
-    # No branch to review: the files are the work, and cauce's check passed on them.
-    assert "these changes are in your checkout (the run had no worktree), checked by cauce's own run of its " \
+    # No branch to review: the files are the work, and locks' check passed on them.
+    assert "these changes are in your checkout (the run had no worktree), checked by locks' own run of its " \
            "check\n" in report.text()
     report = run("create the routes", git_repo, store, Options(isolate=False), registry={},
                  launcher=Script(refused()), classifier=kind("implement"))
@@ -761,8 +761,8 @@ def test_a_run_in_a_folder_of_several_repositories_is_read_in_each_while_it_runs
     """A request that edits two repositories is sent from the folder that holds them: no worktree can be
     made there, so what the worker writes is read in each repository against how it stood at the start,
     while it runs and at the end, and the ending says which repositories it changed in place."""
-    from cauce import progress
-    from cauce.store import home
+    from locks import progress
+    from locks.store import home
 
     from .conftest import git
     from .test_checking import log
@@ -814,7 +814,7 @@ def test_a_run_in_a_folder_of_several_repositories_is_read_in_each_while_it_runs
 def test_a_later_attempt_in_a_folder_of_repositories_still_reads_the_work_of_the_earlier_ones(tmp_path, store):
     """The repositories' starting point is the run's, taken once: a second attempt begins on what the
     first wrote in the person's checkouts, which is the task's work and not what they already had."""
-    from cauce import progress
+    from locks import progress
 
     from .conftest import git
 
@@ -887,8 +887,8 @@ def test_a_resumed_task_continues_on_its_branch_with_its_history_in_the_brief(gi
 
 @pytest.mark.usefixtures("no_verifier")
 def test_a_new_task_never_builds_on_a_branch_of_its_number_another_store_left(git_repo, store):
-    task = store.create_task("create the routes", status="queued", source="cauce")
-    branch = f"cauce/task-{task['id']}"
+    task = store.create_task("create the routes", status="queued", source="locks")
+    branch = f"locks/task-{task['id']}"
     git(git_repo, "checkout", "-q", "-b", branch)
     (git_repo / "foreign.py").write_text("x\n")
     git(git_repo, "add", "-A")
@@ -907,7 +907,7 @@ def test_a_new_task_never_builds_on_a_branch_of_its_number_another_store_left(gi
     assert not found and "is resumed" not in prompt
     assert report.status == "done"
     [aside] = store.events_of(task["id"], "branch_set_aside")
-    assert aside["data"]["to"].startswith(f"cauce/foreign/task-{task['id']}-")
+    assert aside["data"]["to"].startswith(f"locks/foreign/task-{task['id']}-")
     assert git(git_repo, "log", "-1", "--format=%s", aside["data"]["to"]).strip() == "another store's task"
 
 
@@ -919,11 +919,11 @@ def test_a_resumed_worker_that_finds_the_work_done_is_settled_by_the_check(git_r
     report = run("create the routes", git_repo, store, Options(kind="implement", verify="test -f routes.js"),
                  registry={}, launcher=Script(again), task_id=first.task_id)
     assert report.status == "done" and report.changed == ["routes.js"]
-    assert "Cauce-Verified: no" in git(git_repo, "log", "-1", "--format=%B", f"{report.branch}~1")
-    assert "Cauce-Verified: no" not in git(git_repo, "log", "-1", "--format=%B", report.branch)
+    assert "Locks-Verified: no" in git(git_repo, "log", "-1", "--format=%B", f"{report.branch}~1")
+    assert "Locks-Verified: no" not in git(git_repo, "log", "-1", "--format=%B", report.branch)
 
 
-def test_a_worker_that_ran_out_of_turns_is_checked_by_cauce_and_a_red_check_reaches_the_next_brief(git_repo, store):
+def test_a_worker_that_ran_out_of_turns_is_checked_by_locks_and_a_red_check_reaches_the_next_brief(git_repo, store):
     """A large change used every turn before it ran the tests; the tests were never run
     and the run was sent back to be split. The repository's check now runs for it."""
     out_of_turns = WorkerResult(False, Failure.TURNS_EXHAUSTED, "used all 30 turns without a verdict", cost_usd=0.1)
@@ -944,16 +944,16 @@ def test_a_worker_that_ran_out_of_turns_is_checked_by_cauce_and_a_red_check_reac
                  classifier=kind("refactor"))
     first = store.attempts(report.task_id)[0]
     assert first["failure"] == "turns_exhausted" and "2 tests failed" in first["evidence"]
-    assert f"cauce ran `{check}`, which exited 1" in first["summary"]
+    assert f"locks ran `{check}`, which exited 1" in first["summary"]
     assert specs[1].max_turns == 2 * turns_for("refactor") and report.status == "done"
-    assert "What cauce's own check said when it failed the last attempt" in specs[1].prompt
+    assert "What locks' own check said when it failed the last attempt" in specs[1].prompt
     assert "2 tests failed" in specs[1].prompt
 
 
 def test_a_run_in_the_checkout_resumes_in_the_checkout(git_repo, store):
     assert Options(isolate=False).stored()["no_isolate"] is True
     assert "no_isolate" not in Options().stored()
-    from cauce import flow
+    from locks import flow
 
     task = {"options": '{"no_isolate": true}'}
     assert flow.queued_options(task, Options()).isolate is False
@@ -967,9 +967,9 @@ def test_the_plan_names_the_rules_workers_here_were_refused_before(git_repo, sto
                                allow=("Bash(npx tsc:*)", "Bash(npm run build:*)"), permission_mode="auto")
         run(f"task {i}", git_repo, store, registry={}, launcher=Script(refusal), classifier=kind("implement"))
     for _ in range(2):
-        old = store.create_task("older", status="blocked", source="cauce", repo=str(git_repo.resolve()))
+        old = store.create_task("older", status="blocked", source="locks", repo=str(git_repo.resolve()))
         store.add_event(old["id"], "attempt_finished", seq=1, denied=["Bash(make lint)"])  # before rules were kept
-    once = store.create_task("one task's", status="blocked", source="cauce", repo=str(git_repo.resolve()))
+    once = store.create_task("one task's", status="blocked", source="locks", repo=str(git_repo.resolve()))
     store.add_event(once["id"], "attempt_finished", seq=1, denied=["Bash(git checkout main)"],
                     permission_mode="auto")
     dry = run("next", git_repo, store, Options(dry_run=True, allow_tools=("Bash(npm run build:*)",)), registry={},
@@ -978,13 +978,13 @@ def test_the_plan_names_the_rules_workers_here_were_refused_before(git_repo, sto
     assert "Bash(npx tsc:*) ×2" in note and "npm run build" not in note
     # what acceptEdits refused, before auto mode, is not what auto mode will refuse; one task's refusal is its own
     assert "make lint" not in note and "git checkout" not in note
-    monkeypatch.setenv("CAUCE_MODE", "acceptEdits")
+    monkeypatch.setenv("LOCKS_MODE", "acceptEdits")
     dry = run("next", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"))
     note = next(r for r in dry.plan.reasons if r.startswith("workers here were refused before"))
     assert note.startswith("workers here were refused before: Bash(make lint:*) ×2.")
     # work since ages them out
     monkeypatch.setattr(orchestrate, "REFUSALS_WINDOW", 1)
-    later = store.create_task("later", status="done", source="cauce", repo=str(git_repo.resolve()))
+    later = store.create_task("later", status="done", source="locks", repo=str(git_repo.resolve()))
     store.add_event(later["id"], "attempt_finished", seq=1)
     dry = run("next", git_repo, store, Options(dry_run=True), registry={}, classifier=kind("implement"))
     assert not any(r.startswith("workers here were refused before") for r in dry.plan.reasons)
@@ -1020,13 +1020,13 @@ def test_work_that_outgrew_its_turns_is_kept_for_the_resume(git_repo, store):
     report = run("reduce it", git_repo, store, registry={}, launcher=Script(out, out, write="half.py"),
                  classifier=kind("refactor"))
     assert report.status == "replan" and report.stop.cause == "turns"
-    assert report.branch == f"cauce/task-{report.task_id}"
+    assert report.branch == f"locks/task-{report.task_id}"
     assert "half.py" in git(git_repo, "show", "--name-only", report.branch)
-    assert f"cauce resume {report.task_id} --max-turns 120" in report.text()
+    assert f"locks resume {report.task_id} --max-turns 120" in report.text()
 
 
 def test_a_worker_gets_its_mode_the_repository_s_rules_and_the_tools_it_was_handed(git_repo, store, tmp_path):
-    from cauce import grants, repo
+    from locks import grants, repo
 
     grants.grant(repo.key(git_repo), ["Bash(npm:*)"])
     (tmp_path / "caps.json").write_text(json.dumps({"browser": caps.EXAMPLE["browser"]}))
@@ -1046,7 +1046,7 @@ def test_a_worker_gets_its_mode_the_repository_s_rules_and_the_tools_it_was_hand
 
 def test_a_refused_attempt_tells_how_to_keep_its_rules(git_repo, store):
     report = run("x", git_repo, store, registry={}, launcher=Script(refused()), classifier=kind("implement"))
-    assert "or, for every task in this repository: cauce allow 'Bash(node:*)'" in report.text()
+    assert "or, for every task in this repository: locks allow 'Bash(node:*)'" in report.text()
 
 
 def test_a_reading_task_is_told_its_findings_are_the_answer_and_stops_when_cells_agree(git_repo, store):
@@ -1057,14 +1057,14 @@ def test_a_reading_task_is_told_its_findings_are_the_answer_and_stops_when_cells
     assert "also when what you found is broken" in script.specs[0].prompt
     assert report.status == "failed" and report.cells == ["opus/high", "opus/xhigh"]
     assert report.stop.cause == "converged" and report.stop.account == said + "."
-    assert "resuming would only repeat them" in report.text() and "cauce resume" not in report.text()
+    assert "resuming would only repeat them" in report.text() and "locks resume" not in report.text()
 
 
 @pytest.mark.usefixtures("no_verifier")
 def test_a_passing_worker_s_learned_facts_are_filed_and_later_workers_read_them(git_repo, store, monkeypatch):
-    from cauce import notes
+    from locks import notes
 
-    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
     learned = WorkerResult(True, None, "done", "1 passed", learned=("Prices are stored in cents in every table",))
     asked = []
 
@@ -1084,7 +1084,7 @@ def test_a_passing_worker_s_learned_facts_are_filed_and_later_workers_read_them(
     assert "- prices.py" in asked[0] and ended == [True]
     assert "notes_s" in store.last_event(report.task_id, "notes_filed")["data"]
     anchor = store.note_anchors([1])[0]
-    assert anchor["path"] == "prices.py" and anchor["commit_sha"] == git(git_repo, "rev-parse", "cauce/task-1")
+    assert anchor["path"] == "prices.py" and anchor["commit_sha"] == git(git_repo, "rev-parse", "locks/task-1")
     assert store.last_event(report.task_id, "noted")["data"]["notes"][0]["id"] == 1
     # the next worker in this project reads it
     script = Script(ok())
@@ -1094,7 +1094,7 @@ def test_a_passing_worker_s_learned_facts_are_filed_and_later_workers_read_them(
         script.specs[0].prompt)
     assert any(r.startswith("notes: 1 from this project's memory") for r in later.plan.reasons)
     # off: neither read nor filed
-    monkeypatch.setenv("CAUCE_NOTES", "off")
+    monkeypatch.setenv("LOCKS_NOTES", "off")
     script = Script(learned)
     run("prices in cents again", git_repo, store, registry={}, launcher=script, classifier=kind("implement"),
         notes_ask=ask)
@@ -1103,7 +1103,7 @@ def test_a_passing_worker_s_learned_facts_are_filed_and_later_workers_read_them(
 
 
 def test_notes_that_cannot_be_filed_never_fail_the_pass(git_repo, store, monkeypatch):
-    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
 
     def broken(*a, **kw):
         raise RuntimeError("database is locked")
@@ -1121,7 +1121,7 @@ def test_notes_that_cannot_be_filed_never_fail_the_pass(git_repo, store, monkeyp
 
 
 def notes_key(where):
-    from cauce import repo
+    from locks import repo
 
     return repo.key(where)
 
@@ -1134,16 +1134,16 @@ def test_a_run_says_its_task_number_warnings_and_attempts_as_they_happen(git_rep
     report = run("check the checkout page in the browser and fix the total", git_repo, store, registry={},
                  launcher=script, classifier=kind("implement"), progress=lines.append)
     n = report.task_id
-    assert lines[0] == f"cauce: task #{n} started: implement, at {report.plan.start.label}"
+    assert lines[0] == f"locks: task #{n} started: implement, at {report.plan.start.label}"
     # the warning comes before any money is spent, not only in the report
-    assert lines[1].startswith(f"cauce: #{n} warning: this task needs a browser")
-    assert lines.index(f"cauce: #{n} attempt 1 at {report.cells[0]}") == 2
+    assert lines[1].startswith(f"locks: #{n} warning: this task needs a browser")
+    assert lines.index(f"locks: #{n} attempt 1 at {report.cells[0]}") == 2
     ended = lines[3]
-    assert ended.startswith(f"cauce: #{n} attempt 1 ended code_bug: missed the rounding")
+    assert ended.startswith(f"locks: #{n} attempt 1 ended code_bug: missed the rounding")
     assert len(ended) < 220  # a summary is cut, never dumped
-    assert lines[-1] == f"cauce: #{n} attempt 2 passed"
-    # every line is cauce's, and a reason that is no warning is not repeated
-    assert all(line.startswith("cauce: ") for line in lines)
+    assert lines[-1] == f"locks: #{n} attempt 2 passed"
+    # every line is locks', and a reason that is no warning is not repeated
+    assert all(line.startswith("locks: ") for line in lines)
     assert not any("ladder" in line for line in lines)
 
 
@@ -1187,7 +1187,7 @@ def test_a_check_that_covers_less_than_ci_is_said_in_the_plan_and_on_the_report(
                  classifier=kind("implement"), progress=lines.append)
     note = "CI also runs: db (`npm test`, a postgres service, DATABASE_URL), which this check does not" + ci.QUIET_HINT
     assert note in report.plan.reasons and note in report.text()
-    assert f"cauce: #{report.task_id} warning: {note}" in lines
+    assert f"locks: #{report.task_id} warning: {note}" in lines
     assert store.last_event(report.task_id, "planned")["data"]["warnings"] == [note]
     # a check that runs it with what it sets covers it; a task without a check is not compared
     covered = orchestrate.plan("fix the total", git_repo, store, Options(
@@ -1262,7 +1262,7 @@ def test_a_worker_that_says_the_environment_stopped_it_after_changing_files_is_n
     report = run("upgrade the vulnerable dependencies", git_repo, store, registry={}, launcher=script,
                  classifier=kind("implement"), progress=lines.append)
     assert report.status == "blocked" and len(script.specs) == 1
-    assert lines[-1].startswith(f"cauce: #{report.task_id} attempt 1 ended environment")
+    assert lines[-1].startswith(f"locks: #{report.task_id} attempt 1 ended environment")
     # a launch that broke, nothing changed: the one retry stands
     never = WorkerResult(False, Failure.ENVIRONMENT, "transport error", "", (), 0.0, transient=True)
     script = Script(never, ok())
@@ -1312,7 +1312,7 @@ def test_more_turns_continue_the_worker_s_own_session_in_its_worktree(git_repo, 
     assert store.attempts(report.task_id)[0]["session_id"] == "sess-1"
     started = [e["data"] for e in store.events(task_id=report.task_id) if e["kind"] == "attempt_started"]
     assert "resumed" not in started[0] and started[1]["resumed"] == "sess-1"
-    assert f"cauce: #{report.task_id} attempt 2 continues attempt 1's session (sess-1)" in lines
+    assert f"locks: #{report.task_id} attempt 2 continues attempt 1's session (sess-1)" in lines
 
 
 @pytest.mark.usefixtures("no_verifier")
@@ -1324,7 +1324,7 @@ def test_a_continued_session_is_told_the_check_that_failed_after_it_ran_out(git_
         classifier=kind("implement"))
     first, second = script.specs
     assert second.resume_session == "sess-1"
-    # the red check cauce ran after the worker stopped is in the brief a fresh start gets, and in the continuation
+    # the red check locks ran after the worker stopped is in the brief a fresh start gets, and in the continuation
     assert "AssertionError: total is 3" in second.resume_note and "AssertionError: total is 3" in second.prompt
     assert first.resume_note == ""
 
@@ -1355,7 +1355,7 @@ def test_more_turns_without_a_session_start_fresh_and_say_why(git_repo, store):
     assert script.specs[1].resume_session == "" and report.status == "done"
     started = [e["data"] for e in store.events(task_id=report.task_id) if e["kind"] == "attempt_started"]
     assert started[1]["fresh"] == "attempt 1 kept no session to continue"
-    assert f"cauce: #{report.task_id} attempt 2 starts fresh: attempt 1 kept no session to continue" in lines
+    assert f"locks: #{report.task_id} attempt 2 starts fresh: attempt 1 kept no session to continue" in lines
 
 
 @pytest.mark.usefixtures("no_verifier")
@@ -1382,7 +1382,7 @@ def test_more_effort_on_the_same_model_continues_its_session_as_a_fork(git_repo,
     finished = [e["data"] for e in store.events_of(report.task_id, "attempt_finished")]
     assert [f["continued"] for f in finished] == [False, True]
     assert [a["session_id"] for a in store.attempts(report.task_id)] == ["sess-1", "sess-2"]
-    assert f"cauce: #{report.task_id} attempt 2 continues attempt 1's session (sess-1) at sonnet/high" in lines
+    assert f"locks: #{report.task_id} attempt 2 continues attempt 1's session (sess-1) at sonnet/high" in lines
 
 
 @pytest.mark.usefixtures("no_verifier")
@@ -1398,7 +1398,7 @@ def test_a_fork_the_cli_refuses_starts_fresh_and_says_so(git_repo, store):
     finished = [e["data"] for e in store.events_of(report.task_id, "attempt_finished")]
     assert [f["continued"] for f in finished] == [False, False]
     assert finished[1]["fresh"] == "the CLI could not resume session sess-1: No conversation found"
-    assert (f"cauce: #{report.task_id} attempt 2 started fresh: the CLI could not resume session sess-1: "
+    assert (f"locks: #{report.task_id} attempt 2 started fresh: the CLI could not resume session sess-1: "
             "No conversation found") in lines
 
 
@@ -1424,11 +1424,11 @@ def test_more_effort_without_a_session_starts_fresh_and_the_move_says_why(git_re
     assert script.specs[1].resume_session == "" and report.status == "done"
     moved = store.last_event(report.task_id, "moved")["data"]
     assert moved["continued"] is False and moved["fresh"] == "attempt 1 kept no session to continue"
-    assert f"cauce: #{report.task_id} attempt 2 starts fresh: attempt 1 kept no session to continue" in lines
+    assert f"locks: #{report.task_id} attempt 2 starts fresh: attempt 1 kept no session to continue" in lines
 
 
 def test_a_resume_a_person_starts_starts_fresh_whatever_its_last_attempt_kept(git_repo, store):
-    from cauce.escalate import Attempt
+    from locks.escalate import Attempt
 
     shallow = WorkerResult(False, Failure.CODE_BUG, "2 tests fail", cost_usd=0.1, session_id="sess-1")
     first = run("fix the export", git_repo, store, Options(max_attempts=1), registry={}, launcher=Script(shallow),
@@ -1442,9 +1442,9 @@ def test_a_resume_a_person_starts_starts_fresh_whatever_its_last_attempt_kept(gi
 
 
 def test_a_session_is_continued_only_where_the_cell_and_the_model_still_match_it(monkeypatch):
-    from cauce import models
-    from cauce.escalate import Decision, Move
-    from cauce.orchestrate import WorkerSession, _continues
+    from locks import models
+    from locks.escalate import Decision, Move
+    from locks.orchestrate import WorkerSession, _continues
 
     high, medium = Cell("sonnet", "high"), Cell("sonnet", "medium")
     kept = WorkerSession("sess-1", "sonnet", medium, 1)
@@ -1470,14 +1470,14 @@ def test_a_run_in_the_person_s_checkout_keeps_no_session(tmp_path, store):
 
 
 def _ran(store, key, kind_name, *attempts):
-    task = store.create_task(f"{kind_name} work", status="done", source="cauce", repo=key, kind=kind_name)
+    task = store.create_task(f"{kind_name} work", status="done", source="locks", repo=key, kind=kind_name)
     for turns, failure in attempts:
         store.add_attempt(task["id"], cell="sonnet/high", max_turns=turns, passed=int(failure is None),
                           failure=failure)
 
 
 def test_history_of_tasks_that_outgrew_their_turns_raises_where_turns_start(git_repo, store):
-    from cauce import repo as repos
+    from locks import repo as repos
 
     key = repos.key(git_repo)
     _ran(store, key, "implement", (80, None))
@@ -1500,7 +1500,7 @@ def test_history_of_tasks_that_outgrew_their_turns_raises_where_turns_start(git_
 
 
 def test_one_task_that_needed_more_turns_is_no_history(git_repo, store):
-    from cauce import repo as repos
+    from locks import repo as repos
 
     key = repos.key(git_repo)
     _ran(store, key, "implement", (80, "turns_exhausted"), (160, None))
@@ -1511,7 +1511,7 @@ def test_one_task_that_needed_more_turns_is_no_history(git_repo, store):
 
 
 def test_a_dead_end_that_shares_only_a_word_or_two_stays_out_of_the_brief(git_repo, store):
-    from cauce import repo as repos
+    from locks import repo as repos
 
     key = repos.key(git_repo)
     near = store.open_problem("npm audit fix breaks the lockfile", repo=key)
@@ -1533,13 +1533,13 @@ def test_a_resumed_task_numbers_its_attempts_on_from_its_last(git_repo, store):
     lines, seen = [], []
 
     def launcher(spec):
-        seen.append(spec.env["CAUCE_WORKER_ATTEMPT"])
+        seen.append(spec.env["LOCKS_WORKER_ATTEMPT"])
         return ok()
 
     again = run("add the notes file", git_repo, store, registry={}, launcher=launcher, classifier=kind("implement"),
                 task_id=first.task_id, progress=lines.append)
     n = first.task_id
-    assert f"cauce: #{n} attempt 2 at sonnet/medium" in lines and lines[-1] == f"cauce: #{n} attempt 2 passed"
+    assert f"locks: #{n} attempt 2 at sonnet/medium" in lines and lines[-1] == f"locks: #{n} attempt 2 passed"
     assert seen == ["2"] and again.status == "done"
     assert [e["data"]["seq"] for e in store.events_of(n, "attempt_started")] == [1, 2]
 
@@ -1547,8 +1547,8 @@ def test_a_resumed_task_numbers_its_attempts_on_from_its_last(git_repo, store):
 def test_one_run_at_a_time_works_in_a_checkout_without_a_worktree(git_repo, store, monkeypatch):
     import threading
 
-    from cauce import isolate
-    from cauce.store import home
+    from locks import isolate
+    from locks.store import home
 
     monkeypatch.setattr(isolate, "WAIT_POLL_S", 0.05)
     held, release = threading.Event(), threading.Event()
@@ -1579,8 +1579,8 @@ def test_one_run_at_a_time_works_in_a_checkout_without_a_worktree(git_repo, stor
 
 
 def test_a_cancel_while_waiting_for_the_checkout_stops_the_run(git_repo, store, monkeypatch):
-    from cauce import isolate
-    from cauce.store import home
+    from locks import isolate
+    from locks.store import home
 
     monkeypatch.setattr(isolate, "WAIT_POLL_S", 0.05)
     def launcher(spec):
@@ -1598,8 +1598,8 @@ def test_a_cancel_while_waiting_for_the_checkout_stops_the_run(git_repo, store, 
 
 @pytest.mark.usefixtures("no_verifier")
 def test_a_run_in_a_worktree_never_waits_for_the_checkout(git_repo, store):
-    from cauce import isolate
-    from cauce.store import home
+    from locks import isolate
+    from locks.store import home
 
     with isolate.in_place(home(), git_repo, 7, waiting=lambda who: None, check=lambda: None):
         report = run("create the routes", git_repo, store, registry={}, launcher=Script(ok(), write="a.py"),
@@ -1620,7 +1620,7 @@ def test_a_refusal_the_worker_got_past_does_not_stop_a_climb(git_repo, store):
 def test_servers_named_by_a_port_that_answers_need_no_warning():
     import socket
 
-    from cauce import orchestrate
+    from locks import orchestrate
 
     with socket.socket() as server:
         server.bind(("127.0.0.1", 0))
@@ -1667,7 +1667,7 @@ def test_servers_named_by_a_port_that_answers_need_no_warning():
                                   "Do not modify any repo file.", "Investigate (read-only) a timezone bug",
                                   "una tarea de solo lectura"])
 def test_a_task_that_says_it_changes_nothing_is_read_only(text):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     assert orchestrate._READ_ONLY.search(text)
 
@@ -1681,7 +1681,7 @@ def test_a_task_that_says_it_changes_nothing_is_read_only(text):
 ])
 def test_a_task_that_writes_is_not_read_only(text):
     """Each was a task that had to write, told by its brief that it could not."""
-    from cauce import orchestrate
+    from locks import orchestrate
 
     assert orchestrate._READ_ONLY.search(text) is None
 
@@ -1696,7 +1696,7 @@ def test_a_task_that_writes_is_not_read_only(text):
 def test_quoted_or_parenthesized_evidence_about_another_task_is_not_a_read_only_task(text):
     """A fix task quoting what the observed step did ("read-only", "changed no file") was read as
     changing nothing and briefed so; only the task's own words count."""
-    from cauce import orchestrate
+    from locks import orchestrate
 
     # Each case is read-only to the bare pattern: it is the stripping that makes it a task that writes.
     assert orchestrate._READ_ONLY.search(text)
@@ -1711,7 +1711,7 @@ def test_quoted_or_parenthesized_evidence_about_another_task_is_not_a_read_only_
 ])
 def test_a_parenthesis_that_opens_with_the_task_s_own_declaration_is_read(text):
     """The aside that opens with the declaration is the task's own, whatever words follow it."""
-    from cauce import orchestrate
+    from locks import orchestrate
 
     assert orchestrate.declares_read_only("bugfix", text) is True
 
@@ -1724,7 +1724,7 @@ def test_a_fix_that_quotes_a_step_s_read_only_evidence_is_briefed_as_one_that_wr
 
 
 def test_a_task_s_own_words_still_make_it_read_only():
-    from cauce import orchestrate
+    from locks import orchestrate
 
     assert orchestrate.declares_read_only("test", "Validate the flow (READ-ONLY)") is True
     assert orchestrate.declares_read_only("feature", "Validate the flow (READ-ONLY)") is False
@@ -1759,7 +1759,7 @@ def test_the_kept_commit_carries_the_line_the_worker_proposed(git_repo, store):
                  classifier=kind("implement"))
     message = git(git_repo, "log", "-1", "--format=%B", report.branch)
     assert message.splitlines()[0] == "Serve a health route"
-    assert "routes.js serves /health" in message and "Cauce-Verified" not in message
+    assert "routes.js serves /health" in message and "Locks-Verified" not in message
 
 
 # --- what a worktree holds ----------------------------------------------------------------
@@ -1770,10 +1770,10 @@ def test_work_a_reset_throws_away_is_kept_on_a_ref_and_the_brief_says_so(git_rep
                     write="wrong.py")
     report = run("refactor auth flow", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
     second = script.specs[1].prompt
-    assert "reset to the base commit" in second and "refs/cauce/aside/task-1-1" in second
+    assert "reset to the base commit" in second and "refs/locks/aside/task-1-1" in second
     assert "Take what is right from them, not their approach" in second
     # The run ended for good: nothing resumes from what was set aside, so it is gone.
-    assert report.branch is None and git(git_repo, "for-each-ref", "refs/cauce/aside") == ""
+    assert report.branch is None and git(git_repo, "for-each-ref", "refs/locks/aside") == ""
 
 
 @pytest.mark.usefixtures("no_verifier")
@@ -1811,7 +1811,7 @@ def test_ignored_paths_the_task_names_are_copied_into_the_worktree(git_repo, sto
         seen.append(((spec.target_dir / "scripts" / "slides" / "deck.js").is_file(), "too big to copy" in spec.prompt))
         return ok()
 
-    import cauce.isolate as isolate_mod
+    import locks.isolate as isolate_mod
 
     original = isolate_mod.BRING_BYTES
     isolate_mod.BRING_BYTES = 5
@@ -1840,7 +1840,7 @@ def test_a_sibling_directory_reaches_the_worker(git_repo, store, tmp_path):
 
 
 def test_the_brief_says_which_node_is_on_path_and_which_commands_pass(git_repo, store, monkeypatch):
-    from cauce import orchestrate, runtime
+    from locks import orchestrate, runtime
 
     monkeypatch.setattr(runtime, "node_bin", lambda workdir, env=None: runtime.Node("22.23.2", git_repo, ".nvmrc"))
     script = Script(ok())
@@ -1871,7 +1871,7 @@ def test_an_index_that_failed_at_this_commit_is_not_restarted_by_each_task(git_r
 
 
 def test_an_attempt_keeps_the_start_and_the_end_of_long_evidence():
-    from cauce.orchestrate import kept_evidence
+    from locks.orchestrate import kept_evidence
 
     assert kept_evidence("short") == "short"
     long = "start " + "x" * 5000 + " the last line"
@@ -1885,7 +1885,7 @@ def _dropped(summary="the session errored: API Error: Connection error."):
 
 @pytest.mark.usefixtures("no_verifier")
 def test_a_network_drop_waits_and_goes_on_from_the_work_it_kept(git_repo, store, monkeypatch):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     slept = []
     monkeypatch.setattr(orchestrate, "_sleep", slept.append)
@@ -1901,8 +1901,8 @@ def test_a_network_drop_waits_and_goes_on_from_the_work_it_kept(git_repo, store,
 
 
 def test_a_network_that_stays_down_stops_as_the_network_with_the_work_kept(git_repo, store, monkeypatch):
-    from cauce import orchestrate, stops
-    from cauce.escalate import NETWORK_WAITS
+    from locks import orchestrate, stops
+    from locks.escalate import NETWORK_WAITS
 
     monkeypatch.setattr(orchestrate, "_sleep", lambda s: None)
     drops = len(NETWORK_WAITS) + 1
@@ -1916,7 +1916,7 @@ def test_a_network_that_stays_down_stops_as_the_network_with_the_work_kept(git_r
 
 
 def test_a_check_that_lost_the_network_is_no_bug_in_the_work(tmp_path):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     lost = orchestrate._verified(ok(), "echo 'npm ERR! code ENOTFOUND registry.npmjs.org'; exit 1", tmp_path)
     assert lost.failure is Failure.ENVIRONMENT and lost.network.startswith("npm ERR! code ENOTFOUND")
@@ -1946,7 +1946,7 @@ JEST_TIMEOUTS = """FAIL src/api.test.ts
 
 
 def test_a_check_whose_tests_timed_out_after_a_claimed_pass_is_the_load_not_the_work(tmp_path):
-    from cauce import launch, orchestrate
+    from locks import launch, orchestrate
 
     (tmp_path / "out.txt").write_text(JEST_TIMEOUTS)
     slow = orchestrate._verified(ok(), "cat out.txt; exit 1", tmp_path)
@@ -1965,9 +1965,9 @@ def test_a_check_whose_tests_timed_out_after_a_claimed_pass_is_the_load_not_the_
 
 def test_tests_that_keep_timing_out_under_load_stop_with_the_work_kept_and_no_attempt_spent(
         git_repo, store, monkeypatch):
-    from cauce import capacity, orchestrate, stops
-    from cauce.escalate import LOAD_WAITS
-    from cauce.store import home
+    from locks import capacity, orchestrate, stops
+    from locks.escalate import LOAD_WAITS
+    from locks.store import home
 
     slept = []
     monkeypatch.setattr(orchestrate, "_sleep", slept.append)
@@ -1993,8 +1993,8 @@ def test_tests_that_keep_timing_out_under_load_stop_with_the_work_kept_and_no_at
 
 def test_a_whole_check_that_timed_out_after_a_claimed_pass_is_the_load_and_never_climbs(
         git_repo, store, monkeypatch):
-    from cauce import orchestrate
-    from cauce.escalate import LOAD_WAITS
+    from locks import orchestrate
+    from locks.escalate import LOAD_WAITS
 
     monkeypatch.setattr(orchestrate, "_sleep", lambda s: None)
     monkeypatch.setattr(orchestrate, "_run_check", lambda command, workdir, timeout=None: (None, ""))
@@ -2029,8 +2029,8 @@ def _two_branches(repo, *, conflict: bool) -> str:
 
     base = git(repo, "rev-parse", "HEAD")
     for n, text in ((901, "api"), (902, "web")):
-        git(repo, "branch", f"cauce/task-{n}", base)
-        git(repo, "checkout", "-q", f"cauce/task-{n}")
+        git(repo, "branch", f"locks/task-{n}", base)
+        git(repo, "checkout", "-q", f"locks/task-{n}")
         (repo / ("app.py" if conflict else f"{text}.py")).write_text(f"print('{text}')\n")
         git(repo, "add", "-A")
         git(repo, "commit", "-q", "-m", f"{text} part")
@@ -2038,8 +2038,8 @@ def _two_branches(repo, *, conflict: bool) -> str:
     return base
 
 
-JOIN = {"branches": [{"part": "api", "task": 901, "branch": "cauce/task-901"},
-                     {"part": "web", "task": 902, "branch": "cauce/task-902"}],
+JOIN = {"branches": [{"part": "api", "task": 901, "branch": "locks/task-901"},
+                     {"part": "web", "task": 902, "branch": "locks/task-902"}],
         "contract": "- main() prints one line"}
 
 
@@ -2053,7 +2053,7 @@ def test_a_conflict_makes_the_integrate_step_a_worker_told_the_files_the_branch_
     def resolve(spec):
         told.append(spec.prompt)
         work = spec.target_dir
-        subprocess.run(["git", "merge", "--no-edit", "cauce/task-902"], cwd=work, capture_output=True)
+        subprocess.run(["git", "merge", "--no-edit", "locks/task-902"], cwd=work, capture_output=True)
         (work / "app.py").write_text("print('api and web')\n")
         git(work, "add", "app.py")
         git(work, "commit", "-q", "--no-edit")
@@ -2063,10 +2063,10 @@ def test_a_conflict_makes_the_integrate_step_a_worker_told_the_files_the_branch_
                  registry={}, launcher=resolve, classifier=kind("implement"), adapters=[])
     assert report.status == "done" and len(told) == 1
     brief = told[0]
-    assert "api merged cleanly" in brief and "Merging `cauce/task-902` (the web part) conflicts in: app.py" in brief
-    assert "`git merge --no-edit cauce/task-902`" in brief and "> - main() prints one line" in brief
+    assert "api merged cleanly" in brief and "Merging `locks/task-902` (the web part) conflicts in: app.py" in brief
+    assert "`git merge --no-edit locks/task-902`" in brief and "> - main() prints one line" in brief
     joined = store.last_event(report.task_id, "integrated")["data"]
-    assert joined["merged"] == ["cauce/task-901"] and joined["conflict"] == "cauce/task-902"
+    assert joined["merged"] == ["locks/task-901"] and joined["conflict"] == "locks/task-902"
     assert joined["files"] == ["app.py"]
     assert git(git_repo, "show", f"{report.branch}:app.py") == "print('api and web')"
 
@@ -2084,7 +2084,7 @@ def test_a_new_model_on_a_conflicting_join_starts_from_the_parts_that_joined_cle
         if len(seen) == 1:
             (work / "app.py").write_text("print('a wrong guess')\n")
             return bad(Failure.APPROACH, "rewrote the wrong module")
-        subprocess.run(["git", "merge", "--no-edit", "cauce/task-902"], cwd=work, capture_output=True)
+        subprocess.run(["git", "merge", "--no-edit", "locks/task-902"], cwd=work, capture_output=True)
         (work / "app.py").write_text("print('api and web')\n")
         git(work, "add", "app.py")
         git(work, "commit", "-q", "--no-edit")
@@ -2183,7 +2183,7 @@ def test_work_done_that_names_one_decision_is_kept_and_never_called_failed(git_r
     """A worker that did the work (files changed, its check green) and reports `architecture_bug`
     because one point needs a design decision: the work is kept on its branch, the stop waits on
     the orchestrator's decision, and nothing says it failed."""
-    from cauce import cli, hooks, stops
+    from locks import cli, hooks, stops
 
     point = "the export works; whether totals round per line or per invoice is a product decision"
     decided = WorkerResult(False, Failure.ARCHITECTURE_BUG, point, evidence="pytest: 12 passed", cost_usd=0.1)
@@ -2192,10 +2192,10 @@ def test_work_done_that_names_one_decision_is_kept_and_never_called_failed(git_r
     assert report.status == "blocked" and report.cells == ["sonnet/medium"]  # no climb, no replan
     assert report.stop.cause == "decision" and report.stop.who == "worker"
     assert stops.for_person(report.stop) is False  # the orchestrator's to decide
-    assert report.branch == f"cauce/task-{report.task_id}" and report.commit
+    assert report.branch == f"locks/task-{report.task_id}" and report.commit
     assert "export.py" in git(git_repo, "show", "--name-only", report.branch)
     text = report.text()
-    assert f"(commit {report.commit[:12]})" in text and "checked by cauce's own run of its check" in text
+    assert f"(commit {report.commit[:12]})" in text and "checked by locks' own run of its check" in text
     assert "failed" not in text.lower() and "decide the open point, then merge it" in text
     assert point in report.stop.reason and "the work is done and kept on its branch" in report.stop.reason
     assert cli._exit(report) == cli.EXIT_DECISION != 1
@@ -2203,12 +2203,12 @@ def test_work_done_that_names_one_decision_is_kept_and_never_called_failed(git_r
     assert f"#{report.task_id} [work done, one decision open]" in notice and "[blocked]" not in notice
     assert f"the work is done and kept on branch {report.branch} (commit {report.commit[:12]})" in notice
     assert f"one point needs a decision; the worker says: {point}" in notice and "failed" not in notice
-    assert "(its check passed, run by cauce)" in notice
+    assert "(its check passed, run by locks)" in notice
     # With no check given, the worker's own is the evidence, and said as such.
     report = run("add the invoice export", git_repo, store, Options(), registry={},
                  launcher=Script(decided, write="export.py"), classifier=kind("implement"))
     assert report.stop.cause == "decision"
-    assert "checked by the worker's own check, not re-run by cauce" in report.text()
+    assert "checked by the worker's own check, not re-run by locks" in report.text()
     # A red check, or nothing changed, leaves the rule for a wrong task as it was.
     report = run("add the invoice export", git_repo, store, Options(verify="false"), registry={},
                  launcher=Script(decided, write="export.py"), classifier=kind("implement"))
@@ -2220,7 +2220,7 @@ def test_work_done_that_names_one_decision_is_kept_and_never_called_failed(git_r
 
 @pytest.mark.usefixtures("no_verifier")
 def test_a_passing_worker_that_names_a_security_problem_raises_an_alert_with_the_secret_masked(git_repo, store):
-    from cauce import hooks
+    from locks import hooks
 
     learned = ("The CI reads the registry credential from .npmrc, which is committed: it needs rotation",
                "Run the suite with `npm test`, it takes about a minute")
@@ -2261,7 +2261,7 @@ def test_a_task_of_several_pieces_that_outgrows_its_turns_stops_for_a_split_with
     report = run("add the control, the PDF notes and the overlaps", git_repo, store, registry={},
                  launcher=Script(out, write="a.py"), classifier=kind("implement"))
     assert report.status == "replan" and report.stop.cause == "split" and report.branch
-    assert report.stop.who == "cauce" and "split what is left" in report.stop.reason
+    assert report.stop.who == "locks" and "split what is left" in report.stop.reason
     # --whole is the session's word that it is one piece: more turns, as before
     again = run("add the control, the PDF notes and the overlaps", git_repo, store, Options(whole=True), registry={},
                 launcher=Script(out, ok()), classifier=kind("implement"))
@@ -2276,7 +2276,7 @@ def test_a_writing_brief_names_the_tests_near_the_change_to_run_as_it_goes(tmp_p
 
 
 def test_the_account_s_usage_limit_stops_the_task_until_it_resets_with_the_work_kept(git_repo, store):
-    from cauce import flow, stops
+    from locks import flow, stops
 
     limited = WorkerResult(False, Failure.ENVIRONMENT, "the session errored: Session limit reached ∙ resets 5pm",
                            transient=True, limited="usage", retry_after_s=3600.0, cost_usd=0.1)
@@ -2286,13 +2286,13 @@ def test_the_account_s_usage_limit_stops_the_task_until_it_resets_with_the_work_
     # One try: every cell meets the same limit until it resets.
     assert len(script.specs) == 1 and report.status == "blocked" and report.branch
     assert report.stop.cause == "limit" and report.stop.extra["resets_at"]
-    assert "cauce resumes it once the limit resets" in stops.what_to_do(report.stop)
+    assert "locks resumes it once the limit resets" in stops.what_to_do(report.stop)
     assert stops.lost_tries(store, report.task_id) == 1
     # Nothing queued starts before the reset: every session would meet it.
     queued = store.enqueue("rename a flag", repo=None, cwd=str(git_repo))
     assert flow.limited_until(store) == report.stop.extra["resets_at"]
     assert flow.runnable(store, None, parallel=True, decide=lambda t, a: None) == []
-    from cauce import dispatch
+    from locks import dispatch
 
     assert dispatch.waiting(store, store.get_task(queued["id"])).startswith(
         "waits for the account's usage limit to reset")
@@ -2303,7 +2303,7 @@ def test_the_account_s_usage_limit_stops_the_task_until_it_resets_with_the_work_
 
 
 def test_a_pass_whose_worker_never_ran_its_own_check_says_so_on_its_verdict(git_repo, store):
-    from cauce import hooks
+    from locks import hooks
 
     out_of_turns = WorkerResult(False, Failure.TURNS_EXHAUSTED, "used all 120 turns without a verdict")
     report = run("remove the old module", git_repo, store, Options(verify="test -f gone.txt"), registry={},
@@ -2321,7 +2321,7 @@ def test_a_pass_whose_worker_never_ran_its_own_check_says_so_on_its_verdict(git_
 
 def test_a_task_its_surfaces_kept_from_the_cause_offers_a_resume_with_them_widened(git_repo, store, monkeypatch,
                                                                                     capsys):
-    from cauce import cli, stops
+    from locks import cli, stops
 
     wrong = WorkerResult(False, Failure.SPEC_BUG, "the root cause is in src/sync/clock.ts, outside my surfaces "
                          "(src/radio/**): I may not change it", verdict="fail",
@@ -2331,7 +2331,7 @@ def test_a_task_its_surfaces_kept_from_the_cause_offers_a_resume_with_them_widen
     assert report.status == "replan" and report.stop.cause == "spec"
     assert report.stop.extra["widen"] == ["src/sync/clock.ts"]
     line = stops.next_step(report.task_id, report.stop)
-    assert line == f"cauce resume {report.task_id} --surface src/sync/clock.ts"
+    assert line == f"locks resume {report.task_id} --surface src/sync/clock.ts"
     # without a word about its surfaces, a path the account names is no reason to widen them
     plain = WorkerResult(False, Failure.SPEC_BUG, "the request contradicts src/sync/clock.ts", verdict="fail")
     other = run("fix the frames", git_repo, store, Options(surfaces=("src/radio/**",)), registry={},
@@ -2363,13 +2363,13 @@ def test_lines_a_repository_hears_on_every_task_are_said_once_a_day(git_repo, st
     # Every step of a workflow that reaches a sibling repository planned it again.
     assert orchestrate.repeats("this task spans 2 repositories (api, web): tracked apart, each keeps its own notes")
 
-    from cauce.classify import Classification
+    from locks.classify import Classification
 
     plan = orchestrate.Plan("implement", Classification("implement"), (), orchestrate.Cell.parse("sonnet/medium"),
                             ["CI also runs: e2e", "first change"], (), quiet=frozenset({"CI also runs: e2e"}))
     text = orchestrate.Report(7, "done", plan).text()
     assert "CI also runs" not in text and "first change" in text
-    assert "(1 note(s) this repository already heard today left out: `cauce show 7` keeps them)" in text
+    assert "(1 note(s) this repository already heard today left out: `locks show 7` keeps them)" in text
 
 
 @pytest.mark.usefixtures("no_verifier")
@@ -2387,7 +2387,7 @@ def test_a_problem_its_task_left_open_is_solved_when_a_resume_passes_its_first_a
 
 @pytest.mark.usefixtures("no_verifier")
 def test_a_later_task_whose_text_matched_an_open_problem_solves_it(git_repo, store):
-    key = __import__("cauce.repo", fromlist=["key"]).key(git_repo)
+    key = __import__("locks.repo", fromlist=["key"]).key(git_repo)
     problem = store.open_problem("esp-now frames dropped on the macos bridge", repo=key,
                                  symptom="esp-now frames dropped on the macos bridge under load")
     store.add_fix(problem, "sonnet/high: retried the send", "failed", repo=key, why="code_bug", task_id=999)
@@ -2433,7 +2433,7 @@ def test_a_task_about_a_readme_in_a_repository_with_several_is_warned(git_repo, 
                                   "Implementa la exportacion del reporte mensual"])
 def test_a_reading_kind_given_to_a_request_that_orders_a_change_is_widened(kind, text):
     """A session's `--kind review` on "Implement X" sent a reading worker work it could only refuse."""
-    from cauce.orchestrate import _caller_kind
+    from locks.orchestrate import _caller_kind
 
     found = _caller_kind(Options(kind=kind), text)
     assert found.kind == "implement"
@@ -2451,7 +2451,7 @@ def test_a_reading_kind_given_to_a_request_that_orders_a_change_is_widened(kind,
     ("plan", "Implement the export as CSV", {}),
 ])
 def test_a_given_kind_stays_when_the_request_or_its_source_chose_it(kind, text, options):
-    from cauce.orchestrate import _caller_kind
+    from locks.orchestrate import _caller_kind
 
     assert _caller_kind(Options(kind=kind, **options), text).kind == kind
 
@@ -2462,7 +2462,7 @@ def test_the_kind_and_the_neighbours_indexes_are_found_side_by_side(git_repo, st
     import threading
     import time
 
-    from cauce.adapters import ABSENT, Status
+    from locks.adapters import ABSENT, Status
 
     class Neighbour:
         name = "slow"

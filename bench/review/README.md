@@ -1,7 +1,7 @@
 # Review benchmark: two blind reviewers with one purpose, or a classifier before a quality check?
 
 Real workers, real money. Each run is a whole review chain of `claude -p` workers started by
-cauce's own `launch.run`, on a fresh copy of a change to a small pricing engine (`tally`, the
+locks' own `launch.run`, on a fresh copy of a change to a small pricing engine (`tally`, the
 base of `bench/memory`). The change has bugs planted in it. A chain's confirmed rows are matched
 to the planted bugs by file, line and words (`analyze.py`; the bugs live packed in `truth.tgz`,
 so no worker reading the disk finds them).
@@ -12,7 +12,7 @@ python bench/review/analyze.py bench/review/results-volume.jsonl --rows
 python bench/review/recheck.py run both,recheck,merged 3 3 && python bench/review/recheck.py report
 ```
 
-The arms are each a chain cauce runs or could run:
+The arms are each a chain locks runs or could run:
 
 | Arm | Chain |
 |---|---|
@@ -31,7 +31,7 @@ The variants:
   look mechanical: a percent changed in a move, `>=` turned to `>`, a substring test, a stage
   changed, and a rename that missed one file.
 
-## What it measured (cauce 0.44, Claude Code 2.1.310)
+## What it measured (locks 0.44, Claude Code 2.1.310)
 
 One run per arm on `plain`; every arm caught 9/9. These are the `volume` results, three runs per
 arm, 14 bugs each. The cost and the critical path are medians per chain. The path counts the
@@ -59,14 +59,14 @@ because its two stages cannot overlap.
 
 1. **The second blind reviewer paid for nothing here.** Recall did not move. It cost about 60%
    more and was slower than one strong review, and the refuter it calls in refuted no row.
-   cauce's default chains (`feature`, `bugfix`, `review-fix`) already run one review;
+   locks' default chains (`feature`, `bugfix`, `review-fix`) already run one review;
    `dual-review` and `panel` stay as templates a person chooses.
 2. **A classifier does not shrink the quality check's work the way it does on a packing line.**
    An inspector checks a sorted crate in seconds. A model checking a row reads the same code it
    would read to find it. Two blind readers keep their errors independent; a checker that is
    handed the map follows it.
 3. **The pipeline is where the analogy holds.** On a packing line no stage waits for the one
-   before it to finish. In cauce, measured over its own store, the handoff from one step to the
+   before it to finish. In locks, measured over its own store, the handoff from one step to the
    next takes 1 to 3 seconds. The exception was a review step that waited 30 minutes with the
    machine idle: it had been queued while the lane's last dispatcher was leaving.
 
@@ -81,7 +81,7 @@ in three ways:
 
 | Arm | U | N | R | Cost | Path |
 |---|---|---|---|---|---|
-| the fix's verifier, then the re-check (cauce 0.44) | 3/3 | 3/3 | 3/3 | $0.34 | 94 s |
+| the fix's verifier, then the re-check (locks 0.44) | 3/3 | 3/3 | 3/3 | $0.34 | 94 s |
 | the re-check alone | 3/3 | 3/3 | 3/3 | $0.25 | 49 s |
 | one reader asked for both | 3/3 | 3/3 | 3/3 | $0.25 | 51 s |
 
@@ -92,13 +92,13 @@ after it averaged 2.6 and 3.9 minutes per fix round. The verifier caught four fi
 blockers out of 17, two of them regressions next to the rows, so it is the one that stays: it
 corrects the fix in its own task.
 
-## What cauce did with it (0.45.0)
+## What locks did with it (0.45.0)
 
 - **A start is never lost while the last dispatcher leaves.** A start leaves word before it asks
   whether a dispatcher runs. A dispatcher that read its queue before that word starts a fresh one
-  once its lock is released. `cauce doctor` names a pickup that waited with nothing running in
+  once its lock is released. `locks doctor` names a pickup that waited with nothing running in
   its lane (`pickup-nobody-saw`).
-- **`cauce stats` says what each blind review added beside another**: the rows it put on the
+- **`locks stats` says what each blind review added beside another**: the rows it put on the
   ledger, the rows no other review saw, and how many of those were kept. So whether a template's
   second reviewer pays is read from a person's own runs, not from this benchmark.
 - **A fix's verifier answers its rows, and a re-check it already answered runs no worker.** A row
@@ -112,7 +112,7 @@ is how that would show.
 
 ## A large change reviewed whole, or by area (`areas.py`)
 
-The `volume` change was reviewed by cauce's own area split, `workflows._areas` and
+The `volume` change was reviewed by locks' own area split, `workflows._areas` and
 `_area_brief`: four blind opus/high reviews side by side, one per top-level folder (`top`,
 `docs`, `src`, `tests`), with their findings added up. It is compared with one blind review of
 the whole change. Three runs per arm.
@@ -141,7 +141,7 @@ cell.
 opus/medium was a quarter faster and missed the hardest bug every time, which is quality lost.
 Reviews stay where they start, at opus/high.
 
-## How much effort cauce's independent verifier needs (`recheck.py`, `effort.py`)
+## How much effort locks' independent verifier needs (`recheck.py`, `effort.py`)
 
 Each arm is the verifier alone (`verifier_brief`, read-only, no ledger rows), three runs per cell.
 

@@ -1,4 +1,4 @@
-"""What cauce reads from the outside (a worker's answer, a check's output, a request, a CI file, a
+"""What locks reads from the outside (a worker's answer, a check's output, a request, a CI file, a
 tool call) never breaks it: each reader is fed text built from the fragments that broke readers
 before (fences, half JSON, brackets left open, ANSI, unicode, a secret-shaped token, a very long
 line) and holds its contract: it answers, in its shape, and never fails open. Seeded, so a failure
@@ -12,11 +12,11 @@ import re
 
 import pytest
 
-from cauce import classify, criteria, launch, points, risk, route, signature, text
-from cauce.matrix import KINDS
+from locks import classify, criteria, launch, points, risk, route, signature, text
+from locks.matrix import KINDS
 
 FRAGMENTS = [
-    "```cauce-result\n", "```\n", "```json\n", '{"verdict": "pass"', '"summary": "done"}', "}", "{", "[", "]",
+    "```locks-result\n", "```\n", "```json\n", '{"verdict": "pass"', '"summary": "done"}', "}", "{", "[", "]",
     '"criteria": [{"id": "S1", "met": true, "evidence": "ok"}]', '"parts": [{"id": "a", "prompt": "p", "surfaces":',
     '["src/**"]}]', '"findings": [{"where": "a.py:3", "what": "x"}]', "(line 197", "[claude-", "…", "\x1b[31m",
     "\x1b[0m", "FAILED tests/test_x.py::test_y - AssertionError", "Error: what", "Traceback (most recent call last):",
@@ -24,7 +24,7 @@ FRAGMENTS = [
     "Out of scope:\n", "S1 ", "#fable ", "#plan ", "Fix ", "Implement ", "why does it fail?", "¿por qué falla?",
     "ñandú ", "日本語 ", "🙂", "\t", "\r\n", "\n\n", " ", "sk-ant-abcdefghijklmnopqrstuvwxyz0123456789",
     "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", "https://user:pw@host/x", "payment ", "checkout ", "migrate ",
-    "src/cauce/orchestrate.py ", "a" * 300, "\x00", "\\", '"', "'", "$(rm -rf /)", "`id`", "; ls", "| tee", "&&",
+    "src/locks/orchestrate.py ", "a" * 300, "\x00", "\\", '"', "'", "$(rm -rf /)", "`id`", "; ls", "| tee", "&&",
 ]
 
 CASES = 400
@@ -98,7 +98,7 @@ def test_a_tool_call_s_signature_never_holds_an_argument():
 
 @pytest.mark.parametrize("seed", [6, 7])
 def test_a_ci_file_the_line_reader_cannot_read_is_skipped_never_a_crash(tmp_path, seed):
-    from cauce import ci
+    from locks import ci
 
     flows = tmp_path / ".github" / "workflows"
     flows.mkdir(parents=True)
@@ -124,7 +124,7 @@ def test_a_ci_file_the_line_reader_cannot_read_is_skipped_never_a_crash(tmp_path
 def test_a_real_shaped_key_is_masked_wherever_text_is_kept(key):
     """Keys are written with dashes inside: `sk-[A-Za-z0-9]{8,}` let every Anthropic and OpenAI key
     through to check tails, notes, briefs and the UI. Each shape here is masked, glued or not."""
-    from cauce import notes
+    from locks import notes
 
     for around in (f"{key}", f"x={key};", f"export KEY={key}\n", f"¿{key}¿"):
         assert key not in notes._SECRET.sub("[secret]", around)

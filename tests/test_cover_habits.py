@@ -1,4 +1,4 @@
-"""Branches of `cauce.habits` the habits suite leaves unread."""
+"""Branches of `locks.habits` the habits suite leaves unread."""
 from __future__ import annotations
 
 import contextlib
@@ -7,8 +7,8 @@ import os
 import subprocess
 from pathlib import Path
 
-from cauce import habits
-from cauce.store import Store
+from locks import habits
+from locks.store import Store
 
 from .test_habits import _events, _git_repo
 
@@ -60,7 +60,7 @@ def test_vetting_needs_a_tracked_file_of_the_type_a_bounded_run_and_a_checkout(t
 
 
 def test_a_review_applied_by_another_process_meanwhile_is_applied_once(store: Store, tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("CAUCE_HABIT_AUTO", "on")
+    monkeypatch.setenv("LOCKS_HABIT_AUTO", "on")
     task = store.create_task("r", status="done", source="queue", repo="r", cwd=str(tmp_path),
                              options=json.dumps({"habit_review": ["abcd1234"]}))
     real = store.immediate
@@ -82,14 +82,14 @@ def test_no_repository_has_no_current_habits(store: Store):
 
 def test_recipes_name_a_longer_sequence_once_and_stop_at_their_limit(store: Store):
     for i in range(3):
-        t = store.create_task(f"t{i}", status="done", source="cauce", kind="implement", repo="r")
+        t = store.create_task(f"t{i}", status="done", source="locks", kind="implement", repo="r")
         store.add_attempt(t["id"], cell="sonnet/medium", max_turns=30, passed=1)
         _events(store, 1, ["edit:.py", "bash:ruff", "bash:pytest"], task=t["id"], attempt=1)
     # Tied counts: the longest is found first and the pairs inside it are no recipe of their own,
     # whatever this process's string hashing (it was a set, read in hash order).
     assert habits.recipes(store, "implement", repo="r") == ["edit:.py → bash:ruff → bash:pytest"]
     for i in range(3):
-        t = store.create_task(f"u{i}", status="done", source="cauce", kind="implement", repo="r")
+        t = store.create_task(f"u{i}", status="done", source="locks", kind="implement", repo="r")
         store.add_attempt(t["id"], cell="sonnet/medium", max_turns=30, passed=1)
         _events(store, 1, ["edit:.ts", "bash:deno-fmt"], task=t["id"], attempt=1)
     assert habits.recipes(store, "implement", repo="r", limit=1) == ["edit:.py → bash:ruff → bash:pytest"]
@@ -98,10 +98,10 @@ def test_recipes_name_a_longer_sequence_once_and_stop_at_their_limit(store: Stor
 
 def test_recipes_are_the_same_in_every_process(tmp_path: Path):
     script = (
-        "from pathlib import Path\nfrom cauce import habits\nfrom cauce.store import Store\n"
+        "from pathlib import Path\nfrom locks import habits\nfrom locks.store import Store\n"
         f"s = Store(Path({str(tmp_path / 'db.sqlite')!r}))\n"
         "for i in range(3):\n"
-        "    t = s.create_task(f't{i}', status='done', source='cauce', kind='implement', repo='r')\n"
+        "    t = s.create_task(f't{i}', status='done', source='locks', kind='implement', repo='r')\n"
         "    s.add_attempt(t['id'], cell='sonnet/medium', max_turns=30, passed=1)\n"
         "    for sig in ('edit:.py', 'bash:ruff', 'bash:pytest', 'bash:mypy'):\n"
         "        s.add_tool_event(session_id='x', task_id=t['id'], attempt=1, tool='x', sig=sig, arg_hash='h', ok=1)\n"
@@ -109,7 +109,7 @@ def test_recipes_are_the_same_in_every_process(tmp_path: Path):
     seen = set()
     for seed in ("1", "2", "3", "4"):
         out = subprocess.run([os.sys.executable, "-c", script], capture_output=True, text=True, check=True,
-                             env={**os.environ, "PYTHONHASHSEED": seed, "CAUCE_HOME": str(tmp_path / "h")}).stdout
+                             env={**os.environ, "PYTHONHASHSEED": seed, "LOCKS_HOME": str(tmp_path / "h")}).stdout
         (tmp_path / "db.sqlite").unlink()
         seen.add(out)
     assert len(seen) == 1, seen

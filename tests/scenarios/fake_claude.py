@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A `claude` that follows a script, for the scenario tests: cauce runs it as it runs the
+"""A `claude` that follows a script, for the scenario tests: locks runs it as it runs the
 real CLI (argv, the brief on stdin, the JSON envelope on stdout), as a real process under
 the real dispatcher.
 
@@ -14,7 +14,7 @@ worker was given. An action:
 - `"commit": "subject"` beside `write`: the worker commits what it wrote itself, as a real one may;
   `"litter": {path: text}` then leaves files untracked after that commit (a tool's `__pycache__`).
 - `{"turns": true, "write": {...}}`: writes, then ends out of turns.
-- `{"die": true}`: kills the process that started it (cauce's `run-queued`) and itself, as a
+- `{"die": true}`: kills the process that started it (locks' `run-queued`) and itself, as a
   machine that ran out of memory would.
 - `{"crash": "Error: what"}`: writes a traceback ending in that line to the log of the process that
   started it (its stderr), then kills it and itself: a `run-queued` that died of an exception.
@@ -39,7 +39,7 @@ import sys
 import uuid
 from pathlib import Path
 
-HOST = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_REMOTE_SESSION_ID", "CAUCE_SESSION_ID")
+HOST = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_REMOTE_SESSION_ID", "LOCKS_SESSION_ID")
 
 
 def next_action(script: list[dict], brief: str, state: Path) -> tuple[int, dict]:
@@ -78,7 +78,7 @@ def structured(argv: list[str], text: str, script: list[dict]) -> int:
                   None)
     with open(os.environ["FAKE_CLAUDE_LOG"], "a") as log:
         log.write(json.dumps({"argv": argv[:2], "haiku": True, "answered": answer is not None,
-                              "worker_task": os.environ.get("CAUCE_WORKER_TASK")}) + "\n")
+                              "worker_task": os.environ.get("LOCKS_WORKER_TASK")}) + "\n")
     print(json.dumps({"is_error": False, "result": "", "structured_output": answer or minimal(schema),
                       "session_id": str(uuid.uuid4()), "num_turns": 1, "total_cost_usd": 0.0,
                       "usage": {"input_tokens": 10, "cache_read_input_tokens": 0, "output_tokens": 5}}))
@@ -88,7 +88,7 @@ def structured(argv: list[str], text: str, script: list[dict]) -> int:
 def main() -> int:
     argv = sys.argv[1:]
     if argv == ["--help"]:
-        # cauce asks which lean flags this CLI knows (`launch.lean_flags`).
+        # locks asks which lean flags this CLI knows (`launch.lean_flags`).
         print("  --disable-slash-commands\n  --exclude-dynamic-system-prompt-sections")
         return 0
     brief = sys.stdin.read()
@@ -109,8 +109,8 @@ def main() -> int:
     with open(os.environ["FAKE_CLAUDE_LOG"], "a") as log:
         log.write(json.dumps({"argv": argv, "rule": rule, "action": action, "cwd": os.getcwd(),
                               "host": {k: os.environ[k] for k in HOST if k in os.environ},
-                              "worker_task": os.environ.get("CAUCE_WORKER_TASK"),
-                              "attempt": os.environ.get("CAUCE_WORKER_ATTEMPT")}) + "\n")
+                              "worker_task": os.environ.get("LOCKS_WORKER_TASK"),
+                              "attempt": os.environ.get("LOCKS_WORKER_ATTEMPT")}) + "\n")
     for path, text in (action.get("write") or {}).items():
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_text(text)
@@ -140,7 +140,7 @@ def main() -> int:
         return 0
     block = {"verdict": "pass", "summary": action.get("summary", "done as scripted"),
              "evidence": "fake check: 1 passed", **(action.get("block") or {})}
-    result = f"Done.\n```cauce-result\n{json.dumps(block)}\n```\n"
+    result = f"Done.\n```locks-result\n{json.dumps(block)}\n```\n"
     print(json.dumps({"is_error": False, "result": result, "session_id": session, "num_turns": 3,
                       "total_cost_usd": 0.01, "usage": usage}))
     return 0

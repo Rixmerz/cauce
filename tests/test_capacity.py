@@ -6,9 +6,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from cauce import capacity, cli, config, dispatch, flow, launch
-from cauce.capacity import Lane, Machine
-from cauce.store import Store, home
+from locks import capacity, cli, config, dispatch, flow, launch
+from locks.capacity import Lane, Machine
+from locks.store import Store, home
 
 from .test_launch import envelope, proc, spec
 
@@ -144,7 +144,7 @@ def test_the_cli_reads_a_rate_limit_from_its_own_result_never_from_a_check(tmp_p
     no_json = launch.parse(proc("", code=1, stderr="Error: 429 Too Many Requests"), spec(tmp_path))
     assert no_json.limited == "rate_limit"
     # A worker's evidence (a test's log) that mentions a 429 is no limit of the API's.
-    passed = launch.parse(proc(envelope("done\n```cauce-result\n" + json.dumps(
+    passed = launch.parse(proc(envelope("done\n```locks-result\n" + json.dumps(
         {"verdict": "pass", "summary": "s", "evidence": "test_429 ok: rate limit handled"}) + "\n```")),
         spec(tmp_path))
     assert passed.passed and passed.limited == ""
@@ -228,7 +228,7 @@ def test_the_lanes_say_the_level_and_each_lane_s_reserve_use_and_loans(store, ca
     assert "workers: 4: started at what this machine holds (4 CPUs" in out and "max_parallel auto" in out
     assert "a  1 queued  open · reserve 2 · runs 3 · borrows 1" in out
     assert "b  1 queued  open · reserve 2 · runs 0 · lends 2" in out
-    from cauce.ui import api
+    from locks.ui import api
 
     board = api.board(store)
     assert board["capacity"]["level"] == 4 and board["capacity"]["lanes"]["a"]["borrowed"] == 1
@@ -243,8 +243,8 @@ def test_max_parallel_is_auto_or_a_ceiling_set_by_cli_or_plugin_option(capsys):
     assert "auto or a whole number from 1" in capsys.readouterr().err
     assert cli.main(["config", "max_parallel", "auto"]) == 0 and config.max_parallel(env) is None
     config.sync_plugin_options({**env, "CLAUDE_PLUGIN_OPTION_MAX_PARALLEL": "6"})
-    assert config.max_parallel(env) == 6 and config.max_parallel({**env, "CAUCE_MAX_PARALLEL": "2"}) == 2
-    assert config.max_parallel({**env, "CAUCE_MAX_PARALLEL": "lots"}) == 6
+    assert config.max_parallel(env) == 6 and config.max_parallel({**env, "LOCKS_MAX_PARALLEL": "2"}) == 2
+    assert config.max_parallel({**env, "LOCKS_MAX_PARALLEL": "lots"}) == 6
 
 
 def test_the_dispatcher_settles_the_level_each_pass_and_starts_no_more_than_it(git_repo, store):
@@ -278,7 +278,7 @@ def test_the_dispatcher_settles_the_level_each_pass_and_starts_no_more_than_it(g
 
 @pytest.fixture(autouse=True)
 def _no_ceiling(monkeypatch):
-    monkeypatch.delenv("CAUCE_MAX_PARALLEL", raising=False)
+    monkeypatch.delenv("LOCKS_MAX_PARALLEL", raising=False)
 
 
 # --- load, recovery and a full disk -------------------------------------------------------

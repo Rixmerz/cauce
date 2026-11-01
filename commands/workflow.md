@@ -1,10 +1,10 @@
 ---
-description: Make, change, copy, run and watch cauce workflows — saved chains of tasks that go on by themselves, step after step
+description: Make, change, copy, run and watch locks workflows — saved chains of tasks that go on by themselves, step after step
 argument-hint: [what the person wants: run X on Y, make a workflow for Z, change step S, where is run N]
 ---
 
-A cauce workflow is a saved list of steps. Each step is a task text with the
-steps it waits on. A run queues the first steps. When a step passes, cauce
+A locks workflow is a saved list of steps. Each step is a task text with the
+steps it waits on. A run queues the first steps. When a step passes, locks
 queues the steps that waited on it, on the commit it kept, and tells them what
 it found. You start a run and watch it; you never relay a step's result to
 the next one.
@@ -14,14 +14,14 @@ Request: $ARGUMENTS
 ## Find one
 
 ```bash
-cauce workflow list              # every workflow, nearest scope first
-cauce workflow show <name>       # its steps, inputs and where it is saved
+locks workflow list              # every workflow, nearest scope first
+locks workflow show <name>       # its steps, inputs and where it is saved
 ```
 
 There are three scopes, and the nearest one wins:
 
-- `project`: `.cauce/workflows/` in this checkout, shared through the repository.
-- `user`: the person's cauce home.
+- `project`: `.locks/workflows/` in this checkout, shared through the repository.
+- `user`: the person's locks home.
 - `bundled`: the templates `feature`, `feature-parallel`, `bugfix`, `review-fix`,
   `dual-review` and `panel` (four blind reviews, one lens each). `feature-parallel` is for a feature that touches several
   areas; with a plan of one part it is `feature`.
@@ -33,28 +33,28 @@ A workflow in a nearer scope hides one of the same name further away.
 Start from the closest existing workflow rather than from nothing:
 
 ```bash
-cauce workflow new <name> --from <existing> [--scope project|user]
-cauce workflow copy <source> <target>
-cauce workflow new <name> --description "..."      # one empty step to fill
+locks workflow new <name> --from <existing> [--scope project|user]
+locks workflow copy <source> <target>
+locks workflow new <name> --description "..."      # one empty step to fill
 ```
 
 Change it one step at a time. Each change is checked before it is written:
 
 ```bash
-cauce workflow step add <name> <step> --prompt "..." [--after <step>] [--needs a,b] \
+locks workflow step add <name> <step> --prompt "..." [--after <step>] [--needs a,b] \
     [--kind <kind>] [--role <role>] [--surfaces 'src/api/**,docs/**'] [--verify "<check>"] [--start <model/effort>] [--max-turns N] \
     [--memory note:12,topic:zones,problem:7]
-cauce workflow step set <name> <step> --prompt "..." [--clear verify]
-cauce workflow step rm <name> <step>
-cauce workflow validate <name>
-cauce workflow rm <name> --scope user|project
+locks workflow step set <name> <step> --prompt "..." [--clear verify]
+locks workflow step rm <name> <step>
+locks workflow validate <name>
+locks workflow rm <name> --scope user|project
 ```
 
-To rewrite a whole definition, get it with `cauce workflow show <name> --json`,
-change the JSON, and write it back with `cauce workflow save <file> --replace`.
-`cauce workflow edit <name>` opens it in the person's editor.
+To rewrite a whole definition, get it with `locks workflow show <name> --json`,
+change the JSON, and write it back with `locks workflow save <file> --replace`.
+`locks workflow edit <name>` opens it in the person's editor.
 
-`cauce workflow show` prints the definition's revision. Pass it back with
+`locks workflow show` prints the definition's revision. Pass it back with
 `--expect <revision>` on `save`, `step add|set|rm` and `edit`: the change is
 refused if someone else changed the workflow since you read it. Read it again
 and make the change on what is there.
@@ -62,8 +62,8 @@ and make the change on what is there.
 Show the person the graph before a run, or put it in a pull request:
 
 ```bash
-cauce workflow render <name> [--markdown]       # a Mermaid flowchart (fenced, its steps listed)
-cauce workflow render --run <run> [--markdown]  # a run's copy, each step's state on its node
+locks workflow render <name> [--markdown]       # a Mermaid flowchart (fenced, its steps listed)
+locks workflow render --run <run> [--markdown]  # a run's copy, each step's state on its node
 ```
 
 How to write the steps:
@@ -78,7 +78,7 @@ How to write the steps:
 - **Writing steps:** each one starts from the commit the nearest writing step
   before it kept.
 - **Roles:** `--role <name>` runs a step as one role of the project's team
-  (`cauce team show`), say `security-auditor` for an audit step. A role the
+  (`locks team show`), say `security-auditor` for an audit step. A role the
   project's team does not have is not used: the team picks, and the plan says
   so.
 - **Surfaces:** `--surfaces` bounds where a writing step may change files. A
@@ -96,7 +96,7 @@ How to write the steps:
   role reaches it as its first message after the fork. A review forks only an
   `explore` step, which decided nothing; refute, recheck and integrate steps
   fork none. Each repository tries forked and fresh first tries against each
-  other and keeps forking where it won (`cauce stats`). `feature-parallel`'s
+  other and keeps forking where it won (`locks stats`). `feature-parallel`'s
   parts fork its plan.
 - **Review ledger:** after review steps, `--ledger refute` decides the
   findings only one review saw, `--ledger fix` fixes only the confirmed ones,
@@ -104,19 +104,19 @@ How to write the steps:
   gets a second round, then the run waits on the person. `dual-review` and
   `panel` are built this way.
 - **Checks:** give a writing step a `verify` command when the repository has
-  one. cauce runs it itself.
+  one. locks runs it itself.
 - **Conditions:** `when` maps a step it needs to an outcome that step's ending
   records. The outcomes are `findings` or `clean` (did the work it judged have
   problems the change caused), `changed` or `unchanged` (did it change files),
   or one of a question's options. A step whose `when` does not hold is
   skipped: it passes with no worker, and the steps after it start from the
   work before it. For if/else, give two steps opposite `when`s and let a later
-  step need both. The engine decides from cauce's records, never from a
+  step need both. The engine decides from locks' records, never from a
   worker's words.
 - **Questions:** a step with `ask` (the question, `{inputs}` allowed) and
   `options` (2 to 6 short answers) runs no worker. It waits on the person, and
   the session hears of it as a step waiting on them. Ask the person in your
-  conversation, then run their answer with `cauce workflow answer <run> <step>
+  conversation, then run their answer with `locks workflow answer <run> <step>
   <option>`. Never answer for them. A question is answered, never resumed.
 - **Another workflow as a step:** a step with `workflow: <name>` and `with:
   {input: "text with {goal}"}` runs that saved workflow on the work before it,
@@ -125,13 +125,13 @@ How to write the steps:
   frozen when the run starts: one that is missing, lacks an input, calls
   itself, or nests deeper than three levels is refused before anything is
   queued. Cancelling the run cancels the run it started.
-- **Memory:** a step can carry cauce memory into its brief, for considerations
+- **Memory:** a step can carry locks memory into its brief, for considerations
   that step must keep:
   - `--memory note:<id>` (or a bare id) for one project note
   - `topic:<name>` for every live note in a topic
   - `problem:<id>` for a problem with every fix tried on it
 
-  Find the ids with `cauce recall "<question>"` or `cauce memory search
+  Find the ids with `locks recall "<question>"` or `locks memory search
   "<symptom>"`, and remove them again with `--clear memory`. Notes are read
   only from the project the run is in. A run whose memory cannot be read there
   does not start.
@@ -156,9 +156,9 @@ one in the user scope) is held. A change you make to it is kept as a
 or is cancelled. Further changes build on that pending revision.
 
 ```bash
-cauce workflow show <name>        # its version, the runs using it, a pending change
-cauce workflow pending [<name>]   # what waits, and for which runs
-cauce workflow pending <name> --apply|--drop
+locks workflow show <name>        # its version, the runs using it, a pending change
+locks workflow pending [<name>]   # what waits, and for which runs
+locks workflow pending <name> --apply|--drop
 ```
 
 Pass `--now` to a change only when the person wants it at once. The runs
@@ -168,7 +168,7 @@ with `--force`.
 ## Run one
 
 Running spends money, so do it only when the person asked for this work.
-`cauce workflow list` (or `cauce workflow run <name> --help`, or `cauce
+`locks workflow list` (or `locks workflow run <name> --help`, or `locks
 workflow show <name>`) shows what each workflow takes: its inputs, each said
 required, and its memory. An input only a step's own check uses (`"verify":
 "{check}"`) is filled by the run's `--verify` when it is not named. Check a
@@ -176,9 +176,9 @@ run first with `--dry-run`, which queues nothing and says what is missing, so
 the first real start is the one that runs:
 
 ```bash
-cauce workflow run <name> --input goal="..." --input check="..." --dry-run
-cauce workflow run <name> "<value of the one required input not named>" [--verify "<check>"]
-cauce workflow run <name> --input goal="..." --input area="..." [--verify "<check>"] [--allow RULE] [--allow-approval] [--after <run>]
+locks workflow run <name> --input goal="..." --input check="..." --dry-run
+locks workflow run <name> "<value of the one required input not named>" [--verify "<check>"]
+locks workflow run <name> --input goal="..." --input area="..." [--verify "<check>"] [--allow RULE] [--allow-approval] [--after <run>]
 ```
 
 `--verify` (or `--check`, the same flag) is the check of every step that writes and names none of its own;
@@ -199,8 +199,8 @@ The run starts the repository's dispatcher. Then, without you:
 ## Watch one
 
 ```bash
-cauce workflow status [--all]           # one line per run: the step it is at, its attempt, last commit, files
-cauce workflow status <run> [--verbose] # a line a step: state, task, cell, attempt, cost, branch, why it stopped
+locks workflow status [--all]           # one line per run: the step it is at, its attempt, last commit, files
+locks workflow status <run> [--verbose] # a line a step: state, task, cell, attempt, cost, branch, why it stopped
 ```
 
 The inputs show clipped to one line (`--verbose`, or `--full`, shows them
@@ -210,20 +210,20 @@ how far it is behind the base; then the steps waiting on the orchestrator and
 the branch that holds the work so far. `--verbose` adds, under each step, what
 a running worker is doing, the commit a done step kept and the files it
 touched.
-`cauce overview` lists the runs of every project. `cauce show <task>` shows
+`locks overview` lists the runs of every project. `locks show <task>` shows
 one step in depth.
 
 When a step stopped:
 
-- **Read why:** `cauce show <task>`.
-- **Can go on:** `cauce resume <task> --unattended`, or `cauce workflow retry
+- **Read why:** `locks show <task>`.
+- **Can go on:** `locks resume <task> --unattended`, or `locks workflow retry
   <run> <step>` to queue it again as a new task. Either way the run goes on by
   itself once the step passes. Leave `--unattended` off only for a resume that
   carries what the person just granted (`--allow`, `--allow-approval`, `--keep`).
-- **Should stop:** `cauce workflow cancel <run>`. No further step starts.
-- **Asks the person:** `cauce workflow answer <run> <step> <option>`, with the
+- **Should stop:** `locks workflow cancel <run>`. No further step starts.
+- **Asks the person:** `locks workflow answer <run> <step> <option>`, with the
   answer they gave in the conversation.
-- **Runs another workflow:** that run goes on by its own steps (`cauce workflow
+- **Runs another workflow:** that run goes on by its own steps (`locks workflow
   status <its run>`). A step of it that stopped is resumed or retried there,
   and its end passes the step here.
 

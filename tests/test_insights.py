@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from cauce import cli, insights, roles, teams
-from cauce.store import Store, home
+from locks import cli, insights, roles, teams
+from locks.store import Store, home
 
 from .conftest import git
 
@@ -23,7 +23,7 @@ def seed(store: Store, checkout: Path, key: str = "github.com/o/shop") -> str:
             ("debug-repro", "failed", None, 0.9), ("debug-repro", "failed", None, 0.8),
             ("debug-repro", "done", "opus/high", 1.2), ("review-routine", "done", "sonnet/medium", 0.2),
             ("implement", "queued", None, 0.0)]):
-        task = store.create_task(f"task {i}", status=status, source="cauce", repo=key, cwd=str(checkout), kind=kind,
+        task = store.create_task(f"task {i}", status=status, source="locks", repo=key, cwd=str(checkout), kind=kind,
                                  final_cell=cell, cost_usd=cost)
         if status != "done":
             store.add_attempt(task["id"], cell="sonnet/medium", max_turns=30, passed=0, failure="code_bug")
@@ -68,11 +68,11 @@ def test_insights_read_each_project_s_work_languages_and_team(store, tmp_path):
     assert p["languages"]["ui_files"] == 2
     assert "user interface" in p["purpose"] and "debugging" in p["purpose"] and "python" in p["purpose"]
     joined = " | ".join(p["suggestions"])
-    assert "cauce roles new implementer-python --extends implementer --match pyproject.toml --skill python-rules" \
+    assert "locks roles new implementer-python --extends implementer --match pyproject.toml --skill python-rules" \
         in joined
     assert "debug-repro passes 33% here" in joined and "never asked for here" in joined
     assert found["claude_agents"] == [{"name": "mine", "description": "does mine"}]
-    assert {t["name"] for t in found["teams"]} == {"cauce", "web"} and "security-audit" in found["skills"]
+    assert {t["name"] for t in found["teams"]} == {"locks", "web"} and "security-audit" in found["skills"]
     text = insights.text(found)
     assert f"{key} ({d}): team web, 10 tasks" in text and "python 67%" in text and "→ a python implementer" in text
     assert "your Claude Code subagents: mine" in text
@@ -81,7 +81,7 @@ def test_insights_read_each_project_s_work_languages_and_team(store, tmp_path):
 
 def test_a_project_gone_from_disk_and_an_empty_store_still_read(store, tmp_path):
     assert "has not worked in any project yet" in insights.text(insights.gather(store))
-    store.create_task("x", status="done", source="cauce", repo="github.com/o/gone", cwd=str(tmp_path / "gone"),
+    store.create_task("x", status="done", source="locks", repo="github.com/o/gone", cwd=str(tmp_path / "gone"),
                       kind="docs")
     p = insights.gather(store)["projects"][0]
     assert not p["exists"] and p["languages"]["files"] == 0 and p["purpose"] == ["documentation"]
@@ -182,13 +182,13 @@ def test_the_init_skill_is_a_plugin_skill_whose_commands_all_exist():
     assert not (ROOT / "skills" / "personal-team").exists()
     parser = cli.build_parser()
     blocks = "\n".join(re.findall(r"```bash\n(.*?)```", body, re.S)).replace("\\\n", " ")
-    commands = [line.split("  #")[0].strip() for line in blocks.splitlines() if line.startswith("cauce ")]
+    commands = [line.split("  #")[0].strip() for line in blocks.splitlines() if line.startswith("locks ")]
     assert len(commands) >= 20
     for line in commands:
         argv = shlex.split(line.replace("<<'TXT'", "").replace("<<'JSON'", ""))[1:]
-        parser.parse_args(argv)  # every flag the skill tells a session to pass is one cauce takes
-    # The workflow it shows is one cauce accepts as written.
-    from cauce import workflows
+        parser.parse_args(argv)  # every flag the skill tells a session to pass is one locks takes
+    # The workflow it shows is one locks accepts as written.
+    from locks import workflows
 
     shown = re.search(r"<<'JSON'\n(.*?)\nJSON", body, re.S).group(1)
     defn = workflows.normalize(json.loads(shown))

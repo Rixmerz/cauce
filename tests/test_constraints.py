@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from cauce import notes, repo
-from cauce.escalate import Failure
-from cauce.launch import WorkerResult
-from cauce.orchestrate import run, verifier_brief
-from cauce.store import Store
+from locks import notes, repo
+from locks.escalate import Failure
+from locks.launch import WorkerResult
+from locks.orchestrate import run, verifier_brief
+from locks.store import Store
 
 from .conftest import git
 from .test_orchestrate import Script, bad, kind, ok
@@ -42,7 +42,7 @@ def test_constraints_are_briefed_as_requirements_as_many_as_fit(store: Store):
     assert said[0].startswith("Constraints this project keeps") and "must meet every one" in said[0]
     assert "never what you may run" in said[0] and len(said) == 5
     short = notes.constraint_lines(found, limit=10)
-    assert len(short) == 3 and short[-1] == "- 3 more: `cauce notes list --constraints`"
+    assert len(short) == 3 and short[-1] == "- 3 more: `locks notes list --constraints`"
     assert notes.constraint_lines([]) == []
 
 
@@ -66,7 +66,7 @@ def test_a_note_written_on_work_not_merged_is_said_to_be(git_repo, store: Store)
 
 
 def test_every_worker_and_the_verifier_are_told_the_project_s_constraints(git_repo, store: Store, monkeypatch):
-    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
     rule = _rule(store, repo.key(git_repo))
     script = Script(ok())
     report = run("add a loyalty discount", git_repo, store, registry={}, launcher=script,
@@ -83,7 +83,7 @@ def test_every_worker_and_the_verifier_are_told_the_project_s_constraints(git_re
 
 @pytest.mark.usefixtures("no_verifier")
 def test_a_rule_a_failing_check_taught_is_kept_as_a_constraint(git_repo, store: Store, monkeypatch):
-    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
     taught = WorkerResult(True, None, "done", "1 passed", constraints=(f"{POLICY} (CI: POL-7)",))
     report = run("add a loyalty discount", git_repo, store, registry={},
                  launcher=Script(bad(Failure.CODE_BUG), taught, write="app.py"), classifier=kind("implement"),
@@ -97,7 +97,7 @@ def test_a_rule_a_failing_check_taught_is_kept_as_a_constraint(git_repo, store: 
 
 @pytest.mark.usefixtures("no_verifier")
 def test_a_rule_no_check_showed_is_kept_as_a_fact(git_repo, store: Store, monkeypatch):
-    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
     asked = []
 
     def ask(system, schema, question, **kw):

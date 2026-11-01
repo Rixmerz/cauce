@@ -5,11 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from cauce import analysis, flow, trunks, workflows
-from cauce.escalate import Failure
-from cauce.launch import WorkerResult
-from cauce.orchestrate import Options, run
-from cauce.store import Store
+from locks import analysis, flow, trunks, workflows
+from locks.escalate import Failure
+from locks.launch import WorkerResult
+from locks.orchestrate import Options, run
+from locks.store import Store
 
 from .test_orchestrate import Script, bad, kind, ok
 from .test_workflows import PLAN_PARTS, planned
@@ -77,7 +77,7 @@ def test_the_fork_s_first_message_marks_the_new_worker_its_role_and_its_director
     trunk = {"step": "plan", "task": 4, "session": "s", "base": "a" * 40}
     said = trunks.note(trunk, role="You are the implementer.", capabilities="Tool hints.", workdir=tmp_path,
                        base="b" * 40)
-    assert said.startswith("cauce: everything above is the session of the workflow step 'plan' (task #4)")
+    assert said.startswith("locks: everything above is the session of the workflow step 'plan' (task #4)")
     assert "never a decision made for you or an opinion to defend" in said
     assert f"Your directory is now {tmp_path}" in said and f"git diff {'a' * 12} {'b' * 12}" in said
     assert said.index("Your role from here") < said.index("Tool hints.")
@@ -136,7 +136,7 @@ def test_stats_show_the_trunk_s_trial(store: Store):
 
 @pytest.fixture
 def forking(monkeypatch):
-    monkeypatch.setenv("CAUCE_TRUNK", "on")
+    monkeypatch.setenv("LOCKS_TRUNK", "on")
     monkeypatch.setattr(trunks, "arm", lambda *a: ("fork", "the trunk's trial here (test)"))
 
 
@@ -151,7 +151,7 @@ def test_a_step_s_first_try_forks_its_trunk_with_its_role_after_the_fork(git_rep
     first, second = script.specs
     assert first.resume_session == "trunk-sess" and first.fork_session
     assert first.resume_note == first.prompt and "add the export" in first.prompt
-    assert first.resume_prompt.startswith("cauce: everything above is the session of the workflow step 'plan'")
+    assert first.resume_prompt.startswith("locks: everything above is the session of the workflow step 'plan'")
     assert f"Your directory is now {first.target_dir}" in first.resume_prompt
     if first.append_system_prompt:
         # The fork keeps the trunk's recorded system prompt: the role is said in its first message.

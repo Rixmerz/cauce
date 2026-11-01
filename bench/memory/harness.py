@@ -1,6 +1,6 @@
 """Does memory written by an expensive model make a cheap one as good as it, for less?
 
-Real workers, so real money: each run is one `claude -p` worker launched with cauce's own
+Real workers, so real money: each run is one `claude -p` worker launched with locks' own
 `launch.run` (its result contract, its worker environment, its lean flags), on a fresh copy
 of a variant's repository in a temporary directory outside this one. Success is judged by
 hidden tests the worker never sees; a run whose own check passed while the hidden tests
@@ -14,7 +14,7 @@ fail is a silent failure.
 `teachers` runs the seed task t0 once per model; its orientation and lessons are the memory
 the students get. In `lore` the hidden suite is the project's CI and holds a policy nothing in
 the repository states: a teacher CI rejects goes on in its own session with CI's output, as
-cauce's continuation does, and what it learned from that failure is kept as a constraint.
+locks' continuation does, and what it learned from that failure is kept as a constraint.
 """
 from __future__ import annotations
 
@@ -31,8 +31,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "src"))
 
-from cauce import cells, grants, launch, notes  # noqa: E402
-from cauce.matrix import Cell  # noqa: E402
+from locks import cells, grants, launch, notes  # noqa: E402
+from locks.matrix import Cell  # noqa: E402
 
 TASKS = {
     "easy": {
@@ -80,9 +80,9 @@ def hidden(variant: str, task: str, where: Path) -> subprocess.CompletedProcess:
 
 
 def memory(teacher: dict, *, framing: str = "constraints") -> str:
-    """What cauce briefs the next worker with, by its own functions: the teacher's orientation as
+    """What locks briefs the next worker with, by its own functions: the teacher's orientation as
     the primer, its lessons as candidate notes, and (`constraints`) what CI's failure taught it as
-    constraints; `notes` briefs every lesson as a note, as cauce did before constraints."""
+    constraints; `notes` briefs every lesson as a note, as locks did before constraints."""
     parts = [cells.primer_text(teacher.get("orientation") or [])]
     facts = list(teacher.get("learned") or [])
     rules = list(teacher.get("constraints") or [])

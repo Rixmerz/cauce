@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from cauce import usage
-from cauce.store import Store
+from locks import usage
+from locks.store import Store
 
 
 def line(msg_id, model="claude-opus-5-5", out=10, sidechain=False, **usage_extra):
@@ -55,7 +55,7 @@ def test_spend_joins_sessions_and_workers(store: Store, tmp_path):
     path = tmp_path / "t.jsonl"
     path.write_text(line("m1", out=1_000_000))
     usage.ingest(store, path, session_id="s", task_id=None, repo="r")
-    task = store.create_task("x", status="done", source="cauce", repo="r", kind="docs")
+    task = store.create_task("x", status="done", source="locks", repo="r", kind="docs")
     store.add_attempt(task["id"], cell="haiku", max_turns=30, passed=1, cost_usd=0.25)
     report = usage.spend(store, days=100000, repo="r")
     assert report["sessions"][0]["family"] == "opus" and report["sessions"][0]["usd"] > 20
@@ -95,11 +95,11 @@ def test_usage_is_kept_by_task_or_session_only(store: Store):
 
 
 def test_a_running_attempt_shows_its_cost_so_far_or_running_never_zero(store: Store, tmp_path, monkeypatch):
-    from cauce import signature, workflow_cli
-    from cauce.ui import api
+    from locks import signature, workflow_cli
+    from locks.ui import api
 
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cc"))
-    task = store.create_task("add the export", status="running", source="cauce", repo="r")
+    task = store.create_task("add the export", status="running", source="locks", repo="r")
     store.add_event(task["id"], "attempt_started", seq=1, cell="sonnet/medium")
     # No call of its worker reached the log yet: the cost is unknown, said as running.
     seen = usage.so_far(store, store.get_task(task["id"]))
@@ -109,8 +109,8 @@ def test_a_running_attempt_shows_its_cost_so_far_or_running_never_zero(store: St
     running = next(r for r in api.board(store)["running"] if r["id"] == task["id"])
     assert running["cost_running"] is True
     # Its worker's calls name its session; the live transcript gives what it cost so far.
-    worker = {"CAUCE_HOME": str(tmp_path / "cauce-home"), "CAUCE_WORKER_TASK": str(task["id"]),
-              "CAUCE_WORKER_ATTEMPT": "1"}
+    worker = {"LOCKS_HOME": str(tmp_path / "locks-home"), "LOCKS_WORKER_TASK": str(task["id"]),
+              "LOCKS_WORKER_ATTEMPT": "1"}
     signature.append({"session_id": "w-1", "tool_name": "Read", "tool_input": {}}, worker)
     transcript = tmp_path / "cc" / "projects" / "-tmp-wt" / "w-1.jsonl"
     transcript.parent.mkdir(parents=True)
@@ -133,7 +133,7 @@ def test_an_attempt_s_turns_are_its_transcript_s_model_calls_when_the_cli_counts
     import dataclasses
     import json as _json
 
-    from cauce import launch
+    from locks import launch
 
     config = tmp_path / "config"
     folder = config / "projects" / "-w"

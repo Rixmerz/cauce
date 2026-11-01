@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from cauce import acp, behavior, doctor, mcp_guard
-from cauce.adapters import ABSENT, PRESENT, Status, default_adapters
-from cauce.adapters import livespec as livespec_mod
-from cauce.adapters.engram import Engram
-from cauce.adapters.livespec import Livespec, LivespecError
-from cauce.ui import api, server
+from locks import acp, behavior, doctor, mcp_guard
+from locks.adapters import ABSENT, PRESENT, Status, default_adapters
+from locks.adapters import livespec as livespec_mod
+from locks.adapters.engram import Engram
+from locks.adapters.livespec import Livespec, LivespecError
+from locks.ui import api, server
 
 from .livespec_fixture import build
 from .test_acp import FakeProc as AcpFakeProc
@@ -57,17 +57,17 @@ def test_the_engram_guard_with_no_project_names_none(monkeypatch):
     assert mcp_guard.engram("mem_search", {"query": "x"}) == (None, {"query": "x"})
 
 
-def test_cauce_home_is_read_as_the_store_reads_it(tmp_path):
-    assert mcp_guard.cauce_home({"CAUCE_HOME": "/x/home"}) == Path("/x/home")
-    assert mcp_guard.cauce_home({"XDG_DATA_HOME": "/data", "HOME": "/h"}) == Path("/data/cauce")
-    assert mcp_guard.cauce_home({"XDG_DATA_HOME": "relative", "HOME": "/h"}) == Path("/h/.local/share/cauce")
+def test_locks_home_is_read_as_the_store_reads_it(tmp_path):
+    assert mcp_guard.locks_home({"LOCKS_HOME": "/x/home"}) == Path("/x/home")
+    assert mcp_guard.locks_home({"XDG_DATA_HOME": "/data", "HOME": "/h"}) == Path("/data/locks")
+    assert mcp_guard.locks_home({"XDG_DATA_HOME": "relative", "HOME": "/h"}) == Path("/h/.local/share/locks")
 
 
 def _act_loop(home: Path, **loop) -> dict[str, str]:
     folder = home / "loops"
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "grow.json").write_text(json.dumps({"mode": "act", **loop}))
-    return {"CAUCE_HOME": str(home), "CAUCE_OUTBOUND_ACTS": "send", "CAUCE_LOOP": "grow"}
+    return {"LOCKS_HOME": str(home), "LOCKS_OUTBOUND_ACTS": "send", "LOCKS_LOOP": "grow"}
 
 
 def test_an_acting_loop_with_no_hours_and_no_cap_logs_every_call(tmp_path):
@@ -94,7 +94,7 @@ def test_the_guard_says_how_it_is_run(capsys):
     assert mcp_guard.main(["rastro"]) == 2
     assert mcp_guard.main(["nope", "--", "x"]) == 2
     assert mcp_guard.main(["rastro", "x", "y"]) == 2
-    assert "usage: python -m cauce.mcp_guard {rastro,engram,livespec,outbound}" in capsys.readouterr().err
+    assert "usage: python -m locks.mcp_guard {rastro,engram,livespec,outbound}" in capsys.readouterr().err
 
 
 def test_the_guard_s_command_line_serves_stdio(monkeypatch):
@@ -119,9 +119,9 @@ def test_a_status_line_says_only_what_it_knows():
 
 
 def test_the_default_adapters_follow_their_settings(monkeypatch):
-    names = [a.name for a in default_adapters({"CAUCE_LIVESPEC": "on", "CAUCE_ENGRAM": "on"})]
+    names = [a.name for a in default_adapters({"LOCKS_LIVESPEC": "on", "LOCKS_ENGRAM": "on"})]
     assert names == ["livespec", "engram"]
-    assert default_adapters({"CAUCE_LIVESPEC": "off", "CAUCE_ENGRAM": "off"}) == []
+    assert default_adapters({"LOCKS_LIVESPEC": "off", "LOCKS_ENGRAM": "off"}) == []
 
 
 def test_a_memory_engram_saved_without_an_id_is_not_counted(tmp_path):
@@ -129,7 +129,7 @@ def test_a_memory_engram_saved_without_an_id_is_not_counted(tmp_path):
     adapter = Engram({}, http=fake, which=lambda name: "/usr/bin/engram")
     ids = adapter.remember(["Prices are kept in cents."], project="shop", task_id=3, title="t", directory=tmp_path)
     assert ids == [] and len(fake.posted("/observations")) == 1
-    assert fake.posted("/sessions/cauce-task-1/end")  # the session engram named is the one ended
+    assert fake.posted("/sessions/locks-task-1/end")  # the session engram named is the one ended
 
 
 # --- livespec -------------------------------------------------------------------------------
@@ -137,7 +137,7 @@ def test_a_memory_engram_saved_without_an_id_is_not_counted(tmp_path):
 
 def _livespec(tmp_path: Path, path: str = "", **kw) -> Livespec:
     return Livespec(env={"HOME": str(tmp_path / "home"), "PATH": path, "CLAUDE_CONFIG_DIR": str(tmp_path / "cc"),
-                         "CAUCE_HOME": str(tmp_path / "cauce")}, **kw)
+                         "LOCKS_HOME": str(tmp_path / "locks")}, **kw)
 
 
 def _bin(tmp_path: Path, name: str) -> str:
@@ -352,7 +352,7 @@ def _agent(**kw) -> tuple[acp.Agent, AcpSink, io.StringIO]:
 
 
 def _run(**kw) -> acp.Run:
-    return acp.Run(proc=AcpFakeProc(["cauce"], {}, **kw.pop("proc", {})), call_id="cauce-1", request_id=7, **kw)
+    return acp.Run(proc=AcpFakeProc(["locks"], {}, **kw.pop("proc", {})), call_id="locks-1", request_id=7, **kw)
 
 
 def test_a_prompt_s_text_skips_what_is_no_block():
@@ -371,12 +371,12 @@ def test_a_verdict_says_what_was_not_self_checked_and_nothing_of_a_check_it_cann
     lines = acp.verdict_text({"check": None, "independent": {"ran": False}, "unchecked": "it ran out of turns"})
     assert lines == ["check: no check was given, so nothing ran the tests", "not self-checked: it ran out of turns"]
     based = acp.verdict_text({"check": {"command": "npm test", "state": "failing at base, unchanged"}})
-    assert based == ["check: cauce ran `npm test` and it passed (failing at base, unchanged: it fails at the base "
+    assert based == ["check: locks ran `npm test` and it passed (failing at base, unchanged: it fails at the base "
                      "commit too, so the work stood)"]
 
 
 def test_a_stop_with_no_command_to_go_on_says_what_to_do_alone():
-    text = acp.ending_text(5, {"status": "blocked", "stop": {"cause": "converged", "by": "cauce",
+    text = acp.ending_text(5, {"status": "blocked", "stop": {"cause": "converged", "by": "locks",
                                                              "reason": "two cells gave the same findings"}})
     assert text.splitlines()[1].startswith("Next: ")
     assert "The command that goes on" not in text
@@ -438,13 +438,13 @@ def test_a_kept_branch_that_cannot_be_read_costs_the_view_never_the_end():
 
 def test_stderr_blank_lines_and_lines_after_the_progress_line_leave_the_title():
     agent, out, _ = _agent()
-    run = _run(proc={"stderr": ["", "   ", "cauce: #7 attempt 1"]}, look=acp.Look(line="implementing · 1m"))
+    run = _run(proc={"stderr": ["", "   ", "locks: #7 attempt 1"]}, look=acp.Look(line="implementing · 1m"))
     run.title = "implementing · 1m"
     agent._follow_stderr("s1", run)
-    assert run.task == 7 and list(run.tail) == ["cauce: #7 attempt 1"]
+    assert run.task == 7 and list(run.tail) == ["locks: #7 attempt 1"]
     assert run.title == "implementing · 1m"
     shown = [m["params"]["update"] for m in out.messages()]
-    assert all(u.get("title") != "cauce: #7 attempt 1" for u in shown)
+    assert all(u.get("title") != "locks: #7 attempt 1" for u in shown)
 
 
 def test_a_plan_read_after_the_run_closed_is_not_said():
@@ -499,13 +499,13 @@ def test_following_a_task_reads_each_view_when_due_and_stops_saying_once_the_run
     assert len(plans) == 1  # said after the first round only: the second closed the run
 
 
-def test_a_cancel_cauce_cannot_start_is_said_on_stderr():
+def test_a_cancel_locks_cannot_start_is_said_on_stderr():
     def popen(*a, **kw):
         raise OSError("fork failed")
 
     agent, _, err = _agent(popen=popen)
     agent._cancel_task("/w", 7)
-    assert "cauce acp: `cauce cancel 7` did not finish: fork failed" in err.getvalue()
+    assert "locks acp: `locks cancel 7` did not finish: fork failed" in err.getvalue()
 
 
 # --- doctor ---------------------------------------------------------------------------------
@@ -547,7 +547,7 @@ def test_a_part_that_lost_its_mark_before_the_fix_is_history(store):
 
 def test_a_join_short_of_parts_before_the_fix_is_history_and_a_part_with_no_branch_is_not_counted(store):
     part = {"id": "api", "n": 1, "of": 3, "plan": 1}
-    for n, branch in enumerate(("cauce/task-a", "cauce/task-b", None)):
+    for n, branch in enumerate(("locks/task-a", "locks/task-b", None)):
         t = store.create_task(f"p{n}", status="done", source="queue", repo="r", workflow_run=7, workflow_step="build",
                               options=json.dumps({"part": {**part, "n": n + 1}}))
         store.add_event(t["id"], "finished", status="done", branch=branch)
@@ -560,7 +560,7 @@ def test_a_join_short_of_parts_before_the_fix_is_history_and_a_part_with_no_bran
 
 
 def test_old_worktree_attempts_that_kept_their_session_are_not_history(store):
-    t = store.create_task("t", status="done", source="cauce", repo="r", kind="implement")
+    t = store.create_task("t", status="done", source="locks", repo="r", kind="implement")
     store.add_event(t["id"], "attempt_started", seq=1, base="abc", max_turns=80, version=OLD)
     store.add_attempt(t["id"], cell="sonnet/high", max_turns=80, passed=1, session_id="kept")
     assert _rule(doctor.attempts_with_no_session, store) == []
@@ -568,7 +568,7 @@ def test_old_worktree_attempts_that_kept_their_session_are_not_history(store):
 
 def test_a_format_climb_before_the_fix_is_history_and_a_climb_on_real_work_is_none(store):
     for summary, version in (("its plan cannot run in parts: no prompt", OLD), ("the totals are still wrong", OLD)):
-        t = store.create_task("plan", status="done", source="cauce", repo="r", kind="plan")
+        t = store.create_task("plan", status="done", source="locks", repo="r", kind="plan")
         store.add_attempt(t["id"], cell="opus/xhigh", max_turns=80, passed=0, failure="inconclusive", summary=summary)
         store.add_event(t["id"], "moved", seq=1, axis="effort", trigger="inconclusive", version=version)
     assert _rule(doctor.format_failures_that_climbed, store) == [(doctor.FIXED, 1)]
@@ -588,7 +588,7 @@ def test_fix_rounds_with_nothing_before_them_on_their_base_or_before_the_fix(sto
     alone = fix(2, "b0")  # nothing done before it in its step
     assert _rule(doctor.fix_rounds_off_their_base, store) == []
     first = fix(1, "b0")
-    store.add_event(first["id"], "finished", status="done", branch="cauce/x", tip="t1")
+    store.add_event(first["id"], "finished", status="done", branch="locks/x", tip="t1")
     fix(2, "t1", status="running")  # on what round 1 kept
     old = fix(2, "b0", status="running", version=OLD)
     assert alone["id"] < first["id"]
@@ -618,7 +618,7 @@ def test_a_trial_never_sampled_before_the_fix_is_history(store):
 
 
 def test_a_failed_fix_recorded_after_its_task_passed_opens_no_finding(store):
-    task = store.create_task("fix the ble race", status="done", source="cauce", repo="r")
+    task = store.create_task("fix the ble race", status="done", source="locks", repo="r")
     store.add_event(task["id"], "finished", status="done", version="0.40.0")
     store._conn.execute("UPDATE events SET ts = '2000-01-01T00:00:00+00:00' WHERE task_id = ?", (task["id"],))
     problem = store.open_problem("fix the ble race", repo="r")
@@ -627,24 +627,24 @@ def test_a_failed_fix_recorded_after_its_task_passed_opens_no_finding(store):
 
 
 def test_flake_fixes_and_short_turns_before_their_fix_are_history(store):
-    flake = store.create_task("fix the flaky ble test", status="done", source="cauce", repo="r", kind="bugfix")
+    flake = store.create_task("fix the flaky ble test", status="done", source="locks", repo="r", kind="bugfix")
     store.add_event(flake["id"], "finished", status="done", version=OLD,
                     verdict={"check": {"command": "deno task test", "passed": True}})
     assert _rule(doctor.flake_fixes_checked_once, store) == [(doctor.FIXED, flake["id"])]
-    long = store.create_task("ui", status="done", source="cauce", repo="r")
+    long = store.create_task("ui", status="done", source="locks", repo="r")
     store.add_event(long["id"], "attempt_finished", seq=1, wall_s=48 * 60, turns=2, version=OLD)
     assert _rule(doctor.turns_under_the_wall, store) == [(doctor.FIXED, long["id"])]
 
 
 def test_a_pickup_with_an_unreadable_stamp_is_skipped(store):
-    t = store.create_task("x", status="done", source="cauce", repo="r")
+    t = store.create_task("x", status="done", source="locks", repo="r")
     event = store.add_event(t["id"], "attempt_started", seq=1)
     store._conn.execute("UPDATE events SET ts = 'garbage' WHERE id = ?", (event,))
     assert _rule(doctor.pickups_nobody_saw, store) == []
 
 
 def test_runs_with_no_folder_name_no_checkout_to_read(store, tmp_path):
-    t = store.create_task("x", status="done", source="cauce", repo="r")
+    t = store.create_task("x", status="done", source="locks", repo="r")
     store.add_event(t["id"], "planned")
     assert doctor._checkouts(store, None, _livespec(tmp_path)) == []
 
@@ -657,7 +657,7 @@ def _event(n, name, ts, **data):
 
 
 def test_a_run_reads_past_events_it_does_not_count_and_a_death_it_cannot_time():
-    from cauce import analysis
+    from locks import analysis
 
     task = {"id": 1, "repo": "r", "title": "t", "kind": "implement", "source": "queue"}
     found = analysis.runs([task], [
@@ -670,7 +670,7 @@ def test_a_run_reads_past_events_it_does_not_count_and_a_death_it_cannot_time():
 
 
 def test_compactions_read_what_followed_each_decision_and_skip_what_belongs_to_none():
-    from cauce import analysis, compaction
+    from locks import analysis, compaction
 
     rows = analysis.compactions([
         {"id": 1, "kind": compaction.DECIDED, "ts": "t", "data": {"tokens": 100, "window": 200}},
@@ -686,7 +686,7 @@ def test_compactions_read_what_followed_each_decision_and_skip_what_belongs_to_n
 
 
 def test_an_expensive_run_that_raced_says_so():
-    from cauce import analysis
+    from locks import analysis
 
     found = [{"task": 1, "title": "t", "kind": "implement", "cost_usd": 9.0, "moves": ["race"], "cells": [],
               "turns": 0, "verifier_cost_usd": 0.0, "check_s": None, "wall_s": None, "refused": 0, "stop": None,
@@ -695,8 +695,8 @@ def test_an_expensive_run_that_raced_says_so():
 
 
 def test_the_stats_text_says_where_each_trial_stands_now(git_repo, store):
-    from cauce import analysis
-    from cauce.orchestrate import run as run_task
+    from locks import analysis
+    from locks.orchestrate import run as run_task
 
     from .test_orchestrate import Script, kind, ok
 
@@ -727,7 +727,7 @@ def test_the_stats_text_says_where_each_trial_stands_now(git_repo, store):
 
 
 def test_a_store_that_cannot_set_up_closes_its_connection_and_says_why(tmp_path, monkeypatch):
-    from cauce import store as store_mod
+    from locks import store as store_mod
 
     closed = []
 
@@ -763,7 +763,7 @@ def test_a_store_that_cannot_set_up_closes_its_connection_and_says_why(tmp_path,
 
 
 def test_a_locked_setup_is_tried_again_and_any_other_refusal_is_raised(tmp_path, monkeypatch):
-    from cauce import store as store_mod
+    from locks import store as store_mod
 
     real = store_mod.Store._migrate
     tries = []
@@ -787,7 +787,7 @@ def test_a_locked_setup_is_tried_again_and_any_other_refusal_is_raised(tmp_path,
 
 
 def test_a_column_another_opener_added_first_is_no_error_and_a_bad_one_is(tmp_path, monkeypatch):
-    from cauce import store as store_mod
+    from locks import store as store_mod
 
     # `PRAGMA table_info` names `status`; adding `Status` is refused as a duplicate, as a race would be.
     monkeypatch.setattr(store_mod, "_ADDED_COLUMNS", {"tasks": {"Status": "TEXT"}})
@@ -815,21 +815,21 @@ def test_runs_listed_for_no_repository_and_a_session_s_runs(store):
 
 
 def test_the_newest_attempt_of_each_model_family_names_it(store):
-    t = store.create_task("x", status="done", source="cauce", repo="r")
+    t = store.create_task("x", status="done", source="locks", repo="r")
     for served in ("claude-sonnet-4-5", "claude-sonnet-4-6", "claude-opus-4-1"):
         store.add_attempt(t["id"], cell="sonnet/high", max_turns=10, passed=1, served_model=served)
     assert store.worker_models() == {"opus": "claude-opus-4-1", "sonnet": "claude-sonnet-4-6"}
 
 
 def test_the_final_event_of_a_status_asked_for(store):
-    t = store.create_task("x", status="running", source="cauce", repo="r")
+    t = store.create_task("x", status="running", source="locks", repo="r")
     store.add_event(t["id"], "finished", status="interrupted")
     assert store.final_event(t["id"], "interrupted")["data"]["status"] == "interrupted"
     assert store.final_event(t["id"]) is None
 
 
 def test_a_claim_that_fails_takes_nothing_back_half_done(store, monkeypatch):
-    t = store.create_task("x", status="done", source="cauce", repo="r", session_id="s")
+    t = store.create_task("x", status="done", source="locks", repo="r", session_id="s")
     store.add_event(t["id"], "finished", status="done")
 
     def broken(session_id, **kw):
@@ -854,7 +854,7 @@ def test_a_rekey_carries_only_changes_still_unjudged(store):
 
 
 def test_notes_copied_to_another_project_keep_their_state_and_links(store):
-    from cauce import notes
+    from locks import notes
 
     a = store.add_note("old", "code", "a", "Prices are kept in cents", author="worker", filed_by="haiku",
                        state=notes.CANDIDATE)
@@ -879,7 +879,7 @@ def test_a_hand_over_held_to_no_project_moves_no_run(store):
 
 
 def test_a_refusal_only_a_nested_field_names_is_none(store):
-    t = store.create_task("x", status="done", source="cauce", repo="r")
+    t = store.create_task("x", status="done", source="locks", repo="r")
     store.add_event(t["id"], "attempt_finished", denied=[], nested={"denied": ["Bash(rm)"]})
     store.add_event(t["id"], "attempt_finished", denied=["Bash(alembic upgrade)"])
     assert [r["denied"] for r in store.refusals("r")] == [["Bash(alembic upgrade)"]]
@@ -898,7 +898,7 @@ def test_an_anchor_added_again_is_updated_in_place(store):
 
 def _enrolled(tmp_path: Path, name: str) -> Path:
     where = tmp_path / name
-    (where / ".cauce").mkdir(parents=True)
+    (where / ".locks").mkdir(parents=True)
     return where
 
 
@@ -906,7 +906,7 @@ def test_the_overview_leaves_out_quiet_sessions_and_stops_at_its_limit(store, tm
     for sid in ("s1", "s2", "old"):
         store.touch_session(sid, str(_enrolled(tmp_path, sid)), "r")
     store._conn.execute("UPDATE sessions SET last_seen_at = '2000-01-01T00:00:00+00:00' WHERE id = 'old'")
-    done = store.create_task("x", status="done", source="cauce", repo="r", session_id="old")
+    done = store.create_task("x", status="done", source="locks", repo="r", session_id="old")
     store._conn.execute("UPDATE tasks SET updated_at = '2000-01-01T00:00:00+00:00' WHERE id = ?", (done["id"],))
     every = api.overview(store, hours=1, limit=5)
     assert sorted(s["id"] for s in every["sessions"]) == ["s1", "s2"]  # the quiet one with only ended work: out
@@ -922,30 +922,30 @@ def test_sessions_of_one_folder_read_its_names_once_and_stop_at_the_limit(store,
 
 
 def test_a_landing_git_cannot_read_is_still_asked_for(tmp_path, monkeypatch):
-    from cauce import isolate
+    from locks import isolate
 
     def broken(*a, **kw):
         raise OSError("git is gone")
 
     monkeypatch.setattr(isolate, "landed", broken)
-    assert api._landed({"cwd": str(tmp_path)}, "cauce/task-1", None) is False
+    assert api._landed({"cwd": str(tmp_path)}, "locks/task-1", None) is False
 
 
 def test_a_diff_git_does_not_answer_says_so(store, tmp_path, monkeypatch):
-    task = store.create_task("x", status="done", source="cauce", repo="r", cwd=str(tmp_path))
-    store.add_event(task["id"], "finished", status="done", branch="cauce/task-1")
+    task = store.create_task("x", status="done", source="locks", repo="r", cwd=str(tmp_path))
+    store.add_event(task["id"], "finished", status="done", branch="locks/task-1")
 
     def timeout(*a, **kw):
         raise subprocess.TimeoutExpired("git", 20)
 
     monkeypatch.setattr(subprocess, "run", timeout)  # `task_diff` imports it when it runs
     shown = api.task_diff(store, task["id"])
-    assert shown["branch"] == "cauce/task-1" and shown["diff"] == ""
+    assert shown["branch"] == "locks/task-1" and shown["diff"] == ""
     assert shown["why"].startswith("git did not answer:")
 
 
 def test_spend_by_day_prices_session_usage_by_its_model(store, monkeypatch):
-    from cauce import usage
+    from locks import usage
 
     rows = [{"kind": "session", "day": "2026-10-01", "model": "claude-sonnet-4-5", "input_tokens": 1_000_000,
              "output_tokens": 0, "cache_read": 0, "cache_write": 0},
@@ -966,9 +966,9 @@ def test_a_claude_task_file_without_a_subject_is_no_task(tmp_path):
 
 
 def test_a_definition_that_hides_another_or_cannot_be_read_is_listed_as_such(mapped, store):  # noqa: F811
-    from cauce import workflows
+    from locks import workflows
 
-    folder = mapped["repo"] / ".cauce" / "workflows"
+    folder = mapped["repo"] / ".locks" / "workflows"
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "feature.json").write_text("{not json")
     view = api.workflows_view(store, mapped["key"])
@@ -1069,32 +1069,32 @@ def test_an_icon_is_served_with_its_own_type_and_no_charset(ui):  # noqa: F811
 
 def test_a_cancel_of_ended_work_changes_nothing_and_one_of_a_gone_process_still_records(ui, store):  # noqa: F811
     secret = ui_token(ui)
-    ended = store.create_task("x", status="done", source="cauce", repo="r")
-    running = store.create_task("y", status="running", source="cauce", repo="r", pid=999999)
+    ended = store.create_task("x", status="done", source="locks", repo="r")
+    running = store.create_task("y", status="running", source="locks", repo="r", pid=999999)
     # Without the token in its header a cancel is refused, and the token is never read from the URL.
     res, _ = ui_call(ui, "POST", f"/api/tasks/{running['id']}/cancel?token={secret}", {})
     assert res.status == 403
-    res, data = ui_call(ui, "POST", f"/api/tasks/{ended['id']}/cancel", {}, {"X-Cauce-Token": secret})
+    res, data = ui_call(ui, "POST", f"/api/tasks/{ended['id']}/cancel", {}, {"X-Locks-Token": secret})
     assert res.status == 200 and json.loads(data) == {"id": ended["id"], "cancel": True}
     assert store.get_task(ended["id"])["status"] == "done"
-    res, data = ui_call(ui, "POST", f"/api/tasks/{running['id']}/cancel", {}, {"X-Cauce-Token": secret})
+    res, data = ui_call(ui, "POST", f"/api/tasks/{running['id']}/cancel", {}, {"X-Locks-Token": secret})
     assert res.status == 200
     assert store.last_event(running["id"], "cancel_requested")["data"]["via"] == "ui"
 
 
-def test_resume_runs_cauce_and_a_folder_that_is_gone_is_its_failure(tmp_path):
+def test_resume_runs_locks_and_a_folder_that_is_gone_is_its_failure(tmp_path):
     done = server.resume(["--help"], str(tmp_path))
     assert done.returncode == 0 and "usage" in done.stdout.lower()
     gone = server.resume(["--help"], str(tmp_path / "gone"))
     assert gone.returncode == 1 and gone.args == ["--help"] and gone.stderr
 
 
-def test_an_occupant_that_says_cauce_with_an_unreadable_version_has_none():
+def test_an_occupant_that_says_locks_with_an_unreadable_version_has_none():
     import http.server
     import threading
 
     class Garbled(http.server.BaseHTTPRequestHandler):
-        server_version = "cauce"
+        server_version = "locks"
 
         def do_GET(self):
             self.send_response(200)
@@ -1107,7 +1107,7 @@ def test_an_occupant_that_says_cauce_with_an_unreadable_version_has_none():
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Garbled)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
-        assert server.occupant(srv.server_address[1]) == {"cauce": True, "version": None}
+        assert server.occupant(srv.server_address[1]) == {"locks": True, "version": None}
     finally:
         srv.shutdown()
         srv.server_close()
@@ -1123,7 +1123,7 @@ def test_a_listener_lsof_cannot_find_and_a_process_that_vanished_are_left_alone(
         def __init__(self, out):
             self.stdout = out
 
-    answers = iter([Found("4242\n"), Found("python -m cauce ui --port 8790\n")])
+    answers = iter([Found("4242\n"), Found("python -m locks ui --port 8790\n")])
 
     def gone(pid, sig):
         raise ProcessLookupError

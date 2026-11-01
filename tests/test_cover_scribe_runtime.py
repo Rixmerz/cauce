@@ -1,4 +1,4 @@
-"""Branches of `cauce.scribe` and `cauce.runtime` their suites leave unread."""
+"""Branches of `locks.scribe` and `locks.runtime` their suites leave unread."""
 from __future__ import annotations
 
 import json
@@ -6,7 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from cauce import runtime, scribe, usage
+from locks import runtime, scribe, usage
 
 # --- scribe --------------------------------------------------------------------------------------
 

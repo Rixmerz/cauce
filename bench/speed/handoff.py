@@ -1,19 +1,19 @@
-"""Does a worker need to run the full check before it reports, when cauce runs it right after?
+"""Does a worker need to run the full check before it reports, when locks runs it right after?
 
-Real: one `claude -p` worker per run, started by cauce's `launch.run`, on a fresh copy of the
+Real: one `claude -p` worker per run, started by locks' `launch.run`, on a fresh copy of the
 pricing engine with a slow suite: `SLOW_FILES` test files that take `SLOW_S` seconds each, as a
-real project's do. The check is that suite. The worker gets cauce's own brief lines for it
+real project's do. The check is that suite. The worker gets locks' own brief lines for it
 (`orchestrate.brief`), in one of two arms:
 
-- `self`: as cauce briefed before, "run it yourself once, at the end, before you report";
-- `cauce`: "do not run it yourself: cauce runs it as soon as you report and hands you its failures".
+- `self`: as locks briefed before, "run it yourself once, at the end, before you report";
+- `locks`: "do not run it yourself: locks runs it as soon as you report and hands you its failures".
 
-After the worker, cauce's check runs. A red one continues the worker's own session with the
+After the worker, locks' check runs. A red one continues the worker's own session with the
 failing output (`launch.CONTINUE_PROMPT`, as more turns do), at most `ROUNDS` times. Hidden tests
 the worker never sees judge the result. The wall time is the worker's, the checks' and every
 continuation's, until the check passes or the rounds run out.
 
-    python bench/speed/handoff.py run self,cauce 4 4 [--hard]
+    python bench/speed/handoff.py run self,locks 4 4 [--hard]
     python bench/speed/handoff.py report
 """
 from __future__ import annotations
@@ -34,16 +34,16 @@ sys.path.insert(0, str(HERE))
 
 import build  # noqa: E402
 
-from cauce import grants, launch, orchestrate, usage  # noqa: E402
-from cauce.matrix import Cell  # noqa: E402
+from locks import grants, launch, orchestrate, usage  # noqa: E402
+from locks.matrix import Cell  # noqa: E402
 
 CHECK = "PYTHONPATH=src python3 -m pytest -q tests"
 SLOW_FILES, SLOW_S = 12, 5
 ROUNDS = 2
 CELL = Cell("sonnet", "high")
-#: The brief's last line before 0.47, and cauce's own since.
+#: The brief's last line before 0.47, and locks' own since.
 OLD = "Run it yourself once, at the end, before you report."
-NEW = "Do not run it yourself before you report: cauce runs it as soon as you do, and hands you its failures to fix."
+NEW = "Do not run it yourself before you report: locks runs it as soon as you do, and hands you its failures to fix."
 
 
 def slow_suite(where: Path) -> None:
@@ -107,7 +107,7 @@ def one(arm: str, variant: str) -> dict:
                 break
             rounds += 1
             r = launch.run(dataclasses.replace(spec, resume_session=r.session_id,
-                                               resume_note=f"cauce's check failed:\n{out}"))
+                                               resume_note=f"locks' check failed:\n{out}"))
     except Exception as exc:  # a launch that broke is recorded, never retried here
         return {"arm": arm, "variant": variant, "error": str(exc)[:300]}
     wall = time.monotonic() - began

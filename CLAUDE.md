@@ -1,6 +1,6 @@
-# cauce — project instructions
+# locks — project instructions
 
-cauce is the core that routes Claude Code work: classify, choose a model ×
+locks is the core that routes Claude Code work: classify, choose a model ×
 effort cell, run a one-shot worker with exactly the tools and capabilities its
 task needs, check the result, escalate on evidence, remember what failed. It is
 installed as a plugin and its guidance runs in other people's repositories —
@@ -10,99 +10,101 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 
 | Path | What lives there |
 |---|---|
-| `src/cauce/matrix.py` | models, the five efforts and their purpose, the ladder per kind, and the probation cell below a writing kind's ladder (`PROBATION`, `reach`); a model's default effort reads cells recorded before it had the dial |
-| `src/cauce/trust.py` | earned trust, read from the independent check's record per repository, kind and worker cell: skip-lot sampling of the verifier (`sampling`), the probation trial below a ladder (`probation_arm`), and what the record says of learning (`report`, `cauce trust`, `cauce stats`); no model |
-| `src/cauce/evidence.py` | what a neighbour a worker was handed must show before its pass counts (layout-inspector on a UI change, rastro), read from the tool-call log: a pass that owes it goes back once, then to the orchestrator; tried in arms per repository; every handed capability's calls counted per attempt; no model |
-| `src/cauce/classify.py` | rules first, Haiku for the rest; `frontier` only by tag |
-| `src/cauce/escalate.py` | failure kind → move (retry, more effort, next model, more turns, replan) |
-| `src/cauce/launch.py` | one attempt as `claude -p`: argv, the result contract, parsing, git-read changes |
-| `src/cauce/capabilities.py` | which MCP servers a worker gets, from the user-level registry |
-| `src/cauce/mcp_guard.py` | a JSON-RPC guard between a worker and an MCP server: the calls a policy refuses never reach the server; stdlib, imports nothing of cauce |
-| `src/cauce/plugins.py` | neighbours the person installed as Claude Code plugins (layout-inspector, rastro), read from the plugin cache or PATH and handed over as capabilities with their skill; `versions` is the one reader of the cache (folders only, never a `temp_*` clone `/plugin` left half done) |
-| `src/cauce/manifests.py` | what a neighbour says of itself: the `cauce` block of its newest installed plugin manifest (or `cauce.json` beside it), read at plan time and cached per file state; words only (hint, hints per kind, tool descriptions, what tools measure), ignored whole when malformed (`docs/neighbours.md`) |
-| `src/cauce/roles.py` | what a worker is: role files (bundled `roles/`, the person's in their cauce home), `extends` and `match`, skills found by name and put into the worker's system prompt; a bundled skill with an upstream plugin (`UPSTREAM`) read from that installed plugin, the vendored copy the fallback |
-| `src/cauce/teams.py` | the person's teams of roles and which one each project uses (kept in their cauce home); a project's team bounds the kinds it is classified into; `team_cli.py` is `cauce roles …` and `cauce team …` |
-| `src/cauce/survey.py` | what this machine says about how the person works (`cauce survey`): every Claude Code session it kept (requests, shapes, friction, errors and the call that passed after them) and each repository's commit history; read only, no model |
-| `src/cauce/investigate.py` | `cauce investigate`: one read-only worker per project (and per plugin to take on), each in its own lane, wearing the internal `surveyor` role, briefed with the deep survey; their `cauce-report` blocks kept on the tasks, nothing filed |
-| `src/cauce/insights.py` | what the person's projects say about the teams they need (`cauce team insights`): kinds asked and how each went, languages, checks, the team each uses; read only, no model |
-| `src/cauce/criteria.py` | a request's listed items as criteria `S1..Sn`, verbatim; a pass answers each |
-| `src/cauce/findings.py` | findings as records: where, what, `evidence_class`, `cause`; which block a change |
-| `src/cauce/ledger.py` | a review's findings as one frozen ledger `F1..Fn`: who decides each row (refuter, fix, re-check), two rounds, then the person |
-| `src/cauce/specs.py` | whether a repository's OpenSpec specs keep up with its code: days and code commits since `openspec/` changed, the writing brief's line and the ending's offer, the files of a change that owe a spec, and livespec's `validate_openspec` for the specs' structure (`cauce specs`, on a temporary copy of `openspec/`); git and livespec, no model |
-| `src/cauce/tracer.py` | the TRACER method of a repository that keeps one (`docs/tracer/`): the method's files in a writing brief, and the CORRECT lines of the flows a request names, the anti-pattern catalogue and, with a measuring neighbour, each floor and anti-pattern beside the tool that measures it in the independent check's; read only |
-| `src/cauce/risk.py` | a change's tier (passive, medium, high) from its request, kind and files; only raised; no model |
-| `src/cauce/points.py` | a task's size on the Fibonacci scale, no model: the estimate when it is planned (criteria, kind, risk and its areas, files named, livespec's reach, length) and the realized size when it ends (files, lines, turns, wall time, attempts) |
-| `src/cauce/standards.py` | where a repository's tasks of each kind and size start, as measured: a standard per points band, the calibration's two rules, each change's verdict and its revert; recorded, never edited |
-| `src/cauce/evolution.py` | the evolution history: a snapshot a day per repository and kind, the report (`cauce evolution`, the UI's Evolution), and `settle`, which the hooks and the dispatcher run after work ends |
-| `src/cauce/surfaces.py` | where a task may write (`--surface`, a step's `surfaces`): checked after each attempt, and whether two tasks can never touch the same file |
-| `src/cauce/phase.py` | what a running worker is doing (exploring, implementing, checking), read from the tail of the tool-call log |
-| `src/cauce/progress.py` | how far a running task got: time against its kind's usual here, its stage (worker, cauce's check, the independent check), what its worker wrote so far (its worktree's git: counts, names, `peek`'s diff, `texts` before and after), the request's items as its subtasks, a worker gone quiet; read only, no model |
-| `src/cauce/roles_internal/` | roles cauce runs itself and no team holds: the independent `verifier`, and the `surveyor` that investigates for `/cauce:init` |
-| `skills/init/` | the plugin's one skill (`/cauce:init`): scope and an estimate of its cost agreed with the person, `cauce investigate` digs, and from the reports one team for every flow, one workflow per flow, and the memory of what was solved, through cauce's own commands only |
-| `docs/images/` | the README's screenshots of `cauce ui`, taken on demo data with generic project names |
-| `src/cauce/roles/`, `src/cauce/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what cauce changed |
-| `src/cauce/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
-| `src/cauce/config.py` | cauce's settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `trust`, `probation`, `evidence`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `specs`, `tracer`, `habit_review`, `habit_auto`, `role_trials`, `note_trials`, `recall_fusion`, `methods`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number; `livespec_wait`, seconds, 0 never waits), copied from plugin options by SessionStart |
-| `src/cauce/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets, and the jobs a person quieted per repository |
-| `src/cauce/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
-| `src/cauce/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
-| `src/cauce/habits.py` | mining sequences per repository (and the ones several repositories share), recipes for the brief, and approval-gated habit hooks |
-| `src/cauce/usage.py` | tokens per model from session transcripts and their subagents' (counted to the delegation that started each), spend by model and cell, and what a task's or a session's own turns cost |
-| `src/cauce/flow.py` | the queue's dispatcher (`cauce work`): lanes per repository, each task its own `cauce run-queued` process, as many at once as the machine's level allots each lane (`pick`), the stale sweep; a detached dispatcher at its task limit hands queued work to a fresh one |
-| `src/cauce/capacity.py` | how many workers this machine runs at once: the level, kept in the cauce home, that starts at what the machine holds and rises or halves on the API's and the machine's own signals, and its allotment to the lanes by reserve and lending; stdlib |
-| `src/cauce/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
-| `src/cauce/split.py` | a request that is several tasks, as its pieces (`cauce split`): by its listed items with no model, else Haiku read strictly as a plan's parts; `--queue` starts them on what the task kept |
-| `src/cauce/merging.py` | kept branches merged into the person's checkout on their word (`cauce merge`: the ones that touch no other first, the check after each, a conflict aborted), and a draft pull request with the verdict (`cauce pr`) |
-| `src/cauce/guides/` | the orchestration skill's detail, a topic at a time (`cauce guide <topic>`): the skill itself stays short |
-| `src/cauce/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
-| `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
-| `src/cauce/revisions.py` | a role's lessons per repository, improved by measured trial: proposed by Haiku from the role's dead ends and verifier blockers there, tried in alternating arms, adopted, dropped or reverted, every record appended to `role_revisions`; `cauce roles revisions` reads it |
-| `src/cauce/behavior.py` | how a worker worked, per attempt, from its own tool calls (never their arguments): before its first write, the checks it ran, fix loops, an unchecked end, rereads, repeats, silences, tool families; kept on `attempt_finished.behavior`, added up by kind, outcome and cell for `cauce stats` and exported per attempt (`--attempts`); observed, no model |
-| `src/cauce/arms.py` | two arms tried in turns until each has enough first tries, then the one that did no worse: the shape methods and the recall order share (`tally`, `pick`); no model |
-| `src/cauce/methods.py` | how a kind's workers are briefed to work, tried against its absence: a diagnosis protocol for `debug-unclear`, a pre-mortem for `plan` whose `Risks:` reach the independent check of the steps after it; arms per repository (`method_arm`); no model |
-| `src/cauce/racing.py` | whether racing a first try paid, per repository and kind: each race read from its attempts (rung, start, neither), the rung's wins and the time to pass against climbs, the judgement `race_cell` and `cauce stats` read; no model |
-| `src/cauce/cells.py` | where a lesson belongs: the area a path or a change is in, the role that met it, or everyone (`scope`); the text a failure is kept and matched by (a workflow step's goal, never its template); the cell's primer (how its workers got oriented) and its trial; no model |
-| `src/cauce/doctor.py` | `cauce doctor`: states the store should never hold, each a bug that shipped turned into a query (broken: stuck now; suspect: over the last days); read only, no model; SessionStart names what is broken |
+| `src/locks/matrix.py` | models, the five efforts and their purpose, the ladder per kind, and the probation cell below a writing kind's ladder (`PROBATION`, `reach`); a model's default effort reads cells recorded before it had the dial |
+| `src/locks/trust.py` | earned trust, read from the independent check's record per repository, kind and worker cell: skip-lot sampling of the verifier (`sampling`), the probation trial below a ladder (`probation_arm`), and what the record says of learning (`report`, `locks trust`, `locks stats`); no model |
+| `src/locks/evidence.py` | what a neighbour a worker was handed must show before its pass counts (layout-inspector on a UI change, rastro), read from the tool-call log: a pass that owes it goes back once, then to the orchestrator; tried in arms per repository; every handed capability's calls counted per attempt; no model |
+| `src/locks/classify.py` | rules first, Haiku for the rest; `frontier` only by tag |
+| `src/locks/escalate.py` | failure kind → move (retry, more effort, next model, more turns, replan) |
+| `src/locks/launch.py` | one attempt as `claude -p`: argv, the result contract, parsing, git-read changes |
+| `src/locks/capabilities.py` | which MCP servers a worker gets, from the user-level registry |
+| `src/locks/mcp_guard.py` | a JSON-RPC guard between a worker and an MCP server: the calls a policy refuses never reach the server; stdlib, imports nothing of locks |
+| `src/locks/plugins.py` | neighbours the person installed as Claude Code plugins (layout-inspector, rastro), read from the plugin cache or PATH and handed over as capabilities with their skill; `versions` is the one reader of the cache (folders only, never a `temp_*` clone `/plugin` left half done) |
+| `src/locks/manifests.py` | what a neighbour says of itself: the `locks` block of its newest installed plugin manifest (or `locks.json` beside it), read at plan time and cached per file state; words only (hint, hints per kind, tool descriptions, what tools measure), ignored whole when malformed (`docs/neighbours.md`) |
+| `src/locks/roles.py` | what a worker is: role files (bundled `roles/`, the person's in their locks home), `extends` and `match`, skills found by name and put into the worker's system prompt; a bundled skill with an upstream plugin (`UPSTREAM`) read from that installed plugin, the vendored copy the fallback |
+| `src/locks/teams.py` | the person's teams of roles and which one each project uses (kept in their locks home); a project's team bounds the kinds it is classified into; `team_cli.py` is `locks roles …` and `locks team …` |
+| `src/locks/survey.py` | what this machine says about how the person works (`locks survey`): every Claude Code session it kept (requests, shapes, friction, errors and the call that passed after them) and each repository's commit history; read only, no model |
+| `src/locks/investigate.py` | `locks investigate`: one read-only worker per project (and per plugin to take on), each in its own lane, wearing the internal `surveyor` role, briefed with the deep survey; their `locks-report` blocks kept on the tasks, nothing filed |
+| `src/locks/insights.py` | what the person's projects say about the teams they need (`locks team insights`): kinds asked and how each went, languages, checks, the team each uses; read only, no model |
+| `src/locks/criteria.py` | a request's listed items as criteria `S1..Sn`, verbatim; a pass answers each |
+| `src/locks/findings.py` | findings as records: where, what, `evidence_class`, `cause`; which block a change |
+| `src/locks/ledger.py` | a review's findings as one frozen ledger `F1..Fn`: who decides each row (refuter, fix, re-check), two rounds, then the person |
+| `src/locks/specs.py` | whether a repository's OpenSpec specs keep up with its code: days and code commits since `openspec/` changed, the writing brief's line and the ending's offer, the files of a change that owe a spec, and livespec's `validate_openspec` for the specs' structure (`locks specs`, on a temporary copy of `openspec/`); git and livespec, no model |
+| `src/locks/tracer.py` | the TRACER method of a repository that keeps one (`docs/tracer/`): the method's files in a writing brief, and the CORRECT lines of the flows a request names, the anti-pattern catalogue and, with a measuring neighbour, each floor and anti-pattern beside the tool that measures it in the independent check's; read only |
+| `src/locks/risk.py` | a change's tier (passive, medium, high) from its request, kind and files; only raised; no model |
+| `src/locks/points.py` | a task's size on the Fibonacci scale, no model: the estimate when it is planned (criteria, kind, risk and its areas, files named, livespec's reach, length) and the realized size when it ends (files, lines, turns, wall time, attempts) |
+| `src/locks/standards.py` | where a repository's tasks of each kind and size start, as measured: a standard per points band, the calibration's two rules, each change's verdict and its revert; recorded, never edited |
+| `src/locks/evolution.py` | the evolution history: a snapshot a day per repository and kind, the report (`locks evolution`, the UI's Evolution), and `settle`, which the hooks and the dispatcher run after work ends |
+| `src/locks/surfaces.py` | where a task may write (`--surface`, a step's `surfaces`): checked after each attempt, and whether two tasks can never touch the same file |
+| `src/locks/phase.py` | what a running worker is doing (exploring, implementing, checking), read from the tail of the tool-call log |
+| `src/locks/progress.py` | how far a running task got: time against its kind's usual here, its stage (worker, locks' check, the independent check), what its worker wrote so far (its worktree's git: counts, names, `peek`'s diff, `texts` before and after), the request's items as its subtasks, a worker gone quiet; read only, no model |
+| `src/locks/roles_internal/` | roles locks runs itself and no team holds: the independent `verifier`, and the `surveyor` that investigates for `/locks:init` |
+| `skills/init/` | the plugin's one skill (`/locks:init`): scope and an estimate of its cost agreed with the person, `locks investigate` digs, and from the reports one team for every flow, one workflow per flow, and the memory of what was solved, through locks' own commands only |
+| `docs/images/` | the README's screenshots of `locks ui`, taken on demo data with generic project names |
+| `src/locks/roles/`, `src/locks/skills/` | the bundled team and the skills it carries; every vendored skill keeps its license, and `skills/README.md` credits it and lists what locks changed |
+| `src/locks/adapters/` | neighbours the core *adopts*: read their data, brief, route and assess with it. `livespec.py` is the first; `engram.py` reads the team's engram memory over its server and writes to it only opt-in |
+| `src/locks/config.py` | locks' settings (`livespec`, `parallel`, `autowork`, `names`, `notes`, `scribe`, `prune`, `plugins`, `verifier`, `trust`, `probation`, `evidence`, `race`, `route`, `primer`, `trunk`, `overlap`, `late_verifier`, `specs`, `tracer`, `habit_review`, `habit_auto`, `role_trials`, `note_trials`, `recall_fusion`, `methods`, `engram`, `engram_write`, `delegate`, all on/off; `compact`, a word; `max_parallel`, `auto` or a number; `livespec_wait`, seconds, 0 never waits), copied from plugin options by SessionStart |
+| `src/locks/ci.py` | what a repository's own checks run, read from its files: the scripts a command names (package.json, deno.json), whether its tests drive a headless browser, and its CI's jobs (`.github/workflows/*.yml`, a line reader, no YAML dependency) with the services and env each sets, and the jobs a person quieted per repository |
+| `src/locks/orchestrate.py` | the loop: plan, attempt, verify, move, remember |
+| `src/locks/signature.py` | the tool-call signature and the append-only log the PostToolUse fast path writes; imports nothing heavy |
+| `src/locks/habits.py` | mining sequences per repository (and the ones several repositories share), recipes for the brief, and approval-gated habit hooks |
+| `src/locks/usage.py` | tokens per model from session transcripts and their subagents' (counted to the delegation that started each), spend by model and cell, and what a task's or a session's own turns cost |
+| `src/locks/flow.py` | the queue's dispatcher (`locks work`): lanes per repository, each task its own `locks run-queued` process, as many at once as the machine's level allots each lane (`pick`), the stale sweep; a detached dispatcher at its task limit hands queued work to a fresh one |
+| `src/locks/capacity.py` | how many workers this machine runs at once: the level, kept in the locks home, that starts at what the machine holds and rises or halves on the API's and the machine's own signals, and its allotment to the lanes by reserve and lending; stdlib |
+| `src/locks/dispatch.py` | Haiku's call on whether a queued task runs beside running work or waits, and the one-dispatcher-per-repository lock the `++` hook starts it under; light, the hook imports it |
+| `src/locks/split.py` | a request that is several tasks, as its pieces (`locks split`): by its listed items with no model, else Haiku read strictly as a plan's parts; `--queue` starts them on what the task kept |
+| `src/locks/merging.py` | kept branches merged into the person's checkout on their word (`locks merge`: the ones that touch no other first, the check after each, a conflict aborted), and a draft pull request with the verdict (`locks pr`) |
+| `src/locks/guides/` | the orchestration skill's detail, a topic at a time (`locks guide <topic>`): the skill itself stays short |
+| `src/locks/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
+| `src/locks/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
+| `src/locks/revisions.py` | a role's lessons per repository, improved by measured trial: proposed by Haiku from the role's dead ends and verifier blockers there, tried in alternating arms, adopted, dropped or reverted, every record appended to `role_revisions`; `locks roles revisions` reads it |
+| `src/locks/behavior.py` | how a worker worked, per attempt, from its own tool calls (never their arguments): before its first write, the checks it ran, fix loops, an unchecked end, rereads, repeats, silences, tool families; kept on `attempt_finished.behavior`, added up by kind, outcome and cell for `locks stats` and exported per attempt (`--attempts`); observed, no model |
+| `src/locks/arms.py` | two arms tried in turns until each has enough first tries, then the one that did no worse: the shape methods and the recall order share (`tally`, `pick`); no model |
+| `src/locks/methods.py` | how a kind's workers are briefed to work, tried against its absence: a diagnosis protocol for `debug-unclear`, a pre-mortem for `plan` whose `Risks:` reach the independent check of the steps after it; arms per repository (`method_arm`); no model |
+| `src/locks/racing.py` | whether racing a first try paid, per repository and kind: each race read from its attempts (rung, start, neither), the rung's wins and the time to pass against climbs, the judgement `race_cell` and `locks stats` read; no model |
+| `src/locks/cells.py` | where a lesson belongs: the area a path or a change is in, the role that met it, or everyone (`scope`); the text a failure is kept and matched by (a workflow step's goal, never its template); the cell's primer (how its workers got oriented) and its trial; no model |
+| `src/locks/doctor.py` | `locks doctor`: states the store should never hold, each a bug that shipped turned into a query (broken: stuck now; suspect: over the last days); read only, no model; SessionStart names what is broken |
 | `bench/review/` | the review benchmark: real review chains (one review, two blind ones, two with different purposes, a classifier before a quality check) on a change with planted bugs, matched by `analyze.py`; what it measured is in its README |
 | `bench/speed/kinds.py` | whether Haiku does `refactor` and `test` work as right as their first rung: real workers on the memory bench's pricing engine, a refactor judged by its layout and prices kept, tests judged by mutants killed (real money: run on purpose) |
 | `bench/speed/methods.py` | whether the diagnosis method helps an unclear bug: real workers on the pricing engine with a planted bug told only by its symptom, with and without `methods`' lines (real money: run on purpose) |
 | `bench/speed/plans.py` | which cell plans: real read-only planners on the harder pricing engine, scored by the traps their plan names (real money: run on purpose) |
 | `bench/memory/` | the memory benchmark: real workers on a small pricing engine, judged by hidden tests, cold against briefed with a teacher's memory; what it measured is in its README (real money: run on purpose) |
-| `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away; constraints, the rules a change must meet, briefed apart as requirements |
-| `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
-| `src/cauce/grants.py` | what workers may do: the permission mode per model (auto; Haiku bypasses) and the rules a person keeps per repository with `cauce allow` |
-| `src/cauce/runtime.py` | the Node a project declares (`.nvmrc`, `.node-version`, `engines.node`), or its installed dependencies need when it declares none, found among nvm's and put first on a worker's PATH |
-| `src/cauce/preflight.py` | whether a task's check can start here, read before its first attempt: the programs it (and the scripts it names) starts on the PATH it runs with, the scripts and deno tasks it names, the Node the project declares, and a `.venv` importing the package from elsewhere (a warning); no model, fails open |
-| `src/cauce/allow.py` | a refused call → the `--allow` rules that let it through, one per program; suggestions only, nothing is granted |
-| `src/cauce/stops.py` | why a task stopped, who made the call, and the command that continues it; one account on its `finished` event; light, the hooks and the UI read it |
-| `src/cauce/orchestrator.py` | which session orchestrates a project (`.cauce/orchestrator.json`): claimed by sending work, handed on by a relay, a clear in its place or going quiet, with the work the old one sent; stdlib |
-| `src/cauce/project.py` | a project's `.cauce/` folder: enrollment (only enrolled projects show in the UI) and `sessions.json`, the session names; stdlib, no git call |
-| `src/cauce/workspaces.py` | a folder of repositories that is one project (`cauce workspace`): declared in the person's cauce home, read by `repo.key` and `project.find`; a member's files are named with it in front in the notes |
-| `src/cauce/naming.py` | Haiku names a session, started detached by the Stop hook; a name a person wrote is never replaced |
-| `src/cauce/ui/` | `cauce ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step; `svg.js` draws the workflow graphs and the project map node by node |
-| `src/cauce/compact.py` | the facts of a session (requests verbatim, failed calls, changed files), written before a compaction and put back after it; no model call |
-| `src/cauce/scribe.py` | the scribe: at every turn's end, what a session's transcript gained (requests verbatim, corrections, files written, failed calls and the one that passed after), kept in the cauce home; the thread a task the session sent gets in its brief, when the notes are due, and the relay to a fresh session; no model call |
-| `src/cauce/analysis.py` | where cauce's time and money go (`cauce stats`, the UI's Analysis): runs from `planned` to `finished`, their timed phases (and the gaps before them: advance, pickup, spawn), attempts by cell, the session's thread in briefs, a session's own turns; read only, no model |
-| `src/cauce/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
-| `src/cauce/loops.py` | goals that run in rounds (`cauce loop`): a definition, a diary and a state per loop in the person's cauce home, each round a workflow run, the metric measured by cauce, stops on evidence, strategies tried in arms; `loop_cli.py` is `cauce loop …` and the detached `loop-runner` |
-| `src/cauce/trunks.py` | a workflow step whose first try forks the session of a reading step before it (`trunk`): what it forks, the note that marks the role it takes from there, and the trial (`fork` against `fresh`) that keeps forking only where it paid; no model |
-| `src/cauce/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; a step that fans out over a plan's parts, one that joins their branches, a large change's review by area; steps that choose (`when`), ask the person (`ask`) or run another workflow (`workflow`); the graph as Mermaid (`render`); a change refused on a stale revision (`expect`); `workflow_cli.py` is `cauce workflow …` |
-| `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
-| `src/cauce/services.py` | the servers a task needs up (`--service 'cmd@port'`): started in the task's directory, waited for, stopped with their process group when the run ends |
-| `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified; `at_base`, a temporary worktree at a task's base for comparing its check |
+| `src/locks/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away; constraints, the rules a change must meet, briefed apart as requirements |
+| `src/locks/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
+| `src/locks/grants.py` | what workers may do: the permission mode per model (auto; Haiku bypasses) and the rules a person keeps per repository with `locks allow` |
+| `src/locks/runtime.py` | the Node a project declares (`.nvmrc`, `.node-version`, `engines.node`), or its installed dependencies need when it declares none, found among nvm's and put first on a worker's PATH |
+| `src/locks/preflight.py` | whether a task's check can start here, read before its first attempt: the programs it (and the scripts it names) starts on the PATH it runs with, the scripts and deno tasks it names, the Node the project declares, and a `.venv` importing the package from elsewhere (a warning); no model, fails open |
+| `src/locks/allow.py` | a refused call → the `--allow` rules that let it through, one per program; suggestions only, nothing is granted |
+| `src/locks/stops.py` | why a task stopped, who made the call, and the command that continues it; one account on its `finished` event; light, the hooks and the UI read it |
+| `src/locks/orchestrator.py` | which session orchestrates a project (`.locks/orchestrator.json`): claimed by sending work, handed on by a relay, a clear in its place or going quiet, with the work the old one sent; stdlib |
+| `src/locks/project.py` | a project's `.locks/` folder: enrollment (only enrolled projects show in the UI) and `sessions.json`, the session names; stdlib, no git call |
+| `src/locks/workspaces.py` | a folder of repositories that is one project (`locks workspace`): declared in the person's locks home, read by `repo.key` and `project.find`; a member's files are named with it in front in the notes |
+| `src/locks/naming.py` | Haiku names a session, started detached by the Stop hook; a name a person wrote is never replaced |
+| `src/locks/ui/` | `locks ui`: `api.py` turns the store into JSON (testable without a socket), `server.py` is the envelope and the routes, `static/` one ES module per screen, no build step; `svg.js` draws the workflow graphs and the project map node by node |
+| `src/locks/compact.py` | the facts of a session (requests verbatim, failed calls, changed files), written before a compaction and put back after it; no model call |
+| `src/locks/scribe.py` | the scribe: at every turn's end, what a session's transcript gained (requests verbatim, corrections, files written, failed calls and the one that passed after), kept in the locks home; the thread a task the session sent gets in its brief, when the notes are due, and the relay to a fresh session; no model call |
+| `src/locks/analysis.py` | where locks' time and money go (`locks stats`, the UI's Analysis): runs from `planned` to `finished`, their timed phases (and the gaps before them: advance, pickup, spawn), attempts by cell, the session's thread in briefs, a session's own turns; read only, no model |
+| `src/locks/hooks.py` | Claude Code hooks: prompt ↔ task coupling, dead ends into context |
+| `src/locks/loops.py` | goals that run in rounds (`locks loop`): a definition, a diary and a state per loop in the person's locks home, each round a workflow run, the metric measured by locks, stops on evidence, strategies tried in arms; `loop_cli.py` is `locks loop …` and the detached `loop-runner` |
+| `src/locks/trunks.py` | a workflow step whose first try forks the session of a reading step before it (`trunk`): what it forks, the note that marks the role it takes from there, and the trial (`fork` against `fresh`) that keeps forking only where it paid; no model |
+| `src/locks/workflows.py` | saved chains of tasks: definitions in three scopes (project, user, bundled `workflow_templates/`), runs the engine advances when a step passes, each step on the commit the one before kept; a step that fans out over a plan's parts, one that joins their branches, a large change's review by area; steps that choose (`when`), ask the person (`ask`) or run another workflow (`workflow`); the graph as Mermaid (`render`); a change refused on a stale revision (`expect`); `workflow_cli.py` is `locks workflow …` |
+| `hooks/locks.tsx` | the mod (function hooks), a thin layer over `bin/locks`: model tools, waking the session on endings, a status line, `/locks` opens the web board; `hooks/locks-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/locks.test.tsx` its tests |
+| `src/locks/services.py` | the servers a task needs up (`--service 'cmd@port'`): started in the task's directory, waited for, stopped with their process group when the run ends |
+| `src/locks/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified; `at_base`, a temporary worktree at a task's base for comparing its check |
 | `scripts/bump.py` | a new version in every file that names it at once (`__init__.py`, `pyproject.toml`, `uv.lock`, the plugin and marketplace manifests), the CHANGELOG's `[Unreleased]` closed under it; nothing written when one file is off or the notes are empty |
-| `scripts/livespec_check.py`, `.github/workflows/livespec-pin.yml` | the livespec cauce runs kept current: every week a release on PyPI newer than `PINNED` is pinned, verified against a real index of this repository (the index read, a brief, a change's reach, every tool cauce names served, `validate_openspec`), and proposed as a draft pull request once the suite passed with it; stdlib, no model |
+| `scripts/livespec_check.py`, `.github/workflows/livespec-pin.yml` | the livespec locks runs kept current: every week a release on PyPI newer than `PINNED` is pinned, verified against a real index of this repository (the index read, a brief, a change's reach, every tool locks names served, `validate_openspec`), and proposed as a draft pull request once the suite passed with it; stdlib, no model |
 | `scripts/release_notes.py`, `.github/workflows/release.yml` | a version that reaches main with CI green is tagged `v<version>` and released with its CHANGELOG section, by itself; one already tagged is left alone, and a person tags an older one by hand (`workflow_dispatch`); stdlib, no model |
 | `commands/orchestration.md` | the one entry point a user types |
 | `commands/habits.md` | review the habit candidates for this repository and install the ones the person picks |
 | `commands/workflow.md` | make, change, copy, run and watch workflows |
-| `commands/loop.md` | `/cauce:loop`: a session proposes a loop with the person (goal, metric, rules, what acts), builds it only on their yes, and starts it as a draft |
+| `commands/loop.md` | `/locks:loop`: a session proposes a loop with the person (goal, metric, rules, what acts), builds it only on their yes, and starts it as a draft |
 | `commands/watch.md` | a session that watches every other one: `overview`, the endings as they happen, `SendMessage` to send work |
-| `commands/relay.md` | `/cauce:relay`: hand the session's thread to the next session started in the same place (`/clear`), instead of compacting |
-| `bin/cauce` | the launcher every hook and command goes through |
-| `src/cauce/interpreter.py` | which Python runs cauce; imported before the version check, so it must run on any python3 |
-| `src/cauce/link.py` | `cauce link`: a shim on a terminal's PATH that survives plugin updates; `forward_to`, which sends a typed command from an old install to the newest (never a hook, never a checkout) |
-| `src/cauce/acp.py` | `cauce acp`: cauce as an Agent Client Protocol agent over stdio (Zed's `agent_servers`): JSON-RPC lines, one session per `session/new` and its folder, each prompt a `cauce run` (or `cauce tasks`/`stats` for `/tasks`/`/stats`) in its own process group, its stderr progress as one tool call, its report as the answer, a cancel ending the turn at once and the task after `CANCEL_WINDOW_S` unless a prompt follows (`cauce cancel N` then a kill; `/cancel N` is the explicit one), `session/load` refused with what to do, the request's items and cauce's stages as its `plan`, `cauce tasks`' line as the tool call's title, the worker's last call, a failed check's output and the worker's files as content, the verdict and next step as the answer's lead; spawning, diffs and look injectable; stdlib |
+| `commands/relay.md` | `/locks:relay`: hand the session's thread to the next session started in the same place (`/clear`), instead of compacting |
+| `bin/locks` | the launcher every hook and command goes through |
+| `src/locks/legacy.py` | the old name, cauce, wherever an install from before the rename holds it: `CAUCE_*` read as `LOCKS_*` at import (and repeated to a worker), the home moved once with a link left (`cauce.db` renamed only while nothing holds it), `.cauce/` read and renamed when work is written, kept `cauce/task-N` branches and `refs/cauce/` renamed before use, the store's rows read into the new name once, and the words other readers accept (blocks, trailers, a neighbour's manifest, the UI's header, the bundled team); stdlib, imported first, never raises | <!-- legacy-name -->
+| `scripts/rename_to_locks.py` | the rename as a script: ordered rules, the paths moved, an allow-list that says why each old name stays; `--check` fails while one is left outside it | <!-- legacy-name -->
+| `src/locks/interpreter.py` | which Python runs locks; imported before the version check, so it must run on any python3 |
+| `src/locks/link.py` | `locks link`: a shim on a terminal's PATH that survives plugin updates; `forward_to`, which sends a typed command from an old install to the newest (never a hook, never a checkout) |
+| `src/locks/acp.py` | `locks acp`: locks as an Agent Client Protocol agent over stdio (Zed's `agent_servers`): JSON-RPC lines, one session per `session/new` and its folder, each prompt a `locks run` (or `locks tasks`/`stats` for `/tasks`/`/stats`) in its own process group, its stderr progress as one tool call, its report as the answer, a cancel ending the turn at once and the task after `CANCEL_WINDOW_S` unless a prompt follows (`locks cancel N` then a kill; `/cancel N` is the explicit one), `session/load` refused with what to do, the request's items and locks' stages as its `plan`, `locks tasks`' line as the tool call's title, the worker's last call, a failed check's output and the worker's files as content, the verdict and next step as the answer's lead; spawning, diffs and look injectable; stdlib |
 
 ## Verify before reporting done
 
@@ -111,13 +113,13 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 .venv/bin/python -m coverage run -m pytest
 .venv/bin/python -m coverage combine
 .venv/bin/python -m coverage report
-CAUCE_TEST_ALL_ON=1 .venv/bin/python -m pytest
+LOCKS_TEST_ALL_ON=1 .venv/bin/python -m pytest
 claude plugin validate .
 claude plugin test .
 ```
 
 Coverage measures the processes the tests start too (`patch = ["subprocess"]`): `combine` gathers them.
-`CAUCE_TEST_ALL_ON=1` is the profile where every adaptive setting stays as a person gets it, with the
+`LOCKS_TEST_ALL_ON=1` is the profile where every adaptive setting stays as a person gets it, with the
 fake `claude` on PATH (it answers Haiku's questions from their schema): the unit tests turn each
 setting on alone, and the bugs live where they meet. A new setting goes in `conftest.SWITCHES`, and a test
 that relies on one being off says so itself (`monkeypatch.setenv`, or the `no_verifier` fixture): both
@@ -130,7 +132,7 @@ helpers never get it.
 `tests/test_scenarios.py` runs the real commands as processes (the dispatcher,
 `run-queued`, the automatic resume, workflows, worktrees) with
 `tests/scenarios/fake_claude.py` as `claude`, and ends each scenario with
-`cauce doctor`: a bug that leaves the store in a state it should never hold
+`locks doctor`: a bug that leaves the store in a state it should never hold
 fails there. A doctor rule's `suspect` reads only records the release that fixes
 its bug wrote (`doctor.FIXED_IN`, the `version` its events keep): a new rule
 names that release. A way work moves that the unit tests drive in-process (a death, a
@@ -161,9 +163,15 @@ The coverage floor lives in one place, `[tool.coverage.report] fail_under` in
   Adding one needs a stated reason the stdlib failed.
 - **No client or engagement names, ever** — in code, tests, examples or
   commit messages. Describe the shape of a system, never who it belongs to.
-- **Tests use the `CAUCE_HOME` fixture** in `tests/conftest.py`. Never bypass
+- **Tests use the `LOCKS_HOME` fixture** in `tests/conftest.py`. Never bypass
   it: a test that writes to the real database puts fake dead ends in front of
   real sessions.
+
+- **The old name lives in one place.** Every reader of a name from before the rename (an
+  environment variable, a path, a branch, a block, a trailer, a manifest key, a persisted word)
+  takes it from `locks.legacy`; nothing an existing install holds is dropped or rewritten by
+  guess. `scripts/rename_to_locks.py --check` passes, and a line that must name it says
+  `legacy-name` in a comment, with why.
 
 ## Fail open, fail closed
 
@@ -174,7 +182,7 @@ the next `SessionStart` reports. Failing open is not failing silently.
 **Verdicts fail closed.** A worker with no result block, two blocks that differ
 (the same block repeated is one verdict, `launch.result_block`), or a pass
 without evidence is `inconclusive`, never a pass. A pass the independent check
-reads late (`late_verifier`) is a pass on cauce's own check until that check shows a blocker; then
+reads late (`late_verifier`) is a pass on locks' own check until that check shows a blocker; then
 it is reopened as `review`, never left standing. Changed files come from git,
 never from the worker, and every report prints them beside the worker's
 summary — the work directory's checkout and every checkout nested in it. `--verify` overrides a claimed pass; it is the only thing that can
@@ -194,7 +202,7 @@ yields the default kind, not a guess.
   `WorkerResult.shape`) is asked again of the same cell, once, with its turns
   and in its own session when one is kept (`Decision.reshape`); a second one
   climbs as any inconclusive does. An environment the worker
-  named, or a check cauce could not run, blocks at once. A refused
+  named, or a check locks could not run, blocks at once. A refused
   command is neither: it blocks at once, because it is a setting. An
   environment failure on an attempt that changed files is not work that never
   ran: it blocks at once too, its work kept. A timeout after the work changed
@@ -202,7 +210,7 @@ yields the default kind, not a guess.
   time grows with its turns (`launch.timeout_for`). A network that dropped is
   neither: read from a session's own failed call (`launch.NETWORK_DOWN` and
   `NETWORK_FLAKY`), from a worker that named the environment (`NETWORK_DOWN`
-  only: its evidence is a command's output), or from cauce's check only on a
+  only: its evidence is a command's output), or from locks' check only on a
   line where the check itself could not reach it (`launch.CHECK_OFFLINE`),
   never a word a test logs. The same cell goes again after each of
   `escalate.NETWORK_WAITS`, from the work it kept; such a try counts toward no
@@ -212,12 +220,12 @@ yields the default kind, not a guess.
   limit is, its reset read by `launch.resets_in`) is neither: it stops the task
   at once as `limit`, its work kept, the try no attempt (`stops.lost_tries`); no
   queued work starts before the reset (`stops.LIMIT_META`, `flow.limited_until`),
-  and `dispatch.recover` resumes it after the reset, from a detached `cauce
+  and `dispatch.recover` resumes it after the reset, from a detached `locks
   limit-wait` when nobody's turn ends then, at most `dispatch.LIMIT_RESUMES`.
 - A build the plan sizes at `orchestrate.SPLIT_POINTS` or more, outside a workflow run and
   not sent `--whole`, that outgrows its turns is several pieces, not one that needs more
   room: it stops as `split` (`escalate.decide`'s `several`), its work kept, and the ending
-  offers `cauce split N` (`--queue` starts the pieces on that work, and what waited for it
+  offers `locks split N` (`--queue` starts the pieces on that work, and what waited for it
   waits for the last piece). `dispatch.recover` never resumes it; a resume gives it more
   turns as one piece.
 - Out of turns is room, never a bug: a finding of the independent check in
@@ -236,19 +244,19 @@ yields the default kind, not a guess.
   model, or for more turns a different cell) the attempt starts fresh and
   says why. The `moved` event says what the next attempt does (`continued`,
   with `forked_from` or `resumed`, else `fresh` with why) and its
-  `attempt_finished` what it did, so `cauce stats` compares continued and
+  `attempt_finished` what it did, so `locks stats` compares continued and
   fresh attempts. Any other move starts fresh: a new model never inherits the
   old one's approach (it starts from the base, the work set aside), and a
   retry, a replan and a resume a person starts are fresh. The independent
   check never runs in a worker's session.
 - A failed check's own output is kept per attempt (`launch.check_tail`, on the `attempt_finished`
   event, read by `Store.check_tails`): the failing names, the last lines and the base comparison,
-  ANSI stripped, secrets masked, bounded by `CHECK_TAIL_CHARS`. `cauce show`, the task page, the
+  ANSI stripped, secrets masked, bounded by `CHECK_TAIL_CHARS`. `locks show`, the task page, the
   ending of a task that stopped short of a pass (this run's last attempt only) and the next
   brief (`failed_output`) read it; an attempt without one falls back to its evidence.
 - Cost is measured and shown, never a brake: every attempt keeps what it cost
   (its own and its independent check's apart, and how much of its input the
-  cache served), and the report, the board, `cauce spend` and `cauce stats`
+  cache served), and the report, the board, `locks spend` and `locks stats`
   show it; no task stops, skips a cell or gets a shorter attempt for money,
   and no worker is given a dollar cap. The one place money moves anything is a
   probation start (below), and only back up the ladder. Turns are the one room dial: an attempt
@@ -260,13 +268,13 @@ yields the default kind, not a guess.
   manifest, a tool's minimum Node) is `environment`, never a `code_bug`: its
   exit says nothing about the work, and it is no dead end. npm's EBADENGINE
   warning is not such a line. Dead ends reach a brief only on a strict match.
-- A check that cannot start is found before a worker is spent on it (`cauce.preflight`, before
+- A check that cannot start is found before a worker is spent on it (`locks.preflight`, before
   every run's first attempt): a program missing from the PATH the check runs with, a script or
   deno task its files lack, a declared Node nothing installed fits stops the task as `preflight`
   (blocked, the environment's) with the fix line, no attempt counted, nothing ran. It fails open:
   what it cannot tell (a substitution, a `cd`, a workspace flag, a path or script the request may
   add, dependencies the worker installs, a dependency's tool in a script) is said, never a stop,
-  and a `.venv` importing the package from elsewhere is a warning. Ports stay `cauce.services`'.
+  and a `.venv` importing the package from elsewhere is a warning. Ports stay `locks.services`'.
 - A request that opens with a verb of change is never read as a read-only
   kind unless a tag says so, and is read as `test` only when its
   first change is about tests: a fix that asks for its own tests is the fix.
@@ -286,7 +294,7 @@ yields the default kind, not a guess.
   (its `run:` commands, the services and the env the code reads) and names in
   one warning the jobs `--verify` leaves out, on the report too. A workflow
   file the line reader cannot read is skipped and said once. A job the person
-  quieted for a repository (`cauce ci quiet`, kept in their cauce home) is named
+  quieted for a repository (`locks ci quiet`, kept in their locks home) is named
   no more there.
 - Work that stopped for a person (blocked, needs approval) is kept on its
   branch, unverified, and so is work that outgrew its turns (a `replan` for
@@ -295,17 +303,17 @@ yields the default kind, not a guess.
   task drop it, and never what an earlier run of the task kept: a resume that
   ends short leaves its branch as it found it.
 - A `spec_bug` or `architecture_bug` on work that stands (it changed files and
-  cauce's check passed, or with no check the worker's own evidence and at most
+  locks' check passed, or with no check the worker's own evidence and at most
   one criterion open) is no replan: it stops as `decision` (blocked, the
   worker's call, the orchestrator's to decide), its work kept, the point
-  quoted, and `cauce run` exits 4. Never "failed".
+  quoted, and `locks run` exits 4. Never "failed".
 - A run in the checkout itself (no worktree, and it writes or has a check)
   holds it: a second one there waits, says for which task, and a cancel
   still stops it. A run in a folder that is no checkout holds the folder and
   every checkout right inside it, in sorted order. A run in a worktree never
   waits.
 - A task that waits on a person leaves the board by a resume, by their
-  dismissal (`cauce dismiss`, a button they press), or by a later task with
+  dismissal (`locks dismiss`, a button they press), or by a later task with
   the same text that passed (`superseded`); each records its `stops.Stop` and
   is marked reported, never handed to a session as an ending. A dismissed
   task resumes as what it was: one found wrong is still rewritten. A dismissal
@@ -313,7 +321,7 @@ yields the default kind, not a guess.
   task's branch, unverified, and removed (`isolate.keep_left`, a `branch_kept`
   event), as a blocked stop keeps its work.
 - Work a session sent is reported to it once when it ends: by the report a
-  `cauce run` prints, else by the Stop hook (which blocks the turn's end once
+  `locks run` prints, else by the Stop hook (which blocks the turn's end once
   with the endings) or the next prompt.
 - Every ending short of a pass records a `stops.Stop` on its `finished`
   event: a new way for a task to stop adds its cause there, and a status set
@@ -361,19 +369,19 @@ yields the default kind, not a guess.
   it they were there before (`check_preexisting` with `known_at`), else the
   attempt is `environment` with `base_unknown` and the task stops as
   `base_unknown`, its work kept, the reason saying how many failing tests the
-  worker's own account names, and `cauce resume N` as the line. A worker
+  worker's own account names, and `locks resume N` as the line. A worker
   that stopped on a point (`spec_bug`, `architecture_bug`) whose work stands
   only because the check's failures were all at the base, that names the check
   or one of those failures, and that leaves no criterion unmet passes
   (`orchestrate._only_the_base`); any other point stays a `decision`. A report
   that did not pass and says its check's failure was there before its work
   (a `pre-existing` finding, or its words) is checked, never taken or dropped
-  (`orchestrate._weigh_base_claim`): cauce runs the check and compares it with
+  (`orchestrate._weigh_base_claim`): locks runs the check and compares it with
   the base; it passes only on that comparison with every `S#` of the request
   answered and met, else
   the report stands with the comparison added. An answer with no single result
   block is never weighed.
-- Two attempts that leave exactly the same failing tests of cauce's check
+- Two attempts that leave exactly the same failing tests of locks' check
   (`WorkerResult.failing`, `Attempt.failing`) climb no further: a second climb
   would repeat the first and re-run the whole check. The task stops as
   `same_failures` (`escalate._same_failing`, `Decision.stuck`), its work kept.
@@ -395,7 +403,7 @@ yields the default kind, not a guess.
   is. The plan says so and the verdict card keeps the runs.
 - A writing worker's brief names the command that runs only the tests near its change
   (`ci.related`: jest, vitest, pytest), to run as it goes; the full check runs at the end, by
-  cauce, and the worker is told not to run it before it reports (`bench/speed/handoff.py`).
+  locks, and the worker is told not to run it before it reports (`bench/speed/handoff.py`).
 - Reviewers never vote: their findings are added together, so one is enough
   and there is no tie. A row only one saw and could only read from the code is
   decided by a refuter with its own proof, never by a count; a row it cannot
@@ -412,7 +420,7 @@ yields the default kind, not a guess.
   did not fit wait for its next round and a refute's go to the person, each said by
   count. `panel` is this chain after four blind reviews, one lens each.
   What each blind review beside another added (rows no other saw, and of those the ones
-  kept) is measured from the runs (`workflows.reviewer_yield`, `cauce stats`), never a reason
+  kept) is measured from the runs (`workflows.reviewer_yield`, `locks stats`), never a reason
   the engine changes a definition.
   A fix's independent verifier answers its rows in the re-check's words (`verifier_brief`'s
   `rows`): a row it calls open is a blocker of the fix, a correction like any, and when its
@@ -451,7 +459,7 @@ yields the default kind, not a guess.
   has its own turns (`VERIFIER_TURNS`), never the worker's raised ones, and is
   never told to stash the work it checks. A resume after a `review` stop (a
   dismissed one too) gives its first check the blockers the `verified` event
-  kept. When the change will need it, the verifier starts beside cauce's own check, not after
+  kept. When the change will need it, the verifier starts beside locks' own check, not after
   it (`orchestrate.Ahead`, the `overlap` setting): a passing writing attempt in a worktree, a
   check to run and no services (their ports would be shared); it reads the diff the check runs
   on and is told the check is running and not to run it itself. A check that fails stops it, its
@@ -460,30 +468,30 @@ yields the default kind, not a guess.
   A cheap cell is Haiku or a model below Opus at low effort (`orchestrate._cheap`): Opus at low
   effort passed every hidden test of `bench/speed/versus.py` on its own, and checked as cheap its
   medium changes climbed to opus/high for nothing.
-  The check may run after the ending (`late_verifier`, on by default): a pass that cauce's own check
+  The check may run after the ending (`late_verifier`, on by default): a pass that locks' own check
   settled ends at once (`verifier_deferred`), and the verifier reads its kept branch afterwards in a
   temporary worktree at its tip (`orchestrate._late_check`, a `verified` event with `late`, its cost
   the task's). A blocker it shows reopens the task as `review` with a `stops.Stop` and a new ending
   its session hears of; one that cannot decide leaves the pass. Never late for a workflow step, a
   fix of ledger rows, or work something queued `--after` waits on (`orchestrate._awaited`): what
-  those release could not be taken back. `cauce run` and the resumes the dispatcher starts do what
+  those release could not be taken back. `locks run` and the resumes the dispatcher starts do what
   follows an ending (notes, the late check) in a fresh detached process with its own store
   (`Options.detach_after`, `orchestrate._after_ending`), so the command exits with the ending: never
   a fork, since a forked child's SQLite writes were lost when it closed.
-  Tests run with `CAUCE_VERIFIER=off`, `CAUCE_OVERLAP=off` and `CAUCE_LATE_VERIFIER=off`.
-- The independent check's record earns trust (`cauce.trust`, the `trust` setting), never a worker's
+  Tests run with `LOCKS_VERIFIER=off`, `LOCKS_OVERLAP=off` and `LOCKS_LATE_VERIFIER=off`.
+- The independent check's record earns trust (`locks.trust`, the `trust` setting), never a worker's
   word: a cell is a repository, a kind and the worker's cell, and each task's first decided check
   is one inspection (a correction's re-check is no new one). Skip-lot sampling (ISO 2859-3): once
   `trust.QUALIFY` inspections in a row came clean, a medium change a cheap cell made is checked one
   pass in two, after another `QUALIFY` one in `trust.EVERY[-1]`, never fewer; one blocker returns
   the cell to every pass. A high risk, a correction's re-check, a resume carrying blockers and a fix
-  of ledger rows are checked every time (`orchestrate._sampling`); cauce's own check runs on every
+  of ledger rows are checked every time (`orchestrate._sampling`); locks' own check runs on every
   pass. Which passes are checked is a hash of the repository and the task (`trust.due`), never the
   clock; a pass let through is a `verifier_sampled` event with its cell's level, said in the run
-  and on the verdict card, and neither qualifies nor resets a cell. `cauce trust` and `cauce stats`
+  and on the verdict card, and neither qualifies nor resets a cell. `locks trust` and `locks stats`
   show each cell's record: clean checks, its sampling, the blockers that repeat an earlier task's
   here, the re-checks that found something new, and pass-first and cost per point by the cell work
-  started on. Tests run with `CAUCE_TRUST=off`.
+  started on. Tests run with `LOCKS_TRUST=off`.
 - A writing kind may have a cheaper cell below its ladder (`matrix.PROBATION`: Haiku for
   `implement`, from `bench/memory`, and haiku/medium for `refactor` and `test`, from
   `bench/speed/kinds.py`; no other kind was measured). It is tried only on trial
@@ -498,11 +506,11 @@ yields the default kind, not a guess.
   there climbs into the ladder (`Plan.ladder` is `matrix.reach`). It is judged as any change, and
   also reverted when a passed point costs more on it than before it (`standards.PROBATION_COSTLIER`):
   a cheaper cell that climbs is cheaper only in name; and when a passed point takes more than
-  `standards.PROBATION_SLOWER` times as long (`bench/speed/kinds.py`: Haiku five times slower). Tests run with `CAUCE_PROBATION=off`.
+  `standards.PROBATION_SLOWER` times as long (`bench/speed/kinds.py`: Haiku five times slower). Tests run with `LOCKS_PROBATION=off`.
 - A task that stops on a point (`spec`, `decision`) because its surfaces kept it from the
   cause (it changed a path outside them, or its worker says so and names one,
   `orchestrate._widen`) keeps those paths on its stop (`widen`), and its next step is
-  `cauce resume N --surface …` with them: the resume adds them and its brief keeps the
+  `locks resume N --surface …` with them: the resume adds them and its brief keeps the
   diagnosis. Nothing widens a task's surfaces but that resume.
 - Surfaces narrow and grant nothing: a change outside them fails the attempt
   and is undone in its worktree, never in a person's checkout. Two tasks whose
@@ -567,7 +575,7 @@ yields the default kind, not a guess.
   event keeps the changes it started on).
 - Every change of a standard is appended with when, the repository, the kind
   and band, the field, before and after, the rule, its evidence (counts and
-  rates) and cauce's version. Once `standards.JUDGE_AFTER` tasks ran under it,
+  rates) and locks' version. Once `standards.JUDGE_AFTER` tasks ran under it,
   it is judged once against the window before it (pass-first, attempts, time
   and cost per point); one that made pass-first worse by more than
   `standards.REVERT_MARGIN` is reverted one step back, as a change of its own
@@ -592,8 +600,8 @@ yields the default kind, not a guess.
   when they pass less by more than `REVERT_MARGIN` or their tasks took `SKIP_SLOWER` times as
   long to pass, at the median.
 - The evolution history takes one snapshot a day, at the first ending of a new
-  day in the person's time zone or with `cauce evolution --snapshot`, of what
-  ended since the last one. `cauce evolution` and the UI's Evolution read it
+  day in the person's time zone or with `locks evolution --snapshot`, of what
+  ended since the last one. `locks evolution` and the UI's Evolution read it
   beside every change and verdict, never write. Tests run on fake clocks
   (`now=`, `tz=`) and fake finished tasks (`tests/test_standards.finished`).
 - Fable needs a person: `#fable` or `--allow-approval`. An approval is the
@@ -603,8 +611,8 @@ yields the default kind, not a guess.
   carries `--unattended` (`commands/orchestration.md`); one that grants
   (`--allow`, `--allow-approval`, `--keep`) is the person's to type, and the
   guidance gives them the line instead of running it.
-- A worker gets a model alias unless a person pinned it (`cauce config model`).
-  cauce never hard-codes a model id; the model that served an attempt is read
+- A worker gets a model alias unless a person pinned it (`locks config model`).
+  locks never hard-codes a model id; the model that served an attempt is read
   from the CLI's `modelUsage`, never assumed from the alias.
 - A plan names the rules workers here were refused only from the repository's latest
   `orchestrate.REFUSALS_WINDOW` attempts, and only one refused in `REFUSED_IN_TASKS` tasks or
@@ -612,36 +620,36 @@ yields the default kind, not a guess.
 - A worker is lean (`lean`, `launch.lean_flags`): no subagent tool (its description lists
   every agent defined, read each turn), no skill listing (its role's skills are in its
   brief), and the per-machine prompt sections after the shared part; only the flags the
-  installed CLI lists in its `--help` are passed. Tests run with `CAUCE_LEAN=off`.
-- Merging is the person's: `cauce merge` merges kept branches into the branch checked out
+  installed CLI lists in its `--help` are passed. Tests run with `LOCKS_LEAN=off`.
+- Merging is the person's: `locks merge` merges kept branches into the branch checked out
   only on their command, one merge commit each, aborts a conflict (never resolves it by
-  guess) and stops where the check fails, the merge in place; `cauce pr` pushes and opens a
-  draft pull request only on their command. `cauce merge --pr` merges onto a new branch,
+  guess) and stops where the check fails, the merge in place; `locks pr` pushes and opens a
+  draft pull request only on their command. `locks merge --pr` merges onto a new branch,
   leaves the one checked out as it was, and pushes and opens one draft only when every
   branch merged clean and the check passed after each. A worker runs neither, and no one
   merges a pull request but the person.
 - Where a task declared no surfaces, the files its text names (`dispatch.named_surfaces`)
   hold it back from work ahead that declares or names files they may touch, or already
   changed one; never a reason to start beside it, and never enforced on the worker.
-- `cauce roles import` reads Claude Code agents (a file or a folder, read only) into the
+- `locks roles import` reads Claude Code agents (a file or a folder, read only) into the
   person's roles: their instructions kept, `model` dropped, their tool list as the built-in
   tools taken away, their kinds read from their name and description; a role of the same
   name is never replaced, and an imported role reaches no worker until a team names it.
 - An ending of four or more at once tells each pass in one line (`hooks.verdict_summary`).
-  `cauce stats --expensive` names the runs over their kind's p90 cost and why, from what
+  `locks stats --expensive` names the runs over their kind's p90 cost and why, from what
   they recorded. A running task past `flow.SLOW_MIN_S` and its kind's p90 wall time in its
-  repository (`flow.slow`, over `SLOW_SAMPLES` passes) is said slow on the board, in `cauce
+  repository (`flow.slow`, over `SLOW_SAMPLES` passes) is said slow on the board, in `locks
   tasks` and in the mod's `tasks` tool; said, never stopped.
-- A running task shows how far it got (`cauce.progress`), read and never written: its time against the
+- A running task shows how far it got (`locks.progress`), read and never written: its time against the
   median and the 90th percentile of its kind's passes here (of its size when `progress.ESTIMATE_SAMPLES` of
   them are, never a guess with fewer), its stage from the `stage` events the run writes as its worker hands
-  over to cauce's check and the independent check, what its worktree holds against its base (files, lines
+  over to locks' check and the independent check, what its worktree holds against its base (files, lines
   added and removed, a tool's artifacts left out), and a worker with no tool call for `progress.IDLE_S`
   said quiet ("a long command, or stuck"), never stopped. The status line tells each of up to
-  `SHOWN_RUNNING` tasks so, and the board, the task page, `cauce tasks` and the mod's `tasks` tool too,
+  `SHOWN_RUNNING` tasks so, and the board, the task page, `locks tasks` and the mod's `tasks` tool too,
   with the files it wrote by name; queueing says how long tasks like it took here. Its phase is
   implementing once any call of the attempt wrote, or its worktree holds changes (a shell writes with no
-  write call). `cauce peek N` and the task page show its diff so far, read only. Its subtasks are its
+  write call). `locks peek N` and the task page show its diff so far, read only. Its subtasks are its
   request's items (`progress.asked`), never a list its worker keeps: a worker that kept one spent ~5x the
   model calls and ~19% more time on a four-item task.
 - A run with no worktree (`--no-isolate`, or a folder that holds several repositories and is no
@@ -654,7 +662,7 @@ yields the default kind, not a guess.
   the index of a checkout the person (or the worker) may be running `git add` in. Its ending names the repositories changed in place (`finished.in_place`): there is
   no branch per repository, and it says so.
 - A resume's plan says what it resumes after, the cell it starts at and why, and when that
-  is below the highest cell the task ran (`cli.resume_line`); `cauce show` lists every run of
+  is below the highest cell the task ran (`cli.resume_line`); `locks show` lists every run of
   a task that ran more than once, so a fail resumed to a pass reads as both.
 - A plan line a repository hears the same on every task (`orchestrate.repeats`: a
   neighbour's state, the CI jobs a check leaves out, a capability not in the registry) is
@@ -663,28 +671,28 @@ yields the default kind, not a guess.
 - An attempt's turns are the larger of the CLI's `num_turns` and its worker transcript's
   model calls since it began (`launch.counted_turns`): a worker that compacted restarts the
   CLI's count.
-- A pass whose worker never ran its own check (out of turns, refused) and that cauce's
+- A pass whose worker never ran its own check (out of turns, refused) and that locks'
   check settled says so on its verdict card (`unchecked`), and the ending then allows the
   diff to be opened.
 - A plan the request asks to be written to a file ("write it in docs/PLAN.md") is
   classified `implement`, never a read-only plan (`classify.asks_for_change`); a `#plan`
   tag keeps it a plan.
-- Older cauce installs in Claude Code's plugin cache are named once per set at
+- Older locks installs in Claude Code's plugin cache are named once per set at
   SessionStart (`hooks._older_installs`), with the command that removes them; the person
-  removes them, cauce never deletes from Claude Code's folder.
+  removes them, locks never deletes from Claude Code's folder.
 - A session keeps the plugin it loaded: a command it types runs the newest install
   (`link.forward_to`, which keeps the version it came from in `link.LOADED`) and says the
   session's skills and hooks are still that version's; the prompt hook says a newer install
-  once per session and version. `cauce ui` stops an older cauce UI on its port, found by
+  once per session and version. `locks ui` stops an older locks UI on its port, found by
   its command line, never another program.
-- cauce suggests permission rules and never grants one: `allow.py` only
-  writes text a person passes with `--allow` or keeps with `cauce allow` or
-  `cauce resume --keep` (stored in their cauce home, never in a repository;
+- locks suggests permission rules and never grants one: `allow.py` only
+  writes text a person passes with `--allow` or keeps with `locks allow` or
+  `locks resume --keep` (stored in their locks home, never in a repository;
   `--keep` is refused with `--unattended`). A rule for an absolute
   path has two slashes (`Read(//abs)`). Three things are allowed with the
-  worker itself: the tools of the MCP servers cauce hands it, reading the
+  worker itself: the tools of the MCP servers locks hands it, reading the
   skill folders of its role, and the permission mode its model runs in
-  (auto; Haiku bypasses), which a person changes with `cauce config mode`.
+  (auto; Haiku bypasses), which a person changes with `locks config mode`.
 - Two corrections in a row on one model, each leaving the independent check's
   blockers, go to the next model, not the next effort.
 - A refused attempt blocks; it never climbs, whatever else it ended with,
@@ -702,8 +710,8 @@ yields the default kind, not a guess.
   (`finished.tip`); a step whose run builds on a branch that is gone puts it
   back there (`branch_restored`), or stops the run with a `workflow_error`;
   a worktree never starts on HEAD in place of a base it cannot read.
-- A task that never ran owns no branch: a `cauce/task-N` already in the checkout when it
-  first starts (a store started over, another cauce home) is another's, renamed aside
+- A task that never ran owns no branch: a `locks/task-N` already in the checkout when it
+  first starts (a store started over, another locks home) is another's, renamed aside
   (`isolate.FOREIGN`, its tip in the name, a `branch_set_aside` event) and never built on;
   the task starts on its base and is no resume.
 - A kept branch is deleted only when nothing is lost (`isolate.prunable`):
@@ -712,7 +720,7 @@ yields the default kind, not a guess.
   checked out, never one of a task that may resume. Its tip is kept on a
   `branch_pruned` event. It runs in hooks and the server thread, never in a
   GET. A task asked again while one with the same text keeps its work points
-  at `cauce resume`.
+  at `locks resume`.
 - A dependency folder whose lockfile differs between the worktree and the
   checkout is not linked (`isolate.Workspace.stale`): the worker installs it.
 - A worktree gets what the task needs from the person's checkout and nothing
@@ -720,47 +728,47 @@ yields the default kind, not a guess.
   committed, up to `isolate.BRING_BYTES`); uncommitted changes come only with
   `--carry`, and a task that names them without it is warned. A new model
   starts from the base; what the last one did is kept on
-  `refs/cauce/aside/…`, the brief says so, and the refs go with the branch
+  `refs/locks/aside/…`, the brief says so, and the refs go with the branch
   when the run keeps none. `--add-dir` is the person's, for a sibling
   repository.
 - A service (`--service 'cmd@port'`) is the person's flag, never a
-  definition's or a model tool's: cauce starts it in the task's directory,
+  definition's or a model tool's: locks starts it in the task's directory,
   waits for its port, and stops its process group when the run ends; a port
   already up is left alone, and one that never listens blocks the task as
   `environment` before any attempt.
-- A session's turn is recorded for coupling, never as work: `cauce tasks`
+- A session's turn is recorded for coupling, never as work: `locks tasks`
   and the board leave it out (`--turns` shows it), a turn that ended without
   its answer is a `turn` stop with nothing to resume, and so is a subagent
-  whose ending never reached cauce after `flow.DELEGATION_TIMEOUT`; neither is
-  listed as unfinished work. A notice cauce put
+  whose ending never reached locks after `flow.DELEGATION_TIMEOUT`; neither is
+  listed as unfinished work. A notice locks put
   in a session (the endings, a plugin's message) is no turn.
 - A kept commit's subject is the change's: the line the worker proposed
   (`commit`), else the task's title, never a task number; the task and an
-  unverified state are trailers (`Cauce-Task`, `Cauce-Verified: no`).
+  unverified state are trailers (`Locks-Task`, `Locks-Verified: no`).
 - Files a worker's tools write for themselves (`isolate.ARTIFACT_DIRS`, a dev-server
   plugin's `.fresh-dev/` among them) are
   never a changed file and never committed, and a branch holding only them is
   never a review.
 - A worker that stopped before its own check (refused, or out of turns) is
-  checked with `--verify` by cauce when the task changed something;
+  checked with `--verify` by locks when the task changed something;
   a red check is evidence for the next brief, never a pass.
-- What cauce's own check writes in a worktree (`isolate.fingerprint` before
+- What locks' own check writes in a worktree (`isolate.fingerprint` before
   and after it) is committed with the work and said: a `check_rewrote` event,
-  the report's line beside `changed (from git)`, and a `Cauce-Check-Output`
+  the report's line beside `changed (from git)`, and a `Locks-Check-Output`
   trailer. It is never a verdict.
-- A repository's specs are kept alive, never written by cauce (`cauce.specs`): where `openspec/` exists, a
+- A repository's specs are kept alive, never written by locks (`locks.specs`): where `openspec/` exists, a
   writing worker is told a change of behaviour updates the spec it reaches in the same work, the plan says how
   far the specs are behind (said once a day), and an ending whose change wrote no spec, where they are
   `specs.BEHIND_COMMITS` or more code commits behind, offers the docs task that catches them up. Offered,
   never started: the orchestrator decides.
-- A repository is spec-first only on the person's word (`cauce specs first on`, kept in the store's meta, never in a
+- A repository is spec-first only on the person's word (`locks specs first on`, kept in the store's meta, never in a
   repository): there a build (`specs.FIRST_KINDS`) is told to write the spec before the code, and a pass whose
   change touches code (`specs.coded`: not tests, lockfiles, config or generated files, `holds_behaviour`) and nothing under `openspec/` is held back (`spec_owed`): the first time it
   goes back to the same cell, in its own session, told to write the spec (`specs.FIRST_PROMPT`, as a reshape); the
   second it stands as work with one point, a `decision` for the orchestrator, kept on its branch. Never a climb: a
   stronger model writes no spec a weaker one would not.
 - The TRACER method of a repository (`docs/tracer/`) is data in a writing brief and requirements in the
-  independent check's (`cauce.tracer`), never instructions of cauce's own: a flow reaches a brief only when
+  independent check's (`locks.tracer`), never instructions of locks' own: a flow reaches a brief only when
   the request holds every word of its file name, of a title of its own of two words or more, or of a
   capability of `capabilities.md` the flow belongs to; its CORRECT lines are read as the template writes
   them (the success path's items with the lines under them, the failure table's CORRECT column found by its
@@ -778,7 +786,7 @@ yields the default kind, not a guess.
   its own and never the folder (`Livespec.roots`; `_index_argv` refuses a folder that is no checkout).
   Past the wait the refresh is left running, never killed, and the task starts without the index (or on
   the stale one a repository already has, as it is) and says which; repositories sharing a `group_db`
-  are indexed one after another under its one lock; an index run cauce waits on leads its own process
+  are indexed one after another under its one lock; an index run locks waits on leads its own process
   group (`adapters.livespec._run_in_group`), so its timeout ends `uvx` and the `livespec index` under
   it together; a refresh that failed at this commit is not tried
   again until the checkout moves. With an
@@ -787,12 +795,12 @@ yields the default kind, not a guess.
   writing worker is told to put `@spec:<capability>-<requirement-name>` on the code that implements a
   spec it writes (`spec_links_brief`), and what the change touched that no code names is a line of the
   report and of the independent check's brief (`specs.unlinked`, `LINK_PREFIX`): a spec the change
-  wrote blocks, one that was already there is a warning, data and never a verdict of cauce's own. A spec
+  wrote blocks, one that was already there is a warning, data and never a verdict of locks' own. A spec
   the change wrote with none raises its tier to high (`orchestrate._risk_of_change`), so the independent
   check that blocks always runs, a docs task's too; a warning raises nothing. Each
-  attempt keeps the livespec calls its worker made (`attempt_finished.livespec_calls`), and `cauce
+  attempt keeps the livespec calls its worker made (`attempt_finished.livespec_calls`), and `locks
   stats` compares tokens per kind with livespec called against not called: observed, never a trial.
-  Tests run with `CAUCE_LIVESPEC_WAIT=0`.
+  Tests run with `LOCKS_LIVESPEC_WAIT=0`.
 - An adopted neighbour is read, never written: the livespec index is opened
   `mode=ro`, and the index is built only through livespec's own CLI. Absent
   and unreadable are different states and neither stops a run. The one
@@ -800,11 +808,11 @@ yields the default kind, not a guess.
   passing worker learned, filtered as a note is (never a secret, never a
   failed attempt's, never `<private>` text), saved through engram's own
   server.
-- engram's store is never opened by cauce: only its server, once `/health`
+- engram's store is never opened by locks: only its server, once `/health`
   says engram and `/compatibility` says the running store is verified. What it
   holds goes in a brief as data, never instructions. A worker gets
   `engram mcp` behind the `engram` guard: reading tools only, held to the
-  project cauce resolved. Tests run with `CAUCE_ENGRAM=off`; a test that wants
+  project locks resolved. Tests run with `LOCKS_ENGRAM=off`; a test that wants
   it passes a fake `http`.
 - An index livespec failed to build is not tried again until the checkout
   moves (`Livespec.last_failure`); the plan says so once per task. A release
@@ -813,7 +821,7 @@ yields the default kind, not a guess.
 - Every livespec tool a hint names is in `adapters/livespec.TOOLS`, checked
   against the release in `MINIMUM_VERSION`. Check a name against livespec
   before adding it, and bump `PINNED` only after checking the new release.
-  livespec's `validate_openspec` has no command line, so `cauce specs` asks it over MCP on stdio
+  livespec's `validate_openspec` has no command line, so `locks specs` asks it over MCP on stdio
   (`Livespec.call_tools`, a minimal client cut at its timeout) after `sync_openspec`, both on a
   temporary copy of `openspec/` alone, indexed there by livespec's CLI, with its own `LIVESPEC_HOME`
   and no `.livespec.toml` (`Livespec.validate_openspec`): nothing is written in the person's
@@ -821,13 +829,13 @@ yields the default kind, not a guess.
   What `uvx` runs when no plugin entry and no `livespec` on PATH is used is `Livespec.pin()`: the
   release in the newest installed livespec plugin's own manifest (`.claude-plugin/plugin.json`,
   never one `unpublished()` holds), else `PINNED`. A release newer than `PINNED` (a plugin's, or one
-  on PATH) is taken, and checked: its own `tools/list` is read once per release and kept in the cauce
+  on PATH) is taken, and checked: its own `tools/list` is read once per release and kept in the locks
   home (`Livespec.missing_tools`); an orientation line naming a tool it does not serve is not told,
   the hint names it as not served, and the plan says so (`_release_note`, never a raised rung). Tools
   that cannot be read brief as for `PINNED` and are asked again next time. `PINNED` itself moves by a
   reviewed pull request the weekly `livespec-pin` workflow opens only after `scripts/livespec_check.py
   verify` and the suite passed on it: never an unpinned fetch.
-- Tests run with `CAUCE_LIVESPEC=off` and an empty `CLAUDE_CONFIG_DIR`; a
+- Tests run with `LOCKS_LIVESPEC=off` and an empty `CLAUDE_CONFIG_DIR`; a
   test that wants livespec builds the fixture index in `tests/livespec_fixture.py`.
 - A dispatch decision fails closed: no answer from Haiku means the task
   waits. A wait Haiku gives names a collision (a change the task needs, the same code or
@@ -836,7 +844,7 @@ yields the default kind, not a guess.
   work it was judged against is ahead any more: then it is made again
   (`flow._judged_against_gone`, the event's `again`); and a wait Haiku gave is asked again,
   at most every `flow.REJUDGE_S`, once the work ahead changed files it had not when it was
-  judged (the event's `seen` and `moved`). `cauce lanes --beside N` is
+  judged (the event's `seen` and `moved`). `locks lanes --beside N` is
   the session's word that a queued task starts beside the work ahead; it never
   moves work held `--after`. A task that will
   not write (`matrix.READ_ONLY_KINDS`, or text `orchestrate.declares_read_only`
@@ -845,11 +853,11 @@ yields the default kind, not a guess.
   running work, and is no conflict for a writing task, which is judged against
   the writing work ahead of it alone. A reason is kept as plain text on one
   line. Tests run with
-  `CAUCE_PARALLEL=off`, `CAUCE_AUTOWORK=off` and `CAUCE_NAMES=off`; a test
+  `LOCKS_PARALLEL=off`, `LOCKS_AUTOWORK=off` and `LOCKS_NAMES=off`; a test
   that wants them passes a fake `decide`, `start` or `popen`.
 - Scaling has two axes, and money moves neither. Horizontal scaling is the
   number of workers this machine runs at once: the dispatcher's level
-  (`cauce.capacity`), kept in the person's cauce home, never a fixed number.
+  (`locks.capacity`), kept in the person's locks home, never a fixed number.
   It starts at what the machine can hold (its CPUs, free memory and the free
   disk where worktrees live, each worker counted at `WORKER_MEMORY_MB` and
   `WORKTREE_DISK_MB`, at least 1), rises by one when work waits for a worker
@@ -875,17 +883,17 @@ yields the default kind, not a guess.
   starts with and climbs by evidence (`matrix`, `escalate`), as above. Neither
   reads a cost. Tests run on a fake machine of three CPUs (`capacity.machine`,
   in `tests/conftest.py`); a test that wants another passes `machine`.
-- A session belongs to the `.cauce/` in its own directory or up to the top of
+- A session belongs to the `.locks/` in its own directory or up to the top of
   its checkout, never above it; outside a checkout, its own directory only.
   The home directory, `/`, Claude Code's own folder (a plugin's cached copy)
-  and cauce's home are never a project, a dotfiles checkout at home
+  and locks' home are never a project, a dotfiles checkout at home
   included. The one exception is a workspace the person declared.
-- A workspace (`cauce workspace add`) is a folder of two or more repositories
+- A workspace (`locks workspace add`) is a folder of two or more repositories
   that is one project: `repo.key` answers with the folder for each of them and
   their worktrees, and `project.find` for each of them, so notes, tasks, lanes,
-  sessions, the team and the rules kept with `cauce allow` are the folder's (a
+  sessions, the team and the rules kept with `locks allow` are the folder's (a
   repository keeps its own project-scope workflows). It lives in the person's
-  cauce home, never in a repository, and never inside a checkout. Its folder
+  locks home, never in a repository, and never inside a checkout. Its folder
   holds only its own repositories, since every one under it belongs to it: the
   ones named, linked in when elsewhere, or with none named the ones right
   inside it. Nothing is made before everything is checked. Making one moves
@@ -896,31 +904,31 @@ yields the default kind, not a guess.
   work queued or running. A member's file is named with the member in front in
   the notes (`api/src/x.py`); a member and its worktrees review only its own
   anchors, and the folder each member's in that member. A task in the folder
-  holds every checkout in it, a linked one included. cauce offers a workspace
+  holds every checkout in it, a linked one included. locks offers a workspace
   (a task that reaches a sibling with `--add-dir`: their own folder only when
   it holds exactly them, else a new one beside them) and never makes one for
   the person.
-- `.cauce/sessions.json` belongs to the person as much as to Haiku: a `name`
-  that differs from `haiku_name` is theirs, and nothing in cauce overwrites it.
+- `.locks/sessions.json` belongs to the person as much as to Haiku: a `name`
+  that differs from `haiku_name` is theirs, and nothing in locks overwrites it.
 - The UI shows one project at a time and takes no task: work is asked for in
   a session. Claude Code's own task files are read, never written.
 - A lane pauses only on a task the dispatcher started, and never on one a
   person cancelled or on an investigator's; it opens again by itself when that task leaves the board
-  (dismissed, superseded, or resumed to a pass), and the queue starts again. A resume that reopens it, or `cauce lanes
-  --unpause`, starts its dispatcher at once (under the one-dispatcher lock), not at the resumed task's end; a person's own `cauce run` never blocks the queue. A GET in the UI never starts work or
+  (dismissed, superseded, or resumed to a pass), and the queue starts again. A resume that reopens it, or `locks lanes
+  --unpause`, starts its dispatcher at once (under the one-dispatcher lock), not at the resumed task's end; a person's own `locks run` never blocks the queue. A GET in the UI never starts work or
   sweeps — housekeeping runs in hooks, the dispatcher and the server thread.
 - Color in the UI carries meaning and never alone: a state, a kind's family
   and a model's depth each have one tone (`util.js`: `statusBadge`,
   `kindChip`, `cellChip`), always beside their word. The kind hues keep their
   fixed order; a change to them is checked for colour-blind separation in
   both themes. The mod's text carries the same tones as emoji markers.
-- The UI opens no browser tab by itself, and never one per piece of work (`/cauce:ui`
-  runs `cauce ui`; `--open` once, only when the person asks): a session's tasks are all in
+- The UI opens no browser tab by itself, and never one per piece of work (`/locks:ui`
+  runs `locks ui`; `--open` once, only when the person asks): a session's tasks are all in
   its page (`#session=<id>`, the Sessions screen, each task opened inside it). `--tabs` is
   the person's opt-in and gives a session one tab at most: the server holds the sessions
   that have it (`UIServer.claim_tab`), a later run asks with the token (`/api/tab`) and is
-  told `claimed: false`, and a server handed over to a newer cauce passes the claims on.
-  A GET opens nothing. `cauce ui --idle-exit N` is the person's opt-in to stop the board once no
+  told `claimed: false`, and a server handed over to a newer locks passes the claims on.
+  A GET opens nothing. `locks ui --idle-exit N` is the person's opt-in to stop the board once no
   tab was open for N seconds (`UIServer.exit_when_idle`: an open stream is a viewer), counted only
   after one came; without it the board stays up.
 - A task page polls only while it shows a running task (`/api/tasks/N/live`,
@@ -937,7 +945,7 @@ yields the default kind, not a guess.
   background and the task uses the index as it is. A run says its task number
   and each attempt on stderr as they happen; stdout stays the report.
 - `PostToolUse` runs on every tool call: its fast path in `__main__.py`
-  imports only `cauce.signature` and appends one line. Do not add a database
+  imports only `locks.signature` and appends one line. Do not add a database
   write, a git call or an orchestrator import to it.
 - A signature never holds an argument. The final `[a-z0-9:._-]` filter stays
   last, after the semantic scrubbing.
@@ -945,12 +953,12 @@ yields the default kind, not a guess.
   a model: it may leave things out to fit, never paraphrase. A person's
   words are kept as typed; harness text (commands, reminders) is not theirs.
 - Compacting is the orchestrating session's call (`compact orchestrator`, the
-  default): cauce's moment reaches it as advice with its reasons, never as a
+  default): locks' moment reaches it as advice with its reasons, never as a
   compaction, and it compacts with the mod's `compact` tool
   (`compaction.request`), on that advice or on its own, run when its turn ends
   with no check of the cache, the size or the cooldown. What it asks to keep is
   quoted apart and marked as the session's (`kept_by_session`), never mixed
-  into cauce's instructions. What it asks to go on with (`then`) is never told to
+  into locks' instructions. What it asks to go on with (`then`) is never told to
   the summarizer: once the compaction finished (a hook saw it end, the engine
   answered the mod, or it never ran) and within `compaction.THEN_WITHIN_S`, the
   mod submits it once (`compaction.continuation`, a `compaction_continued`
@@ -959,11 +967,11 @@ yields the default kind, not a guess.
   the tool is refused. The tool is delegated like `queue` and `resume`.
 - The scribe reads a session's transcript, never its context, and never with a
   model: the same rules as a compaction digest, kept as the session goes, in the
-  cauce home, secrets masked. Its failure never costs a turn its endings. A
+  locks home, secrets masked. Its failure never costs a turn its endings. A
   task a session sent gets the part of the thread it needs in its brief,
   verbatim and marked as context, never instructions (the task's text is what
   to do); an investigation gets none, and reading it never fails a run.
-- A relay is the person's (`cauce relay`, `/cauce:relay`): taken once, by the
+- A relay is the person's (`locks relay`, `/locks:relay`): taken once, by the
   next session that starts (or is cleared) in the same place, never by a
   resume, and dropped after `scribe.RELAY_HOURS`. The work the old session
   sent that is open, waits on the person or ended unheard reports to the new
@@ -977,24 +985,24 @@ yields the default kind, not a guess.
   worker's task is a place of its own, the home directory and temporary folders
   are no repository (`habits._project`), and a command that does not check the
   edit's file type is no habit (`habits.ECOSYSTEMS`).
-- Nothing in cauce writes to a settings file but a habit: `cauce habits install`, run by a
-  person, or cauce itself installing a reviewed habit (`habits.apply_reviews`, the
+- Nothing in locks writes to a settings file but a habit: `locks habits install`, run by a
+  person, or locks itself installing a reviewed habit (`habits.apply_reviews`, the
   `habit_auto` setting), and only the repository's `.claude/settings.local.json`. A
   project's new habits are reviewed once each by a read-only worker, queued at
   SessionStart at most once a day (`habits.queue_review`, the `habit_review` setting,
   with `autowork`): it finds the tool, a command scoped to the edited file
-  (`$CAUCE_EDITED`), runs and times it. Its proposal is never trusted: in
+  (`$LOCKS_EDITED`), runs and times it. Its proposal is never trusted: in
   `evolution.settle` and in the review's ending before it is told (whichever way it is
-  delivered), never a GET, cauce installs only what passes its own check
+  delivered), never a GET, locks installs only what passes its own check
   (`habits.vet`): one simple command that runs the habit's own program (`shaped`: no
   second command, pipe, redirection, substitution or other variable), passing on a
   tracked file of its type at HEAD in a temporary worktree, within
   `habits.REVIEW_SECONDS`, writing nothing. Each install and refusal is an event on the
   review (`habit_installed`, `habit_refused`) and its ending says it with the line that
   removes it; with `habit_auto` off the ending gives the install lines for the person. A
-  worker never runs `cauce habits install` or `review`. An installed habit that fails
+  worker never runs `locks habits install` or `review`. An installed habit that fails
   three times in a row, or runs past `habits.SLOW_SECONDS`, turns itself off. Tests run
-  with `CAUCE_HABIT_REVIEW=off` and `CAUCE_HABIT_AUTO=off`.
+  with `LOCKS_HABIT_REVIEW=off` and `LOCKS_HABIT_AUTO=off`.
 - A check whose failures are mostly the test runners' own timeout lines
   (`launch.check_timed_out`) after a claimed pass, or that ran past its own
   time as a whole (`VERIFY_TIMEOUT_S`), is `environment` with
@@ -1009,7 +1017,7 @@ yields the default kind, not a guess.
   that read its queue before that word was left starts a fresh one once its lock
   is let go (`cli.cmd_work`, `WorkReport.looked_at`): work queued while the last
   one was leaving never waits for the next hook (`doctor`: `pickup-nobody-saw`).
-- A project names one orchestrator (`cauce.orchestrator`), in its `.cauce/`,
+- A project names one orchestrator (`locks.orchestrator`), in its `.locks/`,
   never in a repository's files: the first session that sends work, one that
   claims it, a relay from it, the next session that starts where it ended, or
   one that sends work after it went quiet (`STALE_HOURS`). The role brings
@@ -1038,7 +1046,7 @@ yields the default kind, not a guess.
   nothing, and the rung's is a first try of its own (`standards.samples`). Never a
   pinned start, a reading kind, a ledger, integrate or plan-parts step, a resume, a run
   in the checkout, or a worktree that brought files in from it. Racing judges itself
-  (`cauce.racing`): once `racing.JUDGE_AFTER` races ran among the window of the kind
+  (`locks.racing`): once `racing.JUDGE_AFTER` races ran among the window of the kind
   here, each read from its attempts (the rung won, the start won, neither), it stops
   where the rung won under `racing.WINS_BELOW` of them, or where the races the start did
   not win took no less wall time to pass, at the median, than the kind's climbs without
@@ -1053,7 +1061,7 @@ yields the default kind, not a guess.
 - A build (`feature`, `implement`) that lists `route.SPLIT_ITEMS` items or more (in `SPLIT_WORDS`
   words or more), is the
   largest size, or names `PARALLEL_PIECES` pieces in folders of their own is several
-  tasks: `cauce run` and `cauce queue add` start nothing and exit `EXIT_SPLIT` with how
+  tasks: `locks run` and `locks queue add` start nothing and exit `EXIT_SPLIT` with how
   to split it (`route.split_first`, pure); `--whole` is the session's word that it is one.
 - An ending names other work in its repository (running, or a kept branch of the last
   `hooks.OVERLAP_DAYS`) that changed the same files: merging both conflicts there. Said,
@@ -1061,27 +1069,27 @@ yields the default kind, not a guess.
 - A goal of `workflows.MANY_FEATURES` items or more at the largest size is told,
   before its run starts, that runs per feature or per phase (`--after run:<N>`)
   cost less than one plan for all; advice, and the run goes on as asked.
-- `cauce workflow run feature` runs as `feature-parallel` when its goal is
+- `locks workflow run feature` runs as `feature-parallel` when its goal is
   `workflows.FAN_OUT_POINTS` or more, or touches `FAN_OUT_AREAS` areas, by the plan's
   pure estimate (`workflows.fanned`), and says so; never a `feature` the person saved,
   and `--whole` keeps one build.
 - A worker that died is noticed at a turn's end, not at the next session: the hooks
   sweep a running task whose process is gone. A task that stopped for a mechanical
   cause (`dispatch.MECHANICAL`: died, outgrew its turns, a network or a load that
-  outlasted cauce's waits) is resumed once on its own before any session hears of it
-  (`dispatch.recover`, from the hooks and `cauce endings`: `cauce resume --unattended`
+  outlasted locks' waits) is resumed once on its own before any session hears of it
+  (`dispatch.recover`, from the hooks and `locks endings`: `locks resume --unattended`
   in the worktree it left, with more turns for one that outgrew them, within
   `AUTO_RESUME_WITHIN_S`, at most `AUTO_RESUMES`, with `autowork` on). Its stop is no
   ending handed to a session; a second one is the orchestrator's. A death names its crash: the last
   exception line its run wrote to its log (`flow.died`, `flow.crash_line`, from where that run began in
   `work/task-N.log`, which the dispatcher's runs and an automatic resume both write, the offset kept in
   the store's meta), read by the dispatcher and by the sweep alike, kept on its stop with the log's path; one that repeats the crash of its last
-  death says so and is never resumed on its own (`repeated`): it is cauce's failure, not the work's,
+  death says so and is never resumed on its own (`repeated`): it is locks' failure, not the work's,
   and a resume repeats it. A stop that needs
   judgment or a person (review, permission, approval, a wrong task) is never resumed so. The analysis reads
   the time from an attempt that never finished to its run's end as `lost_s`, never
   as other.
-- Each request is read for its way (`cauce.route`, the `route` setting), with no model:
+- Each request is read for its way (`locks.route`, the `route` setting), with no model:
   the session itself (a turn, reading, what points back into the conversation), parts
   side by side (`PARALLEL_POINTS`, `PARALLEL_AREAS` or `PARALLEL_PIECES`), else the
   cheaper reading: the worker's measured turns times the session's context against a
@@ -1103,15 +1111,15 @@ yields the default kind, not a guess.
   `cells.PRIMER_TRIAL` first tries, then it stays only where its workers reached
   their first change in fewer calls and passed their first tries no worse than
   `PRIMER_MARGIN` below (`primer_arm`); the `briefed` event keeps the arm and
-  why, and `cauce stats` shows both arms. The `primer` setting turns it off;
-  tests run with `CAUCE_PRIMER=off`.
+  why, and `locks stats` shows both arms. The `primer` setting turns it off;
+  tests run with `LOCKS_PRIMER=off`.
 - A role's candidate whose trial has not filled its arms in `revisions.TRIAL_DAYS` is dropped
   for too few tasks, recorded with the counts it reached. The primer's arms fill by count (the
   arm with fewer tasks goes next) and its trial ends early, lost, once each arm has
   `cells.PRIMER_EARLY` first tries and the primed ones pass worse by more than
-  `PRIMER_EARLY_MARGIN`; `cauce stats` for a repository says where it stands now.
+  `PRIMER_EARLY_MARGIN`; `locks stats` for a repository says where it stands now.
 - A role's instructions improve by measured trial, never by edit
-  (`cauce.revisions`, the `role_trials` setting). Every brief records the role
+  (`locks.revisions`, the `role_trials` setting). Every brief records the role
   and the version of its text (`roles.version`: a hash of its resolved
   instructions and its skills' names, plus the plugin and version of a skill
   read from an installed upstream plugin). Once a role's workers in a repository
@@ -1132,10 +1140,10 @@ yields the default kind, not a guess.
   it is judged once and reverted, as its own record, when its pass-first is
   more than `REVERT_MARGIN` worse than its trial's current arm. Every proposal
   and verdict is appended to `role_revisions`, which refuses an update or a
-  delete. Tests run with `CAUCE_ROLE_TRIALS=off`; a test that wants them
+  delete. Tests run with `LOCKS_ROLE_TRIALS=off`; a test that wants them
   passes a fake `ask`.
 - A passing ending keeps its verdict (`orchestrate.verdict_card`): each criterion the
-  worker answered with its evidence, the check cauce ran (never the worker's word), the
+  worker answered with its evidence, the check locks ran (never the worker's word), the
   independent check's outcome or why it did not run, and the attempts. The ending notice
   gives it (`hooks.verdict_lines`) and tells the session not to re-read the code, re-run
   the check or diff the branch to confirm it: the delegated work is never done twice.
@@ -1155,11 +1163,11 @@ yields the default kind, not a guess.
   closes the open problems of its repository its own text matches strictly
   (`orchestrate._solve_matched`). A failure on work that strictly matches a solved problem
   of its repository makes that problem `recurring` and disproves its fixes (`Store.regressed`).
-  A problem is one request's text, not its clipped title (`Store.open_problem`). `cauce doctor`
+  A problem is one request's text, not its clipped title (`Store.open_problem`). `locks doctor`
   says a problem still open after its task passed (`problem-open-after-pass`), a flake fix
   that passed on one run (`flake-fix-checked-once`) and a long attempt that kept few turns
   (`turns-under-the-wall`).
-- Problems and fixes are kept with their cell (`cauce.cells`): the role the
+- Problems and fixes are kept with their cell (`locks.cells`): the role the
   worker wore and the areas of what it changed (of its request when it changed
   nothing; tests and docs name an area only when the change holds nothing
   else). A worker's brief gets the dead ends of its task's areas, of its role,
@@ -1191,8 +1199,8 @@ yields the default kind, not a guess.
   `briefed.recall_arm`): reciprocal rank fusion of the two lists (`notes.fused`) against
   anchored first, kept where its arm passed first tries no less often. A worker names the
   notes it relied on (`notes_used`); only notes its brief carried are kept, on
-  `attempt_finished`, and `cauce stats` shows them, observed, never a verdict or a trial.
-  How each attempt's worker worked is read from its own tool calls (`cauce.behavior`, kept on
+  `attempt_finished`, and `locks stats` shows them, observed, never a verdict or a trial.
+  How each attempt's worker worked is read from its own tool calls (`locks.behavior`, kept on
   `attempt_finished.behavior`): observed, never a rule's input. The independent check runs with its
   attempt marked as the check's (`orchestrate._verifier_env`), so the log keeps its calls under no
   attempt and nothing read as the worker's use (`evidence.owed`, `capability_calls`) holds them. A person's note and
@@ -1206,17 +1214,17 @@ yields the default kind, not a guess.
   verifier, where breaking one is a finding. Framing is measured, not taste: a cheap model
   ignored a policy briefed as a note and met it briefed as a constraint (`bench/memory`). It
   bounds what the work must be, never what a worker may run or change. It comes from a
-  person (`cauce note … --constraint`, current as written) or from a passing worker's
-  `constraints`, kept only when a check of that task (cauce's own, or the verifier's) failed
+  person (`locks note … --constraint`, current as written) or from a passing worker's
+  `constraints`, kept only when a check of that task (locks' own, or the verifier's) failed
   before the pass, else filed as a fact; a worker's starts as a candidate and is weighed as
   any note. It has no anchor: a change to the code it was learned on does not send it to review.
 - A worker's brief recalls notes by the code the task touches (the notes anchored to the files its
   request names, its surfaces, a step's diff: `touched_paths`) and by its words strictly (several in
   common, `notes.recall(strict=True)`): one word in common puts no unrelated note in a brief.
-- What a worker must use is made to happen, in this order: cauce does it itself where it can (the
+- What a worker must use is made to happen, in this order: locks does it itself where it can (the
   livespec index built and its orientation briefed; what the files a request names reach,
-  `Livespec.reach`, asked by cauce and put in a writing brief as data); else the pass is gated on
-  evidence cauce reads (`cauce.evidence`); a hint alone is the weakest. A requirement (`evidence.REQUIRED`)
+  `Livespec.reach`, asked by locks and put in a writing brief as data); else the pass is gated on
+  evidence locks reads (`locks.evidence`); a hint alone is the weakest. A requirement (`evidence.REQUIRED`)
   names a neighbour and when its use is owed: layout-inspector on writing work whose change touches
   rendered UI (`capabilities.UI_FILES`), rastro on writing work it was handed for. A worker held to
   it is told so in its brief as a requirement (`brief_line`); a pass with no call of that
@@ -1227,8 +1235,8 @@ yields the default kind, not a guess.
   neighbour alternate `gate` and `free` (`briefed.evidence_arm`) until each arm has `evidence.TRIAL`
   tasks the independent check read; then the gate stays only where its passes drew the check's
   blockers less often (`evidence.arm`). Every handed capability's calls are counted per attempt
-  (`attempt_finished.capability_calls`), and `cauce stats` shows each one handed, called and never
-  called, observed. Tests run with `CAUCE_EVIDENCE=off`.
+  (`attempt_finished.capability_calls`), and `locks stats` shows each one handed, called and never
+  called, observed. Tests run with `LOCKS_EVIDENCE=off`.
 - Each CORRECT line of the TRACER flows a request names is a criterion of the independent check,
   `C1..Cn` (`tracer.criteria`; the lines that fit in half of `tracer.BRIEF_CHARS`, the rest said by
   count), added to its `criteria`: one it says is not met is a blocker (`orchestrate._correct_lines`),
@@ -1237,14 +1245,14 @@ yields the default kind, not a guess.
   diff be opened: never taken as met. Before that the check is asked once more for exactly those
   lines (`orchestrate.reask_lines`, `tracer_reasked`), its two answers merged; what stays
   unanswered is what is kept.
-- A method is how a kind's workers are told to work (`cauce.methods`, the `methods` setting): a
+- A method is how a kind's workers are told to work (`locks.methods`, the `methods` setting): a
   diagnosis for `debug-unclear` (reproduce, where it fails and where not, a cause shown before a
   fix), a pre-mortem for `plan` (a `Risks:` section). It is data in the brief, tried in arms per
   repository (`briefed.method_arm`) until each has `methods.TRIAL` first tries, and kept only where
   its arm passed no less often; a pre-mortem is judged by the first tries of the steps after its
   plan. A plan's risks reach the independent check of the steps after it as where to probe
-  (`Plan.seen_risks`), data, never findings. Tests run with `CAUCE_METHODS=off` and
-  `CAUCE_NOTE_TRIALS=off`.
+  (`Plan.seen_risks`), data, never findings. Tests run with `LOCKS_METHODS=off` and
+  `LOCKS_NOTE_TRIALS=off`.
 - A note whose anchors were all written at commits outside the history a task starts from
   (its base, else HEAD: a worker's note about its own change, filed while its branch waits
   to be merged) is marked so in that task's brief (`notes.unmerged`), never dropped: what it
@@ -1253,20 +1261,20 @@ yields the default kind, not a guess.
   on a branch not merged yet is not a change. A run files what its worker learned after its
   `finished` event and the workflow's advance (a `notes_filed` event times it): no ending and no
   next step waits on that model call. Filing notes never fails a run,
-  and a GET in the UI never reviews them. Tests run with `CAUCE_NOTES=off`; a
+  and a GET in the UI never reviews them. Tests run with `LOCKS_NOTES=off`; a
   test that wants notes turns them on and passes a fake `ask`.
-- The ACP agent (`cauce acp`, `cauce.acp`) is a way in, never a power, like the mod: each prompt is a
-  `cauce run` in the session's folder with no `--allow`, `--allow-approval` or `--keep`, so a stop that
+- The ACP agent (`locks acp`, `locks.acp`) is a way in, never a power, like the mod: each prompt is a
+  `locks run` in the session's folder with no `--allow`, `--allow-approval` or `--keep`, so a stop that
   needs a rule or an approval is the person's as anywhere, and the `mcpServers` a client sends are never
-  handed to a worker (the registry is the person's cauce home only; the first answer says so). stdout
+  handed to a worker (the registry is the person's locks home only; the first answer says so). stdout
   carries protocol messages alone. A `session/cancel` ends the turn (answers its prompt `cancelled`, says
   nothing more of its run) and never the task by itself: an editor sends it before the next prompt of a
   thread and waits for its answer, so the task runs on, in `/tasks` and on the board, while a prompt may still
   follow within `acp.CANCEL_WINDOW_S`; one that follows keeps it and starts its own task, one that does not
-  (or a closed input) runs `cauce cancel N` and kills the process group only if the run outlasts
+  (or a closed input) runs `locks cancel N` and kills the process group only if the run outlasts
   `acp.CANCEL_GRACE_S`. `/cancel N` is the explicit stop; a bare `/cancel` is refused, never run as a request.
   `session/load` is answered with an error that says to open a new thread (`loadSession` stays false).
-  The editor gets the request's items as `plan` entries (completed only on a pass), followed by cauce's
+  The editor gets the request's items as `plan` entries (completed only on a pass), followed by locks'
   stages (`progress.STAGES`: worker, check, independent check), each completed once a later one began,
   and the worker's files as `diff` content, read from its worktree every `acp.DIFF_EVERY_S` and from its
   kept branch once it ends. The tool call's title is `progress.line`, its content the worker's last call
@@ -1275,23 +1283,23 @@ yields the default kind, not a guess.
   output (`acp.failed_check`), all read every `acp.PROGRESS_EVERY_S` (`acp.task_look`, read only) and said
   only when they differ from what the editor was last told, never as a flood; its ending leads the
   answer with the verdict and next step (`acp.ending_text`). Reading any of it never fails a prompt.
-- The mod adds a way in, never a power. Every tool runs `bin/cauce`. `resume`
+- The mod adds a way in, never a power. Every tool runs `bin/locks`. `resume`
   runs with `--unattended`, which refuses what only a person may clear, and
   no model input ever reaches `--allow`, `--allow-approval` or `--keep`: only
   a button the person presses in the web board, or on a neighbour's page
-  through `cauce resume <id> --pressed`, does, and its rules are read
-  from cauce's account of the stop (`stops.resume_args`), never from the
+  through `locks resume <id> --pressed`, does, and its rules are read
+  from locks' account of the stop (`stops.resume_args`), never from the
   request; `--pressed` refuses any rule or approval passed with it. The board lives in the web UI only; the mod draws no copy of it. Tool schemas carry no `enum`: the handler
-  reads a value and says what cauce takes. The reading tools (`recall`,
+  reads a value and says what locks takes. The reading tools (`recall`,
   `tasks`, `note`, `overview`) turn an `ask` into an allow; `queue` and
-  `resume` do only while the person delegates them (`cauce config delegate`,
-  on by default, read at each check; a cauce that cannot say leaves the ask
+  `resume` do only while the person delegates them (`locks config delegate`,
+  on by default, read at each check; a locks that cannot say leaves the ask
   with the person). A deny stays a deny, an organization's ceiling still caps
   it, and a delegated `resume` still runs `--unattended`. Without the mod, everything still works through
   the classic hooks.
 - A watcher reads, never claims: `overview` and `events` take nothing from a
   session, and an ending is delivered only to the session that sent the work.
-  cauce has no channel of its own to another session; sending one work is
+  locks has no channel of its own to another session; sending one work is
   Claude Code's `SendMessage`.
 - An ending is claimed, not just read, when it is delivered
   (`Store.claim_unreported`). The Stop hook, the next prompt and the mod's
@@ -1302,8 +1310,8 @@ yields the default kind, not a guess.
   runs at the end of every run (`orchestrate.run`), queues what waited on a
   step that passed, inside one write transaction, and starts the dispatcher;
   advancing never fails the run that ended, and an error is a
-  `workflow_error` event. Work queued after other work (`cauce run|queue add
-  … --after <task>`, `cauce workflow run … --after <run>`) is held in its
+  `workflow_error` event. Work queued after other work (`locks run|queue add
+  … --after <task>`, `locks workflow run … --after <run>`) is held in its
   options (`after.KEY`): the dispatcher never starts it, and every view that
   says why work waits says "waits for #N to pass" (`dispatch.waiting`). A
   task or run that does not exist, or whose work was dropped (failed,
@@ -1314,29 +1322,29 @@ yields the default kind, not a guess.
   rebased. Work that waited on work in another repository (numbers are global)
   starts on its own base, is given that checkout to read (`add_dirs`), and its
   plan names the branch kept there (`after.reads`). Work that stops short releases nothing: what waits stays held and
-  says how it stopped (its ending names what waits on it), until a resume of it passes; `cauce dismiss` or a
+  says how it stopped (its ending names what waits on it), until a resume of it passes; `locks dismiss` or a
   cancel takes held work off the queue, each with its `stops.Stop`. Work that
   leaves the board unpassed takes what waits on it along (`after.abandon`): a
-  dismissed task or a cancelled run cancels it, cause `after`, by cauce, never
-  marked reported, so its session hears of it and `cauce resume N` starts it
+  dismissed task or a cancelled run cancels it, cause `after`, by locks, never
+  marked reported, so its session hears of it and `locks resume N` starts it
   on the base; a superseded task hands it to the one that passed
   (`after.hand_on`), and a landed one releases it onto the base. A chain
   is released one link at a time. `--after N` is a task (`task:N`), `run:N` a
   run; work in another repository is named with it and its title. A step's
-  try that `cauce workflow retry` queued again is superseded by the retry
+  try that `locks workflow retry` queued again is superseded by the retry
   (`stops.retried`): reported, nothing to resume. The session that started a run hears of it once —
   at its end or when a step waits on the person — and steps the engine went
   past are marked reported. A step that stops stops the run there; it goes on
-  by a resume to a pass or `cauce workflow retry`.
+  by a resume to a pass or `locks workflow retry`.
 - A workflow step says how far its work is behind the branch its run started
   from, as that branch is now (`isolate.behind`): the commits it moved and the
   files both changed, kept as a `behind_base` event when the step starts and
-  when the run ends, and shown in `cauce workflow status`, the ending notice
+  when the run ends, and shown in `locks workflow status`, the ending notice
   and the board. It is said, never acted on: nothing is merged or rebased.
 - A workflow definition grants nothing and caps nothing: no rule, no
   approval, no capability, no dollar limit; rules, approvals, a run's check
   (`--verify`, for every step that writes and names none) and `--add-dir` are
-  the person's flags on `cauce workflow run`, so a definition a repository commits
+  the person's flags on `locks workflow run`, so a definition a repository commits
   runs with what the person gives, and a `budget_usd` an older one holds is
   dropped. A bundled template is never written: a change copies it to the user
   scope.
@@ -1366,8 +1374,8 @@ yields the default kind, not a guess.
   measured, never assumed: a repository's steps alternate forked and fresh first tries until
   each arm has `trunks.TRIAL`, then forking stays only where its first tries passed no worse
   than `MARGIN` below and reached their first change in fewer calls or finished sooner
-  (`trunks.arm`, the `briefed` event's `trunk_arm`, `cauce stats`); the `trunk` setting
-  turns it off, and tests run with `CAUCE_TRUNK=off`.
+  (`trunks.arm`, the `briefed` event's `trunk_arm`, `locks stats`); the `trunk` setting
+  turns it off, and tests run with `LOCKS_TRUNK=off`.
 - A worker's answer is refused for its form only by what its result contract
   told it (`launch.RESULT_INSTRUCTIONS`, `PARTS_INSTRUCTIONS`): a check the
   worker was never told of is a lost attempt, never a shape. Length is no form:
@@ -1379,7 +1387,7 @@ yields the default kind, not a guess.
   `MAX_PARTS`, a part without surfaces beside another, surfaces that may touch,
   or an `after` that names no earlier part are `inconclusive`, never a guess).
   A part that builds on another names it (`after`, one part listed before it):
-  it is queued with the others, held behind that part's task (`cauce.after`),
+  it is queued with the others, held behind that part's task (`locks.after`),
   and starts from what that part kept once it passes; a retry that runs that
   part again moves the hold to the retry, and a retried part whose earlier part
   passed starts from its kept tip. The plan is told to read the layout and the
@@ -1391,7 +1399,7 @@ yields the default kind, not a guess.
   whole, as without one. Parts whose surfaces may touch (`surfaces.disjoint`,
   checked again by the engine) take the plan's pass back as `parts`: the run
   stops at the plan with the paths named. What needs a step run in parts waits
-  for every part; a part that stops stops the run there, and `cauce workflow
+  for every part; a part that stops stops the run there, and `locks workflow
   retry` queues only the parts that did not pass. `status` and the board show
   each part under its step.
 - An `integrate` step joins the branches the parts kept, on the commit they
@@ -1414,13 +1422,13 @@ yields the default kind, not a guess.
   `linguist-generated` or `-diff` in `.gitattributes`, or written by a step's
   own check) are no area and count no lines; the review is told they are
   generated, never asked to read them.
-- A loop (`cauce.loops`) is the person's: its definition, diary, state and the log of
-  what its tools sent live in their cauce home, never in a repository, and only
-  `cauce loop add` makes one. Each round is a workflow run started by the loop's detached
+- A loop (`locks.loops`) is the person's: its definition, diary, state and the log of
+  what its tools sent live in their locks home, never in a repository, and only
+  `locks loop add` makes one. Each round is a workflow run started by the loop's detached
   runner (`loop-runner`), on what the round before kept when it passed; each step is told
   the goal, the mode, the person's rules and the diary's last `loops.DIARY_SHOWN` rounds
   (the rest counted), quoted as data. The metric is the last number the person's command
-  prints, run by cauce before the first round and after each, never a worker's word. A
+  prints, run by locks before the first round and after each, never a worker's word. A
   loop stops only on evidence: its target, its window, `stale` rounds that did not improve
   on the best before them (an unmeasured round improves nothing; a passed round that changed
   no file and moved nothing is an empty round, a valid outcome said in the diary, and the
@@ -1431,18 +1439,18 @@ yields the default kind, not a guess.
   a capability's `outbound.acts` tools run behind the `outbound` guard of `mcp_guard`,
   which refuses them outside a loop, in a draft, outside its `hours`, past its `per_hour`
   (counted across its workers in its log, which keeps no argument) or when they name an
-  `exclude`; `cauce loop act` is the person's word only. What the rules do not allow is
+  `exclude`; `locks loop act` is the person's word only. What the rules do not allow is
   listed under `loops.NEEDS` and shown when the loop stops; the session that made the
-  loop hears of its stop once, with the endings (`loops.endings`). `/cauce:loop` proposes
+  loop hears of its stop once, with the endings (`loops.endings`). `/locks:loop` proposes
   a loop and writes nothing, and starts no worker, before the person agrees; it never
   writes the registry, a settings file or a credential.
-- A worker never starts cauce work (`run`, `resume`, `work`, `queue add`,
+- A worker never starts locks work (`run`, `resume`, `work`, `queue add`,
   `workflow run|retry|answer`, `investigate start`, `loop add|start|act|rm` and the
-  `loop-runner` refuse under `CAUCE_WORKER_TASK`),
+  `loop-runner` refuse under `LOCKS_WORKER_TASK`),
   and forks are off inside it (`CLAUDE_CODE_FORK_SUBAGENT=0`): what is left
   goes in its result. The main session does what fits in what it holds, sends
-  to cauce what earns a worker, and a judgment that needs the conversation to
-  Claude Code's own fork, never to cauce (`commands/orchestration.md`).
+  to locks what earns a worker, and a judgment that needs the conversation to
+  Claude Code's own fork, never to locks (`commands/orchestration.md`).
 - A step chooses, asks or delegates only on records, never on a worker's words. `when` maps a
   step it needs to an outcome its ending records (`workflows.OUTCOMES`: `findings` or `clean`,
   from the blocking findings it passed with; `changed` or `unchanged`, from its changed files; or a
@@ -1450,7 +1458,7 @@ yields the default kind, not a guess.
   no worker, a `finished` event with `skipped` and `when_unmet`, reported, and what waits on it
   starts from the work before it. A question step (`ask`, `options`) runs no worker: its task is
   blocked from the moment it exists, its stop is `question` (`stops.PERSON_ONLY`, by `workflow`),
-  its line `cauce workflow answer <run> <step> <option>`; it is answered, never resumed (`cauce
+  its line `locks workflow answer <run> <step> <option>`; it is answered, never resumed (`locks
   resume` refuses it, a board's press offers none), and the answer (`workflows.answer`, an
   `answered` event, `finished.answer`) passes it and advances the run. A sub-workflow step
   (`workflow`, `with`) starts a run of the workflow it names on the commit the step would start
@@ -1462,9 +1470,9 @@ yields the default kind, not a guess.
   workflows a run calls are read and frozen in its options when it starts (`subflows`): one
   missing, lacking an input a check does not fill, calling itself, or nesting past
   `SUBFLOW_DEPTH` refuses the run before anything is queued.
-- `cauce workflow render` draws a definition (or a run's own copy, each step's state beside its
+- `locks workflow render` draws a definition (or a run's own copy, each step's state beside its
   tone) as a Mermaid flowchart, text only; `--markdown` fences it for a README or a pull request.
-  `cauce workflow show` prints a definition's revision (`workflows.revision`: what a change builds
+  `locks workflow show` prints a definition's revision (`workflows.revision`: what a change builds
   on, the pending revision while one waits), and a change passed `--expect` it is refused once
   another landed since (`_expected`); the editor's change carries the revision it opened.
 - A run runs the copy of its definition it started with, never the file. A
@@ -1478,7 +1486,7 @@ yields the default kind, not a guess.
   comes only from the run's own project; a run with a note or problem that
   cannot be read there does not start, a topic with no note yet is said when
   it starts (the step goes without it), and a note gone since says so in the
-  brief. `cauce workflow run --dry-run` checks all of it and queues nothing.
+  brief. `locks workflow run --dry-run` checks all of it and queues nothing.
 - A capability comes by kind (`when`), after a failure (`after_failure`), or
   by what the work touches (`touches`: file patterns or `"ui"`): the files the
   request names, its surfaces, what its work changed so far, and a workflow
@@ -1486,11 +1494,11 @@ yields the default kind, not a guess.
   capability that `measures` (never changes anything), and the independent
   verifier gets every measuring one its change touches, even when the work had
   none. The plan's hint says when it came by touch.
-- The capability registry is read from the user's cauce home only. A
+- The capability registry is read from the user's locks home only. A
   repository must never be able to add an MCP server by committing a file.
   Installed neighbours (`plugins.KNOWN`) are read from the person's Claude
   Code plugin cache or PATH, never a repository; a registry entry of the same
-  name wins, and `cauce config plugins off` leaves them out. Every tool a
+  name wins, and `locks config plugins off` leaves them out. Every tool a
   neighbour's hint names is in its `tools`. A registry entry that shadows a
   neighbour and sets neither `touches` nor `measures` takes the neighbour's
   (`capabilities._inherit`); what a registry shadows or fetches unpinned is
@@ -1499,11 +1507,11 @@ yields the default kind, not a guess.
   profile, no saved routine, writes and uploads to loopback hosts only, every
   call in its own session. A policy that matters is enforced there, never only
   asked of the worker in its prompt.
-- A neighbour's own manifest (`cauce.manifests`) brings words, never policy: its hint, livespec's
+- A neighbour's own manifest (`locks.manifests`) brings words, never policy: its hint, livespec's
   hints per kind, its tools' descriptions and what they measure override the built-in text
   (`plugins.KNOWN`, `livespec._HINTS`, `tracer.MEASURED_BY`, which stay as the fallback); every
   `mcp_guard` policy, rastro's `--routines=off`, `Neighbour.measures`, `when`, `touches`,
-  `extra_args` and the server command are cauce's code alone. It is read from the person's plugin
+  `extra_args` and the server command are locks' code alone. It is read from the person's plugin
   cache only (newest version through `plugins.versions`), never from a repository; a block of
   another format or shape is ignored whole, and a hint naming a tool its own `tools` lacks is
   dropped.
@@ -1512,8 +1520,8 @@ yields the default kind, not a guess.
   carry or point at skills, and name capabilities, which come only from the
   person's registry and adopted neighbours. Its text goes in
   `--append-system-prompt`, never `--agent`, which would replace Claude
-  Code's system prompt and cauce's tool list.
-- Roles and teams live in the person's cauce home and in cauce itself, never
+  Code's system prompt and locks' tool list.
+- Roles and teams live in the person's locks home and in locks itself, never
   in a repository, and so does which team a project uses: a repository must
   not choose what its workers are told by committing a file. A role or team
   that fails its checks is refused with its reason and costs only itself; a
@@ -1526,7 +1534,7 @@ yields the default kind, not a guess.
   (`orchestrate.pickup_causes`, the `pickup_*_s` of its `finished` event): the spans a dispatch
   decision said wait, the spans the usage limit held the queue, and the rest a worker: the
   person's ceiling when the level stood at it (`dispatched.ceiling`, a choice), else the
-  machine's level. The parts add up to the pickup; `cauce stats` shows them, and a pickup from
+  machine's level. The parts add up to the pickup; `locks stats` shows them, and a pickup from
   before they were kept as not told. Compaction advice the orchestrating session chose not to
   take is counted apart from a compaction that did not run.
 - A request about a README in a repository holding several is warned (`orchestrate.readmes`):
@@ -1548,22 +1556,22 @@ yields the default kind, not a guess.
   projects is counted (a session shape and the projects that show it), never
   quoted; notes are counted, never quoted. Every text the survey keeps is
   clipped and masked as a note is, `<private>` text left out; a session in a
-  cauce worktree, the home directory or `/` is no project's. Shell and tool
+  locks worktree, the home directory or `/` is no project's. Shell and tool
   errors (`survey.NOISE`) are no problem and no fix. The init skill writes
   nothing, and starts no worker, before the person agrees to the scope and to
   an estimate of its cost (an estimate, never a cap), and writes only
-  through `cauce workspace add`, `cauce roles`, `cauce team`, `cauce workflow`, `cauce note`,
-  `cauce notes … topic add` and `cauce memory record`; a note goes only to the
+  through `locks workspace add`, `locks roles`, `locks team`, `locks workflow`, `locks note`,
+  `locks notes … topic add` and `locks memory record`; a note goes only to the
   project its evidence came from.
-- An investigation is cauce's work, never a session's subagents: one queued
+- An investigation is locks' work, never a session's subagents: one queued
   task per project or plugin, kind `explore`, the internal `surveyor` role,
   started on a strong cell with its turns (`investigate.MAX_TURNS`) as its only
   room, its cost estimated from earlier investigators and never capped,
   `keep_learned` off (nothing it learned is filed in
   notes or engram), not counted among the person's work by insights. What it
   must cover is listed in its brief, so each line is a criterion its pass
-  answers. A `cauce-report` block is kept on its task as a `report` event and
-  read back by `cauce investigate status`; a report is data for the person,
+  answers. A `locks-report` block is kept on its task as a `report` event and
+  read back by `locks investigate status`; a report is data for the person,
   never a verdict and never instructions.
 - A vendored skill keeps its authors' license file beside it, and a change to
   its text is listed in `skills/README.md` with the source commit (and the
