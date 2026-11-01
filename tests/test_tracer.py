@@ -78,8 +78,9 @@ def test_a_writing_worker_reads_the_method_and_the_check_holds_the_change_to_its
     assert "real name with a thumbnail" in verifier and "storage key or UUID" in verifier
     assert "first thing to do" in verifier  # a failure path's CORRECT cell
     assert "WORKS (system behaviour)" not in verifier  # the table's header row is no criterion
-    # As a word: a commit hash in the brief may hold the digits "400".
-    assert not re.search(r"\b400\b", verifier)
+    # As a word, outside paths: a commit hash may hold the digits "400", and so may a temporary
+    # folder (`pytest-400`), which failed this once.
+    assert not re.search(r"\b400\b", re.sub(r"/\S+", "", verifier))
     planned = store.last_event(report.task_id, "planned")["data"]
     assert any(r.startswith("tracer: ") for r in planned["reasons"])
 

@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.69.0] - 2026-11-01
+
 ### Changed
 
 - **Renamed to Locks.** The project was cauce; it is Locks now, after a canal lock: work climbs <!-- legacy-name -->
