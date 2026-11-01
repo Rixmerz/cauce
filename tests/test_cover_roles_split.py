@@ -1,4 +1,4 @@
-"""Branches of `cauce.roles` and `cauce.split` their suites leave unread."""
+"""Branches of `locks.roles` and `locks.split` their suites leave unread."""
 from __future__ import annotations
 
 import json
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from cauce import classify, roles, split
+from locks import classify, roles, split
 
 from .conftest import git
 

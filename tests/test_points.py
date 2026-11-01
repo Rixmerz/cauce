@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from cauce import points, risk
-from cauce.points import Score, estimate, realized
+from locks import points, risk
+from locks.points import Score, estimate, realized
 
 
 def size(**kw) -> Score:
@@ -81,12 +81,12 @@ def test_every_signal_at_once_tops_the_scale():
 
 
 def test_the_paths_a_request_names_and_its_surfaces():
-    text = ("Change src/cauce/points.py and tests/test_points.py, see CLAUDE.md and `README.md`; "
+    text = ("Change src/locks/points.py and tests/test_points.py, see CLAUDE.md and `README.md`; "
             "not https://example.com/a/b.html nor and/or, nor escalate.MAX_TURNS_CEILING or 0.20.0. "
-            "Also docs/images/ and src/cauce/ui/static/*.js")
-    found = points.named(text, ["src/cauce/points.py", "hooks/**"])
-    assert found == ["CLAUDE.md", "README.md", "docs/images/", "hooks/**", "src/cauce/points.py",
-                     "src/cauce/ui/static/*.js", "tests/test_points.py"]
+            "Also docs/images/ and src/locks/ui/static/*.js")
+    found = points.named(text, ["src/locks/points.py", "hooks/**"])
+    assert found == ["CLAUDE.md", "README.md", "docs/images/", "hooks/**", "src/locks/points.py",
+                     "src/locks/ui/static/*.js", "tests/test_points.py"]
     assert points.named("make the button blue", ()) == []
 
 

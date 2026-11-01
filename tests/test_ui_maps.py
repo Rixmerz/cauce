@@ -5,9 +5,9 @@ import json
 
 import pytest
 
-from cauce import flow, project, repo, workflows
-from cauce.store import Store
-from cauce.ui import api
+from locks import flow, project, repo, workflows
+from locks.store import Store
+from locks.ui import api
 
 from .test_orchestrate import ok
 from .test_ui import call, token, ui  # noqa: F401  (the ui fixture)
@@ -62,9 +62,9 @@ def test_the_map_is_one_project_s_notes_links_anchors_and_problems(mapped, store
 
 
 def test_milestones_come_from_what_happened(mapped, store: Store):
-    store.create_task("add the CSV export", status="done", source="cauce", repo=mapped["key"], cwd="/x",
+    store.create_task("add the CSV export", status="done", source="locks", repo=mapped["key"], cwd="/x",
                       kind="feature", final_cell="sonnet/xhigh")
-    store.create_task("fix a typo", status="done", source="cauce", repo=mapped["key"], cwd="/x", kind="docs")
+    store.create_task("fix a typo", status="done", source="locks", repo=mapped["key"], cwd="/x", kind="docs")
     kinds = [(m["kind"], m["title"]) for m in api.milestones(store, mapped["key"])]
     assert ("workflow", "chain — goal: the export") in kinds
     assert ("decision", "Money is cents") in kinds
@@ -101,8 +101,8 @@ def test_the_screens_routes_read_and_the_attach_needs_the_token(mapped, ui):  # 
         assert call(ui, "GET", asset)[0].status == 200
     body = {"repo": key, "workflow": "chain", "step": "check", "note": mapped["zone"]}
     assert call(ui, "POST", "/api/workflows/attach", body)[0].status == 403
-    res, data = call(ui, "POST", "/api/workflows/attach", body, headers={"X-Cauce-Token": token(ui)})
+    res, data = call(ui, "POST", "/api/workflows/attach", body, headers={"X-Locks-Token": token(ui)})
     assert res.status == 200 and json.loads(data)["held_by"] == []
     res, data = call(ui, "POST", "/api/workflows/attach", {**body, "note": 999},
-                     headers={"X-Cauce-Token": token(ui)})
+                     headers={"X-Locks-Token": token(ui)})
     assert res.status == 409 and b"no note" in data

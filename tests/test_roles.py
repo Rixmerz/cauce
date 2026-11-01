@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from cauce import roles, teams
-from cauce.classify import Classification, by_model, classify, narrow
-from cauce.matrix import KINDS
-from cauce.store import home
+from locks import roles, teams
+from locks.classify import Classification, by_model, classify, narrow
+from locks.matrix import KINDS
+from locks.store import home
 from tests.conftest import git
 
 
@@ -38,7 +38,7 @@ def test_the_bundled_team_covers_every_kind_and_every_skill_it_names_ships():
         briefing = roles.brief(role)
         assert not briefing.missing, role.name
         assert role.description and role.prompt and role.scope == "bundled"
-        # A role says how its findings reach cauce: the result block, never a format of its own.
+        # A role says how its findings reach locks: the result block, never a format of its own.
         assert "evidence" in role.prompt or "summary" in role.prompt, role.name
 
 
@@ -328,7 +328,7 @@ def test_copy_writes_the_resolved_role_to_edit_and_refuses_what_it_should():
 def test_teams_are_made_used_by_projects_changed_and_deleted(git_repo):
     catalog = roles.load()
     team, why = teams.of(None, catalog)
-    assert team.name == "cauce" and "bundled" in why and team.kinds(catalog) == roles.ROLE_KINDS
+    assert team.name == "locks" and "bundled" in why and team.kinds(catalog) == roles.ROLE_KINDS
     teams.create("web", ["frontend"], description="web", start_from=None)
     teams.change("web", add=["implementer", "reviewer"], drop=["frontend"], description="web work")
     web = teams.get("web")
@@ -349,24 +349,24 @@ def test_teams_are_made_used_by_projects_changed_and_deleted(git_repo):
 def test_a_team_refuses_what_it_should():
     with pytest.raises(teams.TeamError, match="no team name"):
         teams.create("Bad Name", ["tester"])
-    with pytest.raises(teams.TeamError, match="team cauce ships"):
-        teams.create("cauce", ["tester"])
+    with pytest.raises(teams.TeamError, match="team locks ships"):
+        teams.create("locks", ["tester"])
     with pytest.raises(teams.TeamError, match="no role 'ghost'"):
         teams.create("t", ["ghost"])
     with pytest.raises(teams.TeamError, match="at least one role"):
         teams.create("t", [])
-    teams.create("t", [], start_from="cauce")
+    teams.create("t", [], start_from="locks")
     with pytest.raises(teams.TeamError, match="already a team"):
         teams.create("t", ["tester"])
     with pytest.raises(teams.TeamError, match="is not changed"):
-        teams.change("cauce", add=["tester"])
+        teams.change("locks", add=["tester"])
     with pytest.raises(teams.TeamError, match="is not deleted"):
-        teams.delete("cauce")
+        teams.delete("locks")
     with pytest.raises(teams.TeamError, match="no team 'gone'"):
         teams.delete("gone")
     with pytest.raises(teams.TeamError, match="no team 'gone'"):
         teams.use("k", "gone")
-    teams.use("k", "cauce")
+    teams.use("k", "locks")
     assert teams.assignments() == {}
 
 
@@ -376,16 +376,16 @@ def test_a_team_file_that_is_wrong_is_refused_and_a_gone_team_falls_back(tmp_pat
     (folder / "bad.json").write_text("{")
     (folder / "list.json").write_text("[]")
     (folder / "roles.json").write_text('{"roles": "tester"}')
-    (folder / "cauce.json").write_text('{"roles": []}')
+    (folder / "locks.json").write_text('{"roles": []}')
     (folder / "ok.json").write_text('{"roles": ["tester", "ghost"], "description": 3}')
     found, refused = teams.listing()
-    assert [t.name for t in found] == ["cauce", "ok"] and found[1].description == ""
-    assert set(refused) == {"bad", "list", "roles", "cauce"}
+    assert [t.name for t in found] == ["locks", "ok"] and found[1].description == ""
+    assert set(refused) == {"bad", "list", "roles", "locks"}
     assert found[1].members(roles.load())[1] == ["ghost"]
     teams.use("k", "ok")
     (folder / "ok.json").unlink()
     team, why = teams.of("k")
-    assert team.name == "cauce" and "is gone" in why
+    assert team.name == "locks" and "is gone" in why
 
 
 # --- the classifier, inside a team ------------------------------------------------------
@@ -423,7 +423,7 @@ def test_the_model_is_offered_only_the_team_s_kinds():
 
 
 def test_claude_code_agents_import_as_roles_of_the_person_s_and_change_no_team(tmp_path, capsys):
-    from cauce import cli
+    from locks import cli
 
     agents = tmp_path / "agents"
     (agents / "quality").mkdir(parents=True)
@@ -437,7 +437,7 @@ def test_claude_code_agents_import_as_roles_of_the_person_s_and_change_no_team(t
     assert capsys.readouterr().out.startswith("would import 2 role(s)")
     assert cli.main(["roles", "import", str(agents)]) == 0
     out = capsys.readouterr().out
-    assert out.startswith("imported 2 role(s)") and "cauce team change" in out
+    assert out.startswith("imported 2 role(s)") and "locks team change" in out
     catalog = roles.load()
     reviewer = catalog.get("code-reviewer")
     assert reviewer.kinds == ("review-routine", "review-critical") and reviewer.description == "Reviews code for bugs."

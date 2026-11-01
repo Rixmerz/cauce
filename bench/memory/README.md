@@ -1,6 +1,6 @@
 # Memory benchmark: does a strong model's memory make a cheap one as good, for less?
 
-Real workers, real money. Each run is one `claude -p` worker started by cauce's own
+Real workers, real money. Each run is one `claude -p` worker started by locks' own
 `launch.run`, on a fresh copy of a small pricing engine (`tally`), in a temporary directory.
 Every task in a family adds one pricing rule. Success is judged by **hidden tests the worker
 never sees**. A run whose own check passed while the hidden tests fail is a **silent failure**.
@@ -8,7 +8,7 @@ never sees**. A run whose own check passed while the hidden tests fail is a **si
 The arms:
 - **Cold.** Haiku, Sonnet or Opus with nothing but the task.
 - **With memory.** Haiku or Sonnet with what a teacher left after the seed task `t0`: its
-  orientation as cauce's primer, and its lessons as cauce's candidate notes. The teacher is
+  orientation as locks' primer, and its lessons as locks' candidate notes. The teacher is
   Opus (`memopus`) or the student's own model (`memself`).
 
 There are three variants:
@@ -17,7 +17,7 @@ There are three variants:
 |---|---|
 | `easy` | House rounding (stated in a docstring), registering a rule in two places, rule stages, never mutating the cart |
 | `hard` | Traps found only by reading: a legacy rounding helper an old rule still uses, the customer's real shape (a fixture), tags sent as one comma-separated string |
-| `lore` | `hard`, plus a finance policy no file states (gift cards are never discounted), enforced by CI. Teachers learn it as cauce's continuation teaches: CI's failing output, then the same session again |
+| `lore` | `hard`, plus a finance policy no file states (gift cards are never discounted), enforced by CI. Teachers learn it as locks' continuation teaches: CI's failing output, then the same session again |
 
 ```bash
 python bench/memory/harness.py lore teachers         # t0 once per model; their memory
@@ -26,7 +26,7 @@ python bench/memory/harness.py lore students 2 5     # t1..t3, 2 reps, 5 at once
 python bench/memory/analyze.py bench/memory/results-lore.jsonl
 ```
 
-## What it measured (cauce 0.43, Claude Code 2.1.310)
+## What it measured (locks 0.43, Claude Code 2.1.310)
 
 177 runs in total; the whole benchmark cost about USD 12.6. Each cell below is 6 runs:
 tasks t1 to t3, 2 reps each.
@@ -42,9 +42,9 @@ tasks t1 to t3, 2 reps each.
 | haiku + its own memory, as notes | 6/6 | 6/6 | **0/6** | 5 | $0.013 |
 | haiku + the policy only, as a note | | | **0/6** | 6 | $0.012 |
 | haiku + the policy, as a constraint | | | **6/6** | 0 | $0.018 |
-| haiku + cauce 0.44's constraint brief (candidate) | | | **6/6** | 0 | $0.016 |
-| haiku + cauce 0.44's whole brief (notes marked unmerged, constraint) | | | **6/6** | 0 | $0.013 |
-| sonnet + cauce 0.44's whole brief | | | 6/6 | 0 | $0.082 |
+| haiku + locks 0.44's constraint brief (candidate) | | | **6/6** | 0 | $0.016 |
+| haiku + locks 0.44's whole brief (notes marked unmerged, constraint) | | | **6/6** | 0 | $0.013 |
+| sonnet + locks 0.44's whole brief | | | 6/6 | 0 | $0.082 |
 
 Memory also cut the work. In `easy`, Sonnet went from 16 turns to 4 to 6, and its cost per
 success fell from $0.088 to $0.063. Opus's memory and Sonnet's own did this equally.
@@ -69,11 +69,11 @@ success fell from $0.088 to $0.063. Opus's memory and Sonnet's own did this equa
 4. **A lesson about unmerged work misleads a weak model.** Haiku trusted "the exemption already
    lives in checkout.price" and added nothing. Sonnet read the code and implemented it.
 
-## What cauce did with it
+## What locks did with it
 
 - **Constraints (0.44.0).** A rule a change must meet is a note of its own kind, briefed apart
   as a requirement, to workers and to the independent verifier. It comes from a person
-  (`cauce note … --constraint`), or from a worker whose task passed after one of its checks
+  (`locks note … --constraint`), or from a worker whose task passed after one of its checks
   failed. It is proven or dropped like any worker's note.
 - **Notes about unmerged work are said to be (0.44.0).** A note whose anchors were all written
   at commits outside the history a task starts from is marked so in that task's brief.

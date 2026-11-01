@@ -8,12 +8,12 @@ import time
 
 import pytest
 
-from cauce import analysis, isolate, launch, orchestrate, repo, standards
-from cauce import racing as racing_mod
-from cauce.escalate import Failure
-from cauce.launch import WorkerResult
-from cauce.matrix import Cell, ladder_for
-from cauce.orchestrate import Options, run
+from locks import analysis, isolate, launch, orchestrate, repo, standards
+from locks import racing as racing_mod
+from locks.escalate import Failure
+from locks.launch import WorkerResult
+from locks.matrix import Cell, ladder_for
+from locks.orchestrate import Options, run
 
 from .test_orchestrate import kind
 from .test_standards import finished
@@ -81,7 +81,7 @@ def test_the_rung_that_passes_first_is_kept_and_the_start_is_stopped(git_repo, s
 
 
 def home_worktrees():
-    from cauce.store import home
+    from locks.store import home
 
     return home() / "worktrees"
 
@@ -125,7 +125,7 @@ def test_the_race_s_prompt_names_its_own_worktree(git_repo, store, racing):
     report = run("add the export", git_repo, store, registry={}, launcher=launcher, classifier=kind("implement"))
     first, second = sorted(launcher.specs, key=lambda s: s.cell != START)
     assert second.launch_dir.name.endswith("-race") and str(second.launch_dir) not in first.prompt
-    assert second.env["CAUCE_WORKER_ATTEMPT"].endswith("-race") and report.status == "done"
+    assert second.env["LOCKS_WORKER_ATTEMPT"].endswith("-race") and report.status == "done"
 
 
 def test_no_race_without_a_worktree_or_after_bringing_files_in(git_repo, store, racing):
@@ -149,7 +149,7 @@ def test_a_lane_that_cannot_be_made_runs_the_try_alone(git_repo, store, racing, 
 
 
 def test_a_start_races_only_where_its_first_tries_rarely_pass(git_repo, store, monkeypatch):
-    monkeypatch.setenv("CAUCE_RACE", "on")
+    monkeypatch.setenv("LOCKS_RACE", "on")
     key = repo.key(git_repo)
     ladder = ladder_for("implement")
     nothing = orchestrate.race_cell(store, key, "implement", ladder, START, Options())
@@ -166,12 +166,12 @@ def test_a_start_races_only_where_its_first_tries_rarely_pass(git_repo, store, m
     assert orchestrate.race_cell(store, key, "implement", ladder, START, Options(ledger={"role": "fix"}))[0] is None
     assert orchestrate.race_cell(store, None, "implement", ladder, START, Options())[0] is None
     assert orchestrate.race_cell(store, key, "implement", ladder, ladder[-1], Options())[0] is None
-    monkeypatch.setenv("CAUCE_RACE", "off")
+    monkeypatch.setenv("LOCKS_RACE", "off")
     assert orchestrate.race_cell(store, key, "implement", ladder, START, Options())[0] is None
 
 
 def test_a_start_whose_failed_first_tries_ran_out_of_turns_does_not_race(git_repo, store, monkeypatch):
-    monkeypatch.setenv("CAUCE_RACE", "on")
+    monkeypatch.setenv("LOCKS_RACE", "on")
     key = repo.key(git_repo)
     ladder = ladder_for("implement")
     for _ in range(2):
@@ -188,7 +188,7 @@ def test_a_start_whose_failed_first_tries_ran_out_of_turns_does_not_race(git_rep
 
 
 def test_a_start_that_passes_often_does_not_race(git_repo, store, monkeypatch):
-    monkeypatch.setenv("CAUCE_RACE", "on")
+    monkeypatch.setenv("LOCKS_RACE", "on")
     key = repo.key(git_repo)
     for _ in range(4):
         finished(store, (START.label, 1), repo=key)
@@ -218,7 +218,7 @@ def test_a_stoppable_runner_runs_and_stops_its_process_group(tmp_path):
 
 
 def test_adopt_carries_a_lane_s_work_and_fails_loudly_when_it_cannot(git_repo, tmp_path):
-    from cauce.store import home
+    from locks.store import home
 
     ws = isolate.prepare(git_repo, 901, home())
     lane = isolate.race_lane(ws, home())
@@ -278,7 +278,7 @@ def test_racing_is_judged_only_after_enough_races(store):
 
 
 def test_a_rung_that_rarely_wins_stops_the_race_and_the_climb_goes_deep(git_repo, store, monkeypatch):
-    monkeypatch.setenv("CAUCE_RACE", "on")
+    monkeypatch.setenv("LOCKS_RACE", "on")
     key = repo.key(git_repo)
     ladder = ladder_for("implement")
     for _ in range(4):
@@ -296,7 +296,7 @@ def test_a_rung_that_rarely_wins_stops_the_race_and_the_climb_goes_deep(git_repo
 
 
 def test_racing_that_pays_keeps_racing_and_says_why(git_repo, store, monkeypatch):
-    monkeypatch.setenv("CAUCE_RACE", "on")
+    monkeypatch.setenv("LOCKS_RACE", "on")
     key = repo.key(git_repo)
     for _ in range(4):
         climbed(store, key, wall=900.0)
@@ -312,7 +312,7 @@ def test_racing_that_pays_keeps_racing_and_says_why(git_repo, store, monkeypatch
 
 
 def test_races_that_save_no_time_stop_racing(git_repo, store, monkeypatch):
-    monkeypatch.setenv("CAUCE_RACE", "on")
+    monkeypatch.setenv("LOCKS_RACE", "on")
     key = repo.key(git_repo)
     for _ in range(4):
         climbed(store, key, wall=500.0)

@@ -1,21 +1,21 @@
-"""Merging the branches tasks kept, on the person's word (`cauce merge`)."""
+"""Merging the branches tasks kept, on the person's word (`locks merge`)."""
 from __future__ import annotations
 
-from cauce import cli, merging
-from cauce.store import Store
+from locks import cli, merging
+from locks.store import Store
 
 from .conftest import git
 
 
 def _kept(store: Store, repo, text: str, files: dict[str, str]) -> dict:
-    task = store.create_task(text, status="done", source="cauce", repo="r", cwd=str(repo))
-    git(repo, "checkout", "-q", "-b", f"cauce/task-{task['id']}")
+    task = store.create_task(text, status="done", source="locks", repo="r", cwd=str(repo))
+    git(repo, "checkout", "-q", "-b", f"locks/task-{task['id']}")
     for name, body in files.items():
         (repo / name).write_text(body)
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", text)
     git(repo, "checkout", "-q", "main")
-    store.add_event(task["id"], "finished", status="done", changed=sorted(files), branch=f"cauce/task-{task['id']}")
+    store.add_event(task["id"], "finished", status="done", changed=sorted(files), branch=f"locks/task-{task['id']}")
     return task
 
 
@@ -36,8 +36,8 @@ def test_merge_takes_each_branch_in_order_and_stops_at_a_conflict(git_repo, caps
     assert cli.main(["merge", str(first["id"]), str(alone["id"]), str(clash["id"]), "--verify", "true"]) == 1
     out = capsys.readouterr()
     assert f"merged #{alone['id']}" in out.out and "`true` passes after it" in out.out
-    assert f"#{clash['id']} (cauce/task-{clash['id']}) conflicts with what is in main in api.spec.ts" in out.err
-    assert "cauce run 'Merge branch cauce/task-" in out.err and f"not merged: #{clash['id']}" in out.out
+    assert f"#{clash['id']} (locks/task-{clash['id']}) conflicts with what is in main in api.spec.ts" in out.err
+    assert "locks run 'Merge branch locks/task-" in out.err and f"not merged: #{clash['id']}" in out.out
     assert (git_repo / "forum.ts").exists() and (git_repo / "api.spec.ts").read_text() == "first\n"
     assert git(git_repo, "status", "--porcelain").strip() == ""  # the conflicting merge was aborted
 
@@ -73,7 +73,7 @@ def test_a_pull_request_carries_the_verdict_and_opens_only_through_gh(git_repo, 
     assert cli.main(["pr", str(task["id"]), "--dry-run"]) == 0
     out = capsys.readouterr().out
     assert out.startswith("title: add the export") and "Added the CSV export." in out
-    assert "- check: `pytest -q` passed, run by cauce in its worktree" in out and "- `export.py`" in out
+    assert "- check: `pytest -q` passed, run by locks in its worktree" in out and "- `export.py`" in out
     assert "do not re-read" not in out
     calls = []
 
@@ -81,7 +81,7 @@ def test_a_pull_request_carries_the_verdict_and_opens_only_through_gh(git_repo, 
         calls.append(argv)
         return sp.CompletedProcess(argv, 0, "https://example.test/pr/1\n", "")
 
-    opened, said = merging.open_pr(git_repo, f"cauce/task-{task['id']}", "t", "b", run=run)
+    opened, said = merging.open_pr(git_repo, f"locks/task-{task['id']}", "t", "b", run=run)
     assert opened and said == "https://example.test/pr/1"
     assert calls[0][:3] == ["git", "push", "-u"] and calls[1][:4] == ["gh", "pr", "create", "--draft"]
     refused = merging.open_pr(git_repo, "x", "t", "b", run=lambda argv, **kw: sp.CompletedProcess(argv, 1, "", "no"))
@@ -107,8 +107,8 @@ def test_merge_with_pr_goes_onto_its_own_branch_and_opens_one_draft(git_repo, ca
     monkeypatch.setattr(merging, "open_pr", fake)
     assert cli.main(["merge", str(one["id"]), str(two["id"]), "--pr", "--verify", "true"]) == 0
     branch, title, body, base = opened[0]
-    assert branch == f"cauce/merge-{one['id']}-{two['id']}" and base == "main"
-    assert title == "Merge 2 cauce branches" and f"- #{one['id']} add the forum" in body
+    assert branch == f"locks/merge-{one['id']}-{two['id']}" and base == "main"
+    assert title == "Merge 2 locks branches" and f"- #{one['id']} add the forum" in body
     assert "https://example.test/pr/2" in capsys.readouterr().out
     # The person's branch is as it was, and the merges are on the new one.
     assert git(git_repo, "rev-parse", "--abbrev-ref", "HEAD").strip() == "main"

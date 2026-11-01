@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import pytest
 
-from cauce import analysis, evidence, notes, orchestrate
-from cauce import capabilities as caps
-from cauce.launch import WorkerResult
-from cauce.orchestrate import Options, run
-from cauce.store import Store
+from locks import analysis, evidence, notes, orchestrate
+from locks import capabilities as caps
+from locks.launch import WorkerResult
+from locks.orchestrate import Options, run
+from locks.store import Store
 
 from .conftest import git
 from .test_checking import check, passing
@@ -24,9 +24,9 @@ LAYOUT = {"layout-inspector": caps.Capability("layout-inspector", {"command": "l
 
 def test_a_note_anchored_to_a_named_file_reaches_the_brief_and_a_loose_word_match_does_not(git_repo, store: Store,
                                                                                          monkeypatch):
-    from cauce import repo
+    from locks import repo
 
-    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
     key = repo.key(git_repo)
     anchored = store.add_note(key, "pricing", "Totals round half-even", "Every total keeps banker's rounding",
                               author="person", filed_by="person")
@@ -73,7 +73,7 @@ def _call(store: Store, task_id: int, attempt: int, tool: str, ok: int = 1) -> N
 
 
 def test_what_is_owed_is_read_from_the_calls_that_went_through(store: Store):
-    task = store.create_task("t", status="running", source="cauce")["id"]
+    task = store.create_task("t", status="running", source="locks")["id"]
     names = ["layout-inspector", "rastro", "other"]
     ui, plain = ["components/Card.tsx"], ["src/db.py"]
     assert [r.capability for r in evidence.owed(store, task, 1, names, ui, "implement")] == [
@@ -92,7 +92,7 @@ def test_what_is_owed_is_read_from_the_calls_that_went_through(store: Store):
 
 
 def _held(monkeypatch):
-    monkeypatch.setenv("CAUCE_EVIDENCE", "on")
+    monkeypatch.setenv("LOCKS_EVIDENCE", "on")
     monkeypatch.setattr(evidence, "arm", lambda store, repo, task_id: ("gate", "held for the test"))
 
 
@@ -129,7 +129,7 @@ def test_a_ui_pass_that_measured_stands(git_repo, store: Store, monkeypatch):
 
     def measured(spec):
         (spec.target_dir / "components" / "Card.tsx").write_text("card\n")
-        _call(store, int(spec.env["CAUCE_WORKER_TASK"]), int(spec.env["CAUCE_WORKER_ATTEMPT"]),
+        _call(store, int(spec.env["LOCKS_WORKER_TASK"]), int(spec.env["LOCKS_WORKER_ATTEMPT"]),
               "mcp__layout-inspector__detect_issues")
         return passing()
 
@@ -141,7 +141,7 @@ def test_a_ui_pass_that_measured_stands(git_repo, store: Store, monkeypatch):
 @pytest.mark.usefixtures("no_verifier")
 def test_free_work_is_never_held_back_and_its_calls_are_still_counted(git_repo, store: Store, monkeypatch):
     _ui_repo(git_repo)
-    monkeypatch.setenv("CAUCE_EVIDENCE", "on")
+    monkeypatch.setenv("LOCKS_EVIDENCE", "on")
     monkeypatch.setattr(evidence, "arm", lambda store, repo, task_id: ("free", "free for the test"))
     script = Script(passing(), write="components/Card.tsx")
     report = run("Restyle the card", git_repo, store, registry=LAYOUT, launcher=script, classifier=kind("implement"))
@@ -151,7 +151,7 @@ def test_free_work_is_never_held_back_and_its_calls_are_still_counted(git_repo, 
 
 def test_the_trial_alternates_then_keeps_the_gate_only_where_it_drew_fewer_blockers(store: Store):
     def task(arm: str, outcome: str | None) -> None:
-        t = store.create_task("t", status="done", source="cauce", repo="r", kind="implement")
+        t = store.create_task("t", status="done", source="locks", repo="r", kind="implement")
         store.add_attempt(t["id"], cell="sonnet/medium", max_turns=30, passed=1, input_tokens=10)
         store.add_event(t["id"], "briefed", evidence_arm=arm)
         if outcome:
@@ -193,13 +193,13 @@ def test_stats_say_which_capabilities_workers_were_handed_and_never_called(store
 
 
 def test_the_check_answers_each_correct_line_and_one_not_met_is_a_blocker(git_repo, store: Store, monkeypatch):
-    from cauce import tracer
+    from locks import tracer
 
     _tracer(git_repo)
     listed, more = tracer.criteria(git_repo, "Fix the course so learners can find material")
     assert listed[0] == ("C1", "find-material: the file shows under its real name with a thumbnail")
     assert len(listed) == 5 and more == 0
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
     missed = WorkerResult(True, None, "checked", "probe", cost_usd=0.05, verdict="pass",
                           criteria=({"id": "C1", "met": False, "evidence": "the list shows a UUID"},
                                     *({"id": f"C{n}", "met": True, "evidence": "seen"} for n in range(2, 6))))
@@ -218,7 +218,7 @@ def test_the_check_answers_each_correct_line_and_one_not_met_is_a_blocker(git_re
     assert "Your answer left these CORRECT lines unanswered" in script.specs[4].prompt
     card = store.last_event(report.task_id, "finished")["data"]["verdict"]["independent"]
     assert card["unchecked"] == ["C1", "C2", "C3", "C4", "C5"]
-    from cauce import hooks
+    from locks import hooks
 
     lines = hooks.verdict_lines({"check": None, "criteria": [], "independent": card})
     assert "  TRACER CORRECT lines nobody checked: C1, C2, C3, C4, C5" in lines
@@ -226,7 +226,7 @@ def test_the_check_answers_each_correct_line_and_one_not_met_is_a_blocker(git_re
 
 
 def test_correct_lines_that_do_not_fit_are_said_by_count(git_repo, monkeypatch):
-    from cauce import tracer
+    from locks import tracer
 
     _tracer(git_repo)
     monkeypatch.setattr(tracer, "BRIEF_CHARS", 300)
@@ -238,8 +238,8 @@ def test_correct_lines_that_do_not_fit_are_said_by_count(git_repo, monkeypatch):
 
 @pytest.mark.parametrize("setting", ["evidence"])
 def test_the_setting_turns_it_off(setting, monkeypatch):
-    monkeypatch.setenv("CAUCE_EVIDENCE", "off")
+    monkeypatch.setenv("LOCKS_EVIDENCE", "off")
     assert not evidence.enabled()
-    monkeypatch.setenv("CAUCE_EVIDENCE", "on")
+    monkeypatch.setenv("LOCKS_EVIDENCE", "on")
     assert evidence.enabled()
     assert notes and orchestrate  # imported for the module's own checks above

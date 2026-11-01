@@ -4,13 +4,13 @@ import os
 
 import pytest
 
-from cauce.store import Store, home
+from locks.store import Store, home
 
 
-def test_home_honours_cauce_home_then_absolute_xdg(tmp_path):
-    assert home({"CAUCE_HOME": str(tmp_path)}) == tmp_path
-    assert home({"XDG_DATA_HOME": "/x"}).as_posix() == "/x/cauce"
-    assert home({"XDG_DATA_HOME": "relative"}).name == "cauce"
+def test_home_honours_locks_home_then_absolute_xdg(tmp_path):
+    assert home({"LOCKS_HOME": str(tmp_path)}) == tmp_path
+    assert home({"XDG_DATA_HOME": "/x"}).as_posix() == "/x/locks"
+    assert home({"XDG_DATA_HOME": "relative"}).name == "locks"
 
 
 def test_a_task_keeps_its_messages_in_order(store: Store):
@@ -31,7 +31,7 @@ def test_a_task_keeps_its_messages_in_order(store: Store):
 def test_interrupt_sweeps_only_other_hook_tasks(store: Store):
     a = store.create_task("a", status="running", source="hook", session_id="s")
     b = store.create_task("b", status="running", source="hook", session_id="s")
-    c = store.create_task("c", status="running", source="cauce", session_id="s")
+    c = store.create_task("c", status="running", source="locks", session_id="s")
     assert store.interrupt_running("s", exclude=[b["id"]]) == 1
     assert store.get_task(a["id"])["status"] == "interrupted"
     assert store.get_task(b["id"])["status"] == "running"
@@ -42,7 +42,7 @@ def test_interrupt_sweeps_only_other_hook_tasks(store: Store):
 
 def test_attempts_add_up_and_landings_only_count_finished_core_tasks(store: Store):
     for cell in ("sonnet/high", "sonnet/xhigh", "sonnet/high"):
-        t = store.create_task("t", status="running", source="cauce", kind="ui", repo="r", start_cell="sonnet/medium")
+        t = store.create_task("t", status="running", source="locks", kind="ui", repo="r", start_cell="sonnet/medium")
         store.add_attempt(t["id"], cell="sonnet/high", max_turns=30, passed=0, cost_usd=0.5, changed_paths=["a"])
         seq = store.add_attempt(t["id"], cell=cell, max_turns=30, passed=1, cost_usd=0.25)
         store.set_move(t["id"], 1, "more_effort", "shallow")
@@ -59,9 +59,9 @@ def test_attempts_add_up_and_landings_only_count_finished_core_tasks(store: Stor
     # A pass where it started is no climb, wherever it started: history had raised later
     # starts to such passes, and every task after them started as high. A task with no
     # start recorded says neither.
-    store.create_task("t", status="done", source="cauce", kind="ui", repo="r", start_cell="opus/high",
+    store.create_task("t", status="done", source="locks", kind="ui", repo="r", start_cell="opus/high",
                       final_cell="opus/high")
-    store.create_task("t", status="done", source="cauce", kind="ui", repo="r", final_cell="opus/xhigh")
+    store.create_task("t", status="done", source="locks", kind="ui", repo="r", final_cell="opus/xhigh")
     assert store.landings("ui", repo="r") == ["", "sonnet/high", "sonnet/xhigh", "sonnet/high"]
     assert store.landings("ui", repo="r", climbs=False) == ["opus/high", "sonnet/high", "sonnet/xhigh", "sonnet/high"]
 
@@ -101,7 +101,7 @@ def test_accents_do_not_split_words(store: Store):
 
 def test_two_stores_share_one_file(_isolated_home):
     a = Store.open()
-    a.create_task("x", status="queued", source="cauce")
+    a.create_task("x", status="queued", source="locks")
     b = Store.open()
     assert len(b.list_tasks()) == 1
     a.close()
@@ -206,7 +206,7 @@ def test_two_deliverers_at_once_never_hand_over_the_same_ending(store):
     import threading
 
     for i in range(5):
-        t = store.create_task(f"t{i}", status="running", source="cauce", session_id="s")
+        t = store.create_task(f"t{i}", status="running", source="locks", session_id="s")
         store.add_event(t["id"], "finished", status="done")
         store.update_task(t["id"], status="done")
     got: list[int] = []
@@ -251,7 +251,7 @@ def test_two_requests_whose_clipped_titles_match_are_two_problems(store):
 
 
 def test_an_ending_touches_the_pulse_the_mod_looks_at(store: Store):
-    t = store.create_task("t", status="running", source="cauce", kind="ui", repo="r")
+    t = store.create_task("t", status="running", source="locks", kind="ui", repo="r")
     assert not store.pulse_path.exists()
     store.add_event(t["id"], "attempt_started")
     assert not store.pulse_path.exists()  # only an ending wakes a session

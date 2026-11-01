@@ -14,15 +14,15 @@ from typing import Any
 
 import pytest
 
-import cauce
-from cauce import acp
+import locks
+from locks import acp
 
 WAIT_S = 5.0
-TASK_LINE = "cauce: #7 attempt 1 at opus/low"
+TASK_LINE = "locks: #7 attempt 1 at opus/low"
 
 
 class FakeProc:
-    """A `cauce` process: its stderr lines, its stdout, and an exit that waits for `release()` when held."""
+    """A `locks` process: its stderr lines, its stdout, and an exit that waits for `release()` when held."""
 
     def __init__(self, argv: list[str], kwargs: dict[str, Any], *, stderr: list[str] | None = None,
                  stdout: str = "", code: int = 0, hold: bool = False) -> None:
@@ -64,7 +64,7 @@ class FakeProc:
 
 
 class Spawner:
-    """The injected popen: each prompt is a run; the `cauce cancel` the agent asks for on its own (its
+    """The injected popen: each prompt is a run; the `locks cancel` the agent asks for on its own (its
     output discarded) is answered at once, and ends the first run unless told not to."""
 
     def __init__(self, release_on_cancel: bool = True, **run: Any) -> None:
@@ -191,14 +191,14 @@ def client() -> Iterator[Client]:
         c.close()
 
 
-def test_initialize_says_what_cauce_is_and_can_do(client):
+def test_initialize_says_what_locks_is_and_can_do(client):
     c = client()
     reply = c.answer(c.request("initialize", {"protocolVersion": 1, "clientCapabilities": {}}))
     assert reply == {"jsonrpc": "2.0", "id": 1, "result": {
         "protocolVersion": 1,
         "agentCapabilities": {"loadSession": False,
                               "promptCapabilities": {"image": False, "audio": False, "embeddedContext": False}},
-        "agentInfo": {"name": "cauce", "title": "cauce", "version": cauce.__version__},
+        "agentInfo": {"name": "locks", "title": "locks", "version": locks.__version__},
         "authMethods": []}}
     assert c.answer(c.request("authenticate", {"methodId": "x"}))["result"] == {}
 
@@ -223,8 +223,8 @@ def test_a_session_needs_an_absolute_folder(client):
         assert c.answer(c.request("session/new", params))["error"]["code"] == -32602
 
 
-def test_a_prompt_is_one_cauce_run_shown_as_a_tool_call_and_answered_with_its_report(client):
-    spawner = Spawner(stderr=[TASK_LINE, "cauce: #7 passed"], stdout="the report\n")
+def test_a_prompt_is_one_locks_run_shown_as_a_tool_call_and_answered_with_its_report(client):
+    spawner = Spawner(stderr=[TASK_LINE, "locks: #7 passed"], stdout="the report\n")
     c = client(spawner)
     session = c.new_session("/work/app")
     request = c.request("session/prompt", {"sessionId": session, "prompt": [
@@ -235,7 +235,7 @@ def test_a_prompt_is_one_cauce_run_shown_as_a_tool_call_and_answered_with_its_re
     reply = c.answer(request)
     assert reply["result"] == {"stopReason": "end_turn"}
     argv, kwargs = spawner.calls[0]
-    assert argv == [sys.executable, "-m", "cauce", "run", "fix the login\nfile:///work/app/auth.py\nand its tests"]
+    assert argv == [sys.executable, "-m", "locks", "run", "fix the login\nfile:///work/app/auth.py\nand its tests"]
     assert kwargs["cwd"] == "/work/app"
     assert kwargs["start_new_session"] is True
     assert kwargs["stdout"] == kwargs["stderr"] == subprocess.PIPE
@@ -243,12 +243,12 @@ def test_a_prompt_is_one_cauce_run_shown_as_a_tool_call_and_answered_with_its_re
     shown = [u for u in c.updates(session)[1:] if u["sessionUpdate"] != "plan"]  # the first announced the commands
     call_id = shown[0]["toolCallId"]
     assert shown == [
-        {"sessionUpdate": "tool_call", "toolCallId": call_id, "title": "cauce run", "kind": "execute",
+        {"sessionUpdate": "tool_call", "toolCallId": call_id, "title": "locks run", "kind": "execute",
          "status": "in_progress"},
         {"sessionUpdate": "tool_call_update", "toolCallId": call_id, "title": TASK_LINE,
          "content": [{"type": "content", "content": {"type": "text", "text": TASK_LINE}}]},
-        {"sessionUpdate": "tool_call_update", "toolCallId": call_id, "title": "cauce: #7 passed",
-         "content": [{"type": "content", "content": {"type": "text", "text": f"{TASK_LINE}\ncauce: #7 passed"}}]},
+        {"sessionUpdate": "tool_call_update", "toolCallId": call_id, "title": "locks: #7 passed",
+         "content": [{"type": "content", "content": {"type": "text", "text": f"{TASK_LINE}\nlocks: #7 passed"}}]},
         {"sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": "completed"},
         {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "the report\n"}},
     ]
@@ -301,7 +301,7 @@ def test_a_tool_call_shows_the_last_forty_stderr_lines(client):
 
 
 def test_a_run_that_exits_nonzero_is_a_failed_tool_call_that_still_reports(client):
-    c = client(Spawner(stderr=["cauce: #3 failed"], stdout="it failed\n", code=1))
+    c = client(Spawner(stderr=["locks: #3 failed"], stdout="it failed\n", code=1))
     session = c.new_session()
     reply = c.answer(c.prompt(session, "go"))
     assert reply["result"] == {"stopReason": "end_turn"}
@@ -316,9 +316,9 @@ def test_slash_commands_run_the_reading_commands_instead(client, command):
     c = client(spawner)
     session = c.new_session()
     c.answer(c.prompt(session, f"/{command}"))
-    assert spawner.calls[0][0] == [sys.executable, "-m", "cauce", command]
+    assert spawner.calls[0][0] == [sys.executable, "-m", "locks", command]
     updates = c.updates(session)
-    assert updates[1]["title"] == f"cauce {command}"
+    assert updates[1]["title"] == f"locks {command}"
     assert updates[-1]["content"]["text"] == "the output\n"
 
 
@@ -331,7 +331,7 @@ def test_a_text_that_only_starts_with_a_slash_command_is_a_request(client):
 
 
 class Looks:
-    """A fake `look`: what cauce would say of the task now, which a test changes; every read is counted and the
+    """A fake `look`: what locks would say of the task now, which a test changes; every read is counted and the
     ones past `enough` set `plenty`."""
 
     def __init__(self, running: acp.Look | None = None, ended: acp.Look | None = None, enough: int = 8) -> None:
@@ -360,7 +360,7 @@ NOW = acp.Look(line="implementing · 3m of ≈5m · 5 files +126 −2", doing="r
                stage="worker", warnings=("no tool call for 5m (a long command, or stuck)",))
 
 
-def test_the_title_is_the_line_cauce_tasks_says_and_the_content_says_what_the_worker_does(client):
+def test_the_title_is_the_line_locks_tasks_says_and_the_content_says_what_the_worker_does(client):
     looks = Looks(NOW)
     spawner = Spawner(stderr=[TASK_LINE], hold=True)
     c = client(spawner, look=looks)
@@ -377,13 +377,13 @@ def test_the_title_is_the_line_cauce_tasks_says_and_the_content_says_what_the_wo
     assert "title" not in said(again)
     spawner.procs[0].release()
     c.answer(request)
-    # Over, the progress line and the activity are gone: the last thing cauce said stands.
+    # Over, the progress line and the activity are gone: the last thing locks said stands.
     final = next(u for u in c.updates(session) if u.get("status") == "completed")
     assert final["title"] == TASK_LINE
     assert final["content"] == [{"type": "content", "content": {"type": "text", "text": TASK_LINE}}]
 
 
-def test_cauce_s_stages_follow_the_request_s_items_in_the_plan(client):
+def test_locks_s_stages_follow_the_request_s_items_in_the_plan(client):
     looks = Looks(acp.Look(stage="worker"), acp.Look(skipped=(acp.STAGE_ENTRIES[2],)))
     spawner = Spawner(stderr=[TASK_LINE], hold=True)
     c = client(spawner, look=looks)
@@ -430,7 +430,7 @@ def test_a_task_that_shows_nothing_new_is_said_once_however_often_it_is_read(cli
 
 def test_the_progress_of_a_run_is_read_only_while_it_is_a_request_and_has_a_task(client):
     looks = Looks(NOW, enough=1)
-    c = client(Spawner(stderr=["cauce: #7 keeps its number here"], stdout="out\n"), look=looks)
+    c = client(Spawner(stderr=["locks: #7 keeps its number here"], stdout="out\n"), look=looks)
     session = c.new_session()
     c.answer(c.prompt(session, "/tasks"))
     assert looks.reads == []
@@ -440,7 +440,7 @@ def test_the_progress_of_a_run_is_read_only_while_it_is_a_request_and_has_a_task
 
 
 def test_the_end_of_a_failed_check_stays_in_view(client):
-    failed = acp.Look(check="cauce's check failed: `npm test` exited 1\nthe end of its output:\nboom")
+    failed = acp.Look(check="locks' check failed: `npm test` exited 1\nthe end of its output:\nboom")
     spawner = Spawner(stderr=[TASK_LINE], hold=True, code=1)
     c = client(spawner, look=Looks(failed, failed))
     session = c.new_session()
@@ -454,7 +454,7 @@ def test_the_end_of_a_failed_check_stays_in_view(client):
 
 
 def test_the_agent_message_leads_with_the_verdict_and_the_next_step_then_the_report(client):
-    ending = "cauce: task #7 passed.\nThe work is on branch cauce/task-7. Next: `cauce merge 7`."
+    ending = "locks: task #7 passed.\nThe work is on branch locks/task-7. Next: `locks merge 7`."
     c = client(Spawner(stderr=[TASK_LINE], stdout="the report\n"), look=Looks(ended=acp.Look(ending=ending)),
                )
     session = c.new_session(mcp=[{"name": "x"}])
@@ -479,9 +479,9 @@ def first_title(update_title: str):
     return lambda m: m.get("params", {}).get("update", {}).get("title") == update_title
 
 
-def test_a_cancel_nothing_follows_asks_cauce_to_cancel_the_task_the_run_named(client, monkeypatch):
+def test_a_cancel_nothing_follows_asks_locks_to_cancel_the_task_the_run_named(client, monkeypatch):
     monkeypatch.setattr(acp, "CANCEL_WINDOW_S", 0.05)
-    spawner = Spawner(stderr=[TASK_LINE, "cauce: #8 other"], hold=True, code=-15)
+    spawner = Spawner(stderr=[TASK_LINE, "locks: #8 other"], hold=True, code=-15)
     c = client(spawner)
     session = c.new_session("/work/app")
     request = c.prompt(session, "go")
@@ -492,7 +492,7 @@ def test_a_cancel_nothing_follows_asks_cauce_to_cancel_the_task_the_run_named(cl
     assert spawner.cancelled.wait(WAIT_S)
     c.close()
     argv, kwargs = spawner.calls[1]
-    assert argv == [sys.executable, "-m", "cauce", "cancel", "7"]
+    assert argv == [sys.executable, "-m", "locks", "cancel", "7"]
     assert kwargs["cwd"] == "/work/app"
     assert spawner.killed == []
     # The turn ended with its answer: the run's own ending is not said after it.
@@ -525,7 +525,7 @@ def test_a_cancel_is_answered_at_once_and_holds_the_task_for_a_prompt_that_may_f
     assert spawner.asked_to_cancel() == []
     # Nothing can follow a closed input: the cancel stands without waiting out the window.
     c.close()
-    assert spawner.asked_to_cancel() == [[sys.executable, "-m", "cauce", "cancel", "7"]]
+    assert spawner.asked_to_cancel() == [[sys.executable, "-m", "locks", "cancel", "7"]]
 
 
 def test_a_prompt_after_a_cancel_leaves_the_task_running_and_starts_its_own(client, monkeypatch):
@@ -551,11 +551,11 @@ def test_a_prompt_after_a_cancel_leaves_the_task_running_and_starts_its_own(clie
 
     # The first turn is over: what its run does from here is not said to the editor, nor answered again.
     first_call = c.updates(session)[1]["toolCallId"]
-    spawner.procs[0].say("cauce: #7 attempt 2 at opus/high")
+    spawner.procs[0].say("locks: #7 attempt 2 at opus/high")
     spawner.procs[0].release()
     c.close()
     updates = c.updates(session)
-    assert [u.get("title") for u in updates if u.get("toolCallId") == first_call] == ["cauce run", TASK_LINE]
+    assert [u.get("title") for u in updates if u.get("toolCallId") == first_call] == ["locks run", TASK_LINE]
     assert len([m for m in c.out.messages() if m.get("id") == first]) == 1
     # The notice comes before the new prompt's own tool call, and the old report is never said.
     assert [u.get("content", {}).get("text", u["sessionUpdate"]) for u in updates
@@ -574,7 +574,7 @@ def test_the_notice_of_a_task_left_running_names_it_when_it_is_known():
 def test_a_prompt_after_a_cancel_does_not_say_a_task_that_already_ended_keeps_running():
     sink, spawner = Sink(), Spawner()
     agent = acp.Agent(sink, io.StringIO(), spawner, spawner.killpg, 30.0, lambda task, live: [])
-    ended = acp.Run(proc=None, call_id="cauce-old", request_id=1, task=7, released=True, answered=True)
+    ended = acp.Run(proc=None, call_id="locks-old", request_id=1, task=7, released=True, answered=True)
     ended.exited.set()
     session = acp.Session(cwd="/work/app", mcp_ignored=False, waiting=ended)
     agent._sessions["sess_x"] = session
@@ -591,7 +591,7 @@ def test_a_prompt_is_answered_once_whichever_of_its_end_and_a_cancel_comes_first
     spawner = Spawner()
     agent = acp.Agent(Sink(), io.StringIO(), spawner, spawner.killpg, 30.0)
     session = acp.Session(cwd="/work/app", mcp_ignored=False)
-    run = session.run = acp.Run(proc=None, call_id="cauce-x", request_id=1)
+    run = session.run = acp.Run(proc=None, call_id="locks-x", request_id=1)
     assert agent._claim(session, run, released=True)
     assert session.run is None
     assert session.waiting is run
@@ -601,15 +601,15 @@ def test_a_prompt_is_answered_once_whichever_of_its_end_and_a_cancel_comes_first
 
 
 @pytest.mark.parametrize("said", ["/cancel 7", "/cancel #7", "  /cancel   7  "])
-def test_cancel_with_a_task_number_runs_cauce_cancel_as_a_prompt(client, said):
+def test_cancel_with_a_task_number_runs_locks_cancel_as_a_prompt(client, said):
     spawner = Spawner(stdout="cancelled #7\n")
     c = client(spawner)
     session = c.new_session()
     assert c.answer(c.prompt(session, said))["result"] == {"stopReason": "end_turn"}
-    assert spawner.calls[0][0] == [sys.executable, "-m", "cauce", "cancel", "7"]
+    assert spawner.calls[0][0] == [sys.executable, "-m", "locks", "cancel", "7"]
     assert spawner.asked_to_cancel() == []  # it is the prompt's run, not the agent's own cancel
     updates = c.updates(session)
-    assert updates[1]["title"] == "cauce cancel"
+    assert updates[1]["title"] == "locks cancel"
     assert updates[-1]["content"]["text"] == "cancelled #7\n"
 
 
@@ -637,7 +637,7 @@ def test_a_cancel_command_after_a_cancel_is_what_stops_the_task(client):
     spawner.run.update(hold=False)
     c.answer(c.prompt(session, "/cancel 7"))
     assert spawner.calls[1][0][3:] == ["cancel", "7"]
-    assert spawner.procs[0].running  # the fake `cauce cancel` is a prompt's run: nothing stopped it
+    assert spawner.procs[0].running  # the fake `locks cancel` is a prompt's run: nothing stopped it
     assert spawner.asked_to_cancel() == []
 
 
@@ -747,10 +747,10 @@ def test_the_loop_ends_at_eof_only_after_the_running_prompts_finish(client):
 def test_the_subcommand_serves_the_protocol_on_stdout_alone(tmp_path):
     lines = "\n".join(json.dumps({"jsonrpc": "2.0", "id": n, "method": method, "params": {}})
                       for n, method in enumerate(["initialize", "authenticate"], 1)) + "\n"
-    proc = subprocess.run([sys.executable, "-m", "cauce", "acp"], input=lines, capture_output=True, text=True,
+    proc = subprocess.run([sys.executable, "-m", "locks", "acp"], input=lines, capture_output=True, text=True,
                           check=False, timeout=30, cwd=tmp_path,
-                          env={**os.environ, "PYTHONPATH": str(Path(cauce.__file__).parents[1])})
+                          env={**os.environ, "PYTHONPATH": str(Path(locks.__file__).parents[1])})
     assert proc.returncode == 0, proc.stderr
     replies = [json.loads(line) for line in proc.stdout.splitlines()]
     assert [r["id"] for r in replies] == [1, 2]
-    assert replies[0]["result"]["agentInfo"]["version"] == cauce.__version__
+    assert replies[0]["result"]["agentInfo"]["version"] == locks.__version__

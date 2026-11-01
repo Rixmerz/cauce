@@ -5,11 +5,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from cauce import __version__, standards
-from cauce.escalate import MAX_TURNS_CEILING
-from cauce.matrix import LADDERS, Cell, turns_for
-from cauce.orchestrate import Options, run
-from cauce.store import Store
+from locks import __version__, standards
+from locks.escalate import MAX_TURNS_CEILING
+from locks.matrix import LADDERS, Cell, turns_for
+from locks.orchestrate import Options, run
+from locks.store import Store
 
 from .test_orchestrate import Script, kind, ok
 
@@ -26,7 +26,7 @@ def finished(store: Store, *tries, repo="r", kind="implement", points=3, cost=1.
              pinned=False, used=(), status=None, options=None) -> int:
     """A fake finished task: each try is (cell, passed[, failure[, move[, turns]]])."""
     passed = any(t[1] for t in tries)
-    task = store.create_task("t", status=status or ("done" if passed else "failed"), source="cauce", repo=repo,
+    task = store.create_task("t", status=status or ("done" if passed else "failed"), source="locks", repo=repo,
                              kind=kind, points=points, pinned=int(pinned), cost_usd=cost,
                              options=json.dumps(options or {}))
     store.add_event(task["id"], "planned", kind=kind, points=points, standard={"changes": list(used)})
@@ -120,7 +120,7 @@ def test_the_start_cell_goes_down_to_the_first_rung_never_below():
     assert standards.start_cell(IMPLEMENT, cell("sonnet/medium"), cheap)[0] is None
     # a cell below the ladder that passes is no start: the floor is the ladder's first rung
     assert standards.start_cell(IMPLEMENT, cell("sonnet/medium"), {"haiku/medium": (10, 10)})[0] is None
-    # cauce's own rules start at the first rung: a standard that would say the same is none
+    # locks' own rules start at the first rung: a standard that would say the same is none
     assert standards.start_cell(IMPLEMENT, None, cheap)[0] is None
 
 
@@ -194,7 +194,7 @@ def test_a_band_with_a_change_not_judged_yet_does_not_move(store: Store):
 def test_turns_move_when_the_cell_stays(store: Store):
     many(store, 8, ("sonnet/medium", 1, None, None, turns_for("implement") + 22))
     change, = standards.calibrate(store, "r", now=NOW)
-    # from cauce's own rules (the kind's turns), one step toward what passes needed
+    # from locks' own rules (the kind's turns), one step toward what passes needed
     assert (change["field"], change["old_value"], change["new_value"]) == (
         "start_turns", None, str(turns_for("implement") + standards.TURNS_STEP))
     assert json.loads(store.calibrations(repo="r")[0]["evidence"])["p75"] == turns_for("implement") + 22
@@ -278,7 +278,7 @@ def test_worse_by_exactly_the_margin_is_kept(store: Store):
 # --- the plan: which standard it used and why; a person's flags win ---------------------------------
 
 def test_the_plan_starts_where_the_standard_says_and_says_why(git_repo, store: Store):
-    from cauce import repo
+    from locks import repo
 
     key = repo.key(git_repo)
     many(store, 6, ("sonnet/medium", 0, "code_bug", "next_model"), ("opus/high", 1), repo=key, points=1)
@@ -305,7 +305,7 @@ def test_the_plan_starts_where_the_standard_says_and_says_why(git_repo, store: S
 
 
 def test_an_explicit_max_turns_wins_over_the_standard(git_repo, store: Store):
-    from cauce import repo
+    from locks import repo
 
     key = repo.key(git_repo)
     store.set_standard(key, "implement", 1, start_turns=100)
@@ -321,8 +321,8 @@ def test_an_explicit_max_turns_wins_over_the_standard(git_repo, store: Store):
 
 def test_what_says_nothing_of_the_work_is_no_first_try(store: Store):
     finished(store, ("sonnet/medium", 0, "environment", "blocked"), status="blocked")
-    finished(store, ("gpt/huge", 1), ("sonnet/medium", 1))  # a cell cauce has no such model for is no sample
-    nothing = store.create_task("never ran", status="failed", source="cauce", repo="r", kind="implement", points=3)
+    finished(store, ("gpt/huge", 1), ("sonnet/medium", 1))  # a cell locks has no such model for is no sample
+    nothing = store.create_task("never ran", status="failed", source="locks", repo="r", kind="implement", points=3)
     store.add_event(nothing["id"], "finished", status="failed")
     tasks = standards.ended(store, repo="r")
     assert [t.first for t in tasks] == [None, True, None]
@@ -341,7 +341,7 @@ def test_a_task_without_points_has_no_band(store: Store):
 
 
 def test_the_first_settle_sizes_past_work_and_calibrates_from_it(store: Store):
-    """Standards waited for five endings with points, and tasks that ended before cauce
+    """Standards waited for five endings with points, and tasks that ended before locks
     kept points never counted: a store full of history calibrated nothing."""
     old = many(store, standards.MIN_SAMPLES + 1, ("sonnet/medium", 0, "code_bug", "next_model"), ("opus/high", 1),
                points=None)
@@ -388,7 +388,7 @@ def test_two_settles_at_once_calibrate_once(store: Store, monkeypatch):
 
 
 def test_the_plan_names_a_revert_and_a_standard_off_the_ladder(git_repo, store: Store):
-    from cauce import repo
+    from locks import repo
 
     key = repo.key(git_repo)
     store.set_standard(key, "implement", 1, start_cell="sonnet/xhigh")
@@ -407,7 +407,7 @@ def test_the_plan_names_a_revert_and_a_standard_off_the_ladder(git_repo, store: 
     assert off.cell is None and "the implement ladder no longer holds" in off.reasons[0]
     store.set_standard(key, "docs", 2, measured={"tasks": 4})
     said = standards.for_plan(store, key, "docs", 2, pinned=False, explicit_turns=False).reasons
-    assert said == ("no standard for docs at 2 points here yet: cauce's rules choose (measured over 4 tasks so far)",)
+    assert said == ("no standard for docs at 2 points here yet: locks' rules choose (measured over 4 tasks so far)",)
     # A standard's turns set before the kind's rose never take room away from it.
     store.set_standard(key, "implement", 13, start_turns=40)
     low = standards.for_plan(store, key, "implement", 13, pinned=False, explicit_turns=False)
@@ -452,7 +452,7 @@ def test_a_size_with_too_few_tasks_starts_where_the_kind_s_tasks_of_every_size_p
 
 
 def test_an_estimate_is_raised_a_step_where_the_kind_turned_out_bigger(store):
-    from cauce import points
+    from locks import points
 
     for _ in range(5):
         task = finished(store, ("opus/high", True), kind="feature", points=3)
@@ -559,7 +559,7 @@ def test_a_skip_that_makes_passing_slower_is_reverted_as_its_own_change(store):
     assert revert["reverts"] == change["id"] and revert["field"] == standards.SKIP
     assert revert["old_value"] == change["new_value"] and revert["new_value"] is None
     assert standards.active_skips(store, "r", "implement") == {}
-    from cauce import evolution
+    from locks import evolution
     assert "again since" in evolution.change_line(revert, None, [])
     assert "skip sonnet/xhigh for opus/high" in evolution.change_line(
         store.calibrations(repo="r")[-2], store.verdicts()[change["id"]], [])

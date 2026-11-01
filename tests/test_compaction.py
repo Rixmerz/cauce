@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from cauce import analysis, cli, compact, compaction, config, hooks, isolate, stops
-from cauce.store import Store, home
+from locks import analysis, cli, compact, compaction, config, hooks, isolate, stops
+from locks.store import Store, home
 from tests.conftest import git
 
 NOW = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
@@ -174,7 +174,7 @@ def test_a_merge_into_the_checkout_is_a_break(git_repo):
 
 
 def test_reported_work_is_a_break_and_a_step_the_engine_went_past_is_not(store: Store):
-    sent = store.create_task("build the export", status="done", source="cauce", session_id="s1")
+    sent = store.create_task("build the export", status="done", source="locks", session_id="s1")
     step = store.create_task("a workflow step", status="done", source="queue", session_id="s1")
     turn = store.create_task("a turn", status="done", source="hook", session_id="s1")
     store.add_event(sent["id"], "reported", via="stop")
@@ -187,8 +187,8 @@ def test_reported_work_is_a_break_and_a_step_the_engine_went_past_is_not(store: 
 
 def test_only_this_session_s_run_holding_the_checkout_counts(store: Store, git_repo):
     root = home()
-    mine = store.create_task("mine", status="running", source="cauce", session_id="s1")
-    other = store.create_task("other", status="running", source="cauce", session_id="s2")
+    mine = store.create_task("mine", status="running", source="locks", session_id="s1")
+    other = store.create_task("other", status="running", source="locks", session_id="s2")
     assert compaction.holding(store, root, "s1", str(git_repo)) is None
     with isolate.in_place(root, git_repo, mine["id"], waiting=print, check=lambda: None):
         assert compaction.holding(store, root, "s1", str(git_repo)) == mine["id"]
@@ -206,23 +206,23 @@ def test_the_instructions_keep_the_person_s_words_and_the_open_work_within_one_l
     requests = [{"text": "use the token sk-abcdefghijklmnop for the call", "correction": False},
                 {"text": "no, never touch the billing table", "correction": True},
                 *({"text": f"request {i}\nsecond line", "correction": False} for i in range(6))]
-    text = compaction.instructions(requests=requests, open_work=["#12 [blocked] the export, next: cauce resume 12"],
-                                   branches=["cauce/task-7 (#7 the login fix)"])
+    text = compaction.instructions(requests=requests, open_work=["#12 [blocked] the export, next: locks resume 12"],
+                                   branches=["locks/task-7 (#7 the login fix)"])
     assert "\n" not in text and text.startswith(compaction.HEAD)
-    assert "Open work: #12 [blocked] the export, next: cauce resume 12." in text
-    assert "Branches waiting to merge: cauce/task-7 (#7 the login fix)." in text
+    assert "Open work: #12 [blocked] the export, next: locks resume 12." in text
+    assert "Branches waiting to merge: locks/task-7 (#7 the login fix)." in text
     assert '"request 2 second line" "request 3 second line" "request 4 second line" "request 5 second line"' in text
     assert "request 1" not in text
     assert 'Decisions the person made (oldest first): "no, never touch the billing table".' in text
     line = compaction.line(42, text)
-    assert line.startswith(compact.ASKED) and line.startswith("/compact [cauce-compaction #42] ")
+    assert line.startswith(compact.ASKED) and line.startswith("/compact [locks-compaction #42] ")
     assert compaction.MARKER_RE.search(line).group(1) == "42"
 
 
 def test_the_instructions_are_bounded_and_mask_secrets():
     requests = [{"text": f"password: hunter{i} " + "y" * 400, "correction": i % 2 == 0} for i in range(50)]
     text = compaction.instructions(requests=requests, open_work=[f"#{i} [running] " + "w" * 200 for i in range(30)],
-                                   branches=[f"cauce/task-{i}" for i in range(30)])
+                                   branches=[f"locks/task-{i}" for i in range(30)])
     assert len(compaction.line(999999, text)) <= compaction.INSTRUCTIONS_CHARS
     assert "Open work: #0 [running]" in text and "hunter" not in text  # what is most needed comes first
     alone = compaction.instructions(requests=requests, open_work=[], branches=[])
@@ -231,22 +231,22 @@ def test_the_instructions_are_bounded_and_mask_secrets():
 
 
 def test_open_work_carries_its_next_command_and_only_unmerged_branches_wait(store: Store, git_repo):
-    blocked = store.create_task("allow ls", status="blocked", source="cauce", session_id="s1", cwd=str(git_repo))
+    blocked = store.create_task("allow ls", status="blocked", source="locks", session_id="s1", cwd=str(git_repo))
     store.add_event(blocked["id"], "finished", status="blocked",
                     stop=stops.Stop("permission", "refused", denied=["Bash(ls)"], allow=["Bash(ls:*)"]).data())
-    for name in ("cauce/task-8", "cauce/task-9"):
+    for name in ("locks/task-8", "locks/task-9"):
         git(git_repo, "checkout", "-q", "-b", name)
         (git_repo / f"{name[-1]}.py").write_text("x\n")
         git(git_repo, "add", "-A")
         git(git_repo, "commit", "-q", "-m", name)
         git(git_repo, "checkout", "-q", "main")
-    git(git_repo, "merge", "-q", "cauce/task-9")
-    for name in ("cauce/task-8", "cauce/task-9", "cauce/gone"):
-        done = store.create_task(f"work on {name}", status="done", source="cauce", session_id="s1")
+    git(git_repo, "merge", "-q", "locks/task-9")
+    for name in ("locks/task-8", "locks/task-9", "locks/gone"):
+        done = store.create_task(f"work on {name}", status="done", source="locks", session_id="s1")
         store.add_event(done["id"], "finished", status="done", branch=name)
     work, branches = compaction.what_is_open(store, "s1", str(git_repo))
-    assert work == [f"#{blocked['id']} [blocked] allow ls, next: cauce resume {blocked['id']} --allow 'Bash(ls:*)'"]
-    assert len(branches) == 1 and branches[0].startswith("cauce/task-8 (#")
+    assert work == [f"#{blocked['id']} [blocked] allow ls, next: locks resume {blocked['id']} --allow 'Bash(ls:*)'"]
+    assert len(branches) == 1 and branches[0].startswith("locks/task-8 (#")
 
 
 # --- the Stop hook records it ------------------------------------------------------------------
@@ -263,7 +263,7 @@ def decided(store: Store) -> list[dict]:
 
 def test_stop_decides_at_a_break_and_records_the_line_s_instructions(store: Store, tmp_path, git_repo):
     turn(store, git_repo)
-    sent = store.create_task("build the export", status="done", source="cauce", session_id="s1")
+    sent = store.create_task("build the export", status="done", source="locks", session_id="s1")
     store.add_event(sent["id"], "finished", status="done")
     store.add_event(sent["id"], "reported", via="prompt")
     path = big(tmp_path, datetime.now(UTC))
@@ -281,17 +281,17 @@ def test_stop_records_nothing_when_off_in_a_worker_small_or_still_going(store: S
     turn(store, git_repo)
     event = {"session_id": "s1", "prompt_id": "p1", "transcript_path": str(big(tmp_path, datetime.now(UTC))),
              "cwd": str(git_repo)}
-    monkeypatch.setenv("CAUCE_COMPACT", "off")
+    monkeypatch.setenv("LOCKS_COMPACT", "off")
     hooks.stop(event, store)
-    monkeypatch.setenv("CAUCE_COMPACT", "auto")
-    monkeypatch.setenv("CAUCE_WORKER_TASK", "3")
+    monkeypatch.setenv("LOCKS_COMPACT", "auto")
+    monkeypatch.setenv("LOCKS_WORKER_TASK", "3")
     hooks.stop(event, store)
-    monkeypatch.delenv("CAUCE_WORKER_TASK")
+    monkeypatch.delenv("LOCKS_WORKER_TASK")
     small = write(tmp_path, [assistant(20_000, datetime.now(UTC))], "small.jsonl")
     hooks.stop({**event, "transcript_path": str(small)}, store)
     assert decided(store) == []
     # endings that block the turn's end: the turn goes on, it is no moment yet
-    ended = store.create_task("work", status="done", source="cauce", session_id="s1")
+    ended = store.create_task("work", status="done", source="locks", session_id="s1")
     store.add_event(ended["id"], "finished", status="done")
     assert hooks.stop(event, store)["decision"] == "block"
     assert decided(store) == []
@@ -310,7 +310,7 @@ def test_a_decision_that_fails_costs_the_turn_nothing(store: Store, tmp_path, gi
 # --- the hooks see compactions, and keep the digest ----------------------------------------------
 
 
-def test_a_compaction_cauce_asked_for_is_seen_by_its_marker_and_still_gets_the_digest(store: Store, tmp_path,
+def test_a_compaction_locks_asked_for_is_seen_by_its_marker_and_still_gets_the_digest(store: Store, tmp_path,
                                                                                       git_repo):
     turn(store, git_repo)
     path = big(tmp_path, datetime.now(UTC))
@@ -356,7 +356,7 @@ def step(store: Store, mode: str, version: str = "2.1.302", at: datetime | None 
 def test_suggest_hands_the_line_once(store: Store, pending_decision):
     first = step(store, "suggest")
     assert first == {"action": "suggest", "decision": pending_decision["id"],
-                     "line": f"/compact [cauce-compaction #{pending_decision['id']}] keep the requests"}
+                     "line": f"/compact [locks-compaction #{pending_decision['id']}] keep the requests"}
     assert step(store, "suggest") == {"action": None}
     assert step(store, "off") == {"action": None}
 
@@ -370,7 +370,7 @@ def test_off_takes_nothing_and_a_cold_or_compacted_decision_is_gone(store: Store
 
 
 def test_a_run_that_took_the_checkout_since_leaves_it_waiting(store: Store, pending_decision, git_repo):
-    run = store.create_task("run", status="running", source="cauce", session_id="s1")
+    run = store.create_task("run", status="running", source="locks", session_id="s1")
     with isolate.in_place(home(), git_repo, run["id"], waiting=print, check=lambda: None):
         assert step(store, "auto") == {"action": None, "wait": True}
     assert step(store, "auto")["action"] == "submit"
@@ -379,7 +379,7 @@ def test_a_run_that_took_the_checkout_since_leaves_it_waiting(store: Store, pend
 def test_auto_submits_and_the_marker_shows_this_build_runs_it(store: Store, pending_decision):
     decision = pending_decision["id"]
     assert step(store, "auto")["action"] == "submit"
-    compaction.seen(store, "s1", "PreCompact", trigger="manual", instructions=f"[cauce-compaction #{decision}] x")
+    compaction.seen(store, "s1", "PreCompact", trigger="manual", instructions=f"[locks-compaction #{decision}] x")
     assert step(store, "auto") == {"action": None}
     assert compaction.builds(home())["2.1.302"]["verdict"] == compaction.RUNS
     [settled] = store.session_events("s1", (compaction.SETTLED,))
@@ -392,7 +392,7 @@ def test_a_build_that_never_ran_it_falls_back_to_suggest_and_says_so_once(store:
     assert step(store, "auto") == {"action": None}  # still within the window: undecided
     late = datetime.now(UTC) + timedelta(seconds=compaction.DETECT_S + 1)
     found = step(store, "auto", at=late)
-    assert "did not run the /compact cauce submitted" in found["said"] and "2.1.302" in found["said"]
+    assert "did not run the /compact locks submitted" in found["said"] and "2.1.302" in found["said"]
     assert compaction.builds(home())["2.1.302"]["verdict"] == compaction.IGNORED
     [settled] = store.session_events("s1", (compaction.SETTLED,))
     assert not settled["data"]["ran"]
@@ -400,12 +400,12 @@ def test_a_build_that_never_ran_it_falls_back_to_suggest_and_says_so_once(store:
     task = store.last_prompt_task("s1")
     again = store.add_event(task["id"], compaction.DECIDED, **{**pending_decision, "id": None})
     assert step(store, "auto") == {"action": "suggest", "decision": again,
-                                   "line": f"/compact [cauce-compaction #{again}] keep the requests"}
+                                   "line": f"/compact [locks-compaction #{again}] keep the requests"}
     # a new Claude Code version is tried again
     third = store.add_event(task["id"], compaction.DECIDED, **{**pending_decision, "id": None})
     assert step(store, "auto", version="2.1.400") == {
-        "action": "submit", "decision": third, "line": f"/compact [cauce-compaction #{third}] keep the requests",
-        "instructions": f"[cauce-compaction #{third}] keep the requests"}
+        "action": "submit", "decision": third, "line": f"/compact [locks-compaction #{third}] keep the requests",
+        "instructions": f"[locks-compaction #{third}] keep the requests"}
 
 
 @pytest.mark.parametrize(("seen", "ran"), [
@@ -471,7 +471,7 @@ def test_what_the_engine_answered_is_kept_and_only_a_compaction_teaches_the_buil
 
 def test_the_compact_setting_takes_its_words():
     # Every environment carries the fixture's home: one without it is the person's.
-    env = {"CAUCE_HOME": str(home())}
+    env = {"LOCKS_HOME": str(home())}
     assert config.choice("compact", env) == "orchestrator"  # the orchestrating session decides
     config.sync_plugin_options({**env, "CLAUDE_PLUGIN_OPTION_COMPACT": "Auto", "CLAUDE_PLUGIN_OPTION_NOTES": "false"})
     assert config.load(env)["compact"] == "auto" and config.load(env)["notes"] is False
@@ -479,12 +479,12 @@ def test_the_compact_setting_takes_its_words():
     assert config.load(env)["compact"] == "off"  # a word, never read as a boolean
     config.sync_plugin_options({**env, "CLAUDE_PLUGIN_OPTION_COMPACT": "sometimes"})
     assert config.choice("compact", env) == "off"
-    assert config.choice("compact", {**env, "CAUCE_COMPACT": "suggest"}) == "suggest"
-    assert config.choice("compact", {**env, "CAUCE_COMPACT": "bogus"}) == "off"
+    assert config.choice("compact", {**env, "LOCKS_COMPACT": "suggest"}) == "suggest"
+    assert config.choice("compact", {**env, "LOCKS_COMPACT": "bogus"}) == "off"
 
 
-def test_cauce_config_compact(capsys, monkeypatch):
-    monkeypatch.delenv("CAUCE_COMPACT", raising=False)
+def test_locks_config_compact(capsys, monkeypatch):
+    monkeypatch.delenv("LOCKS_COMPACT", raising=False)
     assert cli.main(["config", "compact", "auto"]) == 0
     assert capsys.readouterr().out.strip() == 'compact = "auto"'
     assert cli.main(["config", "compact", "on"]) == 1
@@ -492,8 +492,8 @@ def test_cauce_config_compact(capsys, monkeypatch):
     assert config.load()["compact"] == "auto"
 
 
-def test_cauce_compaction_next_and_delivered(store: Store, pending_decision, capsys, monkeypatch):
-    monkeypatch.setenv("CAUCE_COMPACT", "auto")
+def test_locks_compaction_next_and_delivered(store: Store, pending_decision, capsys, monkeypatch):
+    monkeypatch.setenv("LOCKS_COMPACT", "auto")
     assert cli.main(["compaction", "next", "--session", "s1", "--version", "2.1.302", "--json"]) == 0
     answer = json.loads(capsys.readouterr().out)
     assert answer["action"] == "submit" and answer["decision"] == pending_decision["id"]
@@ -501,22 +501,22 @@ def test_cauce_compaction_next_and_delivered(store: Store, pending_decision, cap
     assert json.loads(capsys.readouterr().out) == {"kept": True}
     assert cli.main(["compaction", "next", "--session", "s1"]) == 0
     assert capsys.readouterr().out == ""
-    monkeypatch.setenv("CAUCE_WORKER_TASK", "4")
+    monkeypatch.setenv("LOCKS_WORKER_TASK", "4")
     assert cli.main(["compaction", "next", "--session", "s1", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == {"action": None}
     # with the setting off, the idle poll's question opens no store
-    monkeypatch.delenv("CAUCE_WORKER_TASK")
-    monkeypatch.setenv("CAUCE_COMPACT", "off")
+    monkeypatch.delenv("LOCKS_WORKER_TASK")
+    monkeypatch.setenv("LOCKS_COMPACT", "off")
     monkeypatch.setattr(cli.Store, "open", lambda *a, **k: pytest.fail("the store was opened"))
     assert cli.main(["compaction", "next", "--session", "s1", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == {"action": None}
 
 
-def test_orchestrator_mode_advises_the_session_and_never_submits_cauce_s_own_moment(store: Store,
+def test_orchestrator_mode_advises_the_session_and_never_submits_locks_s_own_moment(store: Store,
                                                                                    pending_decision):
     found = step(store, "orchestrator")
     assert found["action"] == "advise" and found["decision"] == pending_decision["id"] and "line" not in found
-    assert found["advice"].startswith(f"cauce [compaction #{pending_decision['id']}]: this looks like a good moment")
+    assert found["advice"].startswith(f"locks [compaction #{pending_decision['id']}]: this looks like a good moment")
     assert "It is your call" in found["advice"] and "`compact` tool" in found["advice"]
     assert not any(r in found["advice"] for r in ("not now",))
     assert step(store, "orchestrator") == {"action": None}  # once
@@ -525,9 +525,9 @@ def test_orchestrator_mode_advises_the_session_and_never_submits_cauce_s_own_mom
 def test_the_session_s_own_request_runs_whatever_the_cache_with_its_keep_quoted_apart(store: Store, tmp_path,
                                                                                       git_repo):
     assert compaction.request(store, home(), session_id="s1", cwd=str(git_repo)) == {
-        "error": "cauce has seen no turn of this session yet"}
+        "error": "locks has seen no turn of this session yet"}
     turn(store, git_repo)
-    sent = store.create_task("build the export", status="running", source="cauce", session_id="s1")
+    sent = store.create_task("build the export", status="running", source="locks", session_id="s1")
     asked = compaction.request(store, home(), session_id="s1", cwd=str(git_repo), why="the feature landed",
                                keep="the open question on refunds", transcript=big(tmp_path, datetime.now(UTC)))
     assert asked["requested"] and asked["tokens"] == 150_000
@@ -539,7 +539,7 @@ def test_the_session_s_own_request_runs_whatever_the_cache_with_its_keep_quoted_
     later = datetime.now(UTC) + timedelta(minutes=50)
     found = step(store, "orchestrator", at=later)
     assert found["action"] == "submit" and found["decision"] == asked["id"]
-    assert found["instructions"].startswith(f"[cauce-compaction #{asked['id']}] ")
+    assert found["instructions"].startswith(f"[locks-compaction #{asked['id']}] ")
     assert step(store, "orchestrator") == {"action": None}
     # Without a reason or a keep, it still goes, saying so.
     bare = compaction.request(store, home(), session_id="s1", cwd=str(git_repo), transcript=tmp_path / "none")
@@ -547,28 +547,28 @@ def test_the_session_s_own_request_runs_whatever_the_cache_with_its_keep_quoted_
     assert step(store, "suggest")["action"] == "submit"  # whatever the mode: the session asked
 
 
-def test_cauce_compaction_request(store: Store, git_repo, capsys, monkeypatch):
+def test_locks_compaction_request(store: Store, git_repo, capsys, monkeypatch):
     turn(store, git_repo)
     assert cli.main(["compaction", "request", "--session", "s1", "--cwd", str(git_repo), "--why", "done",
                      "--keep", "x", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["requested"]
-    monkeypatch.setenv("CAUCE_COMPACT", "off")
+    monkeypatch.setenv("LOCKS_COMPACT", "off")
     assert cli.main(["compaction", "request", "--session", "s1", "--json"]) == 0
-    assert "turned cauce's compaction off" in json.loads(capsys.readouterr().out)["error"]
+    assert "turned locks' compaction off" in json.loads(capsys.readouterr().out)["error"]
     assert cli.main(["compaction", "request", "--session", "s1"]) == 1
-    assert "turned cauce's compaction off" in capsys.readouterr().err
-    monkeypatch.setenv("CAUCE_WORKER_TASK", "4")
+    assert "turned locks' compaction off" in capsys.readouterr().err
+    monkeypatch.setenv("LOCKS_WORKER_TASK", "4")
     assert cli.main(["compaction", "request", "--session", "s1", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out) == {"error": "a cauce worker never compacts"}
+    assert json.loads(capsys.readouterr().out) == {"error": "a locks worker never compacts"}
 
 
 def test_the_human_form_prints_the_line(store: Store, pending_decision, capsys, monkeypatch):
-    monkeypatch.setenv("CAUCE_COMPACT", "suggest")
+    monkeypatch.setenv("LOCKS_COMPACT", "suggest")
     assert cli.main(["compaction", "next", "--session", "s1"]) == 0
-    assert capsys.readouterr().out.startswith(f"/compact [cauce-compaction #{pending_decision['id']}]")
+    assert capsys.readouterr().out.startswith(f"/compact [locks-compaction #{pending_decision['id']}]")
 
 
-# --- cauce stats ---------------------------------------------------------------------------------------
+# --- locks stats ---------------------------------------------------------------------------------------
 
 
 def test_stats_lists_each_decision_its_cost_against_a_cold_one_and_whether_it_ran(store: Store, pending_decision,
@@ -578,7 +578,7 @@ def test_stats_lists_each_decision_its_cost_against_a_cold_one_and_whether_it_ra
     store.add_event(task["id"], compaction.DECIDED, **wait.data(), mode="suggest")
     step(store, "suggest")
     compaction.seen(store, "s1", "PreCompact", trigger="manual",
-                    instructions=f"[cauce-compaction #{pending_decision['id']}] keep")
+                    instructions=f"[locks-compaction #{pending_decision['id']}] keep")
     report = analysis.compute(store, days=1)
     first, second = report["compactions"]
     assert first["now"] and first["delivered"] == "suggest" and first["ran"] is True
@@ -610,12 +610,12 @@ def test_a_then_reaches_the_session_once_its_compaction_finished(store: Store, t
     # Delivered, not finished yet: the mod is told to look again.
     assert step(store, "orchestrator") == {"action": None, "wait": True}
     compaction.seen(store, "s1", "PreCompact", trigger="manual",
-                    instructions=f"[cauce-compaction #{asked['id']}] x")
+                    instructions=f"[locks-compaction #{asked['id']}] x")
     assert step(store, "orchestrator") == {"action": None, "wait": True}  # started, not done
     compaction.seen(store, "s1", "PostCompact", trigger="manual")
     found = step(store, "orchestrator")
     assert found["action"] == "continue" and found["decision"] == asked["id"]
-    assert found["text"].startswith(f"cauce [compaction #{asked['id']}]: this session compacted.")
+    assert found["text"].startswith(f"locks [compaction #{asked['id']}]: this session compacted.")
     assert '"merge #12, then start the export". Go on with it now.' in found["text"]
     assert step(store, "orchestrator") == {"action": None}  # once
     assert [e["data"]["decision"] for e in store.session_events("s1", (compaction.CONTINUED,))] == [asked["id"]]
@@ -641,7 +641,7 @@ def test_a_then_follows_a_settled_compaction_a_veto_too_and_never_one_never_deli
     assert "then" not in bare
 
 
-def test_cauce_compaction_request_then(store: Store, git_repo, capsys):
+def test_locks_compaction_request_then(store: Store, git_repo, capsys):
     turn(store, git_repo)
     assert cli.main(["compaction", "request", "--session", "s1", "--cwd", str(git_repo), "--why", "done",
                      "--then", "start the export", "--json"]) == 0

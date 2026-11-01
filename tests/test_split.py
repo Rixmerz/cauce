@@ -1,10 +1,10 @@
-"""A request that is several tasks, split into its pieces (`cauce split`)."""
+"""A request that is several tasks, split into its pieces (`locks split`)."""
 from __future__ import annotations
 
 import json
 
-from cauce import after, cli, split, stops
-from cauce.store import Store
+from locks import after, cli, split, stops
+from locks.store import Store
 
 LISTED = ("Build the student side of the platform:\n- the opinion form in src/app/opinion/form.ts\n"
           "- the quiz per module in src/app/quiz/\n- the forum in src/app/forum/forum.ts")
@@ -51,14 +51,14 @@ def test_prose_is_split_by_the_model_and_read_strictly():
 def test_split_queue_starts_the_pieces_on_what_the_task_kept_and_moves_what_waited(git_repo, capsys, monkeypatch):
     store = Store.open()
     try:
-        big = store.create_task(LISTED, status="running", source="cauce", repo="r", cwd=str(git_repo),
+        big = store.create_task(LISTED, status="running", source="locks", repo="r", cwd=str(git_repo),
                                 options=json.dumps({"verify": "npm test", "max_turns": 200}))
         stops.record(store, big["id"], stops.Stop("split", "it outgrew 120 turns as several pieces"))
         store.add_event(big["id"], "finished", status="replan", changed=["src/app/quiz/q.ts"], commit="abc123",
                         stop={"cause": "split", "reason": "x"})
         later = store.enqueue("small fixes", repo="r", cwd=str(git_repo), options={"after": {"task": big["id"]}})
         view = stops.view(store, store.get_task(big["id"]))
-        assert view["next"] == f"cauce split {big['id']}" and "--queue" in view["todo"]
+        assert view["next"] == f"locks split {big['id']}" and "--queue" in view["todo"]
     finally:
         store.close()
     assert cli.main(["split", str(big["id"])]) == 0
@@ -83,5 +83,5 @@ def test_split_queue_starts_the_pieces_on_what_the_task_kept_and_moves_what_wait
 
 
 def test_a_worker_never_queues_a_split(monkeypatch, capsys):
-    monkeypatch.setenv("CAUCE_WORKER_TASK", "7")
+    monkeypatch.setenv("LOCKS_WORKER_TASK", "7")
     assert cli.main(["split", "x", "--queue"]) == 2

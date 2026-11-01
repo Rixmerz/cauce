@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from cauce.adapters import ABSENT, PRESENT, UNREADABLE, Status
-from cauce.adapters import livespec as livespec_mod
-from cauce.adapters.livespec import _HINTS, PINNED, TOOLS, Livespec, is_test_path
-from cauce.adapters.livespec import _lock as lock
+from locks.adapters import ABSENT, PRESENT, UNREADABLE, Status
+from locks.adapters import livespec as livespec_mod
+from locks.adapters.livespec import _HINTS, PINNED, TOOLS, Livespec, is_test_path
+from locks.adapters.livespec import _lock as lock
 
 from .conftest import git
 from .livespec_fixture import build
@@ -23,7 +23,7 @@ from .livespec_fixture import build
 
 def adapter(tmp_path: Path, path: str = "", **kw) -> Livespec:
     env = {"HOME": str(tmp_path / "home"), "PATH": path, "CLAUDE_CONFIG_DIR": str(tmp_path / "cc"),
-           "CAUCE_HOME": str(tmp_path / "cauce")}
+           "LOCKS_HOME": str(tmp_path / "locks")}
     return Livespec(env=env, **kw)
 
 
@@ -214,9 +214,9 @@ def test_background_refresh_never_waits(tmp_path, git_repo):
     a = adapter(tmp_path, tool(tmp_path, "uvx"), popen=lambda argv, **kw: started.append((argv, kw)))
     assert a.refresh_in_background(git_repo, tmp_path / "logs" / "livespec.log")
     argv, kw = started[0]
-    # Through cauce, so the refresh holds the same lock as every other one.
-    assert argv[1:] == ["-m", "cauce", "index-livespec", str(git_repo.resolve())] and kw["start_new_session"]
-    assert kw["env"]["CAUCE_HOOKS_OFF"] == "1"
+    # Through locks, so the refresh holds the same lock as every other one.
+    assert argv[1:] == ["-m", "locks", "index-livespec", str(git_repo.resolve())] and kw["start_new_session"]
+    assert kw["env"]["LOCKS_HOOKS_OFF"] == "1"
     with lock(a.lock_path(git_repo), wait_s=0):
         assert a.indexing(git_repo) and not a.refresh_in_background(git_repo, tmp_path / "logs" / "livespec.log")
     assert len(started) == 1 and not a.indexing(git_repo)
@@ -289,7 +289,7 @@ def test_the_briefing_says_how_many_symbols_the_request_reaches(tmp_path, git_re
 def test_a_resolver_error_on_a_plugin_release_is_read_as_unpublished_never_as_a_failure(tmp_path, git_repo):
     """uv's resolver says "No solution found … livespec==X" or "there is no version of
     livespec==X": the release is not published, so the pinned one runs, and a failure an older
-    cauce recorded that way is not repeated (nor retried) at that commit."""
+    locks recorded that way is not repeated (nor retried) at that commit."""
     assert livespec_mod.unpublished_in("× No solution found when resolving tool dependencies:\n"
                                        "╰─▶ Because there is no version of livespec==0.33.0 and you require "
                                        "livespec==0.33.0, we can conclude ...") == "0.33.0"
@@ -324,7 +324,7 @@ def test_a_resolver_error_on_a_plugin_release_is_read_as_unpublished_never_as_a_
 
 
 class Handle:
-    """The `cauce index-livespec` the adapter started: what its `wait` does is the test's."""
+    """The `locks index-livespec` the adapter started: what its `wait` does is the test's."""
 
     def __init__(self, on_wait):
         self.on_wait, self.killed = on_wait, False
@@ -408,8 +408,8 @@ def test_ensure_fresh_builds_a_missing_index_and_waits_for_it(tmp_path, git_repo
     a = adapter(tmp_path, tool(tmp_path, "uvx"), popen=spawner(started, builds))
     found = a.ensure_fresh(git_repo, 30, say=said.append)
     assert [(f.root, f.outcome) for f in found] == [(git_repo.resolve(), livespec_mod.BUILT)]
-    assert started[0][1:] == ["-m", "cauce", "index-livespec", str(git_repo.resolve())]
-    assert said == ["cauce: livespec is indexing repo before the worker starts (waits up to 30 s)"]
+    assert started[0][1:] == ["-m", "locks", "index-livespec", str(git_repo.resolve())]
+    assert said == ["locks: livespec is indexing repo before the worker starts (waits up to 30 s)"]
     assert found[0].line().startswith("livespec: repo: indexed before the worker started")
     assert a.inspect(git_repo).present
 
@@ -431,7 +431,7 @@ def test_ensure_fresh_gives_a_slow_index_the_wait_and_never_kills_it(tmp_path, g
     found = a.ensure_fresh(git_repo, 7)
     assert [f.outcome for f in found] == [livespec_mod.LATE]
     assert 0 < slow[0] <= 7
-    assert "still indexing after the 7 s cauce waits; this task runs without it" in found[0].line()
+    assert "still indexing after the 7 s locks waits; this task runs without it" in found[0].line()
     assert not handles[0].killed
 
 
@@ -470,7 +470,7 @@ def test_past_the_wait_a_stale_index_is_said_to_be_used_as_it_is_not_to_be_missi
     a = adapter(tmp_path, tool(tmp_path, "uvx"), popen=spawner([], too_long))
     found = a.ensure_fresh(git_repo, 7)
     assert [f.outcome for f in found] == [livespec_mod.LATE]
-    assert "still indexing after the 7 s cauce waits; this task uses the index as it is" in found[0].line()
+    assert "still indexing after the 7 s locks waits; this task uses the index as it is" in found[0].line()
     assert "runs without it" not in found[0].line()
 
 

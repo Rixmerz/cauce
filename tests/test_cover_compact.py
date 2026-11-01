@@ -1,4 +1,4 @@
-"""Branches of `cauce.compaction` and `cauce.compact` their suites leave unread."""
+"""Branches of `locks.compaction` and `locks.compact` their suites leave unread."""
 from __future__ import annotations
 
 import json
@@ -6,8 +6,8 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cauce import compact, compaction
-from cauce.store import Store, home
+from locks import compact, compaction
+from locks.store import Store, home
 
 from .test_compaction import assistant, big, turn, write
 
@@ -28,15 +28,15 @@ def test_a_cache_write_split_that_names_no_lifetime_leaves_it_unknown(tmp_path: 
 
 
 def test_git_that_cannot_run_and_no_checkout_have_no_merges_and_no_unmerged_branch(tmp_path: Path, monkeypatch):
-    assert compaction._unmerged(None, "cauce/task-1") is False
-    assert compaction._unmerged(str(tmp_path / "gone"), "cauce/task-1") is False
+    assert compaction._unmerged(None, "locks/task-1") is False
+    assert compaction._unmerged(str(tmp_path / "gone"), "locks/task-1") is False
 
     def broken(*a, **kw):
         raise OSError("no git")
 
     monkeypatch.setattr(subprocess, "run", broken)
     assert compaction._git(str(tmp_path), "log") is None
-    assert compaction._unmerged(str(tmp_path), "cauce/task-1") is False
+    assert compaction._unmerged(str(tmp_path), "locks/task-1") is False
 
 
 def test_a_context_worth_a_record_with_no_break_keeps_no_instructions(store: Store, tmp_path: Path, git_repo: Path):

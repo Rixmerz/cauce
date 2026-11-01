@@ -1,23 +1,23 @@
-"""cauce against one plain Claude Code session, on the same build.
+"""locks against one plain Claude Code session, on the same build.
 
 Real: each run is a fresh copy of the pricing engine (`build.repository`) and the same request
 (`build.ASK`, `build.HARD` added for `--hard`). The hidden tests the workers never see judge the
 result (`build.hidden`). Arms:
 
 - `opus/low`, `opus/medium`, `sonnet/high`, ...: one `claude -p` at that model and effort, the
-  request as its whole prompt, nothing of cauce around it;
+  request as its whole prompt, nothing of locks around it;
 - `karpathy:<cell>`: the same session with `andrej-karpathy-skills`' CLAUDE.md (behavioural
   guidelines: think first, simplicity, surgical changes, verifiable goals) committed in the copy,
   where Claude Code reads it as the project's instructions (`KARPATHY`, a clone of that repository);
-- `cauce`: `cauce run <request> --verify 'make test'` in the copy, with a cauce home of its own
-  (no history: every start comes from cauce's rules), the work judged on the branch it kept. Its
+- `locks`: `locks run <request> --verify 'make test'` in the copy, with a locks home of its own
+  (no history: every start comes from locks' rules), the work judged on the branch it kept. Its
   wall time ends when the command exits; a late independent check (`late_verifier`) that runs after
   it is waited for and kept apart (`late_s`, `late_passed`), never in the wall time.
 
 The wall time is the whole command's, from start to its exit; the cost is what the CLI reports
-(for cauce, the task's: classification, attempts and the independent check).
+(for locks, the task's: classification, attempts and the independent check).
 
-    python bench/speed/versus.py run cauce,opus/low,opus/medium 3 3 [--hard]
+    python bench/speed/versus.py run locks,opus/low,opus/medium 3 3 [--hard]
     python bench/speed/versus.py report
 """
 from __future__ import annotations
@@ -41,7 +41,7 @@ sys.path.insert(0, str(HERE))
 
 import build  # noqa: E402
 
-from cauce import __version__  # noqa: E402
+from locks import __version__  # noqa: E402
 
 OUT = HERE / "results-versus.jsonl"
 #: A clone of github.com/multica-ai/andrej-karpathy-skills, for the `karpathy:` arms.
@@ -66,21 +66,21 @@ def plain(cell: str, where: Path, request: str) -> dict:
     return {"cost": round(float(reply.get("total_cost_usd") or 0), 4), "turns": reply.get("num_turns")}
 
 
-def cauce(where: Path, request: str, arm: str = "cauce") -> dict:
-    """`cauce`, `cauce@<cell>` (a pinned start) and either with `-noverify` (no independent check)."""
-    home = Path(tempfile.mkdtemp(prefix="cauce-home-"))
-    env = {**os.environ, "CAUCE_HOME": str(home), "CAUCE_AUTOWORK": "off", "CAUCE_NAMES": "off"}
-    env.pop("CAUCE_SESSION_ID", None)
+def locks(where: Path, request: str, arm: str = "locks") -> dict:
+    """`locks`, `locks@<cell>` (a pinned start) and either with `-noverify` (no independent check)."""
+    home = Path(tempfile.mkdtemp(prefix="locks-home-"))
+    env = {**os.environ, "LOCKS_HOME": str(home), "LOCKS_AUTOWORK": "off", "LOCKS_NAMES": "off"}
+    env.pop("LOCKS_SESSION_ID", None)
     env.pop("CLAUDE_CODE_SESSION_ID", None)
     if arm.endswith("-noverify"):
-        env["CAUCE_VERIFIER"] = "off"
+        env["LOCKS_VERIFIER"] = "off"
         arm = arm.removesuffix("-noverify")
     start = ["--start", arm.split("@", 1)[1]] if "@" in arm else []
-    done = subprocess.run([str(ROOT / "bin" / "cauce"), "run", request, "--verify", "make test", *start], cwd=where,
+    done = subprocess.run([str(ROOT / "bin" / "locks"), "run", request, "--verify", "make test", *start], cwd=where,
                           env=env, capture_output=True, text=True, timeout=7200)
     ended = time.monotonic()
-    db = sqlite3.connect(home / "cauce.db")
-    task = db.execute("SELECT id, status, start_cell, final_cell, cost_usd FROM tasks WHERE source = 'cauce' "
+    db = sqlite3.connect(home / "locks.db")
+    task = db.execute("SELECT id, status, start_cell, final_cell, cost_usd FROM tasks WHERE source = 'locks' "
                       "ORDER BY id DESC LIMIT 1").fetchone()
     attempts = db.execute("SELECT COUNT(*) FROM attempts WHERE task_id = ?", (task[0],)).fetchone()[0] if task else 0
     late = waited_late(db, task[0]) if task else {}
@@ -92,7 +92,7 @@ def cauce(where: Path, request: str, arm: str = "cauce") -> dict:
     shutil.rmtree(home, ignore_errors=True)
     if not task:
         return {"error": (done.stderr or done.stdout)[-300:]}
-    branch = f"cauce/task-{task[0]}"
+    branch = f"locks/task-{task[0]}"
     if subprocess.run(["git", "rev-parse", "--verify", "-q", branch], cwd=where, capture_output=True).returncode == 0:
         subprocess.run(["git", "checkout", "-q", branch], cwd=where, check=True)
     return {"cost": round(float(task[4] or 0), 4), "status": task[1], "start": task[2], "final": task[3],
@@ -100,8 +100,8 @@ def cauce(where: Path, request: str, arm: str = "cauce") -> dict:
 
 
 def waited_late(db: sqlite3.Connection, task_id: int, within_s: float = 900) -> dict:
-    """A late independent check (`late_verifier`) runs after `cauce run` exits: wait for its verdict, so
-    the cauce home is not removed under it, and keep what it said apart from the foreground wall time."""
+    """A late independent check (`late_verifier`) runs after `locks run` exits: wait for its verdict, so
+    the locks home is not removed under it, and keep what it said apart from the foreground wall time."""
     if not db.execute("SELECT 1 FROM events WHERE task_id = ? AND kind = 'verifier_deferred'",
                       (task_id,)).fetchone():
         return {}
@@ -144,25 +144,25 @@ SPLIT = (
 
 
 def split(where: Path) -> dict:
-    """`cauce-split`: the two tasks of `SPLIT` run at once, each with the kind a session gives it, in one cauce
+    """`locks-split`: the two tasks of `SPLIT` run at once, each with the kind a session gives it, in one locks
     home; their branches merged into the checkout after (a conflict is recorded, nothing resolved)."""
-    home = Path(tempfile.mkdtemp(prefix="cauce-home-"))
-    env = {**os.environ, "CAUCE_HOME": str(home), "CAUCE_AUTOWORK": "off", "CAUCE_NAMES": "off"}
-    env.pop("CAUCE_SESSION_ID", None)
+    home = Path(tempfile.mkdtemp(prefix="locks-home-"))
+    env = {**os.environ, "LOCKS_HOME": str(home), "LOCKS_AUTOWORK": "off", "LOCKS_NAMES": "off"}
+    env.pop("LOCKS_SESSION_ID", None)
     env.pop("CLAUDE_CODE_SESSION_ID", None)
-    runs = [subprocess.Popen([str(ROOT / "bin" / "cauce"), "run", text, "--verify", "make test", "--kind", kind],
+    runs = [subprocess.Popen([str(ROOT / "bin" / "locks"), "run", text, "--verify", "make test", "--kind", kind],
                              cwd=where, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             for kind, text in SPLIT]
     for run in runs:
         run.wait(timeout=7200)
-    db = sqlite3.connect(home / "cauce.db")
-    tasks = db.execute("SELECT id, status, cost_usd FROM tasks WHERE source = 'cauce' ORDER BY id").fetchall()
+    db = sqlite3.connect(home / "locks.db")
+    tasks = db.execute("SELECT id, status, cost_usd FROM tasks WHERE source = 'locks' ORDER BY id").fetchall()
     db.close()
     shutil.rmtree(home, ignore_errors=True)
     git = ["git", "-c", "user.email=b@b", "-c", "user.name=b"]
     conflict = False
     for task_id, _, _ in tasks:
-        merged = subprocess.run([*git, "merge", "--no-ff", "-q", "-m", f"task {task_id}", f"cauce/task-{task_id}"],
+        merged = subprocess.run([*git, "merge", "--no-ff", "-q", "-m", f"task {task_id}", f"locks/task-{task_id}"],
                                 cwd=where, capture_output=True, text=True)
         if merged.returncode != 0:
             conflict = True
@@ -180,15 +180,15 @@ def one(arm: str, variant: str) -> dict:
                        cwd=where, check=True)
     began = time.monotonic()
     try:
-        got = (split(where) if arm == "cauce-split"
-               else cauce(where, ask(variant), arm.removesuffix("+karpathy")) if arm.startswith("cauce")
+        got = (split(where) if arm == "locks-split"
+               else locks(where, ask(variant), arm.removesuffix("+karpathy")) if arm.startswith("locks")
                else plain(arm.removeprefix("karpathy:"), where, ask(variant)))
     except subprocess.TimeoutExpired:
         got = {"error": "timed out"}
     # The wall time ends when the command exits: a late check waited for after it is `late_s`.
     wall = time.monotonic() - began - float(got.get("late_s") or 0)
     visible = subprocess.run(["make", "test"], cwd=where, capture_output=True, text=True, timeout=600).returncode == 0
-    label = arm.replace("cauce", f"cauce {__version__}", 1) if arm.startswith("cauce") else arm
+    label = arm.replace("locks", f"locks {__version__}", 1) if arm.startswith("locks") else arm
     row = {"arm": label, "variant": variant, "wall_s": round(wall, 1), "foreground": True,
            "visible": visible,
            "hidden": build.hidden(where, variant), "of": 10 if variant == "hard" else 7, **got,
@@ -203,7 +203,7 @@ def main(argv: list[str]) -> None:
     if argv[0] == "report":
         rows = [json.loads(x) for x in OUT.read_text().splitlines() if x.strip()]
         for r in rows:
-            r["arm"] = "cauce 0.49.0" if r["arm"] == "cauce" else r["arm"]  # rows from before versions were kept
+            r["arm"] = "locks 0.49.0" if r["arm"] == "locks" else r["arm"]  # rows from before versions were kept
             if r.get("late_s") and not r.get("foreground"):  # rows whose wall time held the late wait
                 r["wall_s"] = round(r["wall_s"] - r["late_s"], 1)
         print(f"{'build':<7}{'arm':<34}{'n':>3}{'right':>8}{'hidden':>9}{'wall p50':>10}{'mean':>7}{'$ p50':>8}"

@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import pytest
 
-from cauce import hooks, repo, specs
-from cauce.adapters.livespec import LivespecError
-from cauce.cli import main
-from cauce.orchestrate import run
+from locks import hooks, repo, specs
+from locks.adapters.livespec import LivespecError
+from locks.cli import main
+from locks.orchestrate import run
 
 from .conftest import git
 from .test_orchestrate import Script, kind, ok
@@ -52,7 +52,7 @@ def test_a_writing_worker_is_told_to_keep_the_specs_and_the_ending_offers_to_cat
     finished = store.final_event(report.task_id)["data"]
     assert finished["specs"]["code_commits"] >= specs.BEHIND_COMMITS
     # The session that sent it hears it with its ending, and the command that would catch them up.
-    assert any("touches no spec" in line for line in report.impact)  # what `cauce run` prints
+    assert any("touches no spec" in line for line in report.impact)  # what `locks run` prints
     text, _ = hooks.endings(store, "s1")
     assert "touches no spec" in text and f"--after task:{report.task_id}" in text and "Change no code." in text
 
@@ -73,7 +73,7 @@ def test_a_change_that_wrote_a_spec_or_a_reading_task_hears_nothing(git_repo, st
 @pytest.mark.usefixtures("no_verifier")
 def test_with_the_setting_off_specs_are_only_read(git_repo, store, monkeypatch):
     _behind(git_repo)
-    monkeypatch.setenv("CAUCE_SPECS", "off")
+    monkeypatch.setenv("LOCKS_SPECS", "off")
     script = Script(ok(), write="app.py")
     report = run("add a logout button", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
     assert "OpenSpec" not in script.specs[0].prompt and "specs" not in store.final_event(report.task_id)["data"]
@@ -129,7 +129,7 @@ def test_spec_first_binds_only_builds_and_only_where_the_person_turned_it_on(git
     assert specs.owed("feature", ["README.md", "src/a.py"]) == ["src/a.py"]
 
 
-def test_cauce_specs_says_how_far_behind_and_turns_spec_first_on(git_repo, capsys):
+def test_locks_specs_says_how_far_behind_and_turns_spec_first_on(git_repo, capsys):
     _behind(git_repo)
     assert main(["specs", "--repo", str(git_repo)]) == 0
     assert "behind" in capsys.readouterr().out
@@ -140,9 +140,9 @@ def test_cauce_specs_says_how_far_behind_and_turns_spec_first_on(git_repo, capsy
 
 
 def test_the_worker_asked_again_is_told_to_write_the_spec_not_to_reformat(git_repo):
-    from cauce import launch
-    from cauce.escalate import Attempt, Cell
-    from cauce.orchestrate import _reshape_prompt, continuation_note
+    from locks import launch
+    from locks.escalate import Attempt, Cell
+    from locks.orchestrate import _reshape_prompt, continuation_note
 
     held = Attempt(Cell("sonnet", "medium"), 30, False, None, "built it", shape=specs.first_shape(["app.py"]))
     unread = Attempt(Cell("sonnet", "medium"), 30, False, None, "built it", shape="two result blocks")
@@ -323,7 +323,7 @@ def _link_run(git_repo, store, tmp_path, monkeypatch, files, *, indexed=True, of
     from .livespec_fixture import build
     from .test_orchestrate import _livespec
 
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
     if not (git_repo / "openspec").exists():
         _spec_repo(git_repo)
     if indexed:
@@ -349,7 +349,7 @@ def test_a_spec_the_worker_wrote_with_no_comment_is_said_and_told_to_the_indepen
     said = _links_said(report)
     assert len(said) == 1 and "wrote `login-password-reset`" in said[0] and "blocks" in said[0]
     prompt, = writes.verifier_prompts
-    assert "`@spec:<id>` comment" in prompt and "cauce found these without the comment:" in prompt
+    assert "`@spec:<id>` comment" in prompt and "locks found these without the comment:" in prompt
     assert "- the change wrote `login-password-reset`" in prompt and specs.LINK_PREFIX not in prompt
     assert "a warning, never a blocker" in prompt
 
@@ -361,7 +361,7 @@ def test_a_spec_whose_functions_carry_the_comment_is_no_finding(git_repo, store,
     assert report.status == "done"
     assert _links_said(report) == []
     assert writes.verifier_prompts
-    assert all("cauce found these without the comment" not in p for p in writes.verifier_prompts)
+    assert all("locks found these without the comment" not in p for p in writes.verifier_prompts)
     assert not any(NO_LINK_RISK in reason for reason in report.plan.risk.reasons)
 
 
@@ -377,7 +377,7 @@ def test_a_spec_written_with_no_comment_reaches_the_independent_check_whatever_t
     assert report.plan.risk.tier == "high"
     assert NO_LINK_RISK in report.plan.risk.reasons
     prompt, = writes.verifier_prompts
-    assert "cauce found these without the comment:" in prompt
+    assert "locks found these without the comment:" in prompt
 
 
 def test_a_spec_that_was_already_there_raises_no_risk_and_runs_no_check(git_repo, store, tmp_path, monkeypatch):
@@ -404,7 +404,7 @@ def test_a_spec_that_was_already_there_is_a_warning_and_a_repository_with_no_ind
                              indexed=False)
     assert _links_said(bare) == []
     assert writes.verifier_prompts
-    assert all("cauce found these without the comment" not in p for p in writes.verifier_prompts)
+    assert all("locks found these without the comment" not in p for p in writes.verifier_prompts)
 
 
 def test_links_are_expected_only_where_specs_and_a_livespec_index_are_both_there(
@@ -415,8 +415,8 @@ def test_links_are_expected_only_where_specs_and_a_livespec_index_are_both_there
     assert not specs.links_expected(git_repo, {})  # no livespec index yet
     build(git_repo)
     assert specs.links_expected(git_repo, {})
-    assert not specs.links_expected(git_repo, {"CAUCE_SPECS": "off"})
-    assert not specs.links_expected(git_repo, {"CAUCE_LIVESPEC": "off"})
+    assert not specs.links_expected(git_repo, {"LOCKS_SPECS": "off"})
+    assert not specs.links_expected(git_repo, {"LOCKS_LIVESPEC": "off"})
     assert not specs.links_expected(tmp_path / "nowhere", {})
     assert not specs.links_expected(None, {})
 
@@ -498,18 +498,18 @@ class _Asked:
 
 
 def test_structure_asks_livespec_where_it_runs_and_says_when_it_could_not(git_repo, monkeypatch):
-    monkeypatch.setenv("CAUCE_LIVESPEC", "on")
+    monkeypatch.setenv("LOCKS_LIVESPEC", "on")
     answer = {"error_count": 0, "warning_count": 1, "findings": [{"issue": "no scenario", "count": 1}]}
     assert specs.structure(git_repo, _Asked(answer)) == [
         "structure: livespec's validate_openspec found 0 error(s) and 1 warning(s)", "  - warning: no scenario (1)"]
     assert specs.structure(git_repo, _Asked(error="livespec index failed: x")) == [
         "structure: livespec could not validate the specs (livespec index failed: x)"]
     assert specs.structure(git_repo, _Asked(server=False)) == []  # nothing to ask: nothing said
-    monkeypatch.setenv("CAUCE_LIVESPEC", "off")
+    monkeypatch.setenv("LOCKS_LIVESPEC", "off")
     assert specs.structure(git_repo, _Asked(answer)) == []
 
 
-def test_cauce_specs_reports_the_structure_after_the_drift(git_repo, capsys, monkeypatch):
+def test_locks_specs_reports_the_structure_after_the_drift(git_repo, capsys, monkeypatch):
     _behind(git_repo)
     monkeypatch.setattr(specs, "structure", lambda where, adapter=None: ["structure: livespec says so"])
     assert main(["specs", "--repo", str(git_repo)]) == 0

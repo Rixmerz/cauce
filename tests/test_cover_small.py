@@ -6,8 +6,8 @@ import os
 
 import pytest
 
-from cauce import allow, arms, capabilities, cells, dispatch, evidence, ledger, matrix, methods, naming, project
-from cauce.store import Store
+from locks import allow, arms, capabilities, cells, dispatch, evidence, ledger, matrix, methods, naming, project
+from locks.store import Store
 
 
 def test_tally_ignores_a_row_of_an_arm_it_does_not_count():
@@ -71,25 +71,25 @@ def test_a_model_without_the_dial_refuses_an_effort(monkeypatch):
 def test_a_premortem_is_judged_by_the_first_tries_of_the_steps_after_its_plan(store: Store):
     premortem = methods.METHODS["plan"]
     run = store.create_run(name="w", scope="project", source="x", definition="{}")
-    plan = store.create_task("plan it", status="done", source="cauce", repo="r", kind="plan",
+    plan = store.create_task("plan it", status="done", source="locks", repo="r", kind="plan",
                              workflow_run=run["id"])
     store.add_attempt(plan["id"], cell="sonnet/high", max_turns=10, passed=1, input_tokens=5)
     store.add_event(plan["id"], "briefed", method_arm="premortem:with")
-    built = store.create_task("build", status="done", source="cauce", repo="r", kind="implement",
+    built = store.create_task("build", status="done", source="locks", repo="r", kind="implement",
                               workflow_run=run["id"])
     store.add_attempt(built["id"], cell="sonnet/high", max_turns=10, passed=0, input_tokens=5)
     store.add_attempt(built["id"], cell="opus/high", max_turns=10, passed=1, input_tokens=5)
-    store.create_task("still queued", status="queued", source="cauce", repo="r", kind="review",
+    store.create_task("still queued", status="queued", source="locks", repo="r", kind="review",
                       workflow_run=run["id"])
-    unrun = store.create_task("no attempt", status="failed", source="cauce", repo="r", kind="review",
+    unrun = store.create_task("no attempt", status="failed", source="locks", repo="r", kind="review",
                               workflow_run=run["id"])
     assert unrun["id"] > plan["id"]
     # A plan outside a run is judged by nothing after it.
-    lone = store.create_task("lone plan", status="done", source="cauce", repo="r", kind="plan")
+    lone = store.create_task("lone plan", status="done", source="locks", repo="r", kind="plan")
     store.add_attempt(lone["id"], cell="sonnet/high", max_turns=10, passed=1, input_tokens=5)
     store.add_event(lone["id"], "briefed", method_arm="premortem:without")
     # A diagnosis's arm is no premortem's.
-    other = store.create_task("bug", status="done", source="cauce", repo="r", kind="debug-unclear")
+    other = store.create_task("bug", status="done", source="locks", repo="r", kind="debug-unclear")
     store.add_attempt(other["id"], cell="opus/high", max_turns=10, passed=1, input_tokens=5)
     store.add_event(other["id"], "briefed", method_arm="diagnosis:with")
     found = methods.trial(store, "r", premortem)
@@ -105,7 +105,7 @@ def test_no_naming_starts_while_one_runs_for_the_session(store: Store, git_repo,
     root = tmp_path / "home"
     (root / "work").mkdir(parents=True)
     monkeypatch.setattr(dispatch, "held", lambda root, scope: scope == "name:s")
-    on = {**os.environ, "CAUCE_NAMES": "on"}
+    on = {**os.environ, "LOCKS_NAMES": "on"}
     assert naming.maybe_start(store, "s", root, on, popen=lambda argv, **kw: started.append(argv)) is False
     assert started == []
 

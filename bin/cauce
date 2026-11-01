@@ -1,25 +1,12 @@
 #!/usr/bin/env bash
-# The one launcher the plugin's hooks and commands go through. Standard library
-# only, so any python3 >= 3.11 on PATH runs it; no virtualenv to build.
+# The old name of bin/locks, kept so a link or a script that runs `cauce` keeps working.
+# Locks says once (per cauce home) that the command is `locks` now.
 set -euo pipefail
-# Follow symlinks, so `ln -s .../bin/cauce ~/.local/bin/cauce` works too.
 SRC="${BASH_SOURCE[0]}"
 while [ -L "${SRC}" ]; do
   DIR="$(cd "$(dirname "${SRC}")" && pwd)"
   SRC="$(readlink "${SRC}")"
   [[ "${SRC}" == /* ]] || SRC="${DIR}/${SRC}"
 done
-ROOT="$(cd "$(dirname "${SRC}")/.." && pwd)"
-PY="${CAUCE_PYTHON:-python3}"
-if [ -z "${CAUCE_PYTHON:-}" ] && ! command -v python3 >/dev/null 2>&1; then
-  for name in python3.14 python3.13 python3.12 python3.11; do
-    if command -v "${name}" >/dev/null 2>&1; then PY="${name}"; break; fi
-  done
-fi
-# An older python3 that is found is fine here: cauce looks for a newer one itself.
-if ! command -v "${PY}" >/dev/null 2>&1; then
-  echo "cauce: ${PY} not found; install Python 3.11+ or set CAUCE_PYTHON to one" >&2
-  exit 127
-fi
-export PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
-exec "${PY}" -m cauce "$@"
+export LOCKS_INVOKED_AS=cauce
+exec "$(cd "$(dirname "${SRC}")" && pwd)/locks" "$@"

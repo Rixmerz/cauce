@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from cauce import preflight
+from locks import preflight
 
 from .conftest import git
 
@@ -99,7 +99,7 @@ def test_preflight_an_unreadable_node_spec_and_a_silent_node_are_unknown(proj, p
     _bin(Path(penv["PATH"]), "npm")
     (proj / ".nvmrc").write_text("lts/*\n")
     result = preflight.check("npm --version", proj, env=penv)
-    assert result.ok and any("no version cauce compares" in u for u in result.unknown)
+    assert result.ok and any("no version locks compares" in u for u in result.unknown)
     (proj / ".nvmrc").write_text("22\n")
     # no node on the PATH at all: it did not answer
     result = preflight.check("npm --version", proj, env=penv)
@@ -174,15 +174,15 @@ def _head(repo: Path) -> str:
 
 
 def _worktree_for(repo: Path, task_id: int) -> Path:
-    from cauce.config import home
+    from locks.config import home
 
     path = home() / "worktrees" / f"task-{task_id}"
-    git(repo, "worktree", "add", "-q", "-b", f"cauce/task-{task_id}", str(path))
+    git(repo, "worktree", "add", "-q", "-b", f"locks/task-{task_id}", str(path))
     return path
 
 
 def test_progress_estimate_and_expected_line_need_a_kind_and_passes(store):
-    from cauce import progress
+    from locks import progress
 
     assert progress.estimate(store, {"id": 1, "repo": "r"}) is None
     # options that do not parse fall back to the rules; with no passes there is nothing to say
@@ -191,14 +191,14 @@ def test_progress_estimate_and_expected_line_need_a_kind_and_passes(store):
 
 
 def test_progress_new_lines_of_a_file_it_cannot_read_are_none(tmp_path):
-    from cauce import progress
+    from locks import progress
 
     assert progress._new_lines(tmp_path / "gone.py") == 0
 
 
 def test_progress_changes_leave_artifacts_out_and_say_none_when_git_cannot(git_repo, store):
-    from cauce import progress
-    from cauce.config import home
+    from locks import progress
+    from locks.config import home
 
     (git_repo / "__pycache__").mkdir()
     (git_repo / "__pycache__" / "x.pyc").write_text("a\n")
@@ -216,7 +216,7 @@ def test_progress_changes_leave_artifacts_out_and_say_none_when_git_cannot(git_r
 
 
 def test_progress_changes_in_place_count_only_what_moved(git_repo):
-    from cauce import isolate, progress
+    from locks import isolate, progress
 
     (git_repo / "keep.py").write_text("x = 1\n")
     git(git_repo, "add", "-A")
@@ -230,7 +230,7 @@ def test_progress_changes_in_place_count_only_what_moved(git_repo):
 
 
 def test_progress_peek_in_place_skips_still_checkouts_and_says_none_when_git_fails(git_repo, tmp_path):
-    from cauce import isolate, progress
+    from locks import isolate, progress
 
     other = tmp_path / "other"
     other.mkdir()
@@ -249,7 +249,7 @@ def test_progress_peek_in_place_skips_still_checkouts_and_says_none_when_git_fai
 
 
 def test_progress_peek_goes_on_past_a_new_file_git_cannot_diff(git_repo, store, monkeypatch):
-    from cauce import isolate, progress
+    from locks import isolate, progress
 
     places = isolate.stand(git_repo, [git_repo])
     (git_repo / "new.py").write_text("n = 1\n")
@@ -270,7 +270,7 @@ def test_progress_peek_goes_on_past_a_new_file_git_cannot_diff(git_repo, store, 
 
 
 def test_progress_texts_none_without_a_checkout_and_a_deleted_file_has_no_new(git_repo, tmp_path):
-    from cauce import progress
+    from locks import progress
 
     assert progress.texts(tmp_path / "nowhere", None) is None
     plain = tmp_path / "plain"
@@ -282,7 +282,7 @@ def test_progress_texts_none_without_a_checkout_and_a_deleted_file_has_no_new(gi
 
 
 def test_progress_of_without_a_plan_carries_the_estimate(store):
-    from cauce import progress
+    from locks import progress
 
     from .test_standards import finished
 
@@ -297,8 +297,8 @@ def test_progress_of_without_a_plan_carries_the_estimate(store):
 
 
 def test_escalate_streaks_stop_at_the_first_try_that_breaks_them():
-    from cauce.escalate import Attempt, Failure, load_streak, reshape_streak
-    from cauce.matrix import Cell
+    from locks.escalate import Attempt, Failure, load_streak, reshape_streak
+    from locks.matrix import Cell
 
     cell, other = Cell("sonnet", "medium"), Cell("sonnet", "high")
     plain = Attempt(cell, 30, False, Failure.CODE_BUG)
@@ -310,8 +310,8 @@ def test_escalate_streaks_stop_at_the_first_try_that_breaks_them():
 
 
 def test_escalate_skipped_names_nothing_for_a_target_off_the_ladder():
-    from cauce import escalate
-    from cauce.matrix import LADDERS, Cell
+    from locks import escalate
+    from locks.matrix import LADDERS, Cell
 
     assert escalate._skipped(LADDERS["implement"], Cell("sonnet", "medium"), Cell("haiku", "low")) == ()
 
@@ -320,41 +320,41 @@ def test_escalate_skipped_names_nothing_for_a_target_off_the_ladder():
 
 
 def test_stops_supersede_leaves_other_text_alone(store):
-    from cauce import stops
+    from locks import stops
 
-    passed = store.create_task("add the export", status="done", source="cauce", repo="r")
-    copy = store.create_task("add  the export", status="failed", source="cauce", repo="r")
-    other = store.create_task("add the import", status="failed", source="cauce", repo="r")
+    passed = store.create_task("add the export", status="done", source="locks", repo="r")
+    copy = store.create_task("add  the export", status="failed", source="locks", repo="r")
+    other = store.create_task("add the import", status="failed", source="locks", repo="r")
     assert stops.supersede(store, passed) == [copy["id"]]
     assert store.get_task(other["id"])["status"] == "failed"
     assert stops.of(store, store.get_task(copy["id"])).cause == "superseded"
     # a pass with no repository, or no text, supersedes nothing
-    loose = store.create_task("add the import", status="done", source="cauce")
+    loose = store.create_task("add the import", status="done", source="locks")
     assert stops.supersede(store, loose) == [] and store.get_task(other["id"])["status"] == "failed"
     assert stops.supersede(store, {**passed, "body": "  "}) == []
 
 
 def test_stops_landed_reads_only_tasks_of_this_checkout(store, git_repo, tmp_path):
-    from cauce import stops
+    from locks import stops
 
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     git(elsewhere, "init", "-q", "-b", "main")
-    task = store.create_task("add the export", status="running", source="cauce", cwd=str(elsewhere), repo="r")
+    task = store.create_task("add the export", status="running", source="locks", cwd=str(elsewhere), repo="r")
     stops.record(store, task["id"], stops.Stop("died", "its process went away"))
-    git(git_repo, "checkout", "-q", "-b", f"cauce/task-{task['id']}")
+    git(git_repo, "checkout", "-q", "-b", f"locks/task-{task['id']}")
     (git_repo / "export.py").write_text("x\n")
     git(git_repo, "add", "-A")
     git(git_repo, "commit", "-q", "-m", "export")
     git(git_repo, "checkout", "-q", "main")
-    git(git_repo, "merge", "-q", "--no-ff", "-m", "merge", f"cauce/task-{task['id']}")
+    git(git_repo, "merge", "-q", "--no-ff", "-m", "merge", f"locks/task-{task['id']}")
     # its branch landed here, but the task was sent from another checkout: not this one's to sweep
     assert stops.landed(store, git_repo) == []
     assert store.get_task(task["id"])["status"] == "interrupted"
 
 
 def test_stops_retried_leaves_live_and_passed_work_alone(store):
-    from cauce import stops
+    from locks import stops
 
     for status in ("queued", "running", "done"):
         task = store.create_task(f"step {status}", status=status, source="queue", repo="r")
@@ -367,23 +367,23 @@ def test_stops_retried_leaves_live_and_passed_work_alone(store):
 
 
 def test_dispatch_named_surfaces_leave_globs_out():
-    from cauce import dispatch
+    from locks import dispatch
 
     task = {"body": "change src/*.py and src/app/main.py, then src/app/main.py again"}
     assert dispatch.named_surfaces(task) == ("src/app/main.py",)
 
 
 def test_dispatch_a_usage_limit_kept_in_a_form_it_cannot_read_holds_nothing(store):
-    from cauce import dispatch, stops
+    from locks import dispatch, stops
 
     store.set_meta(stops.LIMIT_META, "tomorrow")
     assert dispatch._limit_holds(store) is None
 
 
 def test_dispatch_a_waiter_that_cannot_start_records_no_wait(store, tmp_path):
-    from cauce import dispatch
+    from locks import dispatch
 
-    task = store.create_task("x", status="blocked", source="cauce", cwd=str(tmp_path))
+    task = store.create_task("x", status="blocked", source="locks", cwd=str(tmp_path))
 
     def fails(*args, **kwargs):
         raise OSError("no process")
@@ -393,7 +393,7 @@ def test_dispatch_a_waiter_that_cannot_start_records_no_wait(store, tmp_path):
 
 
 def test_dispatch_alive_reads_a_pid_it_cannot_signal_as_alive():
-    from cauce import dispatch
+    from locks import dispatch
 
     assert dispatch._alive(None) is False
     # a pid no kernel holds cannot be told dead: kept as alive, so nothing is swept on a guess
@@ -401,9 +401,9 @@ def test_dispatch_alive_reads_a_pid_it_cannot_signal_as_alive():
 
 
 def test_dispatch_claim_skips_a_resume_whose_time_it_cannot_read(store):
-    from cauce import dispatch, stops
+    from locks import dispatch, stops
 
-    task = store.create_task("x", status="blocked", source="cauce")
+    task = store.create_task("x", status="blocked", source="locks")
     stop = stops.Stop("died", "gone")
     store.add_event(task["id"], "auto_resumed", after="gone", cause="died")
     store._conn.execute("UPDATE events SET ts = 'garbage' WHERE task_id = ? AND kind = 'auto_resumed'",
@@ -413,7 +413,7 @@ def test_dispatch_claim_skips_a_resume_whose_time_it_cannot_read(store):
 
 
 def test_dispatch_start_resume_without_a_store_keeps_no_log_offset(store, tmp_path):
-    from cauce import dispatch, stops
+    from locks import dispatch, stops
 
     started = []
     task = {"id": 5, "cwd": str(tmp_path)}
@@ -424,13 +424,13 @@ def test_dispatch_start_resume_without_a_store_keeps_no_log_offset(store, tmp_pa
 
 
 def test_dispatch_recover_skips_an_ending_whose_time_it_cannot_read(store, tmp_path, monkeypatch):
-    from cauce import dispatch, stops
+    from locks import dispatch, stops
 
-    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
-    task = store.create_task("x", status="running", source="cauce", cwd=str(tmp_path))
+    monkeypatch.setenv("LOCKS_AUTOWORK", "on")
+    task = store.create_task("x", status="running", source="locks", cwd=str(tmp_path))
     stops.record(store, task["id"], stops.Stop("died", "gone"))
     store._conn.execute("UPDATE events SET ts = 'garbage' WHERE task_id = ? AND kind = 'finished'", (task["id"],))
-    assert dispatch.recover(store, tmp_path, {"CAUCE_AUTOWORK": "on"}, popen=pytest.fail) == []
+    assert dispatch.recover(store, tmp_path, {"LOCKS_AUTOWORK": "on"}, popen=pytest.fail) == []
     assert store.events_of(task["id"], "auto_resumed") == []
 
 
@@ -446,7 +446,7 @@ def _slow_task(store, repo="r"):
 def test_flow_slow_reads_a_kept_history_and_says_nothing_inside_it(store):
     import time as clock
 
-    from cauce import flow
+    from locks import flow
 
     task = _slow_task(store)
     late = clock.time() + flow.SLOW_MIN_S + 600
@@ -463,7 +463,7 @@ def test_flow_slow_reads_a_kept_history_and_says_nothing_inside_it(store):
 def test_flow_slow_says_nothing_of_a_plan_whose_time_it_cannot_read(store):
     import time as clock
 
-    from cauce import flow
+    from locks import flow
 
     task = _slow_task(store)
     store._conn.execute("UPDATE events SET ts = 'garbage' WHERE task_id = ? AND kind = 'planned'", (task["id"],))
@@ -472,7 +472,7 @@ def test_flow_slow_says_nothing_of_a_plan_whose_time_it_cannot_read(store):
 
 
 def test_flow_alive_reads_a_process_it_may_not_signal_as_alive(monkeypatch):
-    from cauce import flow
+    from locks import flow
 
     def refuse(pid, sig):
         raise PermissionError
@@ -482,16 +482,16 @@ def test_flow_alive_reads_a_process_it_may_not_signal_as_alive(monkeypatch):
 
 
 def test_flow_prune_reads_past_tasks_whose_directory_is_gone(store, tmp_path, monkeypatch):
-    from cauce import flow
+    from locks import flow
 
-    monkeypatch.setenv("CAUCE_PRUNE", "on")
-    store.create_task("x", status="done", source="cauce", cwd=str(tmp_path / "gone"), repo="r")
-    store.create_task("y", status="done", source="cauce", repo="r")
+    monkeypatch.setenv("LOCKS_PRUNE", "on")
+    store.create_task("x", status="done", source="locks", cwd=str(tmp_path / "gone"), repo="r")
+    store.create_task("y", status="done", source="locks", repo="r")
     assert flow.prune(store) == []
 
 
 def test_flow_judged_keeps_a_readers_or_a_lone_writers_earlier_yes(store):
-    from cauce import flow
+    from locks import flow
 
     reader = store.enqueue("read the docs and explain", repo="r", cwd="/", options={"kind": "explore"})
     store.set_parallel(reader["id"], True, "earlier")
@@ -507,7 +507,7 @@ def test_flow_judged_keeps_a_readers_or_a_lone_writers_earlier_yes(store):
 
 
 def test_flow_a_wait_whose_decision_time_cannot_be_read_is_not_rejudged(store):
-    from cauce import flow
+    from locks import flow
 
     task = store.enqueue("add the export", repo="r", cwd="/")
     store.set_parallel(task["id"], False, "may conflict")
@@ -518,14 +518,14 @@ def test_flow_a_wait_whose_decision_time_cannot_be_read_is_not_rejudged(store):
 
 
 def test_flow_limited_until_ignores_a_reset_it_cannot_read(store):
-    from cauce import flow, stops
+    from locks import flow, stops
 
     store.set_meta(stops.LIMIT_META, "soon")
     assert flow.limited_until(store) is None
 
 
 def test_flow_a_process_whose_task_is_gone_ended_failed(store):
-    from cauce import flow
+    from locks import flow
 
     handle = object.__new__(flow._Process)
     handle.task_id, handle.store = 98765, store
@@ -535,16 +535,16 @@ def test_flow_a_process_whose_task_is_gone_ended_failed(store):
 
 
 def test_flow_the_last_crash_is_the_last_deaths_not_a_later_stop(store):
-    from cauce import flow, stops
+    from locks import flow, stops
 
-    task = store.create_task("x", status="running", source="cauce")
+    task = store.create_task("x", status="running", source="locks")
     stops.record(store, task["id"], stops.Stop("died", "gone", extra={"crash": "ValueError: bad"}))
     stops.record(store, task["id"], stops.Stop("turns", "out of turns"))
     assert flow._last_crash(store, task["id"]) == "ValueError: bad"
 
 
 def test_flow_settle_keeps_its_error_and_never_stops_the_queue(store, monkeypatch):
-    from cauce import evolution, flow
+    from locks import evolution, flow
 
     def boom(store):
         raise RuntimeError("calibration broke")
@@ -557,7 +557,7 @@ def test_flow_settle_keeps_its_error_and_never_stops_the_queue(store, monkeypatc
 def test_flow_work_waits_out_a_full_disk_at_its_first_sweep_and_raises_its_own_errors(store, monkeypatch):
     import errno
 
-    from cauce import flow
+    from locks import flow
 
     def full(store, **kw):
         raise OSError(errno.ENOSPC, "No space left on device")
@@ -567,15 +567,15 @@ def test_flow_work_waits_out_a_full_disk_at_its_first_sweep_and_raises_its_own_e
     assert report.ran == []
 
     def broken(store, **kw):
-        raise RuntimeError("cauce's own")
+        raise RuntimeError("locks' own")
 
     monkeypatch.setattr(flow, "sweep", broken)
-    with pytest.raises(RuntimeError, match="cauce's own"):
+    with pytest.raises(RuntimeError, match="locks' own"):
         flow.work(store, pause=lambda: None, backoff=lambda s: None)
 
 
 def test_flow_work_starts_nothing_another_dispatcher_claimed(store, monkeypatch):
-    from cauce import flow
+    from locks import flow
 
     task = store.enqueue("read the docs", repo="r", cwd="/")
     monkeypatch.setattr(store, "claim", lambda task_id: False)
@@ -585,7 +585,7 @@ def test_flow_work_starts_nothing_another_dispatcher_claimed(store, monkeypatch)
 
 
 def test_flow_work_raises_a_start_that_failed_for_another_reason_than_space(store):
-    from cauce import flow
+    from locks import flow
 
     task = store.enqueue("read the docs", repo="r", cwd="/")
 
@@ -604,7 +604,7 @@ def test_flow_work_raises_a_start_that_failed_for_another_reason_than_space(stor
 def test_launch_resets_in_reads_a_dated_reset_and_refuses_a_date_that_is_none():
     from datetime import UTC, datetime
 
-    from cauce import launch
+    from locks import launch
 
     now = datetime(2026, 6, 15, 12, 0, tzinfo=UTC)
     assert launch.resets_in("limit reached, resets Feb 30, 9am (UTC)", now=now) is None
@@ -614,20 +614,20 @@ def test_launch_resets_in_reads_a_dated_reset_and_refuses_a_date_that_is_none():
 
 
 def test_launch_cli_help_of_a_cli_that_cannot_run_is_empty(tmp_path):
-    from cauce import launch
+    from locks import launch
 
     launch._cli_help.cache_clear()
     assert launch._cli_help(str(tmp_path / "no-claude")) == ""
-    assert launch.lean_flags(str(tmp_path / "no-claude"), {"CAUCE_LEAN": "on"}) == ()
+    assert launch.lean_flags(str(tmp_path / "no-claude"), {"LOCKS_LEAN": "on"}) == ()
 
 
 def test_launch_the_hosts_session_is_never_kept_as_the_workers(tmp_path, monkeypatch):
-    from cauce import launch
-    from cauce.matrix import Cell
+    from locks import launch
+    from locks.matrix import Cell
 
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "host-1")
     out = json.dumps({"is_error": False, "session_id": "host-1", "num_turns": 1, "total_cost_usd": 0.0,
-                      "result": "```cauce-result\n" + json.dumps({"verdict": "pass", "summary": "s",
+                      "result": "```locks-result\n" + json.dumps({"verdict": "pass", "summary": "s",
                                                                   "evidence": "1 passed"}) + "\n```"})
     spec = launch.LaunchSpec(prompt="p", cell=Cell("sonnet", "high"), launch_dir=tmp_path)
     result = launch.parse(subprocess.CompletedProcess(["claude"], 0, out, ""), spec)
@@ -635,7 +635,7 @@ def test_launch_the_hosts_session_is_never_kept_as_the_workers(tmp_path, monkeyp
 
 
 def test_launch_a_refusal_that_is_no_write_is_kept(tmp_path):
-    from cauce import launch
+    from locks import launch
 
     envelope = {"permission_denials": [{"tool_name": "Bash", "tool_input": {"command": "npm run build"}},
                                        {"tool_name": "Write", "tool_input": {"file_path": "a.py"}}]}
@@ -645,18 +645,18 @@ def test_launch_a_refusal_that_is_no_write_is_kept(tmp_path):
 
 
 def test_launch_parts_whose_surfaces_are_no_list_are_refused():
-    from cauce import launch
+    from locks import launch
 
     parts, _contract, problem = launch.read_parts({"parts": [{"id": "a", "prompt": "do a", "surfaces": "src/a"}]})
     assert parts == () and problem == "part 'a': its surfaces are a list of paths or globs"
 
 
 def test_launch_answered_before_notices_skips_what_it_cannot_read(tmp_path, monkeypatch):
-    from cauce import launch, usage
+    from locks import launch, usage
 
     folder = tmp_path / "cfg" / "projects" / "w"
     folder.mkdir(parents=True)
-    block = "```cauce-result\n" + json.dumps({"verdict": "pass", "summary": "s"}) + "\n```"
+    block = "```locks-result\n" + json.dumps({"verdict": "pass", "summary": "s"}) + "\n```"
     lines = ["not json", json.dumps({"type": "system", "message": {}}),
              json.dumps({"type": "user", "message": {"content": "the task"}}),
              json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": block}]}})]
@@ -669,7 +669,7 @@ def test_launch_answered_before_notices_skips_what_it_cannot_read(tmp_path, monk
 
 
 def test_launch_tracked_state_of_a_folder_that_is_gone_or_holds_broken_checkouts(tmp_path, monkeypatch):
-    from cauce import launch
+    from locks import launch
 
     assert launch.tracked_state(tmp_path / "gone") is None
     folder = tmp_path / "folder"
@@ -695,7 +695,7 @@ def _commit_in(path: Path, name: str, text: str) -> str:
 
 
 def test_isolate_a_mended_branch_goes_back_past_every_commit_it_cannot_read(git_repo, tmp_path):
-    from cauce import isolate
+    from locks import isolate
 
     ws = isolate.prepare(git_repo, 21, tmp_path / "home")
     good = _commit_in(ws.path, "a.py", "a\n")
@@ -704,12 +704,12 @@ def test_isolate_a_mended_branch_goes_back_past_every_commit_it_cannot_read(git_
     for sha in lost:
         (git_repo / ".git" / "objects" / sha[:2] / sha[2:]).unlink()
     again = isolate.prepare(git_repo, 21, tmp_path / "home")
-    assert git(git_repo, "rev-parse", "refs/heads/cauce/task-21") == good
+    assert git(git_repo, "rev-parse", "refs/heads/locks/task-21") == good
     assert (again.path / "a.py").exists() and not (again.path / "b.py").exists()
 
 
 def test_isolate_links_carry_and_drop_aside_touch_only_what_is_theirs(git_repo, tmp_path):
-    from cauce import isolate
+    from locks import isolate
 
     ws = isolate.prepare(git_repo, 22, tmp_path / "home")
     ws = isolate.Workspace(ws.repo_dir, ws.path, ws.branch, ws.base, links=("deps/missing", "deps/dir"))
@@ -723,14 +723,14 @@ def test_isolate_links_carry_and_drop_aside_touch_only_what_is_theirs(git_repo, 
     # drop_aside leaves another task's set-aside work alone
     (ws.path / "w.py").write_text("w\n")
     mine = isolate.set_aside(ws, 1)
-    git(git_repo, "update-ref", "refs/cauce/aside/task-99-1", git(git_repo, "rev-parse", "HEAD"))
+    git(git_repo, "update-ref", "refs/locks/aside/task-99-1", git(git_repo, "rev-parse", "HEAD"))
     isolate.drop_aside(ws)
-    refs = git(git_repo, "for-each-ref", "--format=%(refname)", "refs/cauce/aside").split()
-    assert mine not in refs and "refs/cauce/aside/task-99-1" in refs
+    refs = git(git_repo, "for-each-ref", "--format=%(refname)", "refs/locks/aside").split()
+    assert mine not in refs and "refs/locks/aside/task-99-1" in refs
 
 
 def test_isolate_named_in_and_ignored_named_read_only_what_the_text_names(git_repo, tmp_path):
-    from cauce import isolate
+    from locks import isolate
 
     assert isolate.named_in("fix the parser in app.py", ["app.py", "other.py"]) == ["app.py"]
     (git_repo / ".gitignore").write_text("secret.json\n")
@@ -746,7 +746,7 @@ def test_isolate_named_in_and_ignored_named_read_only_what_the_text_names(git_re
 
 
 def test_isolate_a_race_lane_left_behind_is_replaced(git_repo, tmp_path):
-    from cauce import isolate
+    from locks import isolate
 
     ws = isolate.prepare(git_repo, 24, tmp_path / "home")
     first = isolate.race_lane(ws, tmp_path / "home")
@@ -756,7 +756,7 @@ def test_isolate_a_race_lane_left_behind_is_replaced(git_repo, tmp_path):
 
 
 def test_isolate_adopting_a_lane_that_changed_nothing_leaves_the_worktree_at_its_base(git_repo, tmp_path):
-    from cauce import isolate
+    from locks import isolate
 
     ws = isolate.prepare(git_repo, 28, tmp_path / "home")
     (ws.path / "start.py").write_text("the start's try\n")
@@ -766,7 +766,7 @@ def test_isolate_adopting_a_lane_that_changed_nothing_leaves_the_worktree_at_its
 
 
 def test_isolate_adopt_leaves_links_out_and_refuses_a_patch_that_does_not_apply(git_repo, tmp_path):
-    from cauce import isolate
+    from locks import isolate
 
     deps = git_repo / "node_modules"
     deps.mkdir()
@@ -790,7 +790,7 @@ def test_isolate_adopt_leaves_links_out_and_refuses_a_patch_that_does_not_apply(
 
 
 def test_isolate_changed_since_put_back_and_fingerprint_say_none_when_git_cannot(git_repo, tmp_path, monkeypatch):
-    from cauce import isolate
+    from locks import isolate
 
     plain = tmp_path / "plain"
     plain.mkdir()
@@ -805,7 +805,7 @@ def test_isolate_changed_since_put_back_and_fingerprint_say_none_when_git_cannot
 
 
 def test_isolate_fingerprint_reads_renames_and_fails_closed_when_hashing_fails(git_repo, monkeypatch):
-    from cauce import isolate
+    from locks import isolate
 
     git(git_repo, "mv", "app.py", "main.py")
     found = isolate.fingerprint(git_repo)
@@ -823,7 +823,7 @@ def test_isolate_fingerprint_reads_renames_and_fails_closed_when_hashing_fails(g
 
 
 def test_isolate_stand_leaves_out_what_git_cannot_read(git_repo, tmp_path, monkeypatch):
-    from cauce import isolate
+    from locks import isolate
 
     plain = tmp_path / "plain"
     plain.mkdir()
@@ -842,7 +842,7 @@ def test_isolate_stand_leaves_out_what_git_cannot_read(git_repo, tmp_path, monke
 
 
 def test_isolate_undo_removes_only_files_the_base_lacked(git_repo, tmp_path):
-    from cauce import isolate
+    from locks import isolate
 
     ws = isolate.prepare(git_repo, 26, tmp_path / "home")
     (ws.path / "new.py").write_text("n\n")
@@ -851,7 +851,7 @@ def test_isolate_undo_removes_only_files_the_base_lacked(git_repo, tmp_path):
 
 
 def test_isolate_keep_left_needs_a_checkout_and_something_to_keep(git_repo, tmp_path):
-    from cauce import isolate
+    from locks import isolate
 
     plain = tmp_path / "plain"
     plain.mkdir()
@@ -862,7 +862,7 @@ def test_isolate_keep_left_needs_a_checkout_and_something_to_keep(git_repo, tmp_
 
 
 def test_isolate_numstat_generated_behind_say_nothing_when_git_cannot(git_repo, tmp_path):
-    from cauce import isolate
+    from locks import isolate
 
     head = git(git_repo, "rev-parse", "HEAD")
     assert isolate.numstat(git_repo, "nope", head) is None
@@ -875,7 +875,7 @@ def test_isolate_numstat_generated_behind_say_nothing_when_git_cannot(git_repo, 
 
 
 def test_isolate_behind_says_none_when_git_cannot_count(git_repo, monkeypatch):
-    from cauce import isolate
+    from locks import isolate
 
     head = git(git_repo, "rev-parse", "HEAD")
     real = isolate._git
@@ -890,29 +890,29 @@ def test_isolate_behind_says_none_when_git_cannot_count(git_repo, monkeypatch):
 
 
 def test_isolate_landed_restore_prunable_on_branches_that_are_or_are_not_there(git_repo):
-    from cauce import isolate
+    from locks import isolate
 
     head = git(git_repo, "rev-parse", "HEAD")
-    git(git_repo, "checkout", "-q", "-b", "cauce/task-30")
+    git(git_repo, "checkout", "-q", "-b", "locks/task-30")
     _commit_in(git_repo, "x.py", "x\n")
     git(git_repo, "checkout", "-q", "main")
     # not in HEAD's history, and no paths to compare: it has not landed
-    assert isolate.landed(git_repo, "cauce/task-30") is False
+    assert isolate.landed(git_repo, "locks/task-30") is False
     # a branch that exists is not restored; a tip that is no commit is not either
-    assert isolate.restore(git_repo, "cauce/task-30", head) is False
-    assert isolate.restore(git_repo, "cauce/task-31", "0" * 40) is False
-    assert isolate.prunable(git_repo, "cauce/task-404") is None
+    assert isolate.restore(git_repo, "locks/task-30", head) is False
+    assert isolate.restore(git_repo, "locks/task-31", "0" * 40) is False
+    assert isolate.prunable(git_repo, "locks/task-404") is None
     # an orphan branch shares no history with HEAD: nothing says it landed
-    git(git_repo, "checkout", "-q", "--orphan", "cauce/task-32")
+    git(git_repo, "checkout", "-q", "--orphan", "locks/task-32")
     _commit_in(git_repo, "o.py", "o\n")
     git(git_repo, "checkout", "-q", "main")
-    assert isolate.prunable(git_repo, "cauce/task-32") is None
+    assert isolate.prunable(git_repo, "locks/task-32") is None
 
 
 def test_isolate_in_place_says_once_who_holds_the_checkout(git_repo, tmp_path, monkeypatch):
     import fcntl
 
-    from cauce import isolate
+    from locks import isolate
 
     root = tmp_path / "home"
     lock = isolate.checkout_lock(root, git_repo)
@@ -946,7 +946,7 @@ def _orch():
 
 @pytest.mark.usefixtures("no_verifier")
 def test_orchestrate_an_integrate_step_with_no_worktree_stops_for_the_environment(git_repo, store):
-    from cauce.orchestrate import Options, run
+    from locks.orchestrate import Options, run
 
     t = _orch()
     base = t._two_branches(git_repo, conflict=False)
@@ -959,7 +959,7 @@ def test_orchestrate_an_integrate_step_with_no_worktree_stops_for_the_environmen
 
 @pytest.mark.usefixtures("no_verifier")
 def test_orchestrate_a_joined_check_that_cannot_run_blocks_with_no_worker(git_repo, store):
-    from cauce.orchestrate import Options, run
+    from locks.orchestrate import Options, run
 
     t = _orch()
     base = t._two_branches(git_repo, conflict=False)
@@ -972,7 +972,7 @@ def test_orchestrate_a_joined_check_that_cannot_run_blocks_with_no_worker(git_re
 
 
 def test_orchestrate_cannot_run_reads_nothing_into_a_check_that_passed():
-    from cauce import orchestrate
+    from locks import orchestrate
 
     assert orchestrate.cannot_run(0, "exit 127") is None
     assert orchestrate.cannot_run(None, "") is None
@@ -989,7 +989,7 @@ def _repo(where: Path) -> Path:
 
 
 def test_orchestrate_spans_offers_a_workspace_it_extends_or_a_folder_it_holds(tmp_path, monkeypatch):
-    from cauce import orchestrate, workspaces
+    from locks import orchestrate, workspaces
 
     ws = tmp_path / "ws"
     api, web = _repo(ws / "api"), _repo(ws / "web")
@@ -997,7 +997,7 @@ def test_orchestrate_spans_offers_a_workspace_it_extends_or_a_folder_it_holds(tm
     lone = _repo(tmp_path / "apart" / "lone")
     said = orchestrate._spans(api, [str(lone)])
     # api's workspace exists: the offer adds the one apart to it
-    assert f"`cauce workspace add {ws.resolve()} --with {lone.resolve()}`" in said
+    assert f"`locks workspace add {ws.resolve()} --with {lone.resolve()}`" in said
     assert orchestrate._spans(api, [str(web)]) is None  # the same workspace: one project already
     # a folder git cannot list: no offer of a folder nobody made
 
@@ -1012,9 +1012,9 @@ def test_orchestrate_spans_offers_a_workspace_it_extends_or_a_folder_it_holds(tm
 
 
 def test_orchestrate_refusals_need_a_repository_and_limit_extra_needs_a_reset(store):
-    from cauce import orchestrate, stops
-    from cauce.escalate import Attempt, Failure
-    from cauce.matrix import Cell
+    from locks import orchestrate, stops
+    from locks.escalate import Attempt, Failure
+    from locks.matrix import Cell
 
     assert orchestrate._refused_here(store, None, (), "auto") == []
     plain = Attempt(Cell("sonnet", "high"), 30, False, Failure.ENVIRONMENT, limited="usage")
@@ -1034,7 +1034,7 @@ def _at(store, event_id: int, epoch: float) -> None:
 
 
 def test_orchestrate_pickup_causes_split_the_wait_by_its_decisions(store):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     task = store.create_task("x", status="queued", source="queue")
     assert orchestrate.pickup_causes(store, task["id"], 100.0, 100.0, {}) == {}
@@ -1050,7 +1050,7 @@ def test_orchestrate_pickup_causes_split_the_wait_by_its_decisions(store):
 
 
 def test_orchestrate_gaps_measure_no_pickup_from_a_time_they_cannot_read(store):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     task = store.create_task("x", status="queued", source="queue")
     store._conn.execute("UPDATE tasks SET created_at = 'garbage' WHERE id = ?", (task["id"],))
@@ -1061,13 +1061,13 @@ def test_orchestrate_gaps_measure_no_pickup_from_a_time_they_cannot_read(store):
 
 @pytest.fixture
 def late(monkeypatch):
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
-    monkeypatch.setenv("CAUCE_OVERLAP", "off")
-    monkeypatch.setenv("CAUCE_LATE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_OVERLAP", "off")
+    monkeypatch.setenv("LOCKS_LATE_VERIFIER", "on")
 
 
 def test_orchestrate_a_late_check_that_cannot_run_leaves_the_pass_and_says_so(git_repo, store, late):
-    from cauce.orchestrate import Options, run
+    from locks.orchestrate import Options, run
 
     from .test_checking import passing
 
@@ -1091,7 +1091,7 @@ def test_orchestrate_a_late_check_that_cannot_run_leaves_the_pass_and_says_so(gi
 
 
 def test_orchestrate_a_late_check_that_fails_without_a_finding_still_reopens_the_task(git_repo, store, late):
-    from cauce.orchestrate import Options, run
+    from locks.orchestrate import Options, run
 
     from .test_checking import check, passing
 
@@ -1118,7 +1118,7 @@ class _Index:
             self.spec_links_brief = lambda *a: ""
 
     def inspect(self, repo_dir):
-        from cauce.adapters import PRESENT, Status
+        from locks.adapters import PRESENT, Status
 
         return Status(self.name, PRESENT)
 
@@ -1126,7 +1126,7 @@ class _Index:
         return None
 
     def brief(self, text, repo_dir, status):
-        from cauce.adapters import Briefing
+        from locks.adapters import Briefing
 
         return Briefing(raise_rungs=self._raise)
 
@@ -1145,16 +1145,16 @@ class _Index:
 
 
 def _adopt_all(monkeypatch):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     monkeypatch.setattr(orchestrate, "adopted", lambda options, adapters: list(adapters or ()))
 
 
 def test_orchestrate_an_index_cannot_raise_a_start_past_the_top_of_its_ladder(git_repo, store, monkeypatch):
-    from cauce import orchestrate
-    from cauce.classify import Classification
-    from cauce.matrix import LADDERS
-    from cauce.orchestrate import Options
+    from locks import orchestrate
+    from locks.classify import Classification
+    from locks.matrix import LADDERS
+    from locks.orchestrate import Options
 
     _adopt_all(monkeypatch)
     found = orchestrate.plan("what does the parser do?", git_repo, store, Options(), {},
@@ -1166,8 +1166,8 @@ def test_orchestrate_an_index_cannot_raise_a_start_past_the_top_of_its_ladder(gi
 
 
 def test_orchestrate_what_named_files_reach_is_briefed_only_from_an_index_that_says(git_repo, store, monkeypatch):
-    from cauce import orchestrate
-    from cauce.orchestrate import Options
+    from locks import orchestrate
+    from locks.orchestrate import Options
 
     _adopt_all(monkeypatch)
     t = _orch()
@@ -1186,7 +1186,7 @@ def test_orchestrate_what_named_files_reach_is_briefed_only_from_an_index_that_s
 def test_orchestrate_impact_skips_an_index_that_breaks_and_links_fail_open(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    from cauce import orchestrate, specs
+    from locks import orchestrate, specs
 
     ok_status, breaking = object(), _Index(assess=RuntimeError("down"))
     speaking = _Index(assess=("specs/cart.md is touched", "callers could not be read"))
@@ -1197,7 +1197,7 @@ def test_orchestrate_impact_skips_an_index_that_breaks_and_links_fail_open(tmp_p
     def broken(*args, **kwargs):
         raise OSError("unreadable")
 
-    monkeypatch.setenv("CAUCE_SPECS", "on")
+    monkeypatch.setenv("LOCKS_SPECS", "on")
     monkeypatch.setattr(specs, "unlinked", broken)
     linked = SimpleNamespace(active=[(_Index(links=True), ok_status)], seen_risks=())
     assert orchestrate._unlinked(linked, ["a.py"], tmp_path, None) == []
@@ -1207,9 +1207,9 @@ def test_orchestrate_later_notes_and_said_today_fail_open_on_a_store_error(store
     import sqlite3
     from types import SimpleNamespace
 
-    from cauce import notes, orchestrate
+    from locks import notes, orchestrate
 
-    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
 
     def broken(*args, **kwargs):
         raise sqlite3.OperationalError("locked")
@@ -1222,9 +1222,9 @@ def test_orchestrate_later_notes_and_said_today_fail_open_on_a_store_error(store
 
 
 def test_orchestrate_a_plan_for_a_folder_that_is_no_project_has_no_standard(tmp_path, store):
-    from cauce import orchestrate
-    from cauce.matrix import LADDERS
-    from cauce.orchestrate import Options
+    from locks import orchestrate
+    from locks.matrix import LADDERS
+    from locks.orchestrate import Options
 
     t = _orch()
     found = orchestrate.plan("fix it", tmp_path / "gone", store, Options(), {}, classifier=t.kind("implement"),
@@ -1235,11 +1235,11 @@ def test_orchestrate_a_plan_for_a_folder_that_is_no_project_has_no_standard(tmp_
 
 def test_orchestrate_a_plan_says_recipes_a_bypassed_check_an_old_base_and_notes_on_trial(git_repo, store,
                                                                                         monkeypatch):
-    from cauce import habits, isolate, notes, orchestrate
-    from cauce.orchestrate import Options
+    from locks import habits, isolate, notes, orchestrate
+    from locks.orchestrate import Options
 
     t = _orch()
-    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
     monkeypatch.setattr(habits, "recipes", lambda store, kind, repo=None: ["ruff check before the tests"])
     monkeypatch.setattr(isolate, "behind_trunk", lambda repo_dir: "base: this starts from feature, 12 commits behind")
     candidate = {"id": 77, "topic": "parser", "kind": "fact", "body": "x"}
@@ -1259,10 +1259,10 @@ def test_orchestrate_a_plan_says_recipes_a_bypassed_check_an_old_base_and_notes_
 @pytest.mark.usefixtures("no_verifier")
 def test_orchestrate_a_race_whose_rung_only_met_the_environment_goes_on_from_the_start(git_repo, store,
                                                                                       monkeypatch):
-    from cauce import orchestrate
-    from cauce.escalate import Failure
-    from cauce.launch import WorkerResult
-    from cauce.orchestrate import run
+    from locks import orchestrate
+    from locks.escalate import Failure
+    from locks.launch import WorkerResult
+    from locks.orchestrate import run
 
     from .test_race import RUNG, START
 
@@ -1271,7 +1271,7 @@ def test_orchestrate_a_race_whose_rung_only_met_the_environment_goes_on_from_the
     seen = []
 
     def launcher(spec):
-        seen.append((spec.cell.label, spec.env.get("CAUCE_WORKER_ATTEMPT", "").endswith("-race"),
+        seen.append((spec.cell.label, spec.env.get("LOCKS_WORKER_ATTEMPT", "").endswith("-race"),
                      (spec.target_dir / "a.py").exists()))
         if seen[-1][1]:  # the race's lane: its launch broke
             return WorkerResult(False, Failure.ENVIRONMENT, "the CLI timed out", cost_usd=0.1, transient=True)
@@ -1290,7 +1290,7 @@ def test_orchestrate_a_race_whose_rung_only_met_the_environment_goes_on_from_the
 
 
 def test_orchestrate_launch_hands_the_real_launcher_its_stoppable_runner(monkeypatch, tmp_path):
-    from cauce import launch, orchestrate
+    from locks import launch, orchestrate
 
     seen = []
     monkeypatch.setattr(launch, "run", lambda spec, runner=None: seen.append((spec, runner)) or "result")
@@ -1300,7 +1300,7 @@ def test_orchestrate_launch_hands_the_real_launcher_its_stoppable_runner(monkeyp
 
 
 def test_orchestrate_a_check_beside_that_broke_raises_where_its_verdict_is_read(tmp_path):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     def broken(spec):
         raise RuntimeError("the check's CLI broke")
@@ -1312,19 +1312,19 @@ def test_orchestrate_a_check_beside_that_broke_raises_where_its_verdict_is_read(
 
 
 def _a_plan(store, repo, text="fix the parser"):
-    from cauce import orchestrate
-    from cauce.orchestrate import Options
+    from locks import orchestrate
+    from locks.orchestrate import Options
 
     return orchestrate.plan(text, repo, store, Options(), {}, classifier=_orch().kind("implement"), adapters=[])
 
 
 def test_orchestrate_ahead_starts_nothing_for_no_change_or_a_pass_let_through(git_repo, store, monkeypatch, tmp_path):
-    from cauce import isolate, orchestrate, trust
-    from cauce.launch import LaunchSpec
-    from cauce.matrix import Cell
-    from cauce.orchestrate import Options
+    from locks import isolate, orchestrate, trust
+    from locks.launch import LaunchSpec
+    from locks.matrix import Cell
+    from locks.orchestrate import Options
 
-    monkeypatch.setenv("CAUCE_OVERLAP", "on")
+    monkeypatch.setenv("LOCKS_OVERLAP", "on")
     t = _orch()
     ws = isolate.prepare(git_repo, 40, tmp_path / "home")
     plan = _a_plan(store, git_repo)
@@ -1336,17 +1336,17 @@ def test_orchestrate_ahead_starts_nothing_for_no_change_or_a_pass_let_through(gi
     # nothing changed yet: nothing to read beside the check
     assert orchestrate._ahead(t.ok(), **common) is None
     (ws.path / "app.py").write_text("print('fixed')\n")
-    task = store.create_task("fix", status="running", source="cauce", repo="r")
+    task = store.create_task("fix", status="running", source="locks", repo="r")
     monkeypatch.setattr(orchestrate, "_sampling", lambda *a, **kw: trust.Sampling(False))
     # its cell's record lets this pass through unchecked: nothing runs beside the check
     assert orchestrate._ahead(t.ok(), store=store, task=task, **common) is None
 
 
 def test_orchestrate_read_before_reads_the_whole_change_when_the_round_before_cannot_say(store, tmp_path):
-    from cauce import orchestrate
-    from cauce.matrix import Cell
+    from locks import orchestrate
+    from locks.matrix import Cell
 
-    task = store.create_task("fix", status="running", source="cauce")
+    task = store.create_task("fix", status="running", source="locks")
     cell = Cell("sonnet", "high")
     store.add_event(task["id"], "verified", read_at="abc")  # no worker named
     assert orchestrate._read_before(store, task["id"], cell, 1, tmp_path) is None
@@ -1355,16 +1355,16 @@ def test_orchestrate_read_before_reads_the_whole_change_when_the_round_before_ca
 
 
 def test_orchestrate_a_check_beside_that_read_another_change_is_stopped_and_read_again(git_repo, store):
-    from cauce import orchestrate, risk
-    from cauce.launch import LaunchSpec
-    from cauce.matrix import Cell
+    from locks import orchestrate, risk
+    from locks.launch import LaunchSpec
+    from locks.matrix import Cell
 
     from .test_checking import check
 
     t = _orch()
     beside_seen, again = [], t.Script(check("pass"))
     ahead = orchestrate.Ahead(lambda spec: beside_seen.append(spec) or check("pass"), "beside", ["old.py"], "true")
-    task = store.create_task("fix", status="running", source="cauce")
+    task = store.create_task("fix", status="running", source="locks")
     cell = Cell("sonnet", "medium")
     high = risk.Risk()
     high.raise_to("high", "test")
@@ -1380,7 +1380,7 @@ def test_orchestrate_a_check_beside_that_read_another_change_is_stopped_and_read
 
 
 def test_orchestrate_a_dead_end_without_a_reason_is_briefed_without_one(tmp_path):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     dead = [{"repo": "r", "problem": "the parser drops the last line", "tried": "a regex",
              "why": "", "worked_instead": "a tokenizer"}]
@@ -1390,7 +1390,7 @@ def test_orchestrate_a_dead_end_without_a_reason_is_briefed_without_one(tmp_path
 
 
 def test_orchestrate_expired_and_known_flaky_read_nothing_from_what_they_cannot_parse(store, git_repo):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     assert orchestrate._expired("not json") is True
     store.set_meta(orchestrate.flaky_key(git_repo), "{broken")
@@ -1400,7 +1400,7 @@ def test_orchestrate_expired_and_known_flaky_read_nothing_from_what_they_cannot_
 def test_orchestrate_against_base_names_only_new_failures_when_none_were_there_before(tmp_path):
     from types import SimpleNamespace
 
-    from cauce import orchestrate
+    from locks import orchestrate
 
     out = "FAILED tests/test_cart.py::test_total - assert 3 == 4\n1 failed"
     base = SimpleNamespace(found=None, unknown="", flaked=False, repo_dir=tmp_path, base="a" * 40, must_fix=False,
@@ -1413,7 +1413,7 @@ def test_orchestrate_against_base_names_only_new_failures_when_none_were_there_b
 
 
 def test_orchestrate_a_steady_check_with_no_baseline_still_reruns_a_flake(tmp_path):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     command = ("test -f seen || { touch seen; echo 'FAILED tests/test_a.py::test_one - boom'; exit 1; }; "
                "echo '1 passed'")
@@ -1422,14 +1422,14 @@ def test_orchestrate_a_steady_check_with_no_baseline_still_reruns_a_flake(tmp_pa
 
 
 def _pre_existing(summary="the check failed before my change: pre-existing", **kw):
-    from cauce.escalate import Failure
-    from cauce.launch import WorkerResult
+    from locks.escalate import Failure
+    from locks.launch import WorkerResult
 
     return WorkerResult(False, Failure.CODE_BUG, summary, "FAILED tests/test_a.py::test_one", **kw)
 
 
 def test_orchestrate_a_base_claim_is_weighed_only_on_work_and_a_check_that_fails(tmp_path):
-    from cauce import orchestrate
+    from locks import orchestrate
 
     claim = _pre_existing()
     # nothing written: no claim to weigh, the report stands as it was (not a pass)
@@ -1444,23 +1444,23 @@ def test_orchestrate_a_base_claim_is_weighed_only_on_work_and_a_check_that_fails
 
 
 def test_orchestrate_settled_and_stands_run_the_check_without_a_baseline(tmp_path):
-    from cauce import orchestrate
-    from cauce.launch import WorkerResult
+    from locks import orchestrate
+    from locks.launch import WorkerResult
 
     from .test_orchestrate import ok
 
     settled = orchestrate._settled(ok(), "true", tmp_path)
     assert settled.passed
     point = WorkerResult(False, None, "a decision is needed", "", criteria=())
-    assert orchestrate._stands(point, "true", tmp_path) == "cauce"
+    assert orchestrate._stands(point, "true", tmp_path) == "locks"
     assert orchestrate._stands(point, "false", tmp_path) == ""
 
 
 def test_orchestrate_only_the_base_needs_every_criterion_met():
     from types import SimpleNamespace
 
-    from cauce import orchestrate
-    from cauce.launch import WorkerResult
+    from locks import orchestrate
+    from locks.launch import WorkerResult
 
     base = SimpleNamespace(found={"failures": ["tests/test_a.py::test_one"]})
     unmet = WorkerResult(False, None, "pytest fails as at the base", "", criteria=({"id": "S1", "met": False},))
@@ -1471,12 +1471,12 @@ def test_orchestrate_notes_engram_and_solving_say_nothing_without_a_project_or_a
                                                                                        monkeypatch):
     from types import SimpleNamespace
 
-    from cauce import notes, orchestrate
-    from cauce.matrix import Cell
+    from locks import notes, orchestrate
+    from locks.matrix import Cell
 
     from .test_orchestrate import ok
 
-    task = store.create_task("fix", status="done", source="cauce")
+    task = store.create_task("fix", status="done", source="locks")
     report = SimpleNamespace(learned=("the parser keeps a cache",), noted=[], impact=[], changed=["a.py"])
 
     class Symbols:
@@ -1512,21 +1512,21 @@ def test_orchestrate_notes_engram_and_solving_say_nothing_without_a_project_or_a
 
 
 def test_orchestrate_tip_of_a_branch_that_is_gone_is_none(git_repo, tmp_path):
-    from cauce import isolate, orchestrate
+    from locks import isolate, orchestrate
 
     ws = isolate.prepare(git_repo, 50, tmp_path / "home")
-    assert orchestrate._tip(ws, "cauce/no-such-branch") is None
+    assert orchestrate._tip(ws, "locks/no-such-branch") is None
     assert orchestrate._tip(ws, ws.branch) == git(git_repo, "rev-parse", ws.branch)
 
 
 def test_orchestrate_read_only_guard_never_costs_the_run(store, tmp_path, monkeypatch):
-    from cauce import isolate, orchestrate
+    from locks import isolate, orchestrate
 
     def broken(*args, **kwargs):
         raise RuntimeError("git broke")
 
     monkeypatch.setattr(isolate, "changed_since", broken)
-    task = store.create_task("x", status="running", source="cauce")
+    task = store.create_task("x", status="running", source="locks")
     assert orchestrate._read_only(tmp_path, "abc", store, task["id"], 1, lambda s: None) == []
     assert store.events_of(task["id"], "verifier_wrote") == []
 
@@ -1534,10 +1534,10 @@ def test_orchestrate_read_only_guard_never_costs_the_run(store, tmp_path, monkey
 def test_orchestrate_follow_ending_files_no_constraint_it_cannot_keep(store, tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    from cauce import notes, orchestrate
+    from locks import notes, orchestrate
 
     monkeypatch.setattr(notes, "file_constraints", lambda *a, **kw: [])
-    task = store.create_task("x", status="done", source="cauce")
+    task = store.create_task("x", status="done", source="locks")
     report = SimpleNamespace(learned=(), constraints=("totals are rounded once",), noted=[], commit=None)
     orchestrate._follow_ending(store, task=task, key="r", report=report, plan=SimpleNamespace(), checkout=tmp_path,
                                commit=None, notes=True, engram=False, notes_ask=None, late_check=None, text="x",
@@ -1546,7 +1546,7 @@ def test_orchestrate_follow_ending_files_no_constraint_it_cannot_keep(store, tmp
 
 
 def test_orchestrate_a_late_check_stopped_by_a_signal_says_so_and_stops(git_repo, store, late):
-    from cauce.orchestrate import Options, run
+    from locks.orchestrate import Options, run
 
     from .test_checking import passing
 
@@ -1570,16 +1570,16 @@ def test_orchestrate_a_late_check_stopped_by_a_signal_says_so_and_stops(git_repo
 
 
 def test_orchestrate_an_independent_check_with_no_worktree_reads_in_place(git_repo, store, monkeypatch):
-    from cauce.launch import WorkerResult
-    from cauce.matrix import Cell
-    from cauce.orchestrate import Options, run
+    from locks.launch import WorkerResult
+    from locks.matrix import Cell
+    from locks.orchestrate import Options, run
 
     from .test_checking import check
 
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
-    monkeypatch.setenv("CAUCE_OVERLAP", "off")
-    monkeypatch.setenv("CAUCE_LATE_VERIFIER", "off")
-    monkeypatch.setenv("CAUCE_TRUST", "off")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_OVERLAP", "off")
+    monkeypatch.setenv("LOCKS_LATE_VERIFIER", "off")
+    monkeypatch.setenv("LOCKS_TRUST", "off")
     t = _orch()
     # a medium change a cheap cell made, in the person's checkout: the check reads it there
     worked = WorkerResult(True, None, "done", "1 passed", cost_usd=0.1, changed_paths=("app.py",))
@@ -1593,7 +1593,7 @@ def test_orchestrate_an_independent_check_with_no_worktree_reads_in_place(git_re
 
 @pytest.mark.usefixtures("no_verifier")
 def test_orchestrate_dependencies_whose_lockfile_moved_are_not_linked_and_the_worker_is_told(git_repo, store):
-    from cauce.orchestrate import run
+    from locks.orchestrate import run
 
     t = _orch()
     (git_repo / ".gitignore").write_text("node_modules/\n")
@@ -1614,8 +1614,8 @@ def test_orchestrate_dependencies_whose_lockfile_moved_are_not_linked_and_the_wo
 
 @pytest.mark.usefixtures("no_verifier")
 def test_orchestrate_a_step_whose_trunk_arm_is_fresh_starts_its_own_session(git_repo, store, monkeypatch):
-    from cauce import trunks
-    from cauce.orchestrate import Options, run
+    from locks import trunks
+    from locks.orchestrate import Options, run
 
     t = _orch()
     monkeypatch.setattr(trunks, "enabled", lambda env=None: True)

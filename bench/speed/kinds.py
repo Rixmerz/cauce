@@ -1,6 +1,6 @@
 """Can a cheaper cell do `refactor` and `test` work as right as the ladder's first rung?
 
-Real: one `claude -p` worker per run, started by cauce's `launch.run`, on a fresh copy of the
+Real: one `claude -p` worker per run, started by locks' `launch.run`, on a fresh copy of the
 pricing engine `bench/memory/hard`. Each kind has one request and a judge the worker never sees:
 
 - `refactor`: rename the rule methods and move each rule module by its stage, behaviour kept.
@@ -30,8 +30,8 @@ from statistics import median
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "src"))
 
-from cauce import grants, launch  # noqa: E402
-from cauce.matrix import Cell  # noqa: E402
+from locks import grants, launch  # noqa: E402
+from locks.matrix import Cell  # noqa: E402
 
 BASE = HERE.parent / "memory" / "hard"
 OUT = HERE / "results-kinds.jsonl"

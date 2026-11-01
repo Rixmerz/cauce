@@ -1,6 +1,6 @@
 """Which cell gets a medium build done soonest, and right?
 
-Real: one `claude -p` worker per run, started by cauce's `launch.run`, on a fresh copy of the
+Real: one `claude -p` worker per run, started by locks' `launch.run`, on a fresh copy of the
 pricing engine `bench/memory/hard`, asked for one feature: three pricing rules, a receipt and a
 CSV export. Seven hidden tests judge it, and the worker never sees them (`hidden.tgz`). One
 attempt per run: its wall time, its turns, and how many hidden tests pass.
@@ -24,8 +24,8 @@ from statistics import median
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "src"))
 
-from cauce import grants, launch  # noqa: E402
-from cauce.matrix import Cell  # noqa: E402
+from locks import grants, launch  # noqa: E402
+from locks.matrix import Cell  # noqa: E402
 
 BASE = HERE.parent / "memory" / "hard"
 ASK = ("Add pricing rules: loyalty members get their tier's discount on the order (gold 10%, silver 5%); cart "

@@ -1,4 +1,4 @@
-"""A livespec index with the tables and columns cauce reads, as livespec 0.32 lays them out."""
+"""A livespec index with the tables and columns locks reads, as livespec 0.32 lays them out."""
 from __future__ import annotations
 
 import sqlite3

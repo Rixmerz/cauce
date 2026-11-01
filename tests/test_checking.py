@@ -9,12 +9,12 @@ import sys
 
 import pytest
 
-from cauce import criteria, findings, flow, isolate, launch, orchestrate, risk
-from cauce.escalate import Attempt, Failure, Move, decide
-from cauce.launch import LaunchSpec, WorkerResult
-from cauce.matrix import LADDERS, Cell
-from cauce.orchestrate import Options, run, verifier_brief, verify_cell
-from cauce.store import home
+from locks import criteria, findings, flow, isolate, launch, orchestrate, risk
+from locks.escalate import Attempt, Failure, Move, decide
+from locks.launch import LaunchSpec, WorkerResult
+from locks.matrix import LADDERS, Cell
+from locks.orchestrate import Options, run, verifier_brief, verify_cell
+from locks.store import home
 
 from .test_orchestrate import Script, bad, kind, ok
 from .test_ui import ui  # noqa: F401  (the fixture)
@@ -36,7 +36,7 @@ def test_listed_items_become_criteria_in_the_person_s_words():
 
 
 def proc(block: dict) -> subprocess.CompletedProcess:
-    text = "done\n```cauce-result\n" + json.dumps(block) + "\n```"
+    text = "done\n```locks-result\n" + json.dumps(block) + "\n```"
     return subprocess.CompletedProcess([], 0, json.dumps({"result": text, "total_cost_usd": 0.1}), "")
 
 
@@ -286,11 +286,11 @@ OLD = {"where": "old.py", "what": "was always so", "evidence_class": "determinis
 
 @pytest.fixture
 def verifier_on(monkeypatch):
-    """The independent check as it runs inline: after cauce's own check and before the ending. A
+    """The independent check as it runs inline: after locks' own check and before the ending. A
     test of its form beside the check (`overlap`) or after the ending (`late_verifier`) turns that on."""
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
-    monkeypatch.setenv("CAUCE_OVERLAP", "off")
-    monkeypatch.setenv("CAUCE_LATE_VERIFIER", "off")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_OVERLAP", "off")
+    monkeypatch.setenv("LOCKS_LATE_VERIFIER", "off")
 
 
 def test_a_risky_pass_is_checked_and_its_findings_earn_one_correction(git_repo, store, verifier_on):
@@ -509,7 +509,7 @@ def test_a_worker_that_climbed_to_many_turns_does_not_hand_them_to_its_check(git
 
 
 def test_a_person_s_verifier_role_takes_the_bundled_one_s_place():
-    from cauce import roles
+    from locks import roles
 
     from .test_roles import write_role
 
@@ -523,7 +523,7 @@ def test_a_person_s_verifier_role_takes_the_bundled_one_s_place():
 
 
 def test_surfaces_hold_what_they_name_and_nothing_else():
-    from cauce import surfaces
+    from locks import surfaces
 
     s = surfaces.check(["src/api/", "docs/*.md", "tests/**", "lib", "*.cfg", "./", " "])
     assert s == ("src/api/**", "docs/*.md", "tests/**", "lib", "*.cfg", "**")
@@ -578,7 +578,7 @@ def test_in_the_checkout_itself_nothing_is_undone(git_repo, store):
 
 
 def test_tasks_whose_surfaces_cannot_touch_run_side_by_side_without_a_model(store):
-    from cauce import dispatch, flow
+    from locks import dispatch, flow
 
     def queued(text, surf):
         return store.enqueue(text, repo="k", cwd="/x", options={"surfaces": surf} if surf else {})
@@ -594,7 +594,7 @@ def test_tasks_whose_surfaces_cannot_touch_run_side_by_side_without_a_model(stor
 
 
 def test_a_workflow_step_carries_its_surfaces(git_repo, store, monkeypatch):
-    from cauce import workflows
+    from locks import workflows
 
     monkeypatch.setattr(workflows, "_kick", lambda cwd, key: None)
     with pytest.raises(workflows.WorkflowError, match="surfaces are a list"):
@@ -610,10 +610,10 @@ def test_a_workflow_step_carries_its_surfaces(git_repo, store, monkeypatch):
 
 
 def test_the_cli_takes_surfaces(capsys, git_repo):
-    from cauce import cli
+    from locks import cli
 
     assert cli.main(["queue", "add", "x", "--repo", str(git_repo), "--surface", "src/", "--json"]) == 0
-    from cauce.store import Store
+    from locks.store import Store
 
     queued = json.loads(capsys.readouterr().out)["id"]
     store = Store.open()
@@ -627,7 +627,7 @@ def test_the_cli_takes_surfaces(capsys, git_repo):
 
 
 def test_the_dual_review_starts_two_blind_reviews_on_different_models(git_repo, store, monkeypatch):
-    from cauce import workflows
+    from locks import workflows
 
     monkeypatch.setattr(workflows, "_kick", lambda cwd, key: None)
     defn = workflows.load("dual-review", git_repo)
@@ -642,7 +642,7 @@ def test_the_dual_review_starts_two_blind_reviews_on_different_models(git_repo, 
 
 
 def test_the_panel_starts_four_blind_reviews_each_with_its_own_lens(git_repo, store, monkeypatch):
-    from cauce import ledger, workflows
+    from locks import ledger, workflows
 
     monkeypatch.setattr(workflows, "_kick", lambda cwd, key: None)
     defn = workflows.load("panel", git_repo, "bundled")
@@ -664,7 +664,7 @@ def log(entries):
     import os
     from datetime import UTC, datetime
 
-    from cauce import signature
+    from locks import signature
 
     folder = signature.log_dir(dict(os.environ))
     folder.mkdir(parents=True, exist_ok=True)
@@ -675,7 +675,7 @@ def log(entries):
 
 
 def test_a_running_attempt_s_phase_is_read_from_its_last_calls():
-    from cauce import phase
+    from locks import phase
 
     assert phase.of(1, 1) is None
     log([(1, 1, "read:py"), (1, 1, "grep")])
@@ -691,14 +691,14 @@ def test_a_running_attempt_s_phase_is_read_from_its_last_calls():
 
 
 def test_the_board_and_the_drawer_show_the_phase_the_risk_and_the_checks(git_repo, store, verifier_on):
-    from cauce.ui import api
+    from locks.ui import api
 
     script = Script(passing(), check("fail", [BUG]), passing("fixed"), check("pass"), write="app.py")
     report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
     detail = api.task_detail(store, report.task_id)
     assert detail["risk"]["tier"] == "high" and len(detail["checks"]) == 2
     assert detail["checks"][0]["findings"][0]["where"] == "app.py:3" and detail["phase"] is None
-    running = store.create_task("busy", status="running", source="cauce", repo="k", cwd=str(git_repo))
+    running = store.create_task("busy", status="running", source="locks", repo="k", cwd=str(git_repo))
     store.add_event(running["id"], "attempt_started", seq=1, cell="sonnet/medium")
     log([(running["id"], 1, "edit:py")])
     board = api.board(store)
@@ -708,14 +708,14 @@ def test_the_board_and_the_drawer_show_the_phase_the_risk_and_the_checks(git_rep
     assert diff["branch"] == report.branch and "app.py" in diff["diff"] and not diff["cut"]
     assert api.task_diff(store, 999) is None
     assert "no worktree" in api.task_diff(store, running["id"])["why"]  # a running task: its worktree, none here
-    gone = store.create_task("x", status="done", source="cauce", cwd="/nowhere")
+    gone = store.create_task("x", status="done", source="locks", cwd="/nowhere")
     assert "not here" in api.task_diff(store, gone["id"])["why"]
 
 
 def test_the_diff_route_answers(ui, store, git_repo):  # noqa: F811
     from .test_ui import call
 
-    task = store.create_task("x", status="done", source="cauce", cwd=str(git_repo))
+    task = store.create_task("x", status="done", source="locks", cwd=str(git_repo))
     res, data = call(ui, "GET", f"/api/tasks/{task['id']}/diff")
     assert res.status == 200 and "branch" in json.loads(data)
     res, _ = call(ui, "GET", "/api/tasks/99999/diff")
@@ -726,7 +726,7 @@ def test_the_diff_route_answers(ui, store, git_repo):  # noqa: F811
 
 
 def _found(*rows):
-    from cauce import findings
+    from locks import findings
 
     return findings.read({"findings": [dict(zip(("where", "what", "evidence_class", "cause"), r, strict=True),
                                             proof="a probe shows it" if r[2] == "deterministic" else "")
@@ -734,21 +734,21 @@ def _found(*rows):
 
 
 def _decides(summary, **verdicts):
-    from cauce import ledger
-    from cauce.launch import WorkerResult
+    from locks import ledger
+    from locks.launch import WorkerResult
 
     return WorkerResult(True, None, summary, evidence="read it",
                         verdicts=ledger.read({"verdicts": [{"id": k, "verdict": v} for k, v in verdicts.items()]}))
 
 
 def _reviewed(summary, *rows):
-    from cauce.launch import WorkerResult
+    from locks.launch import WorkerResult
 
     return WorkerResult(True, None, summary, evidence="read it", findings=_found(*rows))
 
 
 def test_the_ledger_adds_reviews_together_and_sends_only_one_sided_readings_to_a_refuter():
-    from cauce import ledger
+    from locks import ledger
 
     rows = ledger.collect([
         ("review-a", _found(("cart.py:10", "total ignores the discount", "deterministic", "introduced"),
@@ -798,7 +798,7 @@ def test_the_ledger_adds_reviews_together_and_sends_only_one_sided_readings_to_a
 
 
 def test_a_deciding_pass_answers_every_row(tmp_path):
-    from cauce.launch import parse
+    from locks.launch import parse
 
     spec = LaunchSpec("p", Cell("sonnet", "medium"), tmp_path, verdicts=("F1", "F2"),
                       verdict_words=("fixed", "not_fixed", "regression"))
@@ -811,7 +811,7 @@ def test_a_deciding_pass_answers_every_row(tmp_path):
 
 
 def _ledger_run(git_repo, store, results, monkeypatch):
-    from cauce import workflows
+    from locks import workflows
 
     monkeypatch.setattr(workflows, "_kick", lambda cwd, key: None)
     started = workflows.start(store, "dual-review", git_repo, {"target": "the cart"}, session_id="s1")
@@ -824,7 +824,7 @@ def _ledger_run(git_repo, store, results, monkeypatch):
 
 @pytest.mark.usefixtures("no_verifier")
 def test_the_dual_review_fixes_only_what_is_confirmed_and_rechecks_each_row(git_repo, store, monkeypatch):
-    from cauce import workflows
+    from locks import workflows
 
     results = [
         _reviewed("a", ("cart.py:10", "total ignores the discount", "deterministic", "introduced"),
@@ -854,7 +854,7 @@ def test_the_dual_review_fixes_only_what_is_confirmed_and_rechecks_each_row(git_
 
 
 def test_the_ledger_keeps_every_row_and_a_brief_carries_what_fits():
-    from cauce import ledger
+    from locks import ledger
 
     assert len(criteria.items("\n".join(f"- item {n}" for n in range(25)))) == 25
 
@@ -883,7 +883,7 @@ def test_the_ledger_keeps_every_row_and_a_brief_carries_what_fits():
 
 
 def test_a_fix_s_rows_that_did_not_fit_go_to_the_next_round(git_repo, store, monkeypatch):
-    from cauce import ledger
+    from locks import ledger
 
     shown = ("cart.py:10", "total ignores the discount", "deterministic", "introduced")
     monkeypatch.setattr(ledger, "BRIEF_CHARS", 1)
@@ -898,7 +898,7 @@ def test_a_fix_s_rows_that_did_not_fit_go_to_the_next_round(git_repo, store, mon
 
 
 def test_what_the_refuter_cannot_decide_goes_to_the_person(git_repo, store, monkeypatch):
-    from cauce import workflows
+    from locks import workflows
 
     results = [_reviewed("a", ("tax.py:5", "tax on the gross", "inferential", "introduced")), _reviewed("b"),
                _decides("cannot tell", F1="unsure")]
@@ -920,7 +920,7 @@ def test_rows_still_open_after_two_rounds_go_to_the_person(git_repo, store, monk
 
 
 def test_with_no_finding_the_ledger_steps_pass_without_a_worker(git_repo, store, monkeypatch):
-    from cauce import workflows
+    from locks import workflows
 
     results = [_reviewed("a", ("old.py:1", "an old leak", "deterministic", "pre-existing")), _reviewed("b")]
     started, seen, steps = _ledger_run(git_repo, store, results, monkeypatch)
@@ -930,7 +930,7 @@ def test_with_no_finding_the_ledger_steps_pass_without_a_worker(git_repo, store,
 
 
 def test_a_ledger_step_is_checked_where_it_stands():
-    from cauce import workflows
+    from locks import workflows
 
     def steps(*more):
         return {"name": "l", "steps": [{"id": "r", "prompt": "Review", "kind": "review-routine"}, *more]}
@@ -946,7 +946,7 @@ def test_a_ledger_step_is_checked_where_it_stands():
 
 
 def test_the_cli_sets_a_step_s_ledger_part(git_repo, capsys, monkeypatch):
-    from cauce import cli
+    from locks import cli
 
     monkeypatch.chdir(git_repo)
     assert cli.main(["workflow", "new", "rv"]) == 0
@@ -961,7 +961,7 @@ def test_the_cli_sets_a_step_s_ledger_part(git_repo, capsys, monkeypatch):
 
 
 def test_the_check_keeps_only_the_neighbours_that_measure(git_repo, store, verifier_on):
-    from cauce import capabilities as caps
+    from locks import capabilities as caps
 
     registry = {"layout-inspector": caps.Capability("layout-inspector", {"command": "li"}),
                 "rastro": caps.Capability("rastro", {"command": "rastro"})}
@@ -977,7 +977,7 @@ def test_the_check_keeps_only_the_neighbours_that_measure(git_repo, store, verif
 
 
 def test_the_check_of_a_change_to_rendered_ui_measures_it_even_when_the_work_did_not(git_repo, store, verifier_on):
-    from cauce import capabilities as caps
+    from locks import capabilities as caps
 
     registry = {"measure": caps.Capability("measure", {"command": "m"}, when=(), hint="measure the page",
                                            touches=("*.tsx",), measures=True)}
@@ -1080,20 +1080,20 @@ def _beside(cost=0.05):
     return launcher, seen
 
 
-def test_the_independent_check_runs_beside_cauce_s_check_and_is_told_not_to_run_it(
+def test_the_independent_check_runs_beside_locks_s_check_and_is_told_not_to_run_it(
         git_repo, store, verifier_on, monkeypatch):
-    monkeypatch.setenv("CAUCE_OVERLAP", "on")
+    monkeypatch.setenv("LOCKS_OVERLAP", "on")
     launcher, seen = _beside()
     report = run("fix the cart total", git_repo, store, Options(verify="python3 -c 'import time; time.sleep(0.3)'"),
                  registry={}, launcher=launcher, classifier=kind("implement"))
     assert report.status == "done"
     _, verifier = seen
     assert "beside you" in verifier.prompt and "do not run it yourself" in verifier.prompt
-    assert "time.sleep(0.3)" in verifier.prompt.split("cauce runs the project's check,")[1]
+    assert "time.sleep(0.3)" in verifier.prompt.split("locks runs the project's check,")[1]
     checked = store.last_event(report.task_id, "verified")["data"]
     assert checked["passed"] and checked["beside_check"]
     # With the setting off, it waits for the check and is told nothing of it.
-    monkeypatch.setenv("CAUCE_OVERLAP", "off")
+    monkeypatch.setenv("LOCKS_OVERLAP", "off")
     launcher, seen = _beside()
     run("fix the cart total again", git_repo, store, Options(verify="true"), registry={}, launcher=launcher,
         classifier=kind("implement"))
@@ -1101,7 +1101,7 @@ def test_the_independent_check_runs_beside_cauce_s_check_and_is_told_not_to_run_
 
 
 def test_a_check_that_fails_drops_what_ran_beside_it_and_keeps_its_cost(git_repo, store, verifier_on, monkeypatch):
-    monkeypatch.setenv("CAUCE_OVERLAP", "on")
+    monkeypatch.setenv("LOCKS_OVERLAP", "on")
     launcher, _ = _beside()
     second = ("python3 -c \"import pathlib, sys; sys.exit(0 if 'attempt 2' in pathlib.Path('app.py').read_text() "
               "else 1)\"")
@@ -1126,7 +1126,7 @@ def test_the_independent_check_is_handed_the_code_index_read_only_where_the_repo
     worker, verifier = script.specs
     assert worker.mcp_servers["livespec"]["command"] == "uvx"
     server = verifier.mcp_servers["livespec"]
-    assert server["command"] == sys.executable and server["args"][:4] == ["-m", "cauce.mcp_guard", "livespec", "--"]
+    assert server["command"] == sys.executable and server["args"][:4] == ["-m", "locks.mcp_guard", "livespec", "--"]
     assert "mcp__livespec" in verifier.allowed_tools
     assert "Read-only: a call that would change the index is refused" in verifier.append_system_prompt
     assert f'workspace="{git_repo.resolve()}"' in verifier.append_system_prompt
@@ -1160,7 +1160,7 @@ def test_a_late_independent_check_is_handed_the_index_too(git_repo, store, tmp_p
 
 @pytest.fixture
 def late(monkeypatch, verifier_on):
-    monkeypatch.setenv("CAUCE_LATE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_LATE_VERIFIER", "on")
 
 
 def test_a_late_check_runs_after_the_ending_and_a_blocker_reopens_the_task(git_repo, store, late):
@@ -1200,8 +1200,8 @@ def test_a_late_check_that_passes_leaves_the_pass(git_repo, store, late):
 
 def test_work_something_waits_on_is_checked_before_its_ending(git_repo, store, late):
     script = Script(passing(), check("fail", [BUG]), passing("fixed"), check("pass"), write="app.py")
-    task = store.create_task("fix the cart total", status="queued", source="cauce")
-    store.create_task("then ship it", status="queued", source="cauce",
+    task = store.create_task("fix the cart total", status="queued", source="locks")
+    store.create_task("then ship it", status="queued", source="locks",
                       options=json.dumps({"after": {"task": task["id"]}}))
     assert orchestrate._awaited(store, task["id"])
     report = run("fix the cart total", git_repo, store, Options(verify="true"), registry={}, launcher=script,
@@ -1218,7 +1218,7 @@ def test_a_fix_of_ledger_rows_is_never_checked_late(git_repo, store, late):
     assert not report.late_check and not store.events_of(report.task_id, "verifier_deferred")
 
 
-def test_a_pass_with_no_check_of_cauce_s_is_never_checked_late(git_repo, store, late):
+def test_a_pass_with_no_check_of_locks_s_is_never_checked_late(git_repo, store, late):
     script = Script(passing(), check("pass"), write="app.py")
     report = run("fix the cart total", git_repo, store, registry={}, launcher=script, classifier=kind("implement"))
     assert not report.late_check and not store.events_of(report.task_id, "verifier_deferred")
@@ -1260,13 +1260,13 @@ def test_a_detached_process_that_fails_keeps_its_error(store, tmp_path):
 
 def test_the_independent_check_is_told_what_the_code_index_says_the_change_reaches(git_repo, store, verifier_on,
                                                                                   tmp_path):
-    from cauce.adapters.livespec import Livespec
+    from locks.adapters.livespec import Livespec
 
     from .livespec_fixture import build
 
     build(git_repo)
     index = Livespec(env={"HOME": str(tmp_path / "home"), "PATH": "", "CLAUDE_CONFIG_DIR": str(tmp_path / "cc"),
-                          "CAUCE_HOME": str(home())})
+                          "LOCKS_HOME": str(home())})
     (git_repo / "src").mkdir(exist_ok=True)
     (git_repo / "src" / "billing.py").write_text("total = 0\n")
     subprocess.run(["git", "add", "-A"], cwd=git_repo, check=True)
@@ -1285,7 +1285,7 @@ def test_what_the_independent_check_writes_in_the_work_it_reads_is_put_back(git_
     from .conftest import git
 
     def launcher(spec):
-        if spec.env.get("CAUCE_WORKER_ATTEMPT", "").endswith("-verify"):
+        if spec.env.get("LOCKS_WORKER_ATTEMPT", "").endswith("-verify"):
             (spec.target_dir / "app.py").write_text("the check's edit\n")
             (spec.target_dir / "probe.py").write_text("print('probe')\n")
             return check("pass")

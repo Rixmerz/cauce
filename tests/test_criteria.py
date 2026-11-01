@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from cauce import criteria
+from locks import criteria
 
 
 def test_items_the_request_puts_out_of_scope_are_no_criteria():

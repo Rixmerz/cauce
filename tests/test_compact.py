@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from cauce import compact, hooks
-from cauce.store import Store
+from locks import compact, hooks
+from locks.store import Store
 
 
 def user(text, **extra):
@@ -23,7 +23,7 @@ ENTRIES = [
     user("Caveat: harness text"),
     user("[Request interrupted by user]"),
     user("/compact"),
-    user("The cauce plugin sent a message: cauce: work ended"),
+    user("The locks plugin sent a message: locks: work ended"),
     user("summary", isCompactSummary=True),
     user([{"type": "text", "text": "meta"}], isMeta=True),
     {"type": "assistant", "message": {"content": [
@@ -74,16 +74,16 @@ def test_precompact_keeps_and_the_session_after_it_gets_it_back(store: Store, tm
     assert kept and "fix the login redirect" in kept and "- new.py" in kept
     answer = hooks.session_start({"session_id": "s1", "source": "compact", "cwd": str(git_repo)}, store,
                                  tmp_path, {})
-    assert "cauce compact:" in answer["hookSpecificOutput"]["additionalContext"]
+    assert "locks compact:" in answer["hookSpecificOutput"]["additionalContext"]
     fresh = hooks.session_start({"session_id": "s1", "source": "startup", "cwd": str(git_repo)}, store,
                                 tmp_path, {})
-    assert fresh is None or "cauce compact:" not in fresh["hookSpecificOutput"]["additionalContext"]
+    assert fresh is None or "locks compact:" not in fresh["hookSpecificOutput"]["additionalContext"]
 
 
 
 def test_a_compaction_record_that_fails_costs_neither_the_digest_nor_its_restore(store: Store, tmp_path, git_repo,
                                                                                  monkeypatch):
-    from cauce import compaction
+    from locks import compaction
 
     def locked(*args, **kwargs):
         raise RuntimeError("database is locked")
@@ -94,7 +94,7 @@ def test_a_compaction_record_that_fails_costs_neither_the_digest_nor_its_restore
     assert "fix the login redirect" in (compact.recall(tmp_path, "s1") or "")
     answer = hooks.session_start({"session_id": "s1", "source": "compact", "cwd": str(git_repo)}, store,
                                  tmp_path, {})
-    assert "cauce compact:" in answer["hookSpecificOutput"]["additionalContext"]
+    assert "locks compact:" in answer["hookSpecificOutput"]["additionalContext"]
     log = (tmp_path / hooks.ERROR_LOG).read_text()
     assert "PreCompact (compaction)" in log and "SessionStart (compaction)" in log
 

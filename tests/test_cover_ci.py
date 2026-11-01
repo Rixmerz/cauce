@@ -1,4 +1,4 @@
-"""Branches of `cauce.ci` the CI suite leaves unread: broken manifests, deep scripts, the YAML
+"""Branches of `locks.ci` the CI suite leaves unread: broken manifests, deep scripts, the YAML
 line reader's edges, workflow files that hold no jobs, and the reader of what the code reads."""
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from cauce import ci
-from cauce.store import Store
+from locks import ci
+from locks.store import Store
 
 from .conftest import git
 

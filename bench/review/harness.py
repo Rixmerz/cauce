@@ -1,14 +1,14 @@
 """Two blind reviewers with the same purpose, or a classifier before a quality check?
 
 Real workers, so real money: each run is a review chain of `claude -p` workers launched with
-cauce's own `launch.run`, on a fresh copy of a change to a small pricing engine with nine planted
+locks' own `launch.run`, on a fresh copy of a change to a small pricing engine with nine planted
 bugs among renames, docs and tests. The chain's confirmed rows are matched to the planted bugs.
 
     python bench/review/harness.py pack                      # truth.py -> truth.tgz (gitignored source)
     python bench/review/harness.py run <plain|volume> <arm,...> [reps] [parallel]
     python bench/review/analyze.py bench/review/results-<variant>.jsonl
 
-Arms, each a chain cauce runs or could run:
+Arms, each a chain locks runs or could run:
 - `single`: one blind review, then a refuter on what it only read (`review-fix`).
 - `dual`: two blind reviews with one purpose on two models, then a refuter on what only one saw
   and only read (`dual-review`).
@@ -33,8 +33,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "src"))
 
-from cauce import grants, launch, ledger  # noqa: E402
-from cauce.matrix import Cell  # noqa: E402
+from locks import grants, launch, ledger  # noqa: E402
+from locks.matrix import Cell  # noqa: E402
 
 sys.path.insert(0, str(HERE))
 import volume  # noqa: E402
@@ -108,7 +108,7 @@ def worker(where: Path, prompt: str, cell: str, ids: tuple[str, ...] = (),
 
 
 def refute(where: Path, rows: list[dict], reviewers: int, cell: str) -> tuple[list[str], dict | None]:
-    """The refuter on the rows only one review saw and only read; the rest are confirmed as cauce does."""
+    """The refuter on the rows only one review saw and only read; the rest are confirmed as locks does."""
     mine = [r for r in rows if ledger.disputed(r)]
     agreed = [r["id"] for r in rows if not ledger.disputed(r)]
     if not mine:

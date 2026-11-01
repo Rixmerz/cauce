@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from cauce import runtime
+from locks import runtime
 
 from .conftest import git
 
@@ -96,8 +96,8 @@ def test_a_dependency_that_needs_a_newer_node_gets_one_of_the_same_major(tmp_pat
 
 
 def test_none_installed_fits_says_which_dependency_needs_what_and_changes_nothing(tmp_path, monkeypatch):
-    from cauce import orchestrate
-    from cauce.store import Store
+    from locks import orchestrate
+    from locks.store import Store
 
     env = _nvm(tmp_path, "22.16.0")
     project = _project(tmp_path, {"@scope/cli": ">=22.22.3"})
@@ -117,7 +117,7 @@ def test_none_installed_fits_says_which_dependency_needs_what_and_changes_nothin
 
 
 @pytest.mark.parametrize("deps", [
-    {"a": "lts/*", "b": "node", "c": "*", "d": "garbage 1"},  # specs cauce cannot read
+    {"a": "lts/*", "b": "node", "c": "*", "d": "garbage 1"},  # specs locks cannot read
     {"a": None},  # declared, never installed
     {"a": ""},  # installed, no engines
     {"../../outside": ">=99"},  # a name that climbs out of node_modules is no package

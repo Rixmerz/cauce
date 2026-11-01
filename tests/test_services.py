@@ -5,9 +5,9 @@ import sys
 
 import pytest
 
-from cauce import cli, services
-from cauce.orchestrate import Options, run
-from cauce.store import home
+from locks import cli, services
+from locks.orchestrate import Options, run
+from locks.store import home
 
 from .test_orchestrate import Script, kind, ok
 
@@ -33,7 +33,7 @@ def test_a_service_starts_listens_and_stops_with_the_run(tmp_path):
     port = free_port()
     with services.running([services.parse(server(port))], tmp_path, tmp_path / "log") as up:
         assert services.listening(port) and up == [f"`{server(port).rsplit('@', 1)[0]}` on localhost:{port}: "
-                                                    "started by cauce for this task"]
+                                                    "started by locks for this task"]
     assert not services.listening(port)
 
 
@@ -56,7 +56,7 @@ def test_a_service_that_exits_never_listens_or_cannot_start(tmp_path):
             tmp_path / "log", wait_s=0.2):
         pass
     with pytest.raises(services.ServiceError, match="could not start"), services.running(
-            [services.Service("no-such-program-for-cauce", port)], tmp_path, tmp_path / "log"):
+            [services.Service("no-such-program-for-locks", port)], tmp_path, tmp_path / "log"):
         pass
 
 

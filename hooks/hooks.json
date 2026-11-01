@@ -1,7 +1,7 @@
 {
-  "description": "cauce couples every prompt, follow-up and result to a task, and puts known dead ends and the project's notes in front of the model, and keeps what a session established in those notes before it compacts or ends, and says when a session should compact and what /compact should keep. Every hook exits 0; a failure is logged and reported at the next SessionStart.",
+  "description": "locks couples every prompt, follow-up and result to a task, and puts known dead ends and the project's notes in front of the model, and keeps what a session established in those notes before it compacts or ends, and says when a session should compact and what /compact should keep. Every hook exits 0; a failure is logged and reported at the next SessionStart.",
   "modules": [
-    "./cauce.tsx"
+    "./locks.tsx"
   ],
   "hooks": {
     "SessionStart": [
@@ -9,7 +9,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/cauce\" hook SessionStart",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/locks\" hook SessionStart",
             "timeout": 5
           }
         ]
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/cauce\" hook UserPromptSubmit",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/locks\" hook UserPromptSubmit",
             "timeout": 5
           }
         ]
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/cauce\" hook Stop",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/locks\" hook Stop",
             "timeout": 5
           }
         ]
@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/cauce\" hook StopFailure",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/locks\" hook StopFailure",
             "timeout": 5
           }
         ]
@@ -54,7 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/cauce\" hook PreToolUse",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/locks\" hook PreToolUse",
             "timeout": 5
           }
         ]
@@ -66,7 +66,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/cauce\" hook PostToolUse",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/locks\" hook PostToolUse",
             "timeout": 5
           }
         ]
@@ -77,7 +77,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/cauce\" hook PreCompact",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/locks\" hook PreCompact",
             "timeout": 5
           }
         ]
@@ -88,7 +88,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/cauce\" hook PostCompact",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/locks\" hook PostCompact",
             "timeout": 5
           }
         ]
@@ -99,7 +99,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/cauce\" hook SessionEnd",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/locks\" hook SessionEnd",
             "timeout": 5
           }
         ]

@@ -1,5 +1,5 @@
 {
-  "about": "Requests people typed, verbatim but for project names, and where each belongs: 'session' (the conversation answers it) or 'work' (an order that may go to a worker; the size and the context decide which). A request the router got wrong in real use is added here with its right answer; `given_kind` is a reading kind a session passed with `--kind` that cauce must widen to `implement`.",
+  "about": "Requests people typed, verbatim but for project names, and where each belongs: 'session' (the conversation answers it) or 'work' (an order that may go to a worker; the size and the context decide which). A request the router got wrong in real use is added here with its right answer; `given_kind` is a reading kind a session passed with `--kind` that locks must widen to `implement`.",
   "requests": [
     {"text": "Nuevos issues", "expect": "session"},
     {"text": "Que falta", "expect": "session"},
@@ -39,7 +39,7 @@
     {"text": "Observaciones de la revisión:\n- el botón de guardar no responde en el formulario de cotización\n- el gráfico de carga se ve cortado en el teléfono\n- el aviso de cambio de fecha no llega al portal\n- la tabla de tickets no ordena por fecha\nNecesito que me des todos los errores que veas en estas observaciones, con su causa probable y dónde están en el código.", "expect": "session"},
     {"text": "Observaciones de la revisión:\n- el botón de guardar no responde en el formulario de cotización\n- el gráfico de carga se ve cortado en el teléfono\nNecesito que los arregles todos y me digas qué cambiaste en cada uno.", "expect": "work"},
     {"text": "Arregla el eje del gráfico de carga en el teléfono y dime qué cambiaste en el componente", "expect": "work"},
-    {"text": "Integra la rama cauce/task-1394 en cauce/task-1400 con cherry-pick y resuelve conflictos; son los arreglos de la auditoría de seguridad", "expect": "work"},
+    {"text": "Integra la rama locks/task-1394 en locks/task-1400 con cherry-pick y resuelve conflictos; son los arreglos de la auditoría de seguridad", "expect": "work"},
     {"text": "Merge the audit branch into main and resolve the conflicts in the security module", "expect": "work"},
     {"text": "Implement the retry policy for the upload client described in the spec, with its tests", "expect": "work", "given_kind": "review-routine"},
     {"text": "Implementa el filtro por fecha en el listado de pedidos y agrega sus pruebas", "expect": "work", "given_kind": "explore"},

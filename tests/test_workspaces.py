@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from cauce import cli, isolate, launch, notes, project, repo, workspaces
-from cauce.store import Store, home
+from locks import cli, isolate, launch, notes, project, repo, workspaces
+from locks.store import Store, home
 
 from .conftest import git
 
@@ -35,7 +35,7 @@ def test_a_folder_of_two_repositories_is_one_project(tmp_path, store: Store, cap
     anchored = store.add_note(before["web"], "code", "Client", "The client talks to the API.", author="person",
                               filed_by="person")
     notes.anchor(store, anchored, web, ["client.ts"])
-    store.create_task("old work", status="done", source="cauce", repo=before["api"], cwd=str(api))
+    store.create_task("old work", status="done", source="locks", repo=before["api"], cwd=str(api))
     store._conn.commit()
 
     # Naming some repositories of a folder that holds others is refused: every one under it would belong.
@@ -49,12 +49,12 @@ def test_a_folder_of_two_repositories_is_one_project(tmp_path, store: Store, cap
     key = str(folder.resolve())
     assert repo.key(api) == repo.key(web) == repo.key(folder / "web") == repo.key(folder) == key
     assert repo.own_key(api) == before["api"]
-    assert project.find(web) == folder / ".cauce" and project.find(api) == folder / ".cauce"
+    assert project.find(web) == folder / ".locks" and project.find(api) == folder / ".locks"
     # One memory: the notes are the folder's, the copy merged, each anchor named with its repository in front.
     live = store.notes(key, states=notes.LIVE)
     assert sorted(n["title"] for n in live) == ["Client", "Money"]
     assert [a["path"] for a in store.note_anchors([anchored])] == ["web/client.ts"]
-    assert store.list_tasks(repo=key, source=("cauce",))[0]["title"] == "old work"
+    assert store.list_tasks(repo=key, source=("locks",))[0]["title"] == "old work"
     # A worker's worktree of a member belongs to the workspace too.
     ws = isolate.prepare(api, 7, home())
     assert repo.key(ws.path) == key
@@ -122,7 +122,7 @@ def test_what_cannot_be_a_workspace_is_refused(tmp_path, store: Store, capsys, m
     assert sorted(m["name"] for m in entry["members"]) == ["front", "services/api"]
     # Work still going in a repository holds the workspace back.
     busy = checkout(tmp_path / "busy")
-    store.create_task("going", status="running", source="cauce", repo=repo.key(busy), cwd=str(busy))
+    store.create_task("going", status="running", source="locks", repo=repo.key(busy), cwd=str(busy))
     store._conn.commit()
     assert cli.main(["workspace", "add", str(tmp_path / "third"), "--with", str(busy)]) == 1
     assert "queued or running" in capsys.readouterr().err
@@ -138,7 +138,7 @@ def test_an_unreadable_file_declares_nothing(tmp_path):
 
 
 def test_a_task_that_spans_two_repositories_is_offered_a_workspace(tmp_path, store: Store):
-    from cauce.orchestrate import Options, run
+    from locks.orchestrate import Options, run
 
     from .test_orchestrate import kind
 
@@ -148,7 +148,7 @@ def test_a_task_that_spans_two_repositories_is_offered_a_workspace(tmp_path, sto
     dry = run("wire the client to the new endpoint", api, store, Options(dry_run=True, add_dirs=(str(web),)),
               registry={}, classifier=kind("implement"))
     offer = [r for r in dry.plan.reasons if r.startswith("this task spans")]
-    assert len(offer) == 1 and f"cauce workspace add {folder}" in offer[0] and "--with" in offer[0]
+    assert len(offer) == 1 and f"locks workspace add {folder}" in offer[0] and "--with" in offer[0]
     workspaces.add(folder)
     dry = run("wire the client to the new endpoint", api, store, Options(dry_run=True, add_dirs=(str(web),)),
               registry={}, classifier=kind("implement"))
@@ -156,12 +156,12 @@ def test_a_task_that_spans_two_repositories_is_offered_a_workspace(tmp_path, sto
 
 
 def test_a_workspace_keeps_the_team_and_the_rules_its_repositories_had(tmp_path, store: Store, capsys):
-    from cauce import grants, teams
+    from locks import grants, teams
 
     folder = tmp_path / "shop"
     api = checkout(folder / "api")
     web = checkout(folder / "web")
-    assert cli.main(["team", "create", "web", "--from", "cauce", "--description", "web"]) == 0
+    assert cli.main(["team", "create", "web", "--from", "locks", "--description", "web"]) == 0
     teams.use(repo.key(api), "web")
     grants.grant(repo.key(web), ["Bash(npm test:*)"])
     assert cli.main(["workspace", "add", str(folder)]) == 0
@@ -171,7 +171,7 @@ def test_a_workspace_keeps_the_team_and_the_rules_its_repositories_had(tmp_path,
     other = tmp_path / "two"
     one = checkout(other / "one")
     two = checkout(other / "two")
-    assert cli.main(["team", "create", "api", "--from", "cauce", "--description", "api"]) == 0
+    assert cli.main(["team", "create", "api", "--from", "locks", "--description", "api"]) == 0
     teams.use(repo.key(one), "web")
     teams.use(repo.key(two), "api")
     capsys.readouterr()
@@ -230,8 +230,8 @@ def test_moving_a_repository_in_keeps_its_paths_and_other_clones(tmp_path, store
     assert repo.key(other) == shared
     note = store.add_note(shared, "code", "Core", "The core holds x.", author="person", filed_by="person")
     notes.anchor(store, note, lib, ["mylib/core.py"])
-    mine = store.create_task("here", status="done", source="cauce", repo=shared, cwd=str(lib))
-    theirs = store.create_task("there", status="done", source="cauce", repo=shared, cwd=str(other))
+    mine = store.create_task("here", status="done", source="locks", repo=shared, cwd=str(lib))
+    theirs = store.create_task("there", status="done", source="locks", repo=shared, cwd=str(other))
     store._conn.commit()
     assert cli.main(["workspace", "add", str(folder)]) == 0
     key = repo.key(web)
@@ -257,8 +257,8 @@ def test_a_merged_note_keeps_the_anchors_and_links_of_its_copy(tmp_path, store: 
     prices = store.add_note(repo.key(web), "business", "Prices", "Prices are shown with tax.", author="person",
                             filed_by="person")
     notes.link(store, prices, second, "depends_on")
-    (web / ".cauce").mkdir()
-    (web / ".cauce" / "sessions.json").write_text(json.dumps({"s1": {"name": "my payments thread"}}))
+    (web / ".locks").mkdir()
+    (web / ".locks" / "sessions.json").write_text(json.dumps({"s1": {"name": "my payments thread"}}))
     assert cli.main(["workspace", "add", str(folder)]) == 0
     key = repo.key(api)
     # The current copy stays, with the anchors and links of both; the session name the person wrote too.
@@ -266,35 +266,35 @@ def test_a_merged_note_keeps_the_anchors_and_links_of_its_copy(tmp_path, store: 
     assert [a["path"] for a in store.note_anchors([second])] == ["web/money.ts"]
     assert [n["id"] for n in notes.recall(store, key, "", paths=["web/money.ts"], limit=5, hops=0)] == [second]
     assert {e["from_id"] for e in store.note_links([second])} == {prices}
-    assert project.names(folder / ".cauce")["s1"]["name"] == "my payments thread"
+    assert project.names(folder / ".locks")["s1"]["name"] == "my payments thread"
 
 
 def test_a_repository_keeps_its_own_workflows_in_a_workspace(tmp_path, store: Store):
-    from cauce import workflows
+    from locks import workflows
 
     folder = tmp_path / "shop"
     api = checkout(folder / "api")
     checkout(folder / "web")
-    (api / ".cauce" / "workflows").mkdir(parents=True)
-    (api / ".cauce" / "workflows" / "release.json").write_text(json.dumps(
+    (api / ".locks" / "workflows").mkdir(parents=True)
+    (api / ".locks" / "workflows" / "release.json").write_text(json.dumps(
         {"name": "release", "steps": [{"id": "do", "prompt": "Ship it", "kind": "docs"}]}))
     workspaces.add(folder)
     assert [w["name"] for w in workflows.listing(api) if w["scope"] == "project"] == ["release"]
 
 
 def test_the_offer_never_takes_in_repositories_that_were_not_named(tmp_path, store: Store):
-    from cauce.orchestrate import _spans
+    from locks.orchestrate import _spans
 
     code = tmp_path / "code"
     api, web = checkout(code / "api"), checkout(code / "web")
     checkout(code / "blog")
     offer = _spans(api, [str(web)])
     # No folder holds just these two: no path is made up, the person makes one.
-    assert "cauce workspace add <folder>" in offer and "api-web" not in offer and str(code) not in offer
+    assert "locks workspace add <folder>" in offer and "api-web" not in offer and str(code) not in offer
     assert "a workspace needs a folder that holds just them" in offer and "the person's choice" in offer
     (code / "blog").rename(tmp_path / "blog")
     offer = _spans(api, [str(web)])
-    assert f"cauce workspace add {code} --with {api} --with {web}" in offer and "the person's choice" in offer
+    assert f"locks workspace add {code} --with {api} --with {web}" in offer and "the person's choice" in offer
     assert "moves what each repository kept" in offer
 
 

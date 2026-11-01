@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from cauce import cli, hooks, lazy, link, stops, teams
-from cauce.store import Store, home
+from locks import cli, hooks, lazy, link, stops, teams
+from locks.store import Store, home
 from tests.test_roles import user_roles, write_role
 
 # --- lazy -------------------------------------------------------------------------------
@@ -21,23 +21,23 @@ from tests.test_roles import user_roles, write_role
 
 def test_a_lazy_module_that_does_not_exist_fails_as_an_import_would():
     with pytest.raises(ModuleNotFoundError):
-        lazy.module("cauce_no_such_module_anywhere")
+        lazy.module("locks_no_such_module_anywhere")
 
 
 def test_a_top_level_module_loads_on_its_first_attribute_read(tmp_path, monkeypatch):
-    (tmp_path / "cauce_lazy_probe.py").write_text("import sys\nsys.cauce_lazy_probe_ran = True\nVALUE = 7\n")
+    (tmp_path / "locks_lazy_probe.py").write_text("import sys\nsys.locks_lazy_probe_ran = True\nVALUE = 7\n")
     monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.delitem(sys.modules, "cauce_lazy_probe", raising=False)
+    monkeypatch.delitem(sys.modules, "locks_lazy_probe", raising=False)
     try:
-        found = lazy.module("cauce_lazy_probe")
-        assert sys.modules["cauce_lazy_probe"] is found
-        assert not getattr(sys, "cauce_lazy_probe_ran", False)  # nothing ran yet
-        assert found.VALUE == 7 and sys.cauce_lazy_probe_ran is True
-        assert lazy.module("cauce_lazy_probe") is found  # the same object every importer gets
+        found = lazy.module("locks_lazy_probe")
+        assert sys.modules["locks_lazy_probe"] is found
+        assert not getattr(sys, "locks_lazy_probe_ran", False)  # nothing ran yet
+        assert found.VALUE == 7 and sys.locks_lazy_probe_ran is True
+        assert lazy.module("locks_lazy_probe") is found  # the same object every importer gets
     finally:
-        sys.modules.pop("cauce_lazy_probe", None)
-        if hasattr(sys, "cauce_lazy_probe_ran"):
-            del sys.cauce_lazy_probe_ran
+        sys.modules.pop("locks_lazy_probe", None)
+        if hasattr(sys, "locks_lazy_probe_ran"):
+            del sys.locks_lazy_probe_ran
 
 
 # --- __main__ ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ class _Exec(Exception):
 
 @pytest.fixture
 def entry(monkeypatch):
-    """`python -m cauce` run in this process: argv, stdin and the exec it would make faked."""
+    """`python -m locks` run in this process: argv, stdin and the exec it would make faked."""
     execs: list[tuple[str, list[str]]] = []
 
     def fake_execv(path, argv):
@@ -58,58 +58,58 @@ def entry(monkeypatch):
 
     monkeypatch.setattr(os, "execv", fake_execv)
     monkeypatch.setattr(link, "LOADED", None)
-    for name in ("CAUCE_REEXEC", "CAUCE_FORWARDED", "CAUCE_PYTHON"):
+    for name in ("LOCKS_REEXEC", "LOCKS_FORWARDED", "LOCKS_PYTHON"):
         monkeypatch.setenv(name, "x")  # recorded, so the test's own changes are undone
         monkeypatch.delenv(name)
 
     def run(*argv: str, stdin: str = "") -> int | None:
-        monkeypatch.setattr(sys, "argv", ["cauce", *argv])
+        monkeypatch.setattr(sys, "argv", ["locks", *argv])
         monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
         with pytest.raises(SystemExit) as stopped:
-            runpy.run_module("cauce.__main__", run_name="__main__")
+            runpy.run_module("locks.__main__", run_name="__main__")
         return stopped.value.code
 
     run.execs = execs
     return run
 
 
-def test_an_old_python_reruns_cauce_on_a_newer_one_beside_it(entry, monkeypatch):
-    from cauce import interpreter
+def test_an_old_python_reruns_locks_on_a_newer_one_beside_it(entry, monkeypatch):
+    from locks import interpreter
 
     monkeypatch.setattr(sys, "version_info", (3, 9, 0))
     monkeypatch.setattr(interpreter, "newer_python", lambda env, which=None: "/opt/py/python3.12")
     with pytest.raises(_Exec):
         entry("tasks", "--all")
-    assert entry.execs == [("/opt/py/python3.12", ["/opt/py/python3.12", "-m", "cauce", "tasks", "--all"])]
-    assert os.environ["CAUCE_REEXEC"] == "1"
+    assert entry.execs == [("/opt/py/python3.12", ["/opt/py/python3.12", "-m", "locks", "tasks", "--all"])]
+    assert os.environ["LOCKS_REEXEC"] == "1"
 
 
 def test_an_old_python_with_none_newer_says_what_is_wrong(entry, monkeypatch, capsys):
-    from cauce import interpreter
+    from locks import interpreter
 
     monkeypatch.setattr(sys, "version_info", (3, 9, 0))
     monkeypatch.setattr(interpreter, "newer_python", lambda env, which=None: None)
     assert entry("tasks") == 1
-    assert "cauce needs Python 3.11+" in capsys.readouterr().err and entry.execs == []
+    assert "locks needs Python 3.11+" in capsys.readouterr().err and entry.execs == []
 
 
 def test_a_forwarded_command_keeps_the_version_it_came_from_and_never_forwards_again(entry, monkeypatch, capsys):
-    monkeypatch.setenv("CAUCE_FORWARDED", "0.1.0")
-    monkeypatch.setenv("CAUCE_REEXEC", "1")
+    monkeypatch.setenv("LOCKS_FORWARDED", "0.1.0")
+    monkeypatch.setenv("LOCKS_REEXEC", "1")
     monkeypatch.setattr(link, "forward_to", lambda *a: pytest.fail("a forwarded command forwards again"))
     assert entry("matrix") == 0
-    assert link.LOADED == "0.1.0" and "CAUCE_FORWARDED" not in os.environ and "CAUCE_REEXEC" not in os.environ
+    assert link.LOADED == "0.1.0" and "LOCKS_FORWARDED" not in os.environ and "LOCKS_REEXEC" not in os.environ
     assert "opus/high" in capsys.readouterr().out
 
 
 def test_a_command_from_an_older_install_runs_the_newest_one(entry, monkeypatch):
-    from cauce import __version__
+    from locks import __version__
 
-    monkeypatch.setattr(link, "forward_to", lambda argv, env, own, version: Path("/cache/cauce/9.9.9/bin/cauce"))
+    monkeypatch.setattr(link, "forward_to", lambda argv, env, own, version: Path("/cache/locks/9.9.9/bin/locks"))
     with pytest.raises(_Exec):
         entry("tasks")
-    assert entry.execs == [("/cache/cauce/9.9.9/bin/cauce", ["/cache/cauce/9.9.9/bin/cauce", "tasks"])]
-    assert os.environ["CAUCE_FORWARDED"] == __version__
+    assert entry.execs == [("/cache/locks/9.9.9/bin/locks", ["/cache/locks/9.9.9/bin/locks", "tasks"])]
+    assert os.environ["LOCKS_FORWARDED"] == __version__
 
 
 def _tool_events(root: Path) -> list[dict]:
@@ -122,7 +122,7 @@ def test_the_post_tool_use_fast_path_appends_one_line_and_exits(entry):
     assert entry("hook", "PostToolUse", stdin=json.dumps(event)) == 0
     logged = _tool_events(home())
     assert len(logged) == 1 and logged[0]["sig"] == "read:.py" and "secret" not in json.dumps(logged)
-    assert not (home() / "cauce.db").exists()  # no database on the fast path
+    assert not (home() / "locks.db").exists()  # no database on the fast path
 
 
 def test_the_fast_path_fails_open_and_writes_the_error_down(entry):
@@ -140,10 +140,10 @@ def test_a_delegation_takes_the_full_hook_unless_hooks_are_off(entry, monkeypatc
     def child() -> dict:
         return next(t for t in store.list_tasks() if t["source"] == "delegation")
 
-    monkeypatch.setenv("CAUCE_HOOKS_OFF", "1")
+    monkeypatch.setenv("LOCKS_HOOKS_OFF", "1")
     assert entry("hook", "PostToolUse", stdin=json.dumps(event)) == 0
     assert child()["status"] == "running"  # hooks off: only the signature
-    monkeypatch.delenv("CAUCE_HOOKS_OFF")
+    monkeypatch.delenv("LOCKS_HOOKS_OFF")
     assert entry("hook", "PostToolUse", stdin=json.dumps(event)) == 0
     assert child()["status"] == "done" and "lgtm" in child()["result"]
     assert len(_tool_events(home())) == 2  # the signature is logged both times
@@ -171,7 +171,7 @@ def test_roles_show_names_a_skill_it_cannot_find(capsys):
 
 
 def test_roles_revisions_with_trials_on_says_no_off_notice(capsys, monkeypatch):
-    monkeypatch.setenv("CAUCE_ROLE_TRIALS", "on")
+    monkeypatch.setenv("LOCKS_ROLE_TRIALS", "on")
     assert cli.main(["roles", "revisions"]) == 0
     out = capsys.readouterr().out
     assert "role trials are off" not in out and out.startswith("no role has a revision yet")
@@ -184,8 +184,8 @@ def test_roles_import_of_many_agents_lists_forty_and_counts_the_rest(tmp_path, c
         (agents / f"a{n:02}.md").write_text(f"---\nname: a{n:02}\ndescription: Reviews code {n}\n---\nReview.\n")
     assert cli.main(["roles", "import", str(agents), "--dry-run"]) == 0
     out = capsys.readouterr().out
-    assert out.startswith("would import 42 role(s)") and "  and 2 more (`cauce roles list`)" in out
-    assert "cauce team change" not in out  # a dry run writes nothing, so it advises nothing
+    assert out.startswith("would import 42 role(s)") and "  and 2 more (`locks roles list`)" in out
+    assert "locks team change" not in out  # a dry run writes nothing, so it advises nothing
 
 
 def test_team_show_names_its_projects_and_a_role_it_lacks(capsys):
@@ -200,9 +200,9 @@ def test_team_show_names_its_projects_and_a_role_it_lacks(capsys):
 
 
 def test_team_show_of_a_team_no_project_uses_names_none(capsys):
-    assert cli.main(["team", "show", "cauce"]) == 0
+    assert cli.main(["team", "show", "locks"]) == 0
     out = capsys.readouterr().out
-    assert out.startswith("cauce: ") and "used by" not in out
+    assert out.startswith("locks: ") and "used by" not in out
 
 
 # --- cli: run, queue, resume, cancel -----------------------------------------------------
@@ -211,7 +211,7 @@ def test_team_show_of_a_team_no_project_uses_names_none(capsys):
 @pytest.fixture
 def no_kick(monkeypatch):
     """No dispatcher is started: each kick the CLI asks for is recorded."""
-    from cauce import dispatch
+    from locks import dispatch
 
     kicked: list[tuple[str, str | None]] = []
     monkeypatch.setattr(dispatch, "kick", lambda cwd, key, env: kicked.append((str(cwd), key))
@@ -219,11 +219,11 @@ def no_kick(monkeypatch):
     return kicked
 
 
-def test_a_run_in_a_session_that_loaded_an_older_cauce_says_so_first(git_repo, monkeypatch, capsys):
+def test_a_run_in_a_session_that_loaded_an_older_locks_says_so_first(git_repo, monkeypatch, capsys):
     monkeypatch.setattr(link, "LOADED", "0.0.1")
     assert cli.main(["run", "where is the router?", "--repo", str(git_repo), "--no-model", "--dry-run"]) == 0
     out, err = capsys.readouterr()
-    assert err.startswith("cauce: this session loaded cauce 0.0.1") and "plan: dry run" in out
+    assert err.startswith("locks: this session loaded locks 0.0.1") and "plan: dry run" in out
 
 
 def test_a_queued_run_refuses_a_launch_dir(git_repo, capsys, no_kick):
@@ -235,10 +235,10 @@ def test_a_queued_run_refuses_a_launch_dir(git_repo, capsys, no_kick):
 
 def test_work_queued_after_a_task_of_another_repository_says_which_and_how_long(git_repo, capsys, monkeypatch,
                                                                                no_kick):
-    from cauce import progress
+    from locks import progress
 
     store = Store.open()
-    other = store.create_task("build the api", status="running", source="cauce", repo="github.com/o/api",
+    other = store.create_task("build the api", status="running", source="locks", repo="github.com/o/api",
                               cwd="/elsewhere")
     store.close()
     monkeypatch.setattr(progress, "expected_line", lambda store, task: "tasks like it took ≈4m here")
@@ -252,7 +252,7 @@ def test_work_queued_after_a_task_of_another_repository_says_which_and_how_long(
 def test_a_press_for_a_task_whose_directory_is_gone_resumes_from_here(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     store = Store.open()
-    gone = store.create_task("x", status="blocked", source="cauce", repo="r", cwd=str(tmp_path / "gone"))
+    gone = store.create_task("x", status="blocked", source="locks", repo="r", cwd=str(tmp_path / "gone"))
     stops.record(store, gone["id"], stops.Stop("permission", "refused", allow=("Bash(npm:*)",)))
     store.close()
     ran = []
@@ -263,7 +263,7 @@ def test_a_press_for_a_task_whose_directory_is_gone_resumes_from_here(tmp_path, 
 
 def test_cancelling_a_running_task_with_no_process_only_raises_its_flag(capsys):
     store = Store.open()
-    task = store.create_task("x", status="running", source="cauce", repo="r")
+    task = store.create_task("x", status="running", source="locks", repo="r")
     store.close()
     assert cli.main(["cancel", str(task["id"])]) == 0
     assert f"cancel requested for task #{task['id']}" in capsys.readouterr().out
@@ -280,7 +280,7 @@ def test_cancelling_a_running_task_with_no_process_only_raises_its_flag(capsys):
 
 def test_merge_outside_a_checkout_says_so(tmp_path, capsys):
     store = Store.open()
-    task = store.create_task("x", status="done", source="cauce", repo="r", cwd=str(tmp_path))
+    task = store.create_task("x", status="done", source="locks", repo="r", cwd=str(tmp_path))
     store.close()
     assert cli.main(["merge", str(task["id"]), "--repo", str(tmp_path)]) == 1
     assert f"{tmp_path} is no git checkout" in capsys.readouterr().err
@@ -299,11 +299,11 @@ def test_ci_names_a_workflow_it_cannot_read_and_says_when_there_is_none(git_repo
 def test_a_pull_request_needs_a_kept_branch_and_gh(git_repo, capsys, monkeypatch):
     import shutil
 
-    from cauce import merging
+    from locks import merging
     from tests.test_merging import _kept
 
     store = Store.open()
-    bare = store.create_task("nothing kept", status="done", source="cauce", repo="r", cwd=str(git_repo))
+    bare = store.create_task("nothing kept", status="done", source="locks", repo="r", cwd=str(git_repo))
     task = _kept(store, git_repo, "add the export", {"export.py": "x\n"})
     store.close()
     assert cli.main(["pr", str(bare["id"])]) == 1
@@ -312,7 +312,7 @@ def test_a_pull_request_needs_a_kept_branch_and_gh(git_repo, capsys, monkeypatch
     monkeypatch.setattr(shutil, "which", lambda name, *a, **kw: None)
     assert cli.main(["pr", str(task["id"])]) == 1
     out, err = capsys.readouterr()
-    assert out.startswith("title: add the export") and f"git push -u origin cauce/task-{task['id']}" in err
+    assert out.startswith("title: add the export") and f"git push -u origin locks/task-{task['id']}" in err
 
     monkeypatch.setattr(shutil, "which", lambda name, *a, **kw: f"/usr/bin/{name}")
     answers = iter([(True, "https://example.test/pr/1"), (False, "git push failed: no")])
@@ -323,7 +323,7 @@ def test_a_pull_request_needs_a_kept_branch_and_gh(git_repo, capsys, monkeypatch
     assert capsys.readouterr().out.strip() == "https://example.test/pr/1"
     assert cli.main(["pr", str(task["id"])]) == 1
     assert capsys.readouterr().err.strip() == "git push failed: no"
-    assert seen == [(f"cauce/task-{task['id']}", "add the export")] * 2
+    assert seen == [(f"locks/task-{task['id']}", "add the export")] * 2
 
 
 LISTED = ("Build the student side of the platform:\n- the opinion form in src/app/opinion/form.ts\n"
@@ -352,10 +352,10 @@ def test_split_as_json_and_with_a_check_for_every_piece(git_repo, capsys, no_kic
 
 
 def test_a_piece_that_builds_on_another_waits_for_it(git_repo, capsys, monkeypatch, no_kick):
-    from cauce import after, split
+    from locks import after, split
 
     store = Store.open()
-    done = store.create_task(LISTED, status="done", source="cauce", repo="r", cwd=str(git_repo))
+    done = store.create_task(LISTED, status="done", source="locks", repo="r", cwd=str(git_repo))
     store.close()
     parts = ({"id": "p1", "prompt": "the model", "surfaces": ["src/model/**"]},
              {"id": "p2", "prompt": "the view on it", "surfaces": ["src/view/**"], "after": "p1"})
@@ -376,14 +376,14 @@ def test_a_piece_that_builds_on_another_waits_for_it(git_repo, capsys, monkeypat
 
 
 def test_a_dismissal_keeps_going_when_git_cannot_keep_what_was_left(tmp_path, monkeypatch, capsys):
-    from cauce import isolate
+    from locks import isolate
 
     def broken(*a, **kw):
         raise isolate.IsolationError("git refused")
 
     monkeypatch.setattr(isolate, "keep_left", broken)
     store = Store.open()
-    task = store.create_task("x", status="blocked", source="cauce", repo="r", cwd=str(tmp_path))
+    task = store.create_task("x", status="blocked", source="locks", repo="r", cwd=str(tmp_path))
     store.close()
     assert cli.main(["dismiss", str(task["id"])]) == 0
     out = capsys.readouterr().out
@@ -396,10 +396,10 @@ def test_a_dismissal_keeps_going_when_git_cannot_keep_what_was_left(tmp_path, mo
 
 
 def test_events_follow_prints_what_came_and_stops_on_ctrl_c(monkeypatch, capsys):
-    from cauce import cli as cli_module
+    from locks import cli as cli_module
 
     store = Store.open()
-    task = store.create_task("x", status="running", source="cauce", repo="r")
+    task = store.create_task("x", status="running", source="locks", repo="r")
     store.add_event(task["id"], "planned", kind="docs")
     store.close()
     slept = []
@@ -417,14 +417,14 @@ def _running_in_worktree(store: Store, git_repo: Path, body: str, *, repo_key: s
     """A running task whose worker wrote a file in its own worktree."""
     from tests.conftest import git
 
-    task = store.create_task(body, status="running", source="cauce", repo=repo_key, kind="implement",
+    task = store.create_task(body, status="running", source="locks", repo=repo_key, kind="implement",
                              cwd=str(git_repo))
     base = git(git_repo, "rev-parse", "HEAD")
     store.add_event(task["id"], "planned", kind="implement")
     store.add_event(task["id"], "attempt_started", seq=1, base=base)
     store.add_attempt(task["id"], cell="sonnet/medium", max_turns=30, passed=0)
     path = home() / "worktrees" / f"task-{task['id']}"
-    git(git_repo, "worktree", "add", "-q", "-b", f"cauce/task-{task['id']}", str(path))
+    git(git_repo, "worktree", "add", "-q", "-b", f"locks/task-{task['id']}", str(path))
     (path / "logout.py").write_text("def logout():\n    return True\n")
     return task
 
@@ -433,7 +433,7 @@ def test_tasks_by_worker_groups_projects_and_names_the_files_a_running_one_wrote
     store = Store.open()
     try:
         running = _running_in_worktree(store, git_repo, "add a logout button", repo_key="github.com/o/web")
-        other = store.create_task("fix the api", status="done", source="cauce", repo="github.com/o/api")
+        other = store.create_task("fix the api", status="done", source="locks", repo="github.com/o/api")
         store.add_attempt(other["id"], cell="haiku", max_turns=30, passed=1, cost_usd=0.5)
     finally:
         store.close()
@@ -448,21 +448,21 @@ def test_tasks_by_worker_groups_projects_and_names_the_files_a_running_one_wrote
 def test_peek_of_a_task_that_is_not_there_or_has_no_worktree(capsys, store):
     assert cli.main(["peek", "77"]) == 1
     assert capsys.readouterr().err.strip() == "no task #77"
-    task = store.create_task("x", status="running", source="cauce", repo="r")
+    task = store.create_task("x", status="running", source="locks", repo="r")
     store.add_event(task["id"], "attempt_started", seq=1)
     assert cli.main(["peek", str(task["id"])]) == 1
     assert "works in no worktree of its own" in capsys.readouterr().err
 
 
 def test_peek_stat_of_nothing_written_and_a_diff_cut_at_its_bound(git_repo, capsys, monkeypatch, store):
-    from cauce import progress
+    from locks import progress
     from tests.conftest import git
 
-    task = store.create_task("x", status="running", source="cauce", repo="r", cwd=str(git_repo))
+    task = store.create_task("x", status="running", source="locks", repo="r", cwd=str(git_repo))
     base = git(git_repo, "rev-parse", "HEAD")
     store.add_event(task["id"], "attempt_started", seq=1, base=base)
     path = home() / "worktrees" / f"task-{task['id']}"
-    git(git_repo, "worktree", "add", "-q", "-b", f"cauce/task-{task['id']}", str(path))
+    git(git_repo, "worktree", "add", "-q", "-b", f"locks/task-{task['id']}", str(path))
     assert cli.main(["peek", str(task["id"]), "--stat"]) == 0
     assert capsys.readouterr().out == "nothing written yet\n"
     (path / "big.py").write_text("x = 1\n" * 200)
@@ -482,17 +482,17 @@ def test_show_of_a_running_task_says_how_far_it_got_and_what_was_asked(git_repo,
     out = capsys.readouterr().out
     assert "now: wrote logout.py" in out
     assert "  asked S1: add a logout button" in out and "  asked S2: add its test" in out
-    assert f"  its diff so far: cauce peek {task['id']}" in out
+    assert f"  its diff so far: locks peek {task['id']}" in out
 
 
 # --- cli: overview, spend, allow, lanes, work --------------------------------------------
 
 
 def test_overview_in_words_names_a_session_s_last_prompt_and_work_no_session_sent(tmp_path, capsys):
-    from cauce import repo
+    from locks import repo
 
     shop = tmp_path / "shop"
-    (shop / ".cauce").mkdir(parents=True)
+    (shop / ".locks").mkdir(parents=True)
     key = repo.key(shop)
     store = Store.open()
     try:
@@ -515,7 +515,7 @@ def test_overview_in_words_names_a_session_s_last_prompt_and_work_no_session_sen
 
 
 def test_spend_names_what_the_sessions_cost_by_model(tmp_path, capsys):
-    from cauce import usage
+    from locks import usage
     from tests.test_usage import line
 
     transcript = tmp_path / "t.jsonl"
@@ -532,13 +532,13 @@ def test_spend_names_what_the_sessions_cost_by_model(tmp_path, capsys):
 
 def test_allow_needs_a_directory_to_key_its_rules_to(tmp_path, capsys):
     assert cli.main(["allow", "Bash(ls:*)", "--repo", str(tmp_path / "nowhere")]) == 1
-    assert "is no repository cauce can key rules to" in capsys.readouterr().err
+    assert "is no repository locks can key rules to" in capsys.readouterr().err
 
 
 def test_lanes_beside_refuses_work_held_after_other_work(git_repo, capsys):
     store = Store.open()
     try:
-        ahead = store.create_task("build the api", status="running", source="cauce", repo="r", cwd=str(git_repo))
+        ahead = store.create_task("build the api", status="running", source="locks", repo="r", cwd=str(git_repo))
         held = store.enqueue("use it", repo="r", cwd=str(git_repo), options={"after": {"task": ahead["id"]}})
     finally:
         store.close()
@@ -548,8 +548,8 @@ def test_lanes_beside_refuses_work_held_after_other_work(git_repo, capsys):
 
 
 def test_a_dispatcher_at_its_limit_that_hands_nothing_on_says_only_why_it_stopped(git_repo, monkeypatch, capsys):
-    from cauce import dispatch
-    from cauce.flow import WorkReport
+    from locks import dispatch
+    from locks.flow import WorkReport
 
     monkeypatch.setattr(cli.flow, "work", lambda store, **kw: WorkReport([], "started 10 tasks", at_limit=True))
     monkeypatch.setattr(dispatch, "start_lane", lambda store, root, key: False)
@@ -558,7 +558,7 @@ def test_a_dispatcher_at_its_limit_that_hands_nothing_on_says_only_why_it_stoppe
 
 
 def test_the_background_index_refresh_says_what_it_did(tmp_path, monkeypatch, capsys):
-    from cauce.adapters.livespec import Livespec
+    from locks.adapters.livespec import Livespec
 
     monkeypatch.setattr(Livespec, "refresh", lambda self, where: f"indexed {where.name}")
     assert cli.main(["index-livespec", str(tmp_path)]) == 0
@@ -566,7 +566,7 @@ def test_the_background_index_refresh_says_what_it_did(tmp_path, monkeypatch, ca
 
 
 def test_naming_a_session_runs_once_at_a_time(monkeypatch, capsys):
-    from cauce import dispatch, naming
+    from locks import dispatch, naming
 
     names = iter(["Cart speed", None])
     monkeypatch.setattr(naming, "name_session", lambda store, sid, **kw: next(names))
@@ -580,11 +580,11 @@ def test_naming_a_session_runs_once_at_a_time(monkeypatch, capsys):
 
 
 def test_tasks_by_worker_in_one_project_lists_no_project_headers(git_repo, capsys):
-    from cauce import repo
+    from locks import repo
 
     store = Store.open()
     try:
-        t = store.create_task("fix the api", status="done", source="cauce", repo=repo.key(git_repo))
+        t = store.create_task("fix the api", status="done", source="locks", repo=repo.key(git_repo))
         store.add_attempt(t["id"], cell="haiku", max_turns=30, passed=1, cost_usd=0.25)
     finally:
         store.close()
@@ -602,7 +602,7 @@ def test_notes_outside_any_directory_stop_with_why(tmp_path):
 
 
 def test_notes_show_a_text_longer_than_its_title_and_a_topic_haiku_proposed(git_repo, capsys):
-    from cauce import repo
+    from locks import repo
 
     key = repo.key(git_repo)
     store = Store.open()
@@ -625,7 +625,7 @@ def test_extract_notes_outside_any_directory_files_nothing(tmp_path, capsys):
 
 def test_workspace_list_as_json_and_when_there_is_none(capsys):
     assert cli.main(["workspace", "list"]) == 0
-    assert capsys.readouterr().out.startswith("no workspace: `cauce workspace add")
+    assert capsys.readouterr().out.startswith("no workspace: `locks workspace add")
     assert cli.main(["workspace", "list", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == []
 
@@ -695,7 +695,7 @@ def test_habits_install_outside_a_repository_takes_a_habit_of_every_repository(t
 
 
 def test_habits_review_queues_one_reader_for_a_repository_s_new_habits(git_repo, tmp_path, monkeypatch, capsys):
-    from cauce import dispatch, repo
+    from locks import dispatch, repo
 
     assert cli.main(["habits", "review", "--repo", str(tmp_path / "nowhere")]) == 1
     assert capsys.readouterr().err.strip() == "not in a repository"
@@ -713,13 +713,13 @@ def test_habits_review_queues_one_reader_for_a_repository_s_new_habits(git_repo,
     out = capsys.readouterr().out
     assert out.startswith("queued #") and "[habits review]" in out
     assert started == [(str(git_repo.resolve()), repo.key(git_repo))]
-    assert (git_repo / ".cauce").is_dir()  # the project is enrolled
+    assert (git_repo / ".locks").is_dir()  # the project is enrolled
 
 
 def test_ui_stops_itself_when_asked_once_no_tab_is_open(monkeypatch, capsys):
     import threading
 
-    from cauce.ui import server
+    from locks.ui import server
 
     asked = threading.Event()
     seen = []
@@ -744,26 +744,26 @@ def test_ui_stops_itself_when_asked_once_no_tab_is_open(monkeypatch, capsys):
     assert "it stops 30s after its last tab closes" in capsys.readouterr().out and seen == [30.0]
 
 
-def test_ui_already_served_by_this_cauce_opens_nothing_unless_asked(monkeypatch, capsys):
+def test_ui_already_served_by_this_locks_opens_nothing_unless_asked(monkeypatch, capsys):
     import errno
 
-    from cauce import __version__
-    from cauce.ui import server
+    from locks import __version__
+    from locks.ui import server
 
     def taken(port):
         raise OSError(errno.EADDRINUSE, "Address already in use")
 
     monkeypatch.setattr(server, "serve", taken)
-    monkeypatch.setattr(server, "occupant", lambda port: {"cauce": True, "version": __version__})
+    monkeypatch.setattr(server, "occupant", lambda port: {"locks": True, "version": __version__})
     monkeypatch.setattr("webbrowser.open", lambda url: pytest.fail("opened a tab nobody asked for"))
     assert cli.main(["ui", "--port", "8791"]) == 0
-    assert capsys.readouterr().out.strip() == f"cauce UI {__version__} is already at http://127.0.0.1:8791/"
+    assert capsys.readouterr().out.strip() == f"locks UI {__version__} is already at http://127.0.0.1:8791/"
 
 
 def test_endings_in_words_print_the_notice(capsys):
     store = Store.open()
     try:
-        mine = store.create_task("write docs", status="running", source="cauce", session_id="s1", final_cell="haiku")
+        mine = store.create_task("write docs", status="running", source="locks", session_id="s1", final_cell="haiku")
         store.add_event(mine["id"], "finished", status="done", final_cell="haiku")
         store.update_task(mine["id"], status="done", result="wrote them")
     finally:
@@ -775,10 +775,10 @@ def test_endings_in_words_print_the_notice(capsys):
 
 
 def test_a_worker_never_takes_a_compaction(monkeypatch, capsys):
-    monkeypatch.setenv("CAUCE_WORKER_TASK", "7")
+    monkeypatch.setenv("LOCKS_WORKER_TASK", "7")
     assert cli.main(["compaction", "next", "--session", "s1"]) == 0
     assert capsys.readouterr().out == ""
-    assert not (home() / "cauce.db").exists()  # it never opened the store
+    assert not (home() / "locks.db").exists()  # it never opened the store
     assert cli.main(["compaction", "next", "--session", "s1", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == {"action": None}
 
@@ -818,10 +818,10 @@ def test_a_dead_end_says_what_worked_instead_when_something_did(store):
         in context
 
 
-def test_a_queued_prompt_with_no_directory_is_queued_for_cauce_work(store):
+def test_a_queued_prompt_with_no_directory_is_queued_for_locks_work(store):
     answer = _prompt(store, "++ write the release notes")
     assert answer["decision"] == "block"
-    assert answer["reason"].startswith("cauce: queued #1 — write the release notes. `cauce work` runs the queue.")
+    assert answer["reason"].startswith("locks: queued #1 — write the release notes. `locks work` runs the queue.")
     task = store.get_task(1)
     assert task["status"] == "queued" and task["cwd"] is None
 
@@ -835,23 +835,23 @@ def test_a_bare_continue_after_a_turn_that_ended_well_is_a_turn_of_its_own(store
 
 
 def test_a_prompt_no_note_speaks_to_gets_no_notes_block(store, git_repo, monkeypatch):
-    from cauce import project
+    from locks import project
 
-    monkeypatch.setenv("CAUCE_NOTES", "on")
-    monkeypatch.setenv("CAUCE_ROUTE", "off")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
+    monkeypatch.setenv("LOCKS_ROUTE", "off")
     project.enroll(git_repo)
     answer = _prompt(store, "rename the login button label", cwd=str(git_repo))
-    assert "cauce notes" not in _context_of(answer)
+    assert "locks notes" not in _context_of(answer)
     assert not store.events_of(store.list_tasks()[0]["id"], "notes_shown")
 
 
 def test_a_prompt_in_a_session_behind_the_newest_install_hears_of_it(store):
-    from cauce import __version__
+    from locks import __version__
     from tests.test_link import _plugin
 
     _plugin(Path(os.environ["CLAUDE_CONFIG_DIR"]), "999.0.0")
     context = _context_of(_prompt(store, "rename the button"))
-    assert context.startswith(f"cauce: cauce 999.0.0 is installed, and this session loaded {__version__}")
+    assert context.startswith(f"locks: locks 999.0.0 is installed, and this session loaded {__version__}")
 
 
 # --- hooks: what never costs a turn ------------------------------------------------------
@@ -863,7 +863,7 @@ def _errors() -> str:
 
 
 def test_older_installs_are_named_again_when_the_set_changes(tmp_path):
-    from cauce import __version__
+    from locks import __version__
     from tests.test_link import _plugin
 
     config = tmp_path / "config"
@@ -902,7 +902,7 @@ def test_a_landing_that_fails_is_noted(monkeypatch, git_repo, store):
 
 
 def test_the_orchestrator_adopts_quiet_sessions_work_and_hears_it_at_its_start(store, git_repo, monkeypatch):
-    from cauce import orchestrator, project, repo
+    from locks import orchestrator, project, repo
     from tests.test_orchestrator import _old
 
     key = repo.key(git_repo)
@@ -910,18 +910,18 @@ def test_the_orchestrator_adopts_quiet_sessions_work_and_hears_it_at_its_start(s
     orchestrator.claim(folder, "me", str(git_repo), via="sent work")
     store._conn.execute("INSERT INTO sessions (id, cwd, repo, started_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
                         ("old", str(git_repo), key, _old(30), _old(20)))
-    left = store.create_task("x", status="blocked", source="cauce", repo=key, session_id="old")
+    left = store.create_task("x", status="blocked", source="locks", repo=key, session_id="old")
     said = hooks._orchestrates(store, "me", str(git_repo))
     assert said.endswith("1 task(s) sent by a session that ended or went quiet report here now.")
     assert store.get_task(left["id"])["session_id"] == "me"
-    other = store.create_task("y", status="blocked", source="cauce", repo=key, session_id="old")
+    other = store.create_task("y", status="blocked", source="locks", repo=key, session_id="old")
     assert hooks._adopt(store, "me", str(git_repo)) == 1 and store.get_task(other["id"])["session_id"] == "me"
     context = _context_of(hooks.session_start({"session_id": "me", "cwd": str(git_repo)}, store, home(), {},
                                               adapters=[]))
     assert "this session orchestrates this project" in context
 
     def unreadable(*a, **kw):
-        raise OSError("no .cauce")
+        raise OSError("no .locks")
 
     monkeypatch.setattr(orchestrator, "is_it", unreadable)
     monkeypatch.setattr(orchestrator, "started", unreadable)
@@ -930,12 +930,12 @@ def test_the_orchestrator_adopts_quiet_sessions_work_and_hears_it_at_its_start(s
 
 
 def test_a_habits_review_is_queued_once_a_day_and_its_failure_is_noted(store, git_repo, monkeypatch):
-    from cauce import habits
+    from locks import habits
 
     queued = []
     monkeypatch.setattr(habits, "queue_review", lambda store, **kw: queued.append(kw) or None)
-    on = {"CAUCE_HABIT_REVIEW": "on", "CAUCE_AUTOWORK": "on"}
-    hooks._review_habits(store, home(), {"CAUCE_HABIT_REVIEW": "off"}, "s", str(git_repo), "k")
+    on = {"LOCKS_HABIT_REVIEW": "on", "LOCKS_AUTOWORK": "on"}
+    hooks._review_habits(store, home(), {"LOCKS_HABIT_REVIEW": "off"}, "s", str(git_repo), "k")
     assert queued == []
     hooks._review_habits(store, home(), on, "s", str(git_repo), "k")
     hooks._review_habits(store, home(), on, "s", str(git_repo), "k")  # mined today already
@@ -950,7 +950,7 @@ def test_a_habits_review_is_queued_once_a_day_and_its_failure_is_noted(store, gi
 
 
 def test_a_relay_with_no_transcript_and_no_work_takes_the_role_with_the_thread(store, git_repo):
-    from cauce import orchestrator, project, scribe
+    from locks import orchestrator, project, scribe
 
     folder = project.enroll(git_repo)
     orchestrator.claim(folder, "old", str(git_repo), via="sent work")
@@ -960,8 +960,8 @@ def test_a_relay_with_no_transcript_and_no_work_takes_the_role_with_the_thread(s
     scribe.mark_relay(home(), "old", git_repo)
     event = {"session_id": "new", "cwd": str(git_repo), "source": "clear"}
     context = _context_of(hooks.session_start(event, store, home(), {}, adapters=[]))
-    assert "cauce relay: this session continues old" in context and "Plan the cart migration to cents" in context
-    assert "cauce task(s) that session sent" not in context
+    assert "locks relay: this session continues old" in context and "Plan the cart migration to cents" in context
+    assert "locks task(s) that session sent" not in context
     assert orchestrator.is_it(folder, "new") and scribe.load(home(), "new") is None
 
 
@@ -981,32 +981,32 @@ def test_a_turn_that_failed_with_no_turn_running_changes_nothing(store):
 
 
 def test_a_session_start_names_older_installs_left_in_the_cache(store):
-    from cauce import __version__
+    from locks import __version__
     from tests.test_link import _plugin
 
     config = Path(os.environ["CLAUDE_CONFIG_DIR"])
     _plugin(config, __version__)
     _plugin(config, "0.1.0")
     context = _context_of(hooks.session_start({"session_id": "s"}, store, home(), {}, adapters=[]))
-    assert "older cauce installs remain in Claude Code's plugin cache (0.1.0)" in context
+    assert "older locks installs remain in Claude Code's plugin cache (0.1.0)" in context
 
 
 def test_a_session_start_names_what_the_doctor_finds_stuck(store, git_repo, monkeypatch):
-    from cauce import doctor
+    from locks import doctor
 
-    found = doctor.Finding("x", doctor.BROKEN, "task #3 runs with no process", "cauce cancel 3")
+    found = doctor.Finding("x", doctor.BROKEN, "task #3 runs with no process", "locks cancel 3")
     suspect = doctor.Finding("y", "suspect", "a slow one", "look")
     monkeypatch.setattr(doctor, "check", lambda store, repo=None, days=1: [found, suspect])
     context = _context_of(hooks.session_start({"session_id": "s", "cwd": str(git_repo)}, store, home(), {},
                                               adapters=[]))
-    assert "cauce doctor: work in this repository is stuck" in context
-    assert "- task #3 runs with no process → cauce cancel 3" in context and "a slow one" not in context
+    assert "locks doctor: work in this repository is stuck" in context
+    assert "- task #3 runs with no process → locks cancel 3" in context and "a slow one" not in context
 
 
 def test_a_session_start_with_notes_on_and_none_kept_says_no_index(store, git_repo, monkeypatch):
-    from cauce import project
+    from locks import project
 
-    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
     project.enroll(git_repo)
     context = _context_of(hooks.session_start({"session_id": "s", "cwd": str(git_repo)}, store, home(), {},
                                               adapters=[]))
@@ -1014,7 +1014,7 @@ def test_a_session_start_with_notes_on_and_none_kept_says_no_index(store, git_re
 
 
 def test_freshen_reads_the_neighbours_from_the_settings_when_none_are_given(tmp_path):
-    assert hooks._freshen(tmp_path, tmp_path, {"CAUCE_LIVESPEC": "off", "CAUCE_ENGRAM": "off"}, None) == []
+    assert hooks._freshen(tmp_path, tmp_path, {"LOCKS_LIVESPEC": "off", "LOCKS_ENGRAM": "off"}, None) == []
 
 
 def test_main_answers_a_session_start_on_stdout(tmp_path, git_repo):
@@ -1022,7 +1022,7 @@ def test_main_answers_a_session_start_on_stdout(tmp_path, git_repo):
     root.mkdir()
     (root / hooks.ERROR_LOG).write_text("--- a Stop\nboom\n")
     out = io.StringIO()
-    env = {"CAUCE_HOME": str(root), "CAUCE_LIVESPEC": "off", "CAUCE_ENGRAM": "off"}
+    env = {"LOCKS_HOME": str(root), "LOCKS_LIVESPEC": "off", "LOCKS_ENGRAM": "off"}
     assert hooks.main("SessionStart", io.StringIO(json.dumps({"session_id": "s"})), out, env) == 0
     answer = json.loads(out.getvalue())
     assert answer["hookSpecificOutput"]["hookEventName"] == "SessionStart"
@@ -1058,7 +1058,7 @@ def test_an_error_count_that_cannot_be_read_counts_none(tmp_path):
 
 
 def _ended(store: Store, title: str, status: str, session: str = "s", **data) -> dict:
-    task = store.create_task(title, status="running", source="cauce", session_id=session, repo="r")
+    task = store.create_task(title, status="running", source="locks", session_id=session, repo="r")
     store.add_event(task["id"], "finished", status=status, **data)
     store.update_task(task["id"], status=status)
     return store.get_task(task["id"])
@@ -1072,7 +1072,7 @@ def test_endings_are_delivered_once(store):
 
 
 def test_a_loop_that_cannot_be_read_never_costs_the_endings(store, monkeypatch):
-    from cauce import loops
+    from locks import loops
 
     def broken(session_id):
         raise RuntimeError("diary unreadable")
@@ -1083,12 +1083,12 @@ def test_a_loop_that_cannot_be_read_never_costs_the_endings(store, monkeypatch):
 
 
 def test_a_habits_review_whose_verdict_is_text_or_options_are_broken(store, monkeypatch):
-    from cauce import habits
+    from locks import habits
 
     assert hooks.habit_lines({"options": "{broken", "status": "done"}) == []
     task = {"options": json.dumps({"habit_review": ["c1"]}), "status": "done", "finished_data": "{}", "result": ""}
     assert hooks.habit_lines(task) == ["  habits review: nothing worth a hook (0 skipped)",
-                                       "    not answered: c1 (`cauce habits` lists them)"]
+                                       "    not answered: c1 (`locks habits` lists them)"]
 
     def broken(*a, **kw):
         raise RuntimeError("settings unreadable")
@@ -1121,7 +1121,7 @@ def test_an_ending_says_a_lane_of_the_session_s_is_paused_after_the_endings(stor
     store.enqueue("more docs", repo="r2", cwd="/x", session_id="s")
     store.pause_lane("r2", "task #999 stopped for a person")
     text, _ = hooks.endings(store, "s", claim="stop")
-    head, paused = text.split("\n\ncauce: a lane holding work you queued is paused")
+    head, paused = text.split("\n\nlocks: a lane holding work you queued is paused")
     assert f"#{task['id']} [done] write docs" in head and "r2: 1 queued task(s) of yours wait" in paused
 
 
@@ -1132,28 +1132,28 @@ def test_a_verdict_summary_with_no_independent_check_says_nothing_of_one():
 
 
 def test_what_moved_since_is_empty_when_git_cannot_say(store, git_repo, monkeypatch):
-    from cauce import isolate
+    from locks import isolate
 
     def broken(*a, **kw):
         raise RuntimeError("git cannot say")
 
     monkeypatch.setattr(isolate, "moved_since", broken)
-    task = store.create_task("x", status="done", source="cauce", cwd=str(git_repo))
+    task = store.create_task("x", status="done", source="locks", cwd=str(git_repo))
     store.add_event(task["id"], "finished", status="done", base="abc")
     assert hooks._moved_since(store, store.get_task(task["id"]), [store.get_task(task["id"])]) == set()
 
 
 def test_overlaps_count_the_tasks_past_the_shown_ones_and_survive_git_failing(store, git_repo, monkeypatch):
-    from cauce import isolate
+    from locks import isolate
 
     def broken(*a, **kw):
         raise RuntimeError("git cannot say")
 
     monkeypatch.setattr(isolate, "kept_branches", broken)
     for n in range(hooks.OVERLAP_SHOWN + 1):
-        running = store.create_task(f"beside {n}", status="running", source="cauce", repo="r", cwd=str(git_repo))
+        running = store.create_task(f"beside {n}", status="running", source="locks", repo="r", cwd=str(git_repo))
         store.add_attempt(running["id"], cell="sonnet/medium", max_turns=40, passed=0, changed_paths=["src/a.ts"])
-    mine = store.create_task("mine", status="done", source="cauce", repo="r", cwd=str(git_repo))
+    mine = store.create_task("mine", status="done", source="locks", repo="r", cwd=str(git_repo))
     lines = hooks._overlaps(store, {**mine, "finished_data": {"changed": ["src/a.ts"]}})
     assert len([x for x in lines if "(running now)" in x]) == hooks.OVERLAP_SHOWN
     assert lines[-1] == "    and 1 more task(s)"
@@ -1177,7 +1177,7 @@ def test_a_limit_wait_whose_reset_has_passed_resumes_at_once(monkeypatch, capsys
     import argparse
     import time as clock
 
-    from cauce import dispatch
+    from locks import dispatch
 
     monkeypatch.setattr(dispatch, "recover", lambda *a, **kw: [])
     monkeypatch.setattr(dispatch, "revive", lambda *a, **kw: [])

@@ -7,9 +7,9 @@ import threading
 
 import pytest
 
-from cauce import cli, flow, stops, workflows
-from cauce.launch import WorkerResult
-from cauce.store import Store
+from locks import cli, flow, stops, workflows
+from locks.launch import WorkerResult
+from locks.store import Store
 
 from .test_orchestrate import ok
 from .test_workflows import _runner, _save
@@ -133,7 +133,7 @@ def test_a_question_waits_on_the_person_and_their_answer_chooses_the_branch(git_
     task = store.get_task(asked["task"])
     stop = stops.of(store, task)
     assert stop.cause == "question" and stops.for_person(stop) and stop.reason.startswith("Ship the export")
-    line = f"cauce workflow answer {started['id']} how <flag|direct>"
+    line = f"locks workflow answer {started['id']} how <flag|direct>"
     assert stops.next_step(task["id"], stop) == line and stops.view(store, task)["next"] == line
     assert stops.resume_args(task["id"], stops.view(store, task)) is None
     # The session hears of the question, as a step that waits on the person.
@@ -159,13 +159,13 @@ def test_a_question_is_answered_never_resumed(git_repo, store: Store, kicks, cap
     flow.work(store, runner=_runner([ok("built")], []))
     asked = workflows.status(store, started["id"])["steps"][1]["task"]
     assert cli.main(["resume", str(asked)]) == 1
-    assert f"answer it with `cauce workflow answer {started['id']} how <flag|direct>`" in capsys.readouterr().err
+    assert f"answer it with `locks workflow answer {started['id']} how <flag|direct>`" in capsys.readouterr().err
     monkeypatch.chdir(git_repo)
     assert cli.main(["workflow", "status", str(started["id"])]) == 0
     assert "asks you: flag | direct" in capsys.readouterr().out
     assert cli.main(["workflow", "answer", str(started["id"]), "how", "direct"]) == 0
     assert "how answered direct; queued #" in capsys.readouterr().out
-    monkeypatch.setenv("CAUCE_WORKER_TASK", "9")
+    monkeypatch.setenv("LOCKS_WORKER_TASK", "9")
     assert cli.main(["workflow", "answer", str(started["id"]), "how", "direct"]) != 0
 
 
@@ -311,7 +311,7 @@ def test_a_change_made_on_a_revision_that_moved_is_refused(git_repo, capsys, mon
 
 
 def test_the_board_stops_once_its_last_viewer_left_and_never_before_one_came(tmp_path):
-    from cauce.ui import server
+    from locks.ui import server
 
     ui = server.UIServer(0, tmp_path)
     try:

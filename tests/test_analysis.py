@@ -4,12 +4,12 @@ import csv
 import io
 import json
 
-from cauce import analysis, cli
-from cauce.escalate import Failure
-from cauce.launch import WorkerResult
-from cauce.orchestrate import Options, run
-from cauce.store import home
-from cauce.ui import api
+from locks import analysis, cli
+from locks.escalate import Failure
+from locks.launch import WorkerResult
+from locks.orchestrate import Options, run
+from locks.store import home
+from locks.ui import api
 
 from .test_orchestrate import Script, bad, kind, ok
 from .test_survey import user, write
@@ -43,7 +43,7 @@ def test_the_analysis_counts_passes_climbs_phases_and_the_session_s_thread(git_r
     assert s["wall_p50_s"] is not None and s["queued_p50_s"] is not None
     kinds = {row["kind"]: row for row in report["by_kind"]}
     assert kinds["implement"]["runs"] == 3 and kinds["feature"]["pass_rate"] == 1.0
-    assert {row["source"] for row in report["by_source"]} == {"cauce"}
+    assert {row["source"] for row in report["by_source"]} == {"locks"}
     # Every run here was timed, phase by phase.
     assert report["phases"]["runs"] == 4 and set(report["phases"]["seconds"]) == set(analysis.PHASES)
     assert abs(sum(report["phases"]["share"].values()) - 1) < 0.01 or sum(report["phases"]["seconds"].values()) == 0
@@ -60,7 +60,7 @@ def test_the_analysis_counts_passes_climbs_phases_and_the_session_s_thread(git_r
 
 
 def test_a_run_recorded_before_its_phases_were_timed_counts_by_its_timestamps(store):
-    task = store.create_task("old work", status="done", source="cauce", kind="test")
+    task = store.create_task("old work", status="done", source="locks", kind="test")
     for stamp, kind_, data in (
             ("2026-10-01T10:00:00+00:00", "planned", {"kind": "test", "start": "sonnet/medium"}),
             ("2026-10-01T10:04:00+00:00", "attempt_finished", {"cell": "sonnet/medium", "passed": True,
@@ -100,7 +100,7 @@ def test_percentiles_and_the_outputs(git_repo, tmp_path, store):
     assert analysis._seconds(9000) == "2.5h" and analysis._between("x", None) is None
     assert analysis._between("2026-10-01 10:00:00", "2026-10-01T10:01:00+00:00") == 60  # no zone: UTC
     empty = analysis.compute(store, days=7)
-    assert "No run of cauce's yet" in analysis.text(empty)
+    assert "No run of locks' yet" in analysis.text(empty)
     seed(git_repo, tmp_path, store)
     report = analysis.compute(store, days=0, keep_runs=None)
     shown = analysis.text(report)
@@ -116,7 +116,7 @@ def test_the_stats_command(git_repo, tmp_path, store, capsys):
     seed(git_repo, tmp_path, store)
     store._conn.commit()
     assert cli.main(["stats"]) == 0
-    assert "cauce stats — every repository, last 30 days" in capsys.readouterr().out
+    assert "locks stats — every repository, last 30 days" in capsys.readouterr().out
     assert cli.main(["stats", "--json", "--days", "0"]) == 0
     assert json.loads(capsys.readouterr().out)["summary"]["passed"] == 3
     assert cli.main(["stats", "--runs"]) == 0
@@ -127,7 +127,7 @@ def test_the_stats_command(git_repo, tmp_path, store, capsys):
 
 
 def test_a_check_s_cost_and_the_cache_are_kept_apart(store):
-    task = store.create_task("checked work", status="done", source="cauce", kind="implement")
+    task = store.create_task("checked work", status="done", source="locks", kind="implement")
     for kind_, data in (
             ("planned", {"kind": "implement", "start": "sonnet/medium", "plan_s": 1.0}),
             ("attempt_finished", {"cell": "sonnet/medium", "passed": True, "cost_usd": 0.5, "worker_cost_usd": 0.3,
@@ -135,7 +135,7 @@ def test_a_check_s_cost_and_the_cache_are_kept_apart(store):
                                   "wall_s": 100}),
             ("finished", {"status": "done", "cost_usd": 0.5, "wall_s": 120})):
         store.add_event(task["id"], kind_, **data)
-    old = store.create_task("older work", status="done", source="cauce", kind="implement")
+    old = store.create_task("older work", status="done", source="locks", kind="implement")
     for kind_, data in (("planned", {"kind": "implement"}),
                         ("verified", {"passed": True, "cost_usd": 0.1}),
                         ("attempt_finished", {"cell": "sonnet/medium", "passed": True, "cost_usd": 0.4,
@@ -157,7 +157,7 @@ def test_attempts_that_went_on_in_a_session_are_compared_with_fresh_ones(git_rep
         launcher=Script(shallow, WorkerResult(True, None, "fixed", "1 passed", cost_usd=0.1, turns=8)))
     run("fix the cart total", git_repo, store, registry={}, classifier=kind("implement"),
         launcher=Script(bad(Failure.CODE_BUG, "missed it", cost=0.4), ok(cost=0.5)))
-    old = store.create_task("before sessions were kept", status="done", source="cauce", kind="implement")
+    old = store.create_task("before sessions were kept", status="done", source="locks", kind="implement")
     for kind_, data in (("planned", {"kind": "implement"}),
                         ("attempt_finished", {"seq": 1, "cell": "sonnet/medium", "passed": False, "cost_usd": 0.3}),
                         ("moved", {"move": "more_turns"}),
@@ -178,7 +178,7 @@ def test_attempts_that_went_on_in_a_session_are_compared_with_fresh_ones(git_rep
 
 
 def test_the_gaps_between_steps_are_measured_on_each_run_s_ending(git_repo, store, kicks):
-    from cauce import flow, workflows
+    from locks import flow, workflows
 
     from .test_workflows import CHAIN, _runner, _save
 
@@ -193,7 +193,7 @@ def test_the_gaps_between_steps_are_measured_on_each_run_s_ending(git_repo, stor
     assert "advance_s" not in build and check["advance_s"] >= 0 and polish["advance_s"] >= 0
     found = {r["step"]: r for r in analysis.runs(*store.runs_since(""))}
     assert found["check"]["advance_s"] == check["advance_s"] and found["build"]["advance_s"] is None
-    # A run nobody dispatched (a person's `cauce run`) measured none of them.
+    # A run nobody dispatched (a person's `locks run`) measured none of them.
     direct = run("fix the cart total", git_repo, store, registry={}, launcher=Script(ok()),
                  classifier=kind("implement"))
     ended = store.final_event(direct.task_id)["data"]
@@ -208,7 +208,7 @@ def test_the_breakdown_shows_the_gaps_instead_of_other_and_leaves_out_what_was_n
 
     a = store.create_task("a step", status="done", source="queue", kind="implement")
     ended(a["id"], 70.0, advance_s=4.0, pickup_s=25.0, spawn_s=5.0)
-    b = store.create_task("a person's run", status="done", source="cauce", kind="implement")
+    b = store.create_task("a person's run", status="done", source="locks", kind="implement")
     ended(b["id"], 70.0)
     found = analysis.runs(*store.runs_since(""))
     ph = analysis.phases(found)
@@ -227,14 +227,14 @@ def test_an_attempt_whose_worker_died_is_lost_time_and_notes_are_their_own_phase
     """The time a dead worker cost was read as "other": 17% of it, here."""
     from datetime import UTC, datetime, timedelta
 
-    task = store.create_task("x", status="interrupted", source="cauce", kind="implement")
+    task = store.create_task("x", status="interrupted", source="locks", kind="implement")
     start = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
     for event_kind, at, data in (("planned", start, {"kind": "implement", "plan_s": 1.0}),
                                  ("attempt_started", start, {"seq": 1}),
                                  ("finished", start + timedelta(minutes=30), {"status": "interrupted"})):
         event = store.add_event(task["id"], event_kind, **data)
         store._conn.execute("UPDATE events SET ts = ? WHERE id = ?", (at.isoformat(timespec="seconds"), event))
-    done = store.create_task("y", status="done", source="cauce", kind="implement")
+    done = store.create_task("y", status="done", source="locks", kind="implement")
     store.add_event(done["id"], "planned", kind="implement", plan_s=1.0)
     store.add_event(done["id"], "attempt_started", seq=1)
     store.add_event(done["id"], "attempt_finished", seq=1, passed=True, wall_s=50.0)
@@ -250,9 +250,9 @@ def test_an_attempt_whose_worker_died_is_lost_time_and_notes_are_their_own_phase
 def test_a_dead_worker_noticed_days_later_is_lost_only_up_to_its_time_limit(store):
     from datetime import UTC, datetime, timedelta
 
-    from cauce import launch
+    from locks import launch
 
-    task = store.create_task("x", status="interrupted", source="cauce", kind="implement")
+    task = store.create_task("x", status="interrupted", source="locks", kind="implement")
     start = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
     for event_kind, at, data in (("planned", start, {"kind": "implement", "plan_s": 1.0}),
                                  ("attempt_started", start, {"seq": 1, "max_turns": 30}),
@@ -287,7 +287,7 @@ def test_the_runs_that_cost_most_for_their_kind_say_why(capsys):
 
 
 def test_stats_expensive_prints_the_section(capsys):
-    from cauce import cli
+    from locks import cli
 
     assert cli.main(["stats", "--expensive"]) == 0
     assert capsys.readouterr().out.startswith("No run cost more")
@@ -298,7 +298,7 @@ def test_stats_expensive_prints_the_section(capsys):
 def test_a_pickup_is_split_by_what_it_waited_on(store):
     from datetime import datetime
 
-    from cauce import analysis, orchestrate
+    from locks import analysis, orchestrate
 
     task = store.create_task("t", status="running", source="queue", repo="r")
     store.add_event(task["id"], "dispatch_decided", parallel=False, reason="may touch #1")
@@ -315,9 +315,9 @@ def test_a_pickup_is_split_by_what_it_waited_on(store):
 
 
 def test_livespec_use_is_counted_from_the_attempts_it_was_handed(store):
-    from cauce import analysis
+    from locks import analysis
 
-    task = store.create_task("build it", status="done", source="cauce")
+    task = store.create_task("build it", status="done", source="locks")
     for seq, passed, calls in ((1, False, 0), (2, True, 3)):
         store.add_event(task["id"], "attempt_started", seq=seq, capabilities=["livespec"])
         store._conn.execute("INSERT INTO attempts (task_id, seq, cell, max_turns, passed, created_at) "
@@ -325,7 +325,7 @@ def test_livespec_use_is_counted_from_the_attempts_it_was_handed(store):
         for _ in range(calls):
             store._conn.execute("INSERT INTO tool_events (task_id, attempt, ts, tool, sig, arg_hash, ok) "
                                 "VALUES (?, ?, '2026', 'mcp__livespec__who_calls', 'x', '', 1)", (task["id"], seq))
-    other = store.create_task("other", status="done", source="cauce")
+    other = store.create_task("other", status="done", source="locks")
     store.add_event(other["id"], "attempt_started", seq=1, capabilities=[])
     use = analysis.capability_use(store.capability_use("livespec"))
     assert use == {"given": 2, "used": 1, "calls": 3, "passed_used": 1.0, "passed_idle": 0.0}
@@ -342,12 +342,12 @@ class Calling:
         self.tools, self.tokens, self.store, self.specs = tools, tokens, store, []
 
     def __call__(self, spec):
-        from cauce import signature
+        from locks import signature
 
         self.specs.append(spec)
         task = self.store._conn.execute("SELECT max(id) FROM tasks").fetchone()[0]
-        env = {"CAUCE_HOME": str(home()), "CAUCE_WORKER_TASK": str(task),
-               "CAUCE_WORKER_ATTEMPT": str(len(self.specs))}
+        env = {"LOCKS_HOME": str(home()), "LOCKS_WORKER_TASK": str(task),
+               "LOCKS_WORKER_ATTEMPT": str(len(self.specs))}
         for tool in self.tools:
             signature.append({"tool_name": tool, "tool_input": {"q": "x"}, "session_id": "w"}, env)
         return WorkerResult(True, None, "done", evidence="1 passed", cost_usd=0.1, input_tokens=self.tokens,
@@ -380,7 +380,7 @@ def test_an_attempt_keeps_the_livespec_calls_its_worker_made_and_a_run_without_l
 
 
 def test_tool_counts_are_one_attempt_s_calls_by_name(store):
-    task = store.create_task("t", status="done", source="cauce")
+    task = store.create_task("t", status="done", source="locks")
     for attempt, tool in ((1, "mcp__livespec__who_calls"), (1, "mcp__livespec__who_calls"),
                           (1, "mcp__livespec__read_unit"), (1, "Read"), (2, "mcp__livespec__find_symbol")):
         store.add_tool_event(task_id=task["id"], attempt=attempt, tool=tool, sig="x", arg_hash="h", ok=1)

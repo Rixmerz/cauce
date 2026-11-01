@@ -1,4 +1,4 @@
-"""A livespec newer than the one cauce was checked against: its tools are read once per release, and
+"""A livespec newer than the one locks was checked against: its tools are read once per release, and
 what it does not serve is left out of what a worker is told, said in the plan."""
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import io
 import json
 from pathlib import Path
 
-from cauce.adapters import PRESENT, Status
-from cauce.adapters.livespec import PINNED, TOOLS, Livespec, orientation
+from locks.adapters import PRESENT, Status
+from locks.adapters.livespec import PINNED, TOOLS, Livespec, orientation
 
 from .test_livespec_adapter import adapter, tool
 
@@ -68,7 +68,7 @@ def test_a_newer_release_is_read_once_and_what_it_lacks_is_left_out_and_said(tmp
     a = adapter(tmp_path, tool(tmp_path, "livespec"), popen=server)
     assert a.missing_tools(NEWER, tmp_path) == {"read_unit", "find_orphan_tests"}
     assert a.missing_tools(NEWER, tmp_path) == {"read_unit", "find_orphan_tests"}
-    assert len(server.asked) == 1  # kept per release in the cauce home
+    assert len(server.asked) == 1  # kept per release in the locks home
     status = _status(tmp_path, NEWER)
     assert "does not serve find_orphan_tests, read_unit" in a._release_note(status)[0]
     # The orientation step that names read_unit is not told; the others are.
@@ -85,7 +85,7 @@ def test_a_newer_release_whose_tools_cannot_be_read_briefs_as_the_checked_one(tm
     assert a.missing_tools(NEWER, tmp_path) is None
     note = a._release_note(_status(tmp_path, NEWER))[0]
     assert f"newer than the {PINNED}" in note and "could not be read" in note
-    assert not (tmp_path / "cauce" / "work" / "livespec-tools.json").exists()  # tried again next time
+    assert not (tmp_path / "locks" / "work" / "livespec-tools.json").exists()  # tried again next time
 
 
 def test_a_newer_release_that_serves_every_tool_says_nothing(tmp_path):

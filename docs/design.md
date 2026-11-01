@@ -26,9 +26,9 @@ report — and still hands the worker the server. livespec is the first, and it
 is on by default: a code index consulted at every step is the difference
 between a worker that starts by searching and one that starts by working.
 
-Its code is not copied into cauce. livespec is AGPL-3.0 and depends on
-tree-sitter, fastmcp and networkx; cauce's hooks run on every prompt and must
-import with the standard library alone. So cauce reads livespec's SQLite index
+Its code is not copied into locks. livespec is AGPL-3.0 and depends on
+tree-sitter, fastmcp and networkx; locks' hooks run on every prompt and must
+import with the standard library alone. So locks reads livespec's SQLite index
 read-only and drives its CLI, and pins the release it was checked against.
 
 ## Why one-shot workers, not subagents
@@ -70,7 +70,7 @@ measured run of an orchestrator at low effort skipped its own self-check.
   tasks per kind, like the one behind vise's routing defaults, should move
   them; the attempt trace is already the data such a sweep reads.
 - **Parallel runs.** Independent tasks can already run as separate
-  `cauce run` processes (each has its own worktree); a planner that splits a
+  `locks run` processes (each has its own worktree); a planner that splits a
   request into a dependency graph is not here yet.
 - **The rest of tasky:** the queue and auto-pull, the dashboard, transcript
   ingest and token accounting, the architecture map.

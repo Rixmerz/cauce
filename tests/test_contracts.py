@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from cauce import flow
-from cauce.matrix import Cell
-from cauce.orchestrate import Options
+from locks import flow
+from locks.matrix import Cell
+from locks.orchestrate import Options
 
-SRC = Path(__file__).resolve().parents[1] / "src" / "cauce"
+SRC = Path(__file__).resolve().parents[1] / "src" / "locks"
 
 
 def test_every_option_a_resume_stores_reads_back_the_same():
@@ -35,12 +35,12 @@ def test_every_option_a_resume_stores_reads_back_the_same():
 def test_the_notes_a_brief_carried_are_the_ones_weighing_reads_back(git_repo, store, monkeypatch):
     """`orchestrate` keeps on `briefed` the notes the worker was shown; `notes.weigh` proves or
     drops a candidate from that field alone."""
-    from cauce import notes, repo
-    from cauce.orchestrate import run
+    from locks import notes, repo
+    from locks.orchestrate import run
 
     from .test_orchestrate import Script, kind, ok
 
-    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setenv("LOCKS_NOTES", "on")
     key = repo.key(git_repo)
     note = store.add_note(key, "business", "Prices in cents", "Prices are stored in cents in every table",
                           author="worker", filed_by="haiku", state=notes.CANDIDATE)
@@ -72,12 +72,12 @@ def test_every_reason_a_lane_is_paused_with_is_one_its_task_releases(store):
 def test_a_brief_s_revision_arm_is_what_the_trial_reads_back(store):
     """`revisions.for_brief` writes the arm on the `briefed` event; `revisions.arms` counts it,
     reading a task's first brief (a resume's is not the one its first try ran under)."""
-    from cauce import revisions
+    from locks import revisions
 
     cand = store.add_role_revision(at="2026-10-01T00:00:00+00:00", repo="r", role="implementer",
                                    record="proposed", hash="h", lessons=["Run the suite before a pass."],
                                    version="0.32.0")
-    task = store.create_task("t", status="done", source="cauce", repo="r")
+    task = store.create_task("t", status="done", source="locks", repo="r")
     _, data = revisions.for_brief(store, "r", "implementer", task["id"])
     store.add_event(task["id"], "briefed", role="implementer", **data)
     store.add_event(task["id"], "briefed", role="implementer", revision_trial=cand, revision_arm="nonsense")
@@ -90,8 +90,8 @@ def test_a_brief_s_revision_arm_is_what_the_trial_reads_back(store):
 def test_a_check_that_failed_only_as_at_the_base_reads_back_in_the_ending(git_repo, store):
     """`orchestrate` writes `check_preexisting` and the verdict card's `check.state`; the ending
     notice reads both back (`hooks.verdict_lines`, `hooks._found_before`) from those fields alone."""
-    from cauce import hooks
-    from cauce.orchestrate import FAILING_AT_BASE, run
+    from locks import hooks
+    from locks.orchestrate import FAILING_AT_BASE, run
 
     from .test_orchestrate import Script, kind, ok
 
@@ -111,10 +111,10 @@ def test_the_reset_a_limit_stop_keeps_is_the_one_its_resume_waits_for(git_repo, 
     waits for it from that field alone, and `flow.pick` from the store's meta."""
     from datetime import datetime
 
-    from cauce import dispatch, stops
-    from cauce.escalate import Failure
-    from cauce.launch import WorkerResult
-    from cauce.orchestrate import run
+    from locks import dispatch, stops
+    from locks.escalate import Failure
+    from locks.launch import WorkerResult
+    from locks.orchestrate import run
 
     from .test_orchestrate import Script, kind
 
@@ -132,8 +132,8 @@ def test_the_reset_a_limit_stop_keeps_is_the_one_its_resume_waits_for(git_repo, 
 def test_the_base_a_finished_event_keeps_is_what_the_ending_reads_moved_files_from(git_repo, store):
     """`orchestrate` keeps the work's base on its `finished` event; `hooks._found_before` reads
     what the checkout's branch changed since from that field alone."""
-    from cauce import hooks
-    from cauce.orchestrate import run
+    from locks import hooks
+    from locks.orchestrate import run
 
     from .conftest import git
     from .test_orchestrate import Script, kind, ok
@@ -155,9 +155,9 @@ def test_the_base_a_finished_event_keeps_is_what_the_ending_reads_moved_files_fr
 def test_the_lines_a_plan_kept_quiet_are_left_out_of_the_ending_s_warnings(git_repo, store):
     """`orchestrate` keeps the lines a repository already heard today on `planned.quiet`;
     `hooks._warned` leaves them out from that field alone."""
-    from cauce import hooks
+    from locks import hooks
 
-    task = store.create_task("t", status="done", source="cauce")
+    task = store.create_task("t", status="done", source="locks")
     store.add_event(task["id"], "planned", warnings=["CI also runs: e2e", "this task's check exits 0"],
                     quiet=["CI also runs: e2e"])
     assert hooks._warned(store, task["id"]) == ["this task's check exits 0"]
@@ -166,7 +166,7 @@ def test_the_lines_a_plan_kept_quiet_are_left_out_of_the_ending_s_warnings(git_r
 def test_the_pickup_causes_a_run_keeps_are_what_stats_reads(store):
     """`orchestrate.pickup_causes` writes `pickup_*_s` on the `finished` event; `analysis`
     reads them back as each run's `pickup_why` and adds them up by cause."""
-    from cauce import analysis, orchestrate
+    from locks import analysis, orchestrate
 
     task = store.create_task("t", status="done", source="queue", repo="r")
     store.add_event(task["id"], "planned", kind="implement", start="sonnet/medium", plan_s=0.1)
@@ -181,7 +181,7 @@ def test_the_pickup_causes_a_run_keeps_are_what_stats_reads(store):
 def test_the_rows_a_fix_s_check_answers_are_in_the_words_its_re_check_reads():
     """The fix's independent check answers its rows in the re-check's words, and the engine decides the
     re-check from them only when every row reads `fixed` (`workflows._ledger`)."""
-    from cauce import ledger
+    from locks import ledger
 
     orchestrate_src = (SRC / "orchestrate.py").read_text()
     workflows_src = (SRC / "workflows.py").read_text()
@@ -193,13 +193,13 @@ def test_the_rows_a_fix_s_check_answers_are_in_the_words_its_re_check_reads():
 def test_the_cell_a_check_or_a_sampled_pass_names_is_the_one_trust_reads_back(git_repo, store, monkeypatch):
     """`orchestrate` keeps on `verified` and `verifier_sampled` the worker's cell (`worker`); `trust`
     reads a cell's record, and with it its sampling, from that field."""
-    from cauce import trust
-    from cauce.orchestrate import run
+    from locks import trust
+    from locks.orchestrate import run
 
     from .test_checking import check, passing
     from .test_orchestrate import Script, kind
 
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
     haiku = Cell("haiku", "high")
     report = run("rename the helper in notes", git_repo, store, Options(start=haiku), registry={},
                  launcher=Script(passing(), check("pass"), write="notes.txt"), classifier=kind("implement"),
@@ -212,18 +212,18 @@ def test_the_cell_a_check_or_a_sampled_pass_names_is_the_one_trust_reads_back(gi
 
 def test_the_snapshot_a_check_keeps_is_the_one_the_next_round_reads_from(git_repo, store, monkeypatch):
     """`_judged` keeps `read_at` and the worker's cell on `verified`; `_read_before` reads them back."""
-    from cauce import orchestrate
-    from cauce.orchestrate import run
+    from locks import orchestrate
+    from locks.orchestrate import run
 
     from .test_checking import BUG, check, passing
     from .test_orchestrate import Script, kind
 
-    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("LOCKS_VERIFIER", "on")
     report = run("fix the cart total", git_repo, store, registry={}, classifier=kind("implement"),
                  launcher=Script(passing(), check("fail", [BUG]), passing("fixed"), check("pass"), write="app.py"))
     first = store.events_of(report.task_id, "verified")[0]["data"]
     assert first["worker"] == "sonnet/medium" and first["read_at"]
-    task = store.create_task("t", status="running", source="cauce", repo="r", kind="implement")
+    task = store.create_task("t", status="running", source="locks", repo="r", kind="implement")
     store.add_event(task["id"], "verified", **first)
     since = orchestrate._read_before(store, task["id"], Cell("sonnet", "high"), 1, git_repo)
     assert since is not None and since[0] == first["read_at"]
@@ -231,14 +231,14 @@ def test_the_snapshot_a_check_keeps_is_the_one_the_next_round_reads_from(git_rep
 
 def test_the_evidence_arm_a_brief_keeps_is_the_one_its_trial_reads_back(git_repo, store, monkeypatch):
     """`orchestrate` keeps a task's arm on `briefed` (`evidence.KEY`); `evidence.trial` counts arms from it."""
-    from cauce import capabilities as caps
-    from cauce import evidence
-    from cauce.orchestrate import run
+    from locks import capabilities as caps
+    from locks import evidence
+    from locks.orchestrate import run
 
     from .test_checking import passing
     from .test_orchestrate import Script, kind
 
-    monkeypatch.setenv("CAUCE_EVIDENCE", "on")
+    monkeypatch.setenv("LOCKS_EVIDENCE", "on")
     monkeypatch.setattr(evidence, "arm", lambda store, repo, task_id: ("free", "free for the test"))
     registry = {"rastro": caps.Capability("rastro", {"command": "rastro"}, hint="drive the app")}
     report = run("Rename the helper in notes", git_repo, store, registry=registry,
@@ -248,7 +248,7 @@ def test_the_evidence_arm_a_brief_keeps_is_the_one_its_trial_reads_back(git_repo
     assert found["free"]["tasks"] == 1 and found["gate"]["tasks"] == 0
 
 
-#: Keys read with `.get` from data that comes from outside cauce, never from its own events: a
+#: Keys read with `.get` from data that comes from outside locks, never from its own events: a
 #: neighbour's manifest (`format`, `hints`) and a request's body to the UI (`note`).
 OUTSIDE_KEYS = {"format", "hints", "note"}
 

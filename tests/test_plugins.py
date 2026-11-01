@@ -6,10 +6,10 @@ import re
 import sys
 from pathlib import Path
 
-from cauce import capabilities as caps
-from cauce import cli, config, plugins
-from cauce.orchestrate import run
-from cauce.store import home
+from locks import capabilities as caps
+from locks import cli, config, plugins
+from locks.orchestrate import run
+from locks.store import home
 
 from .test_orchestrate import Script, kind, ok
 
@@ -64,7 +64,7 @@ def test_rastro_runs_without_its_saved_routines_from_a_plugin_or_from_path(tmp_p
     install("rastro", "0.4.0", files={".mcp.json": {"mcpServers": {"rastro": {"command": "rastro", "args": ["mcp"]}}}})
     found = plugins.installed()["rastro"]
     assert found.server["command"] == sys.executable and found.skill_dir is None
-    assert found.server["args"] == ["-m", "cauce.mcp_guard", "rastro", "--", "rastro", "mcp", "--routines=off"]
+    assert found.server["args"] == ["-m", "locks.mcp_guard", "rastro", "--", "rastro", "mcp", "--routines=off"]
     assert found.server["env"]["PYTHONPATH"].startswith(str(Path(plugins.__file__).resolve().parents[1]))
     assert "Before the first call" not in plugins.capabilities()["rastro"].hint
     bin_dir = tmp_path / "bin"

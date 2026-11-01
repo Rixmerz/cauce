@@ -7,7 +7,7 @@ import textwrap
 
 import pytest
 
-from cauce import mcp_guard
+from locks import mcp_guard
 
 
 @pytest.mark.parametrize(("host", "ok"), [
@@ -20,9 +20,9 @@ def test_only_this_machine_is_loopback(host, ok):
 
 
 def test_the_rastro_policy_keeps_a_worker_to_the_app_it_runs():
-    assert mcp_guard.rastro("rastro_view", {"session": "mine"}) == (None, {"session": "cauce-worker"})
+    assert mcp_guard.rastro("rastro_view", {"session": "mine"}) == (None, {"session": "locks-worker"})
     why, args = mcp_guard.rastro("rastro_open", {"url": "http://localhost:3000", "allowWrite": ["localhost:3000"]})
-    assert why is None and args["session"] == "cauce-worker"
+    assert why is None and args["session"] == "locks-worker"
     assert "profile" in mcp_guard.rastro("rastro_open", {"profile": "chrome:Default"})[0]
     assert "example.com" in mcp_guard.rastro("rastro_open", {"allowWrite": ["localhost", "example.com"]})[0]
     assert "allowUpload" in mcp_guard.rastro("rastro_open", {"allowUpload": ["files.example.com"]})[0]
@@ -37,11 +37,11 @@ def test_screen_passes_what_is_not_a_refused_call_and_answers_the_refused_ones()
     assert mcp_guard.screen(init, policy) == (init, [])
     ok = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "rastro_view", "arguments": {}}}
     sent, answers = mcp_guard.screen(ok, policy)
-    assert sent["params"]["arguments"] == {"session": "cauce-worker"} and answers == []
+    assert sent["params"]["arguments"] == {"session": "locks-worker"} and answers == []
     bad = {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "rastro_profiles"}}
     sent, answers = mcp_guard.screen(bad, policy)
     assert sent is None and answers[0]["id"] == 3 and answers[0]["result"]["isError"] is True
-    assert "cauce refused this call" in answers[0]["result"]["content"][0]["text"]
+    assert "locks refused this call" in answers[0]["result"]["content"][0]["text"]
     sent, answers = mcp_guard.screen([init, bad], policy)
     assert sent == [init] and len(answers) == 1
     assert mcp_guard.screen([bad], policy)[0] is None
@@ -69,7 +69,7 @@ def test_the_guard_relays_a_real_server_and_answers_what_it_refuses(tmp_path):
     got = {m["id"]: m for m in map(json.loads, stdout.getvalue().splitlines())}
     assert got[1]["result"]["echo"]["method"] == "initialize"
     assert got[2]["result"]["isError"] is True
-    assert got[3]["result"]["echo"]["params"]["arguments"] == {"allowWrite": ["localhost"], "session": "cauce-worker"}
+    assert got[3]["result"]["echo"]["params"]["arguments"] == {"allowWrite": ["localhost"], "session": "locks-worker"}
 
 
 def test_main_refuses_what_it_does_not_know(capsys):
@@ -78,11 +78,11 @@ def test_main_refuses_what_it_does_not_know(capsys):
 
 
 def test_livespec_policy_lets_only_the_reading_tools_through():
-    from cauce.adapters.livespec import TOOLS
+    from locks.adapters.livespec import TOOLS
 
     for name in sorted(mcp_guard.LIVESPEC_READ):
         assert mcp_guard.livespec(name, {"workspace": "/r"}) == (None, {"workspace": "/r"})
-    # Every tool cauce names to a worker reads, but the two that write the index (a worker's own
+    # Every tool locks names to a worker reads, but the two that write the index (a worker's own
     # index of a fresh repository, the sync of its specs).
     assert {"index_project", "sync_openspec"} == TOOLS - mcp_guard.LIVESPEC_READ
     for name in ("index_project", "sync_openspec", "export_openspec", "bulk_link_spec_symbols", "create_spec",

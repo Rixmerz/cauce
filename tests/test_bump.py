@@ -15,7 +15,7 @@ spec.loader.exec_module(bump)
 
 
 def _copy(tmp_path: Path, unreleased: str = "### Added\n\n- a thing\n") -> Path:
-    for rel in ("src/cauce/__init__.py", "pyproject.toml", "uv.lock", ".claude-plugin/plugin.json",
+    for rel in ("src/locks/__init__.py", "pyproject.toml", "uv.lock", ".claude-plugin/plugin.json",
                 ".claude-plugin/marketplace.json"):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / rel, tmp_path / rel)
@@ -33,7 +33,7 @@ def test_every_file_moves_to_the_new_version_and_the_notes_get_its_heading(tmp_p
         path.write_text(text)
     assert bump.current(root) == new
     assert f'version = "{new}"' in (root / "pyproject.toml").read_text()
-    assert f'name = "cauce"\nversion = "{new}"' in (root / "uv.lock").read_text()
+    assert f'name = "locks"\nversion = "{new}"' in (root / "uv.lock").read_text()
     assert json.loads((root / ".claude-plugin/plugin.json").read_text())["version"] == new
     assert json.loads((root / ".claude-plugin/marketplace.json").read_text())["plugins"][0]["version"] == new
     log = (root / "CHANGELOG.md").read_text()
@@ -50,6 +50,6 @@ def test_nothing_is_written_for_a_bad_version_or_empty_notes(tmp_path):
     empty = _copy(tmp_path / "e", unreleased="")
     with pytest.raises(SystemExit, match="empty"):
         bump.plan("99.0.0", empty)
-    (root / "pyproject.toml").write_text('[project]\nname = "cauce"\n')
+    (root / "pyproject.toml").write_text('[project]\nname = "locks"\n')
     with pytest.raises(SystemExit, match="expected one version line"):
         bump.plan("99.0.0", root)

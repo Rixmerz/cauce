@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from cauce import preflight, stops
+from locks import preflight, stops
 
 
 def _bin(folder: Path, *names: str, body: str = "exit 0") -> Path:
@@ -178,7 +178,7 @@ def test_the_stop_has_its_cause_and_words():
     stop = stops.Stop("preflight", "the check cannot run here")
     assert stop.status == "blocked" and stop.who == "environment"
     assert "no attempt was counted" in stops.what_to_do(stop)
-    assert stops.next_step(7, stop) == "cauce resume 7"
+    assert stops.next_step(7, stop) == "locks resume 7"
 
 
 def test_the_env_default_is_this_process(project):
@@ -186,7 +186,7 @@ def test_the_env_default_is_this_process(project):
 
 
 def test_a_check_that_cannot_start_stops_the_task_before_any_worker(git_repo, store):
-    from cauce.orchestrate import Options, run
+    from locks.orchestrate import Options, run
 
     from .test_orchestrate import Script, kind, ok
 
@@ -202,7 +202,7 @@ def test_a_check_that_cannot_start_stops_the_task_before_any_worker(git_repo, st
 
 
 def test_a_check_that_can_start_runs_the_worker(git_repo, store):
-    from cauce.orchestrate import Options, run
+    from locks.orchestrate import Options, run
 
     from .test_orchestrate import Script, kind, ok
 

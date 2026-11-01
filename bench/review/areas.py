@@ -1,7 +1,7 @@
 """A large change reviewed whole, or by area side by side (`workflows._areas`, `_area_brief`)?
 
 The `volume` change (1,221 diff lines, 69 files, 14 planted bugs). The `areas` arm runs one blind
-opus/high review per top-level area at once, each with cauce's own area brief, and adds their
+opus/high review per top-level area at once, each with locks' own area brief, and adds their
 findings up; its path is the slowest area's. The whole review is `harness.py`'s `single` arm.
 
     python bench/review/areas.py run 3
@@ -21,7 +21,7 @@ sys.path.insert(0, str(HERE.parents[1] / "src"))
 
 import harness  # noqa: E402
 
-from cauce import isolate, ledger, workflows  # noqa: E402
+from locks import isolate, ledger, workflows  # noqa: E402
 
 
 def areas(where: Path) -> list[dict]:

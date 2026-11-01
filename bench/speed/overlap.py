@@ -1,8 +1,8 @@
-"""Does cauce's own check overlap the independent verifier without either slowing the other?
+"""Does locks' own check overlap the independent verifier without either slowing the other?
 
-Real: a git worktree of cauce at a real commit, cauce's full suite as the check, and a real
-verifier (cauce's `verifier_brief`, its cell, read-only) on that commit's change. Each rep runs
-them one after the other (as cauce does today) and side by side, and keeps both walls and both
+Real: a git worktree of locks at a real commit, locks' full suite as the check, and a real
+verifier (locks' `verifier_brief`, its cell, read-only) on that commit's change. Each rep runs
+them one after the other (as locks does today) and side by side, and keeps both walls and both
 outcomes.
 
     python bench/speed/overlap.py <commit> [reps]
@@ -24,13 +24,13 @@ sys.path.insert(0, str(HERE.parent / "review"))
 
 import harness  # noqa: E402
 
-from cauce.orchestrate import verifier_brief  # noqa: E402
+from locks.orchestrate import verifier_brief  # noqa: E402
 
 CHECK = [".venv/bin/python", "-m", "pytest", "-q", "-p", "no:cacheprovider"]
 
 
 def worktree(commit: str) -> Path:
-    where = Path(tempfile.mkdtemp(prefix="cauce-bench-")) / "wt"
+    where = Path(tempfile.mkdtemp(prefix="locks-bench-")) / "wt"
     subprocess.run(["git", "worktree", "add", "-q", "--detach", str(where), commit], cwd=ROOT, check=True)
     (where / ".venv").symlink_to(ROOT / ".venv")
     return where

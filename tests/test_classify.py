@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from cauce.classify import SCHEMA, by_model, by_rules, classify
+from locks.classify import SCHEMA, by_model, by_rules, classify
 
 
 @pytest.mark.parametrize(
@@ -70,7 +70,7 @@ def test_model_classification_is_used_when_confident():
     assert (got.kind, got.complexity, got.source, got.cost_usd) == ("ui", "low", "model", 0.001)
     argv, kwargs = run.calls[0]
     assert argv[argv.index("--model") + 1] == "haiku"
-    from cauce import models
+    from locks import models
 
     models.pin("haiku", "claude-haiku-4-5", None)
     by_model("the header looks wrong", runner=run)
@@ -80,7 +80,7 @@ def test_model_classification_is_used_when_confident():
     assert "--strict-mcp-config" in argv and "--no-session-persistence" in argv
     assert json.loads(argv[argv.index("--json-schema") + 1]) == SCHEMA
     assert kwargs["input"].endswith("<request>\nthe header looks wrong\n</request>")
-    assert kwargs["env"]["CAUCE_HOOKS_OFF"] == "1"
+    assert kwargs["env"]["LOCKS_HOOKS_OFF"] == "1"
 
 
 def test_the_model_is_asked_to_classify_the_request_not_to_do_it():
@@ -141,7 +141,7 @@ def test_the_neutral_directory_is_created(tmp_path):
         ("¿dónde se define el usuario que se crea?", "explore"),
         ("where is the router defined #explore, then add a route", "explore"),  # a tag is a person's word
         # joining branches is writing, whatever the branches hold
-        ("Integra la rama cauce/task-1394 en cauce/task-1400 con cherry-pick y resuelve conflictos; son los "
+        ("Integra la rama locks/task-1394 en locks/task-1400 con cherry-pick y resuelve conflictos; son los "
          "arreglos de la auditoría de seguridad", "implement"),
         ("Mergea la rama de seguridad en main y resuelve los conflictos del audit", "implement"),
         ("Haz merge de la rama del audit en main", "implement"),
@@ -166,7 +166,7 @@ def test_the_model_reading_a_change_as_a_search_is_overruled(monkeypatch):
 
 
 def test_haiku_answers_a_narrow_question_at_low_effort():
-    from cauce import classify
+    from locks import classify
 
     seen = {}
 

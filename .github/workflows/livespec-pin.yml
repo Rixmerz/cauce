@@ -1,9 +1,9 @@
 name: livespec pin
 
-# Keeps the livespec cauce runs current, checked before it is taken. Every week (or by hand): when
+# Keeps the livespec locks runs current, checked before it is taken. Every week (or by hand): when
 # PyPI has a release newer than the adapter's PINNED, move the pin, verify that release against a real
 # index of this repository (scripts/livespec_check.py verify: the index read, a brief, a change's
-# reach, every tool cauce names served, validate_openspec), run the whole suite, and open a draft
+# reach, every tool locks names served, validate_openspec), run the whole suite, and open a draft
 # pull request with the result. Nothing merges by itself: the person does.
 # A pull request opened with the workflow's own token starts no other workflow (GitHub's rule):
 # the checks it needs have already run here, and a push to it runs CI as usual.
@@ -60,4 +60,4 @@ jobs:
           git commit -am "Pin livespec $version, checked against a real index of this repository"
           git push -u origin "${{ steps.open.outputs.branch }}"
           gh pr create --draft --title "Pin livespec $version" \
-            --body "PyPI has livespec $version. \`scripts/livespec_check.py verify\` passed against a real index of this repository (the index read, a brief, a change's reach, every tool cauce names served, validate_openspec), and the suite passed with it."
+            --body "PyPI has livespec $version. \`scripts/livespec_check.py verify\` passed against a real index of this repository (the index read, a brief, a change's reach, every tool locks names served, validate_openspec), and the suite passed with it."

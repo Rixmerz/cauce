@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from cauce import repo
+from locks import repo
 
 from .conftest import git
 
@@ -45,7 +45,7 @@ def test_what_git_said_of_a_folder_is_kept_until_a_stat_shows_it_changed(git_rep
     per folder), and asked again when a repository is made inside, or the remote changes."""
     import subprocess
 
-    from cauce import repo
+    from locks import repo
 
     calls = []
     real = repo._git
