@@ -243,3 +243,38 @@ def test_the_evidence_arm_a_brief_keeps_is_the_one_its_trial_reads_back(git_repo
     task = store.get_task(report.task_id)
     found = evidence.trial(store, task["repo"])
     assert found["free"]["tasks"] == 1 and found["gate"]["tasks"] == 0
+
+
+#: Keys read with `.get` from data that comes from outside cauce, never from its own events: a
+#: neighbour's manifest (`format`, `hints`) and a request's body to the UI (`note`).
+OUTSIDE_KEYS = {"format", "hints", "note"}
+
+
+def test_every_field_read_from_an_event_is_one_some_place_writes():
+    """A field read from an event's data (`data.get("x")`) that nothing writes is a contract one side
+    dropped: the reader sees None forever and says nothing. Read statically from the source."""
+    import ast
+
+    written: set[str] = set()
+    read: dict[str, set[str]] = {}
+    for path in SRC.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Call):
+                func = node.func
+                if (isinstance(func, ast.Attribute) and func.attr in ("add_event", "update", "replace")) or (
+                        isinstance(func, ast.Name) and func.id == "dict"):
+                    written.update(kw.arg for kw in node.keywords if kw.arg)
+                    for kw in node.keywords:
+                        if kw.arg is None and isinstance(kw.value, ast.Dict):
+                            written.update(k.value for k in kw.value.keys if isinstance(k, ast.Constant))
+                if (isinstance(func, ast.Attribute) and func.attr == "get" and node.args
+                        and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
+                        and "data" in ast.unparse(func.value)):
+                    read.setdefault(node.args[0].value, set()).add(path.name)
+            elif isinstance(node, ast.Dict):
+                written.update(k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str))
+            elif (isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store)
+                  and isinstance(node.slice, ast.Constant)):
+                written.add(node.slice.value)
+    dropped = {key: sorted(where) for key, where in read.items() if key not in written and key not in OUTSIDE_KEYS}
+    assert dropped == {}, dropped
