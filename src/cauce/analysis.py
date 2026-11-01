@@ -25,9 +25,9 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from cauce import behavior, launch, racing, revisions, trunks, trust, usage, workflows
 from cauce import cells as cells_mod
 from cauce import evidence as evidence_mod
-from cauce import launch, racing, revisions, trunks, trust, usage, workflows
 from cauce import methods as methods_mod
 from cauce import notes as notes_mod
 from cauce.store import Store
@@ -49,7 +49,12 @@ COMPACTIONS_SHOWN = 10
 RUN_COLUMNS = ("task", "repo", "kind", "source", "workflow", "step", "status", "stop", "start_cell", "final_cell",
                "started_at", "ended_at", "wall_s", *PHASES[:-1], "attempts", "first_try", "verified",
                "verifier_blocked", "cost_usd", "turns", "input_tokens", "output_tokens", "tokens",
-               "livespec_handed", "livespec_calls", "session_context", "session_chars", "brief_chars", "title")
+               "livespec_handed", "livespec_calls", "calls", "failed_calls", "check_runs", "fix_cycles",
+               "calls_before_edit", "session_context", "session_chars", "brief_chars", "title")
+#: One row per attempt (`cauce stats --attempts`): what it ran at, how it ended, and its worker's profile.
+ATTEMPT_COLUMNS = ("task", "seq", "repo", "kind", "ts", "cell", "served_model", "passed", "failure", "turns",
+                   "wall_s", "check_s", "verifier_s", "cost_usd", "worker_cost_usd", "input_tokens",
+                   "output_tokens", "cache_read_tokens", "continued", "refused", *behavior.FIELDS, "tools")
 
 
 def _when(stamp: str | None) -> datetime | None:
@@ -141,6 +146,7 @@ def _start(task: Mapping[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
         "cost_usd": 0.0, "turns": 0, "input_tokens": 0, "output_tokens": 0, "refused": 0,
         "cache_read_tokens": 0, "measured_input_tokens": 0, "verifier_cost_usd": 0.0, "tokens": 0,
         "livespec_handed": False, "livespec_calls": 0, "livespec_tools": {},
+        "calls": 0, "failed_calls": 0, "check_runs": 0, "fix_cycles": 0, "calls_before_edit": None,
         "session_context": None, "session_chars": 0, "brief_chars": None,
         "_worker_s": 0.0, "_check_s": 0.0, "_verifier_s": 0.0, "_timed": False, "_check_usd": 0.0,
     }
@@ -159,6 +165,12 @@ def _attempt(run: dict[str, Any], data: Mapping[str, Any]) -> None:
     for tool, n in (data.get("livespec_calls") or {}).items():
         run["livespec_tools"][tool] = run["livespec_tools"].get(tool, 0) + int(n)
     run["livespec_calls"] = sum(run["livespec_tools"].values())
+    worked = data.get("behavior") or {}
+    for field, into in (("calls", "calls"), ("failed", "failed_calls"), ("check_runs", "check_runs"),
+                        ("fix_cycles", "fix_cycles")):
+        run[into] += int(worked.get(field) or 0)
+    if run["attempts"] == 1:
+        run["calls_before_edit"] = worked.get("calls_before_edit")
     if "cache_read_tokens" in data:  # recorded since 0.18: older attempts say nothing of the cache
         run["cache_read_tokens"] += int(data.get("cache_read_tokens") or 0)
         run["measured_input_tokens"] += int(data.get("input_tokens") or 0)
@@ -577,6 +589,8 @@ def compute(store: Store, *, days: int = 30, repo: str | None = None, keep_runs:
         "trust": trust.report(store, repo),
         # Each capability workers were handed and whether they called it (observed), and the evidence trial.
         "capabilities": capabilities_used(events, {r["task"] for r in found}),
+        # How workers worked, from their own tool calls, by kind and outcome and by cell (`cauce.behavior`).
+        "behavior": behavior.table(events, {r["task"]: r["kind"] for r in found}),
         # The notes briefs carried and the ones workers said they relied on (observed, never a verdict).
         "notes_used": notes_relied_on(events, {r["task"] for r in found}),
         "recall": notes_mod.recall_trial(store, repo),
@@ -653,6 +667,40 @@ def expensive_text(rows: Sequence[Mapping[str, Any]]) -> str:
                      + (f" — {r['title']}" if r.get("title") else ""))
         lines += [f"  · {w}" for w in r["why"]] or ["  · nothing it recorded stands out"]
     return "\n".join(lines)
+
+
+def attempts(tasks: Sequence[Mapping[str, Any]], events: Sequence[Mapping[str, Any]], *,
+             since: str = "") -> list[dict[str, Any]]:
+    """One record per attempt that finished since `since`, oldest first: its task, repository and
+    kind, its cell, how it ended, its time, tokens and cost, and its worker's profile flattened
+    (`behavior.FIELDS`, `tools` by family). For an analysis outside cauce; read only."""
+    by_id = {int(t["id"]): t for t in tasks}
+    out = []
+    for e in events:
+        task = by_id.get(int(e["task_id"]))
+        if e["kind"] != "attempt_finished" or task is None or (since and (e.get("ts") or "") < since):
+            continue
+        data = e.get("data") or {}
+        worked = data.get("behavior") or {}
+        out.append({
+            "task": task["id"], "seq": data.get("seq"), "repo": task.get("repo"), "kind": task.get("kind"),
+            "ts": e.get("ts"), "refused": bool(data.get("denied")),
+            **{k: data.get(k) for k in ATTEMPT_COLUMNS[5:19]},
+            **{k: worked.get(k) for k in behavior.FIELDS}, "tools": worked.get("tools") or {},
+        })
+    return out
+
+
+def attempts_csv(rows: Sequence[Mapping[str, Any]]) -> str:
+    """One row per attempt, for a spreadsheet: `tools` as `family:calls` pairs."""
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=list(ATTEMPT_COLUMNS), extrasaction="ignore", lineterminator="\n")
+    writer.writeheader()
+    for r in rows:
+        flat = {k: ("" if r.get(k) is None else r.get(k)) for k in ATTEMPT_COLUMNS}
+        flat["tools"] = " ".join(f"{k}:{v}" for k, v in (r.get("tools") or {}).items())
+        writer.writerow(flat)
+    return out.getvalue()
 
 
 def runs_csv(found: Sequence[Mapping[str, Any]]) -> str:
@@ -795,6 +843,7 @@ def text(report: Mapping[str, Any]) -> str:
                              f"({_rate(row['called_rate'])})  through {row['through']:>4}  never called "
                              f"{row['never_called']:>4}  passed called {_rate(row['pass_when_called'])} / silent "
                              f"{_rate(row['pass_when_silent'])}")
+        lines += behavior_lines(report.get("behavior") or {})
         if relied := report.get("notes_used"):
             lines += ["", f"notes in briefs: {relied['tasks']} task(s) carried {relied['carried']}, workers said they "
                       f"relied on {relied['relied_on']} ({_rate(relied['relied_rate'])}); first tries passed "
@@ -836,6 +885,27 @@ def text(report: Mapping[str, Any]) -> str:
                   f"  ${t['usd']:.2f}  interrupted {t['interrupted']}"]
     lines += _compaction_lines(report.get("compactions") or [])
     return "\n".join(lines)
+
+
+def behavior_lines(table: Mapping[str, Any]) -> list[str]:
+    """`cauce stats`' lines of how workers worked, by kind and outcome (medians; shares)."""
+    rows = table.get("by_kind") or []
+    if not rows:
+        return []
+
+    def num(value: float | None) -> str:
+        return "—" if value is None else f"{value:g}"
+
+    lines = ["", "how workers worked, from their tool calls (attempts; medians of calls, calls before the first "
+             "write, checks run, fix loops, rereads; shares of failed calls, writes left unchecked, attempts "
+             "that never checked; observed):"]
+    for r in rows:
+        lines.append(f"  {r['kind'] + ' ' + r['outcome']:<22} {r['attempts']:>4}  calls {num(r['calls_p50'])}  "
+                     f"before write {num(r['calls_before_edit_p50'])}  checks {num(r['check_runs_p50'])}  "
+                     f"loops {num(r['fix_cycles_p50'])}  rereads {num(r['rereads_p50'])}  failed "
+                     f"{_rate(r['failed_share'])}  unchecked {_rate(r['unchecked_end_share'])}  never checked "
+                     f"{_rate(r['never_checked_share'])}")
+    return lines
 
 
 def _name(repo: str | None) -> str:

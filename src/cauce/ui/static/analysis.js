@@ -75,6 +75,23 @@ function notesUsedSection(n) {
         h("td", {}, `${pct(n.pass_first_naming)} · ${pct(n.pass_first_silent)}`)))];
 }
 
+const median = (v) => (v === null || v === undefined ? "—" : String(v));
+
+function behaviorSection(b) {
+  const rows = (b && b.by_kind) || [];
+  if (!rows.length) return [];
+  return [h("h2", { class: "section" }, "How workers worked"),
+    h("p", { class: "empty" }, "Read from each attempt's own tool calls, observed: medians of calls, calls before the "
+      + "first write, checks it ran and fix loops (a check again after a write that followed one); shares of failed "
+      + "calls, of attempts that ended on a write no check followed and of attempts that never checked."),
+    h("table", {}, head("kind", "outcome", ["attempts"], ["calls"], ["before write"], ["checks"], ["loops"], ["rereads"],
+      ["failed calls"], ["unchecked end"], ["never checked"]),
+      rows.map((r) => h("tr", {}, h("td", {}, kindChip(r.kind)), h("td", {}, r.outcome), num(r.attempts),
+        num(median(r.calls_p50)), num(median(r.calls_before_edit_p50)), num(median(r.check_runs_p50)),
+        num(median(r.fix_cycles_p50)), num(median(r.rereads_p50)), num(pct(r.failed_share)),
+        num(pct(r.unchecked_end_share)), num(pct(r.never_checked_share))))))];
+}
+
 function armsSection(title, about, arms, names, said, now) {
   if (!arms || !names.some((n) => (arms[n] || {}).tasks)) return [];
   return [h("h2", { class: "section" }, title), h("p", { class: "empty" }, about),
@@ -248,6 +265,7 @@ export async function renderAnalysis(ctx) {
       + "brief orders them by rank fusion (a note both find comes first) or anchored first, in turns; fusion stays where "
       + "its first tries passed no less often.", r.recall, ["fused", "ordered"],
       (a) => `${a.tasks} tasks · ${a.passed}/${a.tries} first tries (${pct(a.rate)})`, r.recall_now),
+    behaviorSection(r.behavior),
     notesUsedSection(r.notes_used),
     Object.entries(r.methods || {}).map(([name, arms]) => armsSection(`The ${name} method`,
       "A method its kind's workers are briefed to follow, tried in turns against its absence.", arms, ["with", "without"],

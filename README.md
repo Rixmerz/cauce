@@ -410,7 +410,16 @@ cauce stats                      # every repository, last 30 days
 cauce stats --repo . --days 7    # one repository
 cauce stats --json               # everything, for a script
 cauce stats --runs --csv         # one row per run, for a spreadsheet
+cauce stats --attempts --csv     # one row per attempt, with how its worker worked
 ```
+
+Each attempt also keeps how its worker worked, read from its own tool calls (never their
+arguments): how many calls, how many failed, how far it read before its first write (calls and
+seconds), the checks it ran itself, its fix loops (a check again after a write that followed a
+check), whether it ended on a write no check followed, files it read again, the longest run of
+the same call, the longest silence and the calls by tool family. `cauce stats` and the Analysis
+screen set passing workers beside failing ones per kind, and by cell; observed, never a rule's
+input. The independent check's calls are not counted as the worker's.
 
 It answers what the routing needs evidence for: how often each kind passes at
 the first attempt and how often it climbs, what a pass costs and how long it

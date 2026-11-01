@@ -57,6 +57,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `src/cauce/after.py` | work queued after other work (`--after`): held in its options until that task or run passes, refused when it cannot pass, released onto the branch it kept (or the base, once merged), and the line every view says of why it waits; light, `stops` and `dispatch` read it |
 | `src/cauce/store.py` | SQLite memory: tasks, messages, attempts, problems and fixes, notes |
 | `src/cauce/revisions.py` | a role's lessons per repository, improved by measured trial: proposed by Haiku from the role's dead ends and verifier blockers there, tried in alternating arms, adopted, dropped or reverted, every record appended to `role_revisions`; `cauce roles revisions` reads it |
+| `src/cauce/behavior.py` | how a worker worked, per attempt, from its own tool calls (never their arguments): before its first write, the checks it ran, fix loops, an unchecked end, rereads, repeats, silences, tool families; kept on `attempt_finished.behavior`, added up by kind, outcome and cell for `cauce stats` and exported per attempt (`--attempts`); observed, no model |
 | `src/cauce/arms.py` | two arms tried in turns until each has enough first tries, then the one that did no worse: the shape methods and the recall order share (`tally`, `pick`); no model |
 | `src/cauce/methods.py` | how a kind's workers are briefed to work, tried against its absence: a diagnosis protocol for `debug-unclear`, a pre-mortem for `plan` whose `Risks:` reach the independent check of the steps after it; arms per repository (`method_arm`); no model |
 | `src/cauce/racing.py` | whether racing a first try paid, per repository and kind: each race read from its attempts (rung, start, neither), the rung's wins and the time to pass against climbs, the judgement `race_cell` and `cauce stats` read; no model |
@@ -1172,7 +1173,11 @@ yields the default kind, not a guess.
   `briefed.recall_arm`): reciprocal rank fusion of the two lists (`notes.fused`) against
   anchored first, kept where its arm passed first tries no less often. A worker names the
   notes it relied on (`notes_used`); only notes its brief carried are kept, on
-  `attempt_finished`, and `cauce stats` shows them, observed, never a verdict or a trial. A person's note and
+  `attempt_finished`, and `cauce stats` shows them, observed, never a verdict or a trial.
+  How each attempt's worker worked is read from its own tool calls (`cauce.behavior`, kept on
+  `attempt_finished.behavior`): observed, never a rule's input. The independent check runs with its
+  attempt marked as the check's (`orchestrate._verifier_env`), so the log keeps its calls under no
+  attempt and nothing read as the worker's use (`evidence.owed`, `capability_calls`) holds them. A person's note and
   Haiku's from a conversation are current as written. Haiku files under topics that
   exist and never invents a link; without Haiku a fact is kept by its words.
   A fact that looks like a secret is never kept.
