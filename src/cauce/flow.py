@@ -151,7 +151,7 @@ def sweep(store: Store, *, now: datetime | None = None, is_alive: Callable[[int 
         stop = (stops.Stop("turn", "the session's turn ended without its answer reaching cauce")
                 if task["source"] == "hook" else
                 stops.Stop("turn", "the session's subagent ended without its ending reaching cauce")
-                if task["source"] == "delegation" else stops.Stop("died", gone))
+                if task["source"] == "delegation" else died(store, task["id"], gone))
         stops.record(store, task["id"], stop, pid=None, current_cell=None, result=task["source"] == "cauce")
         if task["dispatched"]:
             store.pause_lane(task["repo"], f"task #{task['id']} stopped with no sign of life")
@@ -575,11 +575,12 @@ class _Process:
         argv = [sys.executable, "-m", "cauce", "run-queued", str(task["id"])]
         if not defaults.use_model_classifier:
             argv.append("--no-model")
-        log = home() / "work" / f"task-{task['id']}.log"
+        log = task_log(task["id"])
         log.parent.mkdir(parents=True, exist_ok=True)
         with open(log, "a") as out:
             # Where this run's output starts in the log it appends to: a death reads its crash from there.
             self.log, self.log_from = log, out.tell()
+            store.set_meta(LOG_FROM + str(task["id"]), str(self.log_from))
             self.proc = subprocess.Popen(argv, cwd=str(where), env=dispatch.child_env(),
                                          stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
 
@@ -593,18 +594,12 @@ class _Process:
             # It exited without saying how it ended: it died. Killed outright, the kernel's
             # out-of-memory killer is the likely hand, and the machine's level halves on it.
             killed = self.proc.returncode in launch.KILLED
-            crash = crash_line(self.log, self.log_from) if getattr(self, "log", None) else ""
-            again = bool(crash) and crash == _last_crash(self.store, self.task_id)
-            reason = f"its process exited with {self.proc.returncode} without saying how the task ended" + (
-                " (killed: the kernel does so when memory runs out)" if killed else "") + (
-                f": {crash}" if crash else "") + (
-                " — the same crash as its last death: cauce's failure, not the work's; resuming repeats it"
-                if again else "")
-            extra: dict[str, Any] = {"starved": "memory"} if killed else {}
-            if crash:
-                extra.update(crash=crash, log=str(self.log), **({"repeated": True} if again else {}))
-            stops.record(self.store, self.task_id, stops.Stop("died", reason, extra=extra), pid=None,
-                         current_cell=None)
+            stop = died(self.store, self.task_id,
+                        f"its process exited with {self.proc.returncode} without saying how the task ended"
+                        + (" (killed: the kernel does so when memory runs out)" if killed else ""),
+                        log=getattr(self, "log", None), start=getattr(self, "log_from", 0),
+                        extra={"starved": "memory"} if killed else {})
+            stops.record(self.store, self.task_id, stop, pid=None, current_cell=None)
             self.store.pause_lane(task["repo"], f"task #{self.task_id}: its process exited unexpectedly")
             return "interrupted"
         return task["status"]
@@ -624,6 +619,34 @@ def crash_line(log: Path, start: int = 0) -> str:
         return ""
     found = [line.strip() for line in text.splitlines() if _CRASH.match(line.strip())]
     return clip(found[-1], 300, one_line=True) if found else ""
+
+
+#: The store's meta key, with a task id after it, of where its latest run's output starts in its log.
+LOG_FROM = "log_from:"
+
+
+def task_log(task_id: int) -> Path:
+    """The log every run of a task appends its output to (the dispatcher's and an automatic resume's)."""
+    return home() / "work" / f"task-{task_id}.log"
+
+
+def died(store: Store, task_id: int, reason: str, *, log: Path | None = None, start: int | None = None,
+         extra: Mapping[str, Any] | None = None) -> stops.Stop:
+    """The stop of a run that died: its reason with the crash its run wrote to its log, when it wrote
+    one (from `start`, else where the store says its latest run began), and whether that crash is the
+    one its last death named (`repeated`: cauce's failure, which a resume repeats)."""
+    log = log or task_log(task_id)
+    if start is None:
+        start = int(store.meta(LOG_FROM + str(task_id)) or -1)
+    crash = crash_line(log, start) if start >= 0 else ""
+    again = bool(crash) and crash == _last_crash(store, task_id)
+    out = dict(extra or {})
+    if crash:
+        reason += f": {crash}"
+        out.update(crash=crash, log=str(log), **({"repeated": True} if again else {}))
+    if again:
+        reason += " — the same crash as its last death: cauce's failure, not the work's; resuming repeats it"
+    return stops.Stop("died", reason, extra=out)
 
 
 def _last_crash(store: Store, task_id: int) -> str:

@@ -16,6 +16,8 @@ worker was given. An action:
 - `{"turns": true, "write": {...}}`: writes, then ends out of turns.
 - `{"die": true}`: kills the process that started it (cauce's `run-queued`) and itself, as a
   machine that ran out of memory would.
+- `{"crash": "Error: what"}`: writes a traceback ending in that line to the log of the process that
+  started it (its stderr), then kills it and itself: a `run-queued` that died of an exception.
 - `{"limit": "text"}`: writes, then ends as the CLI does when the account's usage limit turns
   the session away (`is_error`, subtype `success`, the text as its result).
 
@@ -82,6 +84,11 @@ def main() -> int:
     for path, text in (action.get("litter") or {}).items():
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_text(text)
+    if action.get("crash"):
+        with open(f"/proc/{os.getppid()}/fd/2", "a") as log:
+            log.write(f"Traceback (most recent call last):\n  File \"x.py\", line 1\n{action['crash']}\n")
+        os.kill(os.getppid(), signal.SIGKILL)
+        os.kill(os.getpid(), signal.SIGKILL)
     if action.get("die"):
         os.kill(os.getppid(), signal.SIGKILL)
         os.kill(os.getpid(), signal.SIGKILL)

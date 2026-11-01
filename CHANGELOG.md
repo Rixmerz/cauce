@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [0.64.0] - 2026-11-01
+
+### Changed
+
+- **A plan starts at sonnet/high** (`bench/speed/plans.py`): sonnet named every trap of a plan whose
+  traps are found only by reading the code, 3 of 3, at a sixth of opus/high's cost and half its time.
+  A plan classified high starts on opus/high, and `feature-parallel`'s plan for parts keeps opus/high,
+  where its own bench measured it.
+- **The probation cell below `refactor` and `test` is haiku/medium**: as right as haiku/high, about
+  twice as fast and cheaper (`bench/speed/kinds.py`).
+
+### Fixed
+
+- **An automatic resume that dies names its crash too**: it wrote to a shared log and its death was
+  found by the sweep, which read no crash, so a repeated crash went unseen there. Each run of a task
+  now writes to the task's own log, and both the dispatcher and the sweep read the crash from where
+  that run began.
+
+### Added
+
+- **`scripts/bump.py`**: one command moves the version in every file that names it and closes the
+  CHANGELOG's `[Unreleased]` section, refusing a half-bumped tree or empty notes.
+- **A scenario test of a worker that dies of the same crash twice**: resumed once, then left to the
+  orchestrator, read through the sweep as the hooks do.
+
 ## [0.63.0] - 2026-10-31
 
 ### Added

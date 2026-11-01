@@ -229,7 +229,8 @@ def resumes_that_never_ran(store: Store, *, now: datetime, since: str, **_) -> I
             yield Finding("resume-never-ran", BROKEN,
                           f"#{task['id']} was resumed on its own {int((now - at).total_seconds() // 60)} min ago and "
                           f"no attempt started ({task['status']}); its one automatic try is spent",
-                          f"cauce resume {task['id']} --unattended; read ~/.local/share/cauce/work/auto-resume.log",
+                          f"cauce resume {task['id']} --unattended; read its log, "
+                          f"~/.local/share/cauce/work/task-{task['id']}.log",
                           task["id"], task["repo"])
 
 

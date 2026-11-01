@@ -137,9 +137,12 @@ LADDERS: dict[str, tuple[Cell, ...]] = {
     "debug-unclear": ladder("opus/high", "opus/xhigh", "opus/max"),
     "review-routine": ladder("sonnet/medium", "sonnet/high", "opus/high"),
     "review-critical": ladder("opus/high", "opus/xhigh", "opus/max"),
-    # A plan starts at opus/high: on bench/speed's plan for parts it drew the same three parts as
-    # opus/xhigh and opus/max, every one valid, in half xhigh's time and a fifth of max's.
-    "plan": ladder("opus/high", "opus/xhigh", "opus/max", "fable/high"),
+    # A plan starts at sonnet/high: on bench/speed/plans.py's plan of a rule whose traps are found only
+    # by reading the code, sonnet/high and sonnet/medium named all four in 3 plans of 3, at a sixth of
+    # opus/high's cost and half its time (opus/high missed one once). A high complexity starts a rung
+    # up, on opus/high, and a plan for parts keeps opus/high (`feature-parallel`'s step): on its bench
+    # it drew the same valid parts as opus/xhigh and opus/max, and sonnet was not measured there.
+    "plan": ladder("sonnet/high", "opus/high", "opus/xhigh", "opus/max", "fable/high"),
     "frontier": ladder("fable/high", "fable/xhigh", "fable/max"),
 }
 
@@ -181,7 +184,10 @@ def ladder_for(kind: str) -> tuple[Cell, ...]:
 #: rung of `refactor` and `test` (every layout check and price kept; every mutant killed, 3 of 3
 #: each) at a fifth of the cost per right answer, though about five times the wall time. No other
 #: kind was measured, so no other has one.
-PROBATION: dict[str, Cell] = {kind: Cell("haiku", "high") for kind in ("implement", "refactor", "test")}
+PROBATION: dict[str, Cell] = {"implement": Cell("haiku", "high"),
+                               # haiku/medium was as right as haiku/high on both, and two to one and a
+                               # half times as fast (`kinds.py`, 0.64): still slower than the first rung.
+                               "refactor": Cell("haiku", "medium"), "test": Cell("haiku", "medium")}
 
 
 def reach(kind: str) -> tuple[Cell, ...]:

@@ -1285,8 +1285,9 @@ def test_the_bundled_feature_parallel_plans_builds_in_parts_joins_and_reviews_li
     defn = workflows.load("feature-parallel", git_repo, "bundled")
     steps = {s["id"]: s for s in defn["steps"]}
     assert list(steps) == ["plan", "build", "integrate", "review", "refute", "fix", "recheck"]
-    # The plan reads only, starts where plans pass here (no pinned cell), and its ladder never holds Haiku.
-    assert steps["plan"]["kind"] == "plan" and "start" not in steps["plan"]
+    # The plan reads only and starts on opus/high, where plans for parts were measured; its ladder never
+    # holds Haiku.
+    assert steps["plan"]["kind"] == "plan" and steps["plan"]["start"] == "opus/high"
     assert all(cell.model != "haiku" for cell in matrix.ladder_for("plan"))
     assert steps["build"]["fanout"] == "plan" and steps["integrate"]["integrate"] is True
     assert steps["review"]["needs"] == ["integrate"]
