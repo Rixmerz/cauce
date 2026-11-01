@@ -1359,7 +1359,8 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m coverage run -m pytest && .venv/bin/python -m coverage report
 ```
 
-A release is cut by merging a version bump: once CI passes on `main`, the `release` workflow tags
+A release is cut by merging a version bump (`python scripts/bump.py X.Y.Z` moves it in every file
+and closes the CHANGELOG's `[Unreleased]` section): once CI passes on `main`, the `release` workflow tags
 `v<version>` and publishes that version's CHANGELOG section. To tag a version from before that
 workflow, run it from the Actions tab with the version and its commit.
 

@@ -9,6 +9,7 @@
       "id": "plan",
       "title": "Split it into parts",
       "kind": "plan",
+      "start": "opus/high",
       "prompt": "Plan, without changing any file, how to build this feature in parts that run side by side: {goal}\n\nRead the code it touches. Split it only where its areas are really apart: each part gets surfaces no other part reaches, and the contract names what the parts share. A part that builds on another's work names it with `after`, so the work runs in phases. Read the layout and the interfaces the parts share, not every file: each part's worker reads its own code. When splitting does not pay (one area, or parts that would keep touching each other), give one part."
     },
     {

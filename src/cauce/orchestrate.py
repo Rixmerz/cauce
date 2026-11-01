@@ -461,8 +461,10 @@ class Report:
         return "\n".join(lines)
 
 
-#: Reading kinds a high complexity does not raise: their first rung is measured as enough.
-UNRAISED_KINDS = frozenset({"plan"})
+#: Reading kinds a high complexity does not raise: their first rung is measured as enough. None now:
+#: a plan's first rung is sonnet/high (`bench/speed/plans.py`), and the one it rises to is opus/high,
+#: which drew the same parts as opus/xhigh and opus/max (`bench/speed/plan.py`).
+UNRAISED_KINDS: frozenset[str] = frozenset()
 
 
 def choose_start(
@@ -481,9 +483,8 @@ def choose_start(
     passes where it starts (a landing of "", `Store.landings`) is no reason to
     start higher, wherever it started. A high complexity raises a reading kind's
     start one rung, never a writing kind's: a build classified high passed as often
-    at its ladder's first cell, five times sooner (`bench/speed/versus.py`). Nor a plan's
-    (`UNRAISED_KINDS`): opus/high drew the same parts as opus/xhigh and opus/max, in half
-    the time of xhigh (`bench/speed/plan.py`).
+    at its ladder's first cell, five times sooner (`bench/speed/versus.py`). A plan classified
+    high rises from sonnet/high to opus/high (`UNRAISED_KINDS` holds the kinds that would not).
     """
     index, reasons = 0, []
     if complexity == "high" and len(ladder) > 1 and not writes and kind not in UNRAISED_KINDS:

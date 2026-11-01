@@ -65,6 +65,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `bench/review/` | the review benchmark: real review chains (one review, two blind ones, two with different purposes, a classifier before a quality check) on a change with planted bugs, matched by `analyze.py`; what it measured is in its README |
 | `bench/speed/kinds.py` | whether Haiku does `refactor` and `test` work as right as their first rung: real workers on the memory bench's pricing engine, a refactor judged by its layout and prices kept, tests judged by mutants killed (real money: run on purpose) |
 | `bench/speed/methods.py` | whether the diagnosis method helps an unclear bug: real workers on the pricing engine with a planted bug told only by its symptom, with and without `methods`' lines (real money: run on purpose) |
+| `bench/speed/plans.py` | which cell plans: real read-only planners on the harder pricing engine, scored by the traps their plan names (real money: run on purpose) |
 | `bench/memory/` | the memory benchmark: real workers on a small pricing engine, judged by hidden tests, cold against briefed with a teacher's memory; what it measured is in its README (real money: run on purpose) |
 | `src/cauce/notes.py` | what a project knows, by topic: notes, typed links between them, anchors to code that send them to review; filed by Haiku, recalled by topic, file and one link away; constraints, the rules a change must meet, briefed apart as requirements |
 | `src/cauce/models.py` | what `--model` gets for an alias (the alias, or a person's pin), the model that served an attempt, and workers lagging the person's sessions |
@@ -88,6 +89,7 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `hooks/cauce.tsx` | the mod (function hooks), a thin layer over `bin/cauce`: model tools, waking the session on endings, a status line, `/cauce` opens the web board; `hooks/cauce-cli.ts` its engine-free helpers, `types/index.d.ts` its state contract, `hooks/cauce.test.tsx` its tests |
 | `src/cauce/services.py` | the servers a task needs up (`--service 'cmd@port'`): started in the task's directory, waited for, stopped with their process group when the run ends |
 | `src/cauce/isolate.py` | one git worktree per writing task, the checkout's ignored dependencies linked in; work that stopped for a person kept unverified; `at_base`, a temporary worktree at a task's base for comparing its check |
+| `scripts/bump.py` | a new version in every file that names it at once (`__init__.py`, `pyproject.toml`, `uv.lock`, the plugin and marketplace manifests), the CHANGELOG's `[Unreleased]` closed under it; nothing written when one file is off or the notes are empty |
 | `scripts/release_notes.py`, `.github/workflows/release.yml` | a version that reaches main with CI green is tagged `v<version>` and released with its CHANGELOG section, by itself; one already tagged is left alone, and a person tags an older one by hand (`workflow_dispatch`); stdlib, no model |
 | `commands/orchestration.md` | the one entry point a user types |
 | `commands/habits.md` | review the habit candidates for this repository and install the ones the person picks |
@@ -470,8 +472,8 @@ yields the default kind, not a guess.
   here, the re-checks that found something new, and pass-first and cost per point by the cell work
   started on. Tests run with `CAUCE_TRUST=off`.
 - A writing kind may have a cheaper cell below its ladder (`matrix.PROBATION`: Haiku for
-  `implement`, from `bench/memory`, and for `refactor` and `test`, from `bench/speed/kinds.py`; no
-  other kind was measured). It is tried only on trial
+  `implement`, from `bench/memory`, and haiku/medium for `refactor` and `test`, from
+  `bench/speed/kinds.py`; no other kind was measured). It is tried only on trial
   (`trust.probation_arm`, the `probation` setting): where the ladder's first rung passes
   `standards.PASS_FIRST` of `MIN_SAMPLES` or more first tries of the kind here, on a start nothing
   raised or pinned, never a high risk, a resume, a ledger, parts or a run in the checkout, and only
@@ -499,6 +501,8 @@ yields the default kind, not a guess.
 - A move explains itself: `Decision.because` is the evidence chain (what the
   attempt ended with, the rule, where it goes) and `skipped` the rungs passed
   over. A new branch in `decide` gives both; the `moved` event keeps them.
+- A plan starts at sonnet/high (`bench/speed/plans.py`: every trap named at a sixth of opus/high's
+  cost), and a plan for parts at opus/high (`feature-parallel`'s step, where it was measured).
 - A high complexity raises a reading kind's start one rung, never a writing kind's: a build
   classified high passed as often at its ladder's first cell, in less than half the time
   (`bench/speed/versus.py`). History may raise where a task starts, never lower it below its ladder, and only on
@@ -1050,8 +1054,9 @@ yields the default kind, not a guess.
   in the worktree it left, with more turns for one that outgrew them, within
   `AUTO_RESUME_WITHIN_S`, at most `AUTO_RESUMES`, with `autowork` on). Its stop is no
   ending handed to a session; a second one is the orchestrator's. A death names its crash: the last
-  exception line its run wrote to its log (`flow.crash_line`, from where that run began in
-  `work/task-N.log`), kept on its stop with the log's path; one that repeats the crash of its last
+  exception line its run wrote to its log (`flow.died`, `flow.crash_line`, from where that run began in
+  `work/task-N.log`, which the dispatcher's runs and an automatic resume both write, the offset kept in
+  the store's meta), read by the dispatcher and by the sweep alike, kept on its stop with the log's path; one that repeats the crash of its last
   death says so and is never resumed on its own (`repeated`): it is cauce's failure, not the work's,
   and a resume repeats it. A stop that needs
   judgment or a person (review, permission, approval, a wrong task) is never resumed so. The analysis reads

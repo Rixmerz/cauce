@@ -53,7 +53,8 @@ def test_choose_start_rises_with_complexity_and_history_never_falls():
     # A writing kind classified high starts where its ladder starts: only climbs raise it.
     assert choose_start(IMPLEMENT, "high", [], [], writes=True)[0] == Cell("sonnet", "medium")
     assert choose_start(IMPLEMENT, "high", ["opus/high"] * 3, [], writes=True)[0] == Cell("opus", "high")
-    # Nor a plan: its first rung drew the same parts in half the time (`bench/speed/plan.py`).
+    # A plan starts at sonnet/high (`bench/speed/plans.py`), and a high one on opus/high.
+    assert choose_start(LADDERS["plan"], "medium", [], [], kind="plan")[0] == Cell("sonnet", "high")
     assert choose_start(LADDERS["plan"], "high", [], [], kind="plan")[0] == Cell("opus", "high")
     assert choose_start(LADDERS["review-critical"], "high", [], [], kind="review-critical")[0] \
         == LADDERS["review-critical"][1]
@@ -253,9 +254,11 @@ def test_runs_end_with_a_status_that_says_why(git_repo, store, results, status):
 def test_fable_waits_for_approval(tmp_path, store):
     script = Script(bad(Failure.INCONCLUSIVE, "could not read the queue"),
                     bad(Failure.INCONCLUSIVE, "the queue is still unclear"),
-                    bad(Failure.INCONCLUSIVE, "the scheduler is unclear"))
+                    bad(Failure.INCONCLUSIVE, "the scheduler is unclear"),
+                    bad(Failure.INCONCLUSIVE, "the workers are unclear"))
     report = run("design the system", tmp_path, store, registry={}, launcher=script, classifier=kind("plan"))
-    assert report.status == "needs_approval" and report.cells == ["opus/high", "opus/xhigh", "opus/max"]
+    assert report.status == "needs_approval"
+    assert report.cells == ["sonnet/high", "opus/high", "opus/xhigh", "opus/max"]
 
 
 def test_cost_is_measured_never_a_brake_and_attempts_are_the_ceiling(git_repo, store):

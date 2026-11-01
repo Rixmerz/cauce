@@ -508,3 +508,38 @@ Both misses without it claimed a pass: they changed something and stopped, the c
 place. With it every worker reproduced the failure first and fixed the rounding mode. Four runs a
 side is a small sample, so the method stays on trial per repository (`methods.arm`); this is why
 it starts in its trial instead of being left out until one proves it.
+
+## U: haiku/medium for `refactor` and `test` (`kinds.py`, 0.64)
+
+The same asks and judges as S, three more runs on haiku/medium:
+
+| kind | cell | right | wall p50 | turns p50 | $ per right |
+|---|---|---|---|---|---|
+| refactor | haiku/high | 3/3 | 113 s | 24 | 0.020 |
+| refactor | haiku/medium | 3/3 | 48 s | 14 | 0.017 |
+| refactor | sonnet/medium | 3/3 | 21 s | 6 | 0.104 |
+| test | haiku/high | 3/3 | 134 s | 25 | 0.030 |
+| test | haiku/medium | 3/3 | 92 s | 19 | 0.021 |
+| test | sonnet/medium | 3/3 | 27 s | 8 | 0.110 |
+
+haiku/medium was as right as haiku/high, faster and cheaper: it is now the probation cell below
+both ladders. It is still two to three and a half times slower than the first rung, so
+`standards.PROBATION_SLOWER` decides per repository whether a start there stays.
+
+## V: which cell plans (`plans.py`, 0.64)
+
+Real read-only planners on the harder pricing engine, asked to plan a rule whose four traps are
+found only by reading the code (the house rounding helper beside a legacy one, the tier nested under
+`loyalty` that may be null, written in capitals, and a rule registered in two places). A plan is
+scored by the traps it names; three plans per cell.
+
+| cell | all four named | traps named | wall p50 | turns p50 | $ p50 |
+|---|---|---|---|---|---|
+| opus/high | 2/3 | 11/12 | 50 s | 19 | 0.465 |
+| sonnet/high | 3/3 | 12/12 | 29 s | 5 | 0.077 |
+| sonnet/medium | 3/3 | 12/12 | 25 s | 5 | 0.074 |
+
+Sonnet named every trap at a sixth of the cost and half the time. A plan now starts at sonnet/high
+(the margin over medium costs nothing here), and a plan classified high starts a rung up, on
+opus/high. A plan for parts (`feature-parallel`) keeps opus/high: that is where its own bench
+measured it, and sonnet was not measured there.

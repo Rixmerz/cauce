@@ -494,7 +494,7 @@ def _claim_resume(store: Store, task_id: int, stop: Any, ended_id: int) -> bool:
 
 
 def _start_resume(task: Mapping[str, Any], stop: Any, root: Path, env: Mapping[str, str],
-                  start: Callable[..., object]) -> bool:
+                  start: Callable[..., object], store: Store | None = None) -> bool:
     """`cauce resume --unattended` for a stopped task, detached, in the worktree it left, with more
     turns for one that outgrew them; False when it could not start. That leaves the claim: it is
     one of the tries, and the next one waits out `RESUME_STARTING_S`."""
@@ -503,7 +503,11 @@ def _start_resume(task: Mapping[str, Any], stop: Any, root: Path, env: Mapping[s
     more = ["--max-turns", str(stops.RESUME_TURNS)] if stop.cause == "turns" else []
     try:
         (root / "work").mkdir(parents=True, exist_ok=True)
-        with open(root / "work" / "auto-resume.log", "a") as out:
+        # The task's own log, where the dispatcher's runs write too: a death reads its crash from where
+        # this run began (`flow.died`).
+        with open(root / "work" / f"task-{task['id']}.log", "a") as out:
+            if store is not None:
+                store.set_meta(f"log_from:{task['id']}", str(out.tell()))
             start([sys.executable, "-m", "cauce", "resume", str(task["id"]), "--unattended", *more],
                   cwd=str(task["cwd"]), env=child_env(env), stdin=subprocess.DEVNULL, stdout=out,
                   stderr=subprocess.STDOUT, start_new_session=True)
@@ -560,6 +564,6 @@ def recover(store: Store, root: Path, env: Mapping[str, str], *, popen: Callable
             continue
         if not _claim_resume(store, task["id"], stop, int((ended or {}).get("id") or 0)):
             continue
-        if _start_resume(task, stop, root, env, start):
+        if _start_resume(task, stop, root, env, start, store):
             resumed.append(int(task["id"]))
     return resumed

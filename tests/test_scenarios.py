@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from cauce import doctor, workflows
+from cauce import doctor, flow, workflows
 from cauce.store import Store
 
 from .conftest import git
@@ -126,6 +126,30 @@ def test_a_worker_that_committed_its_own_work_and_left_only_artifacts_passes_on_
                          capture_output=True, text=True, check=True).stdout.strip()
     assert log == "Document the greeting"
     world.healthy()
+
+
+def test_a_worker_that_dies_of_the_same_crash_twice_is_resumed_once_and_then_left_to_the_orchestrator(world):
+    world.script([{"match": "make the badge", "do": [{"crash": "cauce.isolate.IsolationError: git commit failed"}]}])
+    world.cauce("queue", "add", "--kind", "implement", "make the badge file for the app")
+
+    def died_twice(store):
+        # The automatic resume is a process of its own: what notices its death is a turn's end, whose
+        # hooks sweep (`flow.sweep`), not the dispatcher that started it. Nothing here ends a turn.
+        flow.sweep(store)
+        task = next(iter(store.list_tasks(status=["interrupted"], limit=5)), None)
+        stop = (store.final_event(task["id"]) or {}).get("data", {}).get("stop") if task else None
+        return task if stop and stop.get("repeated") else None
+
+    ended = world.wait(died_twice, "the second death of the same crash")
+    store = Store(world.home / "cauce.db")
+    try:
+        stop = store.final_event(ended["id"])["data"]["stop"]
+        resumed = store.events_of(ended["id"], "auto_resumed")
+    finally:
+        store.close()
+    assert stop["crash"] == "cauce.isolate.IsolationError: git commit failed"
+    assert "the same crash as its last death" in stop["reason"] and len(resumed) == 1
+    assert len(world.calls()) == 2  # the first try and the one automatic resume; never a third
 
 
 def test_a_folder_a_cancel_left_where_a_task_s_worktree_goes_does_not_stop_it(world):
