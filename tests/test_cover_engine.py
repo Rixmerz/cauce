@@ -755,6 +755,16 @@ def test_isolate_a_race_lane_left_behind_is_replaced(git_repo, tmp_path):
     assert second.path == first.path and not (second.path / "stale.py").exists()
 
 
+def test_isolate_adopting_a_lane_that_changed_nothing_leaves_the_worktree_at_its_base(git_repo, tmp_path):
+    from cauce import isolate
+
+    ws = isolate.prepare(git_repo, 28, tmp_path / "home")
+    (ws.path / "start.py").write_text("the start's try\n")
+    lane = isolate.race_lane(ws, tmp_path / "home")
+    assert isolate.adopt(lane, ws) == ()
+    assert not (ws.path / "start.py").exists()
+
+
 def test_isolate_adopt_leaves_links_out_and_refuses_a_patch_that_does_not_apply(git_repo, tmp_path):
     from cauce import isolate
 
@@ -1277,3 +1287,345 @@ def test_orchestrate_a_race_whose_rung_only_met_the_environment_goes_on_from_the
     # that broke in the race's lane is no reason to retry the rung (it read that once, then blocked).
     assert report.moves[0].startswith("more_effort to sonnet/high")
     assert report.status == "done" and seen[-1] == ("sonnet/high", False, True)
+
+
+def test_orchestrate_launch_hands_the_real_launcher_its_stoppable_runner(monkeypatch, tmp_path):
+    from cauce import launch, orchestrate
+
+    seen = []
+    monkeypatch.setattr(launch, "run", lambda spec, runner=None: seen.append((spec, runner)) or "result")
+    runner = launch.Stoppable()
+    assert orchestrate._launch(launch.run, "spec", runner) == "result" and seen == [("spec", runner)]
+    assert orchestrate._launch(lambda spec: f"ran {spec}", "spec", runner) == "ran spec"
+
+
+def test_orchestrate_a_check_beside_that_broke_raises_where_its_verdict_is_read(tmp_path):
+    from cauce import orchestrate
+
+    def broken(spec):
+        raise RuntimeError("the check's CLI broke")
+
+    ahead = orchestrate.Ahead(broken, "spec", ["a.py"], "true")
+    with pytest.raises(RuntimeError, match="CLI broke"):
+        ahead.result()
+    assert ahead.ended is not None and ahead.stop() is None
+
+
+def _a_plan(store, repo, text="fix the parser"):
+    from cauce import orchestrate
+    from cauce.orchestrate import Options
+
+    return orchestrate.plan(text, repo, store, Options(), {}, classifier=_orch().kind("implement"), adapters=[])
+
+
+def test_orchestrate_ahead_starts_nothing_for_no_change_or_a_pass_let_through(git_repo, store, monkeypatch, tmp_path):
+    from cauce import isolate, orchestrate, trust
+    from cauce.launch import LaunchSpec
+    from cauce.matrix import Cell
+    from cauce.orchestrate import Options
+
+    monkeypatch.setenv("CAUCE_OVERLAP", "on")
+    t = _orch()
+    ws = isolate.prepare(git_repo, 40, tmp_path / "home")
+    plan = _a_plan(store, git_repo)
+    plan.risk.raise_to("high", "test")
+    cell = Cell("sonnet", "medium")
+    spec = LaunchSpec(prompt="p", cell=cell, launch_dir=ws.path)
+    common = dict(options=Options(verify="true"), verifying=True, workspace=ws, cell=cell, plan=plan, text="fix",
+                  spec=spec, workdir=ws.path, base=ws.base, ledger={}, launcher=pytest.fail, registry={})
+    # nothing changed yet: nothing to read beside the check
+    assert orchestrate._ahead(t.ok(), **common) is None
+    (ws.path / "app.py").write_text("print('fixed')\n")
+    task = store.create_task("fix", status="running", source="cauce", repo="r")
+    monkeypatch.setattr(orchestrate, "_sampling", lambda *a, **kw: trust.Sampling(False))
+    # its cell's record lets this pass through unchecked: nothing runs beside the check
+    assert orchestrate._ahead(t.ok(), store=store, task=task, **common) is None
+
+
+def test_orchestrate_read_before_reads_the_whole_change_when_the_round_before_cannot_say(store, tmp_path):
+    from cauce import orchestrate
+    from cauce.matrix import Cell
+
+    task = store.create_task("fix", status="running", source="cauce")
+    cell = Cell("sonnet", "high")
+    store.add_event(task["id"], "verified", read_at="abc")  # no worker named
+    assert orchestrate._read_before(store, task["id"], cell, 1, tmp_path) is None
+    store.add_event(task["id"], "verified", read_at="abc", worker="not a cell")
+    assert orchestrate._read_before(store, task["id"], cell, 1, tmp_path) is None
+
+
+def test_orchestrate_a_check_beside_that_read_another_change_is_stopped_and_read_again(git_repo, store):
+    from cauce import orchestrate, risk
+    from cauce.launch import LaunchSpec
+    from cauce.matrix import Cell
+
+    from .test_checking import check
+
+    t = _orch()
+    beside_seen, again = [], t.Script(check("pass"))
+    ahead = orchestrate.Ahead(lambda spec: beside_seen.append(spec) or check("pass"), "beside", ["old.py"], "true")
+    task = store.create_task("fix", status="running", source="cauce")
+    cell = Cell("sonnet", "medium")
+    high = risk.Risk()
+    high.raise_to("high", "test")
+    verdict, stop, *_ = orchestrate._independent_check(
+        t.ok(), text="fix the parser", kind="implement", cell=cell,
+        spec=LaunchSpec(prompt="p", cell=cell, launch_dir=git_repo), workdir=git_repo, base=None,
+        changed=["old.py", "new.py"], risk=high, ledger={}, corrections=0, launcher=again, store=store,
+        task_id=task["id"], nth=1, say=lambda s: None, ahead=ahead)
+    # new.py was written after the check beside began: the change was read again, as it stands
+    assert len(again.specs) == 1 and verdict.passed and stop is None
+    verified = store.last_event(task["id"], "verified")["data"]
+    assert "beside_check" not in verified
+
+
+def test_orchestrate_a_dead_end_without_a_reason_is_briefed_without_one(tmp_path):
+    from cauce import orchestrate
+
+    dead = [{"repo": "r", "problem": "the parser drops the last line", "tried": "a regex",
+             "why": "", "worked_instead": "a tokenizer"}]
+    said = orchestrate.brief("fix the parser", "implement", tmp_path, [], dead, None, True)
+    assert "- (r) the parser drops the last line: tried a regex; what worked: a tokenizer" in said
+    assert "failed because" not in said
+
+
+def test_orchestrate_expired_and_known_flaky_read_nothing_from_what_they_cannot_parse(store, git_repo):
+    from cauce import orchestrate
+
+    assert orchestrate._expired("not json") is True
+    store.set_meta(orchestrate.flaky_key(git_repo), "{broken")
+    assert orchestrate.known_flaky(store, git_repo) == []
+
+
+def test_orchestrate_against_base_names_only_new_failures_when_none_were_there_before(tmp_path):
+    from types import SimpleNamespace
+
+    from cauce import orchestrate
+
+    out = "FAILED tests/test_cart.py::test_total - assert 3 == 4\n1 failed"
+    base = SimpleNamespace(found=None, unknown="", flaked=False, repo_dir=tmp_path, base="a" * 40, must_fix=False,
+                           runs=1, at_base=lambda command: {"code": 1,
+                                                            "failures": ["tests/test_other.py::test_x"]})
+    stands, said = orchestrate._against_base(base, "pytest", out, tmp_path)
+    # the base failed something else: every failure here is new, so it is the work's (fail closed)
+    assert stands is False and "1 failing line(s) are new with this work" in said
+    assert "already failed at the base" not in said
+
+
+def test_orchestrate_a_steady_check_with_no_baseline_still_reruns_a_flake(tmp_path):
+    from cauce import orchestrate
+
+    command = ("test -f seen || { touch seen; echo 'FAILED tests/test_a.py::test_one - boom'; exit 1; }; "
+               "echo '1 passed'")
+    code, out = orchestrate._steady_check(command, tmp_path, None)
+    assert code == 0 and "failed on the first run and passed on the second" in out
+
+
+def _pre_existing(summary="the check failed before my change: pre-existing", **kw):
+    from cauce.escalate import Failure
+    from cauce.launch import WorkerResult
+
+    return WorkerResult(False, Failure.CODE_BUG, summary, "FAILED tests/test_a.py::test_one", **kw)
+
+
+def test_orchestrate_a_base_claim_is_weighed_only_on_work_and_a_check_that_fails(tmp_path):
+    from cauce import orchestrate
+
+    claim = _pre_existing()
+    # nothing written: no claim to weigh, the report stands as it was (not a pass)
+    assert orchestrate._weigh_base_claim(claim, "false", tmp_path, None, None) is claim
+    wrote = _pre_existing(changed_paths=("a.py",))
+    # the check passes now: nothing to compare, the report stands
+    assert orchestrate._weigh_base_claim(wrote, "true", tmp_path, None, None) is wrote
+    # no base to compare with: the claim cannot be shown, so it is no pass
+    weighed = orchestrate._weigh_base_claim(wrote, "echo 'FAILED tests/test_a.py::test_one'; exit 1", tmp_path,
+                                            None, None)
+    assert weighed is wrote and not weighed.passed
+
+
+def test_orchestrate_settled_and_stands_run_the_check_without_a_baseline(tmp_path):
+    from cauce import orchestrate
+    from cauce.launch import WorkerResult
+
+    from .test_orchestrate import ok
+
+    settled = orchestrate._settled(ok(), "true", tmp_path)
+    assert settled.passed
+    point = WorkerResult(False, None, "a decision is needed", "", criteria=())
+    assert orchestrate._stands(point, "true", tmp_path) == "cauce"
+    assert orchestrate._stands(point, "false", tmp_path) == ""
+
+
+def test_orchestrate_only_the_base_needs_every_criterion_met():
+    from types import SimpleNamespace
+
+    from cauce import orchestrate
+    from cauce.launch import WorkerResult
+
+    base = SimpleNamespace(found={"failures": ["tests/test_a.py::test_one"]})
+    unmet = WorkerResult(False, None, "pytest fails as at the base", "", criteria=({"id": "S1", "met": False},))
+    assert orchestrate._only_the_base(unmet, "pytest", base) is False
+
+
+def test_orchestrate_notes_engram_and_solving_say_nothing_without_a_project_or_a_result(store, tmp_path,
+                                                                                       monkeypatch):
+    from types import SimpleNamespace
+
+    from cauce import notes, orchestrate
+    from cauce.matrix import Cell
+
+    from .test_orchestrate import ok
+
+    task = store.create_task("fix", status="done", source="cauce")
+    report = SimpleNamespace(learned=("the parser keeps a cache",), noted=[], impact=[], changed=["a.py"])
+
+    class Symbols:
+        name = "idx"
+
+        def symbols_named(self, fact, status):
+            return [("Parser", "a.py:1")]
+
+    plan = SimpleNamespace(active=[(Symbols(), None)])
+    orchestrate._note(store, task, None, report, plan, tmp_path, None, None)
+    assert report.noted == [] and store.events_of(task["id"], "noted") == []
+    asked = []
+
+    def file_facts(store, key, learned, **kw):
+        asked.append(kw["symbols_of"]("the parser keeps a cache"))
+        return []
+
+    monkeypatch.setattr(notes, "file_facts", file_facts)
+    orchestrate._note(store, task, "r", report, plan, tmp_path, None, None)
+    # the index named the symbol; nothing was filed, so no `noted` event
+    assert asked == [[("Parser", "a.py:1")]] and store.events_of(task["id"], "noted") == []
+
+    class Engram:
+        name = "engram"
+
+        def remember(self, facts, **kw):
+            return []
+
+    status = SimpleNamespace(data={"project": "p"})
+    orchestrate._to_engram(store, task, report, SimpleNamespace(active=[(Engram(), status)]), tmp_path)
+    assert store.events_of(task["id"], "engram_saved") == [] and report.impact == []
+    assert orchestrate._solve_matched(store, task, None, Cell("sonnet", "high"), ok()) == []
+
+
+def test_orchestrate_tip_of_a_branch_that_is_gone_is_none(git_repo, tmp_path):
+    from cauce import isolate, orchestrate
+
+    ws = isolate.prepare(git_repo, 50, tmp_path / "home")
+    assert orchestrate._tip(ws, "cauce/no-such-branch") is None
+    assert orchestrate._tip(ws, ws.branch) == git(git_repo, "rev-parse", ws.branch)
+
+
+def test_orchestrate_read_only_guard_never_costs_the_run(store, tmp_path, monkeypatch):
+    from cauce import isolate, orchestrate
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("git broke")
+
+    monkeypatch.setattr(isolate, "changed_since", broken)
+    task = store.create_task("x", status="running", source="cauce")
+    assert orchestrate._read_only(tmp_path, "abc", store, task["id"], 1, lambda s: None) == []
+    assert store.events_of(task["id"], "verifier_wrote") == []
+
+
+def test_orchestrate_follow_ending_files_no_constraint_it_cannot_keep(store, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cauce import notes, orchestrate
+
+    monkeypatch.setattr(notes, "file_constraints", lambda *a, **kw: [])
+    task = store.create_task("x", status="done", source="cauce")
+    report = SimpleNamespace(learned=(), constraints=("totals are rounded once",), noted=[], commit=None)
+    orchestrate._follow_ending(store, task=task, key="r", report=report, plan=SimpleNamespace(), checkout=tmp_path,
+                               commit=None, notes=True, engram=False, notes_ask=None, late_check=None, text="x",
+                               base=None, launcher=pytest.fail, registry={}, say=lambda s: None)
+    assert report.noted == [] and store.events_of(task["id"], "noted") == []
+
+
+def test_orchestrate_a_late_check_stopped_by_a_signal_says_so_and_stops(git_repo, store, late):
+    from cauce.orchestrate import Options, run
+
+    from .test_checking import passing
+
+    t = _orch()
+    calls = []
+
+    def launcher(spec):
+        calls.append(spec)
+        if len(calls) == 1:
+            (spec.target_dir / "app.py").write_text("print('fixed')\n")
+            return passing()
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        run("fix the cart total", git_repo, store, Options(verify="true"), registry={}, launcher=launcher,
+            classifier=t.kind("implement"))
+    task_id = store.list_tasks(limit=1)[0]["id"]
+    verified = store.last_event(task_id, "verified")["data"]
+    assert verified["late"] and verified["passed"] is None and "KeyboardInterrupt" in verified["summary"]
+    assert store.get_task(task_id)["status"] == "done"
+
+
+def test_orchestrate_an_independent_check_with_no_worktree_reads_in_place(git_repo, store, monkeypatch):
+    from cauce.launch import WorkerResult
+    from cauce.matrix import Cell
+    from cauce.orchestrate import Options, run
+
+    from .test_checking import check
+
+    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("CAUCE_OVERLAP", "off")
+    monkeypatch.setenv("CAUCE_LATE_VERIFIER", "off")
+    monkeypatch.setenv("CAUCE_TRUST", "off")
+    t = _orch()
+    # a medium change a cheap cell made, in the person's checkout: the check reads it there
+    worked = WorkerResult(True, None, "done", "1 passed", cost_usd=0.1, changed_paths=("app.py",))
+    script = t.Script(worked, check("pass"), write="app.py")
+    report = run("fix the cart total", git_repo, store, Options(isolate=False, start=Cell("haiku", "medium")),
+                 registry={}, launcher=script, classifier=t.kind("implement"))
+    assert report.status == "done" and len(script.specs) == 2
+    assert store.last_event(report.task_id, "verified")["data"]["passed"]
+    assert store.events_of(report.task_id, "verifier_wrote") == []
+
+
+@pytest.mark.usefixtures("no_verifier")
+def test_orchestrate_dependencies_whose_lockfile_moved_are_not_linked_and_the_worker_is_told(git_repo, store):
+    from cauce.orchestrate import run
+
+    t = _orch()
+    (git_repo / ".gitignore").write_text("node_modules/\n")
+    (git_repo / "package-lock.json").write_text('{"v": 1}\n')
+    git(git_repo, "add", "-A")
+    git(git_repo, "commit", "-q", "-m", "deps")
+    (git_repo / "node_modules").mkdir()
+    (git_repo / "node_modules" / "x.js").write_text("x\n")
+    (git_repo / "package-lock.json").write_text('{"v": 2}\n')  # the person's checkout moved its dependencies
+    said = []
+    script = t.Script(t.ok(), write="feature.py")
+    report = run("add the feature", git_repo, store, registry={}, launcher=script, classifier=t.kind("implement"),
+                 progress=said.append)
+    assert report.status == "done"
+    assert "Not linked from the person's checkout: node_modules" in script.specs[0].prompt
+    assert any("dependencies not linked, their lockfile differs" in s for s in said)
+
+
+@pytest.mark.usefixtures("no_verifier")
+def test_orchestrate_a_step_whose_trunk_arm_is_fresh_starts_its_own_session(git_repo, store, monkeypatch):
+    from cauce import trunks
+    from cauce.orchestrate import Options, run
+
+    t = _orch()
+    monkeypatch.setattr(trunks, "enabled", lambda env=None: True)
+    monkeypatch.setattr(trunks, "context_tokens", lambda session, env=None: 1000)
+    monkeypatch.setattr(trunks, "arm", lambda store, repo, task_id: ("fresh", "the fresh arm's turn"))
+    said = []
+    script = t.Script(t.ok(), write="feature.py")
+    trunk = {"session": "sess-1", "step": "explore", "task": 3}
+    report = run("add the feature", git_repo, store, Options(trunk=trunk), registry={}, launcher=script,
+                 classifier=t.kind("implement"), progress=said.append)
+    assert report.status == "done" and not script.specs[0].resume_session
+    assert any(s.endswith("the fresh arm's turn") and "forks" not in s for s in said)
+    assert store.last_event(report.task_id, "briefed")["data"][trunks.KEY] == "fresh"
