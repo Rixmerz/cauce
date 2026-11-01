@@ -221,7 +221,7 @@ class Handler(BaseHTTPRequestHandler):
         given = self.headers.get("X-Cauce-Token", "")
         return bool(expected) and hmac.compare_digest(given.encode(), expected.encode())
 
-    def _send(self, status: int, body: bytes, content_type: str, extra: dict[str, str] | None = None) -> None:
+    def _send(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
@@ -229,8 +229,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Cache-Control", "no-store")
-        for k, v in (extra or {}).items():
-            self.send_header(k, v)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
