@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.68.0] - 2026-11-01
+
 ### Added
 
 - **A newer livespec is taken and checked, not trusted.** When the livespec cauce runs (a plugin's,
