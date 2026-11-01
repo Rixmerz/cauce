@@ -1168,3 +1168,16 @@ def test_a_step_that_ended_unheard_and_unreported_is_no_step_the_engine_went_pas
                         (run["id"], second["id"]))
     ended = {**store.get_task(second["id"]), "finished_id": store.final_event(second["id"])["id"]}
     assert hooks._went_past(store, ended) == []
+
+
+def test_a_limit_wait_whose_reset_has_passed_resumes_at_once(monkeypatch, capsys):
+    import argparse
+    import time as clock
+
+    from cauce import dispatch
+
+    monkeypatch.setattr(dispatch, "recover", lambda *a, **kw: [])
+    monkeypatch.setattr(dispatch, "revive", lambda *a, **kw: [])
+    slept = []
+    assert cli.cmd_limit_wait(argparse.Namespace(until=clock.time() - 60), sleep=slept.append) == 0
+    assert slept == [] and "resumed nothing; started 0 dispatcher(s)" in capsys.readouterr().out
