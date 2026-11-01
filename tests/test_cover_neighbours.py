@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -16,12 +17,17 @@ from cauce.adapters import ABSENT, PRESENT, Status, default_adapters
 from cauce.adapters import livespec as livespec_mod
 from cauce.adapters.engram import Engram
 from cauce.adapters.livespec import Livespec, LivespecError
+from cauce.ui import api, server
 
 from .livespec_fixture import build
 from .test_acp import FakeProc as AcpFakeProc
 from .test_acp import Sink as AcpSink
 from .test_acp import Spawner as AcpSpawner
 from .test_engram import Fake as EngramFake
+from .test_ui import call as ui_call
+from .test_ui import token as ui_token
+from .test_ui import ui  # noqa: F401  (the fixture)
+from .test_ui_maps import mapped  # noqa: F401  (the fixture)
 
 # --- behavior -------------------------------------------------------------------------------
 
@@ -715,3 +721,428 @@ def test_the_stats_text_says_where_each_trial_stands_now(git_repo, store):
     report.update(recall_now=None, evidence_now=None)
     quiet = analysis.text(report)
     assert "the order of a brief's notes" in quiet and "now: fusion kept" not in quiet and "now: gate kept" not in quiet
+
+
+# --- store ----------------------------------------------------------------------------------
+
+
+def test_a_store_that_cannot_set_up_closes_its_connection_and_says_why(tmp_path, monkeypatch):
+    from cauce import store as store_mod
+
+    closed = []
+
+    class Conn:
+        """A connection that records its close; everything else is sqlite's."""
+
+        def __init__(self, real):
+            self._real = real
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        def __setattr__(self, name, value):
+            if name == "_real":
+                object.__setattr__(self, name, value)
+            else:
+                setattr(self._real, name, value)
+
+        def close(self):
+            closed.append(True)
+            self._real.close()
+
+    real_connect = sqlite3.connect
+    monkeypatch.setattr(store_mod.sqlite3, "connect", lambda *a, **kw: Conn(real_connect(*a, **kw)))
+
+    def broken(self):
+        raise RuntimeError("the schema would not load")
+
+    monkeypatch.setattr(store_mod.Store, "_setup", broken)
+    with pytest.raises(RuntimeError, match="the schema would not load"):
+        store_mod.Store(tmp_path / "s.db")
+    assert closed == [True]
+
+
+def test_a_locked_setup_is_tried_again_and_any_other_refusal_is_raised(tmp_path, monkeypatch):
+    from cauce import store as store_mod
+
+    real = store_mod.Store._migrate
+    tries = []
+
+    def locked_once(self):
+        tries.append(1)
+        if len(tries) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        real(self)
+
+    monkeypatch.setattr(store_mod.Store, "_migrate", locked_once)
+    store_mod.Store(tmp_path / "a.db").close()
+    assert len(tries) == 2
+
+    def full(self):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(store_mod.Store, "_migrate", full)
+    with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+        store_mod.Store(tmp_path / "b.db")
+
+
+def test_a_column_another_opener_added_first_is_no_error_and_a_bad_one_is(tmp_path, monkeypatch):
+    from cauce import store as store_mod
+
+    # `PRAGMA table_info` names `status`; adding `Status` is refused as a duplicate, as a race would be.
+    monkeypatch.setattr(store_mod, "_ADDED_COLUMNS", {"tasks": {"Status": "TEXT"}})
+    store_mod.Store(tmp_path / "a.db").close()
+    monkeypatch.setattr(store_mod, "_ADDED_COLUMNS", {"tasks": {"nowhere": "INTEGER PRIMARY KEY"}})
+    with pytest.raises(sqlite3.OperationalError, match="PRIMARY KEY"):
+        store_mod.Store(tmp_path / "b.db")
+
+
+def test_a_delegation_without_a_tool_id_is_the_session_s_newest_running_one(store):
+    store.create_task("one", status="running", source="delegation", repo="r", session_id="s", prompt_id="a")
+    newest = store.create_task("two", status="running", source="delegation", repo="r", session_id="s",
+                               prompt_id="b")
+    store.create_task("three", status="done", source="delegation", repo="r", session_id="s", prompt_id="c")
+    assert store.delegation("s", None)["id"] == newest["id"]
+    assert store.delegation("other", None) is None
+
+
+def test_runs_listed_for_no_repository_and_a_session_s_runs(store):
+    run = store.create_run(name="feature", scope="bundled", source="x", repo="r", session_id="s",
+                           definition=json.dumps({"name": "feature", "steps": []}))
+    assert store.list_runs(repos=set()) == []
+    assert [r["id"] for r in store.session_runs("s")] == [run["id"]]
+    assert store.session_runs("s", status="done") == []
+
+
+def test_the_newest_attempt_of_each_model_family_names_it(store):
+    t = store.create_task("x", status="done", source="cauce", repo="r")
+    for served in ("claude-sonnet-4-5", "claude-sonnet-4-6", "claude-opus-4-1"):
+        store.add_attempt(t["id"], cell="sonnet/high", max_turns=10, passed=1, served_model=served)
+    assert store.worker_models() == {"opus": "claude-opus-4-1", "sonnet": "claude-sonnet-4-6"}
+
+
+def test_the_final_event_of_a_status_asked_for(store):
+    t = store.create_task("x", status="running", source="cauce", repo="r")
+    store.add_event(t["id"], "finished", status="interrupted")
+    assert store.final_event(t["id"], "interrupted")["data"]["status"] == "interrupted"
+    assert store.final_event(t["id"]) is None
+
+
+def test_a_claim_that_fails_takes_nothing_back_half_done(store, monkeypatch):
+    t = store.create_task("x", status="done", source="cauce", repo="r", session_id="s")
+    store.add_event(t["id"], "finished", status="done")
+
+    def broken(session_id, **kw):
+        raise RuntimeError("read failed")
+
+    monkeypatch.setattr(store, "unreported", broken)
+    with pytest.raises(RuntimeError, match="read failed"):
+        store.claim_unreported("s", via="stop")
+    assert not store._conn.in_transaction and store.unreported is broken
+
+
+def test_a_rekey_carries_only_changes_still_unjudged(store):
+    stamp = "2026-10-01T00:00:00+00:00"
+    judged = store.add_calibration(at=stamp, repo="old", kind="implement", band=1, field="start_turns",
+                                   old_value="80", new_value="100", rule="r", evidence={}, version="0.60.0")
+    store.add_verdict(at=stamp, change_id=judged, verdict="kept", reason="x", version="0.60.0")
+    waiting = store.add_calibration(at=stamp, repo="old", kind="implement", band=2, field="start_turns",
+                                    old_value="80", new_value="100", rule="r", evidence={}, version="0.60.0")
+    store.rekey("old", "new")
+    carried = [dict(r) for r in store._conn.execute("SELECT * FROM calibrations WHERE repo = 'new'")]
+    assert [json.loads(c["evidence"])["carried_from"] for c in carried] == [waiting]
+
+
+def test_notes_copied_to_another_project_keep_their_state_and_links(store):
+    from cauce import notes
+
+    a = store.add_note("old", "code", "a", "Prices are kept in cents", author="worker", filed_by="haiku",
+                       state=notes.CANDIDATE)
+    b = store.add_note("old", "code", "b", "Totals are rounded half up", author="person", filed_by="person")
+    left = store.add_note("old", "code", "c", "Invoices are numbered per tenant", author="person", filed_by="person")
+    store.link_notes(a, b, "relates")
+    store.link_notes(a, left, "relates")  # `left` is not copied: its link stays behind
+    made = store._copy_notes([a, b, 9999], "new", "api/")
+    assert len(made) == 2
+    copies = [store.get_note(n) for n in made]
+    assert [c["state"] for c in copies] == [notes.CANDIDATE, "current"]
+    links = store.note_links(made)
+    assert [(link["from_id"], link["to_id"], link["kind"]) for link in links] == [(made[0], made[1], "relates")]
+
+
+def test_a_hand_over_held_to_no_project_moves_no_run(store):
+    run = store.create_run(name="feature", scope="bundled", source="x", repo="r", session_id="old",
+                           status="active", definition=json.dumps({"name": "feature", "steps": []}))
+    store.create_task("x", status="queued", source="queue", repo="r", session_id="old")
+    assert store.hand_over("old", "new", repos=[]) == 0
+    assert store.get_run(run["id"])["session_id"] == "old"
+
+
+def test_a_refusal_only_a_nested_field_names_is_none(store):
+    t = store.create_task("x", status="done", source="cauce", repo="r")
+    store.add_event(t["id"], "attempt_finished", denied=[], nested={"denied": ["Bash(rm)"]})
+    store.add_event(t["id"], "attempt_finished", denied=["Bash(alembic upgrade)"])
+    assert [r["denied"] for r in store.refusals("r")] == [["Bash(alembic upgrade)"]]
+
+
+def test_an_anchor_added_again_is_updated_in_place(store):
+    note = store.add_note("r", "code", "a", "Prices are kept in cents", author="person", filed_by="person")
+    first = store.add_anchor(note, "src/a.py", commit_sha="c1", blob="b1")
+    assert store.add_anchor(note, "src/a.py", commit_sha="c2", blob="b2") == first
+    (anchor,) = store.note_anchors([note])
+    assert (anchor["commit_sha"], anchor["blob"]) == ("c2", "b2")
+
+
+# --- ui: api --------------------------------------------------------------------------------
+
+
+def _enrolled(tmp_path: Path, name: str) -> Path:
+    where = tmp_path / name
+    (where / ".cauce").mkdir(parents=True)
+    return where
+
+
+def test_the_overview_leaves_out_quiet_sessions_and_stops_at_its_limit(store, tmp_path):
+    for sid in ("s1", "s2", "old"):
+        store.touch_session(sid, str(_enrolled(tmp_path, sid)), "r")
+    store._conn.execute("UPDATE sessions SET last_seen_at = '2000-01-01T00:00:00+00:00' WHERE id = 'old'")
+    done = store.create_task("x", status="done", source="cauce", repo="r", session_id="old")
+    store._conn.execute("UPDATE tasks SET updated_at = '2000-01-01T00:00:00+00:00' WHERE id = ?", (done["id"],))
+    every = api.overview(store, hours=1, limit=5)
+    assert sorted(s["id"] for s in every["sessions"]) == ["s1", "s2"]  # the quiet one with only ended work: out
+    assert len(api.overview(store, hours=1, limit=1)["sessions"]) == 1
+
+
+def test_sessions_of_one_folder_read_its_names_once_and_stop_at_the_limit(store, tmp_path):
+    where = _enrolled(tmp_path, "app")
+    store.touch_session("s1", str(where), "r")
+    store.touch_session("s2", str(where), "r")
+    assert len(api.sessions(store, limit=5)) == 2
+    assert len(api.sessions(store, limit=1)) == 1
+
+
+def test_a_landing_git_cannot_read_is_still_asked_for(tmp_path, monkeypatch):
+    from cauce import isolate
+
+    def broken(*a, **kw):
+        raise OSError("git is gone")
+
+    monkeypatch.setattr(isolate, "landed", broken)
+    assert api._landed({"cwd": str(tmp_path)}, "cauce/task-1", None) is False
+
+
+def test_a_diff_git_does_not_answer_says_so(store, tmp_path, monkeypatch):
+    task = store.create_task("x", status="done", source="cauce", repo="r", cwd=str(tmp_path))
+    store.add_event(task["id"], "finished", status="done", branch="cauce/task-1")
+
+    def timeout(*a, **kw):
+        raise subprocess.TimeoutExpired("git", 20)
+
+    monkeypatch.setattr(subprocess, "run", timeout)  # `task_diff` imports it when it runs
+    shown = api.task_diff(store, task["id"])
+    assert shown["branch"] == "cauce/task-1" and shown["diff"] == ""
+    assert shown["why"].startswith("git did not answer:")
+
+
+def test_spend_by_day_prices_session_usage_by_its_model(store, monkeypatch):
+    from cauce import usage
+
+    rows = [{"kind": "session", "day": "2026-10-01", "model": "claude-sonnet-4-5", "input_tokens": 1_000_000,
+             "output_tokens": 0, "cache_read": 0, "cache_write": 0},
+            {"kind": "worker", "day": "2026-10-01", "usd": 0.5, "attempts": 1}]
+    monkeypatch.setattr(store, "spend_by_day", lambda days: rows)
+    day = api.spend(store)["by_day"][0]
+    expected = round(usage.dollars("claude-sonnet-4-5", 1_000_000, 0, 0, 0), 4)
+    assert day == {"day": "2026-10-01", usage.family("claude-sonnet-4-5"): expected, "workers": 0.5}
+
+
+def test_a_claude_task_file_without_a_subject_is_no_task(tmp_path):
+    folder = tmp_path / "tasks" / "s1"
+    folder.mkdir(parents=True)
+    (folder / "1.json").write_text(json.dumps({"id": "1", "status": "pending"}))
+    (folder / "2.json").write_text(json.dumps({"id": "2", "subject": "ship it", "status": "pending"}))
+    got = api.claude_tasks("s1", {"CLAUDE_CONFIG_DIR": str(tmp_path)})
+    assert got["state"] == "read" and [t["subject"] for t in got["tasks"]] == ["ship it"]
+
+
+def test_a_definition_that_hides_another_or_cannot_be_read_is_listed_as_such(mapped, store):  # noqa: F811
+    from cauce import workflows
+
+    folder = mapped["repo"] / ".cauce" / "workflows"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "feature.json").write_text("{not json")
+    view = api.workflows_view(store, mapped["key"])
+    features = [d for d in view["definitions"] if d["name"] == "feature"]
+    assert len(features) == 1 and features[0]["scope"] == "project" and features[0]["error"]
+    assert "version" not in features[0]
+    # A run still going is no milestone.
+    workflows.start(store, "chain", mapped["repo"], {"goal": "the import"})
+    titles = [m["title"] for m in api.milestones(store, mapped["key"]) if m["kind"] == "workflow"]
+    assert titles == ["chain — goal: the export"]
+
+
+def test_two_anchors_of_one_file_are_one_node_on_the_map(mapped, store):  # noqa: F811
+    store.add_anchor(mapped["zone"], "src/zones.py", symbol="format_zone")
+    nodes = [n for n in api.map_view(store, mapped["key"])["nodes"] if n["kind"] == "anchor"]
+    assert [n["id"] for n in nodes] == [f"anchor:{mapped['zone']}:src/zones.py"]
+
+
+# --- ui: server -----------------------------------------------------------------------------
+
+
+def _bare_server(root: Path) -> server.UIServer:
+    return server.UIServer(0, root)
+
+
+def test_idle_exit_waits_while_no_viewer_came_and_ends_when_stopped(_isolated_home):
+    import threading
+
+    srv = _bare_server(_isolated_home)
+    try:
+        threading.Timer(0.1, srv.stop_event.set).start()
+        srv.exit_when_idle(0.01, every=0.01)  # nobody ever came: idle is None, it waits until stopped
+        assert srv.idle_for() is None and srv.url() == f"http://127.0.0.1:{srv.server_address[1]}/"
+    finally:
+        srv.server_close()
+
+
+def test_housekeeping_prunes_on_its_own_clock_and_survives_an_error(_isolated_home, monkeypatch):
+    srv = _bare_server(_isolated_home)
+    sweeps, prunes, looks = [], [], []
+
+    def sweep(store):
+        sweeps.append(1)
+        if len(sweeps) == 2:
+            raise RuntimeError("sweep broke")
+
+    def newer(env):
+        looks.append(1)
+        if len(looks) == 2:
+            srv.stop_event.set()
+        return None
+
+    monkeypatch.setattr(server, "SWEEP_EVERY_S", 0.01)
+    monkeypatch.setattr(server, "PRUNE_EVERY_S", 3600)
+    monkeypatch.setattr(server.flow, "sweep", sweep)
+    monkeypatch.setattr(server.flow, "prune", lambda store: prunes.append(1))
+    monkeypatch.setattr(server, "newer_install", newer)
+    try:
+        srv.housekeeping()
+    finally:
+        srv.server_close()
+    assert len(sweeps) == 3 and prunes == [1] and len(looks) == 2
+    assert "housekeeping" in (_isolated_home / "ui-errors.log").read_text()
+    assert "RuntimeError: sweep broke" in (_isolated_home / "ui-errors.log").read_text()
+
+
+def test_a_log_that_cannot_be_written_costs_the_server_nothing(_isolated_home, tmp_path):
+    srv = _bare_server(_isolated_home)
+    try:
+        srv.root = tmp_path / "not" / "there"
+        srv.log_note("a note")
+        try:
+            raise ValueError("x")
+        except ValueError:
+            srv.log_error_trace("somewhere")
+        assert not srv.root.exists()
+    finally:
+        srv.server_close()
+
+
+def test_a_reader_that_hangs_up_gets_no_answer_and_leaves_no_trace(ui, monkeypatch):  # noqa: F811
+    import http.client
+
+    def gone(*a, **kw):
+        raise BrokenPipeError
+
+    monkeypatch.setattr(api, "board", gone)
+    with pytest.raises((http.client.RemoteDisconnected, ConnectionError)):
+        ui_call(ui, "GET", "/api/board?repo=r")
+    assert not (ui.root / "ui-errors.log").exists() or "BrokenPipe" not in (ui.root / "ui-errors.log").read_text()
+
+
+def test_an_icon_is_served_with_its_own_type_and_no_charset(ui):  # noqa: F811
+    res, data = ui_call(ui, "GET", "/static/favicon.svg")
+    assert res.status == 200 and res.getheader("Content-Type") == "image/svg+xml" and data.startswith(b"<svg")
+    assert res.getheader("X-Content-Type-Options") == "nosniff"
+
+
+def test_a_cancel_of_ended_work_changes_nothing_and_one_of_a_gone_process_still_records(ui, store):  # noqa: F811
+    secret = ui_token(ui)
+    ended = store.create_task("x", status="done", source="cauce", repo="r")
+    running = store.create_task("y", status="running", source="cauce", repo="r", pid=999999)
+    # Without the token in its header a cancel is refused, and the token is never read from the URL.
+    res, _ = ui_call(ui, "POST", f"/api/tasks/{running['id']}/cancel?token={secret}", {})
+    assert res.status == 403
+    res, data = ui_call(ui, "POST", f"/api/tasks/{ended['id']}/cancel", {}, {"X-Cauce-Token": secret})
+    assert res.status == 200 and json.loads(data) == {"id": ended["id"], "cancel": True}
+    assert store.get_task(ended["id"])["status"] == "done"
+    res, data = ui_call(ui, "POST", f"/api/tasks/{running['id']}/cancel", {}, {"X-Cauce-Token": secret})
+    assert res.status == 200
+    assert store.last_event(running["id"], "cancel_requested")["data"]["via"] == "ui"
+
+
+def test_resume_runs_cauce_and_a_folder_that_is_gone_is_its_failure(tmp_path):
+    done = server.resume(["--help"], str(tmp_path))
+    assert done.returncode == 0 and "usage" in done.stdout.lower()
+    gone = server.resume(["--help"], str(tmp_path / "gone"))
+    assert gone.returncode == 1 and gone.args == ["--help"] and gone.stderr
+
+
+def test_an_occupant_that_says_cauce_with_an_unreadable_version_has_none():
+    import http.server
+    import threading
+
+    class Garbled(http.server.BaseHTTPRequestHandler):
+        server_version = "cauce"
+
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{not json")
+
+        def log_message(self, *args):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Garbled)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        assert server.occupant(srv.server_address[1]) == {"cauce": True, "version": None}
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_listener_lsof_cannot_find_and_a_process_that_vanished_are_left_alone():
+    def missing(*a, **kw):
+        raise OSError("no lsof")
+
+    assert server.listener(8790, missing) is None
+
+    class Found:
+        def __init__(self, out):
+            self.stdout = out
+
+    answers = iter([Found("4242\n"), Found("python -m cauce ui --port 8790\n")])
+
+    def gone(pid, sig):
+        raise ProcessLookupError
+
+    assert server.take_over(8790, run=lambda *a, **kw: next(answers), kill=gone, wait_s=0.1) is None
+
+
+def test_a_tab_asked_of_a_server_that_refuses_the_token_cannot_be_claimed(ui, tmp_path):  # noqa: F811
+    assert server.claim_tab_there(ui.server_address[1], "s1", root=tmp_path / "another-home") is None
+    assert server.claim_tab_there(ui.server_address[1], "s1", root=ui.root) is True
+
+
+def test_serve_says_when_it_is_ready(_isolated_home):
+    import threading
+
+    ready = threading.Event()
+    srv = server.serve(0, _isolated_home, ready=ready)
+    try:
+        assert ready.is_set() and isinstance(srv, server.UIServer)
+    finally:
+        srv.stop_event.set()
+        srv.server_close()
