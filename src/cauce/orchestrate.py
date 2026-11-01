@@ -921,6 +921,10 @@ def _record_raced(store: Store, task_id: int, raced: Raced, turns: int, capabili
         store.set_move(task_id, seq, RACED_OUT, "the other try passed its check first")
     elif first:
         store.set_move(task_id, seq, "race", f"raced {raced.cell.label} beside it")
+    else:
+        # Neither passed and the start's went on: the start's row takes the next move, so the race
+        # is marked here, where nothing overwrites it (`racing.outcome`, `standards.samples`).
+        store.set_move(task_id, seq, racing.RACED_BESIDE, f"raced beside {raced.cell.label}, which went on")
     report.cells.append(raced.other_cell.label)
     report.served.append(o.served_model)
     report.cost_usd += o.cost_usd

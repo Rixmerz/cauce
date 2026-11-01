@@ -38,13 +38,17 @@ TIME_SAMPLES = 3
 #: How a race came out: the rung passed first, the start passed first, or neither passed.
 RUNG, START, NEITHER = "rung", "start", "neither"
 RACED_OUT = "raced_out"
+#: The rung's try of a race neither side won, kept beside the start's, which went on: its own
+#: first try, and the mark that the race happened (the start's row takes the next move).
+RACED_BESIDE = "raced_beside"
 
 
 def outcome(attempts: Sequence[Mapping[str, Any]]) -> str | None:
     """How a task's race came out, read from its attempts; None when its first try did not
     race. A race leaves two attempts first: the start's stopped one and the rung's when the
     rung passed first; the start's and the rung's stopped one when the start did; the start's
-    (moved `race`) and the rung's when neither passed."""
+    and the rung's (moved `raced_beside`) when neither passed; older records kept `race` on the
+    start's, which the next move then overwrote."""
     if len(attempts) < 2:
         return None
     first, second = attempts[0].get("move"), attempts[1].get("move")
@@ -52,6 +56,8 @@ def outcome(attempts: Sequence[Mapping[str, Any]]) -> str | None:
         return RUNG
     if second == RACED_OUT:
         return START
+    if second == RACED_BESIDE:
+        return NEITHER
     if first == "race":
         return NEITHER
     return None

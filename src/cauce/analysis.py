@@ -642,7 +642,7 @@ def expensive(found: Sequence[Mapping[str, Any]], *, top: int = 10) -> list[dict
             why.append("climbed models: " + " → ".join(models))
         if moves.get("more_effort"):
             why.append(f"climbed effort {moves['more_effort']}×")
-        if moves.get("race"):
+        if moves.get("race") or moves.get("raced_beside"):
             why.append("raced a second worker")
         if r["verifier_cost_usd"]:
             why.append(f"independent check {_usd(r['verifier_cost_usd'])}")
