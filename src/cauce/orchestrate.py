@@ -13,6 +13,7 @@ file says so.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import contextlib
 import dataclasses
 import hashlib
@@ -579,12 +580,22 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     catalog = roles.load()
     team, members, team_notes = _team(options, repo.key(repo_dir), catalog)
     covered = roles.kinds_of(members)
-    if options.kind:
-        classification = narrow(_caller_kind(options, text), covered)
-    elif classifier is not None:
-        classification = narrow(classifier(text), covered)
-    else:
-        classification = classify(text, use_model=options.use_model_classifier, cwd=home(), kinds=covered)
+
+    def classified() -> Classification:
+        if options.kind:
+            return narrow(_caller_kind(options, text), covered)
+        if classifier is not None:
+            return narrow(classifier(text), covered)
+        return classify(text, use_model=options.use_model_classifier, cwd=home(), kinds=covered)
+
+    # The kind and the neighbours' indexes are found side by side: neither needs the other, and each
+    # waits on a process (Haiku's answer, ~4 s; an index built or refreshed, up to `livespec_wait`).
+    # A real plan took 13.7 s doing them one after the other.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(classified)
+        brought = [(adapter, *_bring_current(adapter, adapter.inspect(repo_dir), repo_dir, options, say))
+                   for adapter in adopted(options, adapters)]
+        classification = pending.result()
     kind = classification.kind
 
     neighbour_notes: list[str] = []
@@ -594,8 +605,7 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     raise_rungs, critical = 0, False
     # The symbols the request reaches, when an index could say: None when none could.
     reached: int | None = None
-    for adapter in adopted(options, adapters):
-        status, index_notes = _bring_current(adapter, adapter.inspect(repo_dir), repo_dir, options, say)
+    for adapter, status, index_notes in brought:
         neighbour_notes += index_notes
         statuses.append(status)
         if not status.present:

@@ -2426,3 +2426,38 @@ def test_a_given_kind_stays_when_the_request_or_its_source_chose_it(kind, text, 
     from cauce.orchestrate import _caller_kind
 
     assert _caller_kind(Options(kind=kind, **options), text).kind == kind
+
+
+def test_the_kind_and_the_neighbours_indexes_are_found_side_by_side(git_repo, store, monkeypatch):
+    """Haiku's answer and an index built or refreshed each wait on a process, and neither needs the
+    other: a plan waits for the longer one, not for both (a real plan took 13.7 s, 4 + 9)."""
+    import threading
+    import time
+
+    from cauce.adapters import ABSENT, Status
+
+    class Neighbour:
+        name = "slow"
+
+        def inspect(self, _repo):
+            return Status("slow", ABSENT)
+
+    seen: dict[str, int] = {}
+
+    def indexing(adapter, status, repo_dir, options, say):
+        seen["index"] = threading.get_ident()
+        time.sleep(0.6)
+        return status, ["slow: indexed"]
+
+    def classifying(text):
+        seen["classify"] = threading.get_ident()
+        time.sleep(0.6)
+        return Classification("implement", "medium", "rule", "test")
+
+    monkeypatch.setattr(orchestrate, "_bring_current", indexing)
+    monkeypatch.setattr(orchestrate, "adopted", lambda options, adapters: list(adapters or ()))
+    began = time.monotonic()
+    found = orchestrate.plan("Rename the helper in notes", git_repo, store, Options(), {}, classifier=classifying,
+                             adapters=[Neighbour()])
+    assert time.monotonic() - began < 1.1 and seen["index"] != seen["classify"]
+    assert found.kind == "implement"
