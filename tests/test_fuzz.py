@@ -135,7 +135,7 @@ def test_a_real_shaped_key_is_masked_wherever_text_is_kept(key):
 def test_a_signature_keeps_a_file_s_type_only_when_it_is_one_and_a_quoted_token_never():
     """A path's text after a dot is no extension (`notes.final draft`): kept, the signature held the
     argument. A token whose quotes `shlex` could not split showed a secret once cleaned."""
-    assert signature.signature("Read", {"file_path": "/a/b/app.TSX"}) == "read:tsx"
+    assert signature.signature("Read", {"file_path": "/a/b/app.TSX"}) == "read:.tsx"
     assert signature.signature("Read", {"file_path": "/a/Makefile"}) == "read:noext"
     assert signature.signature("Edit", {"file_path": "/a/notes.final draft sk-ant-abcdefghijklmnop"}) == "edit:other"
     assert signature.signature("Read", {"file_path": "/a/x.ghp_abcdefghij"}) == "read:other"
