@@ -323,8 +323,12 @@ def test_a_worktree_that_cannot_be_made_stops_the_task_resumable_instead_of_leav
     assert f"cauce resume {report.task_id}" in report.text()
 
 
-def test_a_stopped_task_whose_kept_work_landed_leaves_the_board_from_the_hooks(store: Store, git_repo, tmp_path):
+def test_a_stopped_task_whose_kept_work_landed_leaves_the_board_from_the_hooks(store: Store, git_repo, tmp_path,
+                                                                                monkeypatch):
     from cauce import hooks
+
+    # A death is resumed on its own with autowork (`dispatch.recover`): here only the landing is read.
+    monkeypatch.setenv("CAUCE_AUTOWORK", "off")
 
     from .conftest import git
 
@@ -360,6 +364,36 @@ def test_a_stopped_task_whose_kept_work_landed_leaves_the_board_from_the_hooks(s
     hooks.stop({"session_id": "s", "cwd": str(git_repo)}, store)
     assert stops.of(store, store.get_task(open_work["id"])).cause == "landed"
     assert stops.landed(store, git_repo) == []
+
+
+def test_a_death_whose_work_landed_is_never_resumed_on_its_own_at_session_start(store: Store, git_repo, tmp_path,
+                                                                                 monkeypatch):
+    """SessionStart resumed the deaths (`dispatch.recover`) before it read what landed: a task whose
+    kept work was already merged got a `cauce resume --unattended` and was then dismissed as landed."""
+    from cauce import dispatch, hooks
+
+    from .conftest import git
+
+    monkeypatch.setenv("CAUCE_AUTOWORK", "on")
+    resumed: list[int] = []
+    monkeypatch.setattr(dispatch, "_start_resume", lambda task, *a, **kw: resumed.append(task["id"]) or True)
+
+    def died(text: str, name: str) -> dict:
+        task = store.create_task(text, status="interrupted", source="cauce", cwd=str(git_repo), repo="r")
+        stops.record(store, task["id"], stops.Stop("died", "its process went away"))
+        git(git_repo, "checkout", "-q", "-b", f"cauce/task-{task['id']}")
+        (git_repo / name).write_text(f"{text}\n")
+        git(git_repo, "add", "-A")
+        git(git_repo, "commit", "-q", "-m", text)
+        git(git_repo, "checkout", "-q", "main")
+        return task
+
+    landed = died("add the export", "export.py")
+    open_work = died("add the report", "report.py")
+    git(git_repo, "merge", "-q", "--no-ff", "-m", "merge", f"cauce/task-{landed['id']}")
+    hooks.session_start({"session_id": "s", "cwd": str(git_repo), "source": "startup"}, store, tmp_path)
+    assert stops.of(store, store.get_task(landed["id"])).cause == "landed"
+    assert resumed == [open_work["id"]]
 
 
 @pytest.mark.parametrize("cause", ["base_unknown", "same_failures"])
