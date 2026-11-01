@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,9 +11,24 @@ import pytest
 from cauce import plugins, workflows
 from cauce.store import Store
 
+#: The profile where every adaptive setting is on (`CAUCE_TEST_ALL_ON=1`): read once, before any
+#: test sets the switches below in this process's environment.
+ALL_ON = os.environ.get("CAUCE_TEST_ALL_ON") == "1"
+FAKE_CLAUDE = Path(__file__).parent / "scenarios" / "fake_claude.py"
+#: The settings a test turns on itself when it wants them: each would call a model, start a
+#: process or a second worker, read a record, or change what a worker is told.
+SWITCHES = (
+    "CAUCE_PARALLEL", "CAUCE_AUTOWORK", "CAUCE_NAMES", "CAUCE_NOTES", "CAUCE_VERIFIER", "CAUCE_TRUST",
+    "CAUCE_PROBATION", "CAUCE_EVIDENCE", "CAUCE_NOTE_TRIALS", "CAUCE_METHODS", "CAUCE_RECALL_FUSION",
+    "CAUCE_RACE", "CAUCE_ROUTE", "CAUCE_PRIMER", "CAUCE_TRUNK", "CAUCE_OVERLAP", "CAUCE_LATE_VERIFIER",
+    "CAUCE_LEAN", "CAUCE_ROLE_TRIALS", "CAUCE_HABIT_REVIEW", "CAUCE_HABIT_AUTO", "CAUCE_ENGRAM",
+    "CAUCE_ENGRAM_WRITE",
+)
+
 
 @pytest.fixture(autouse=True)
-def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def _isolated_home(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory,
+                   monkeypatch: pytest.MonkeyPatch) -> Path:
     """Every test gets its own cauce home. Never bypass this: a test writing to
     the real database would put fake dead ends in front of real sessions."""
     home = tmp_path / "cauce-home"
@@ -24,37 +40,25 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("CAUCE_LIVESPEC", "off")
     # And a task never waits on an index before its worker: a test that wants the wait sets it.
     monkeypatch.setenv("CAUCE_LIVESPEC_WAIT", "0")
-    # The same for the two settings that would call a model or start a process:
-    # a test that wants them turns them on with a fake.
-    monkeypatch.setenv("CAUCE_PARALLEL", "off")
-    monkeypatch.setenv("CAUCE_AUTOWORK", "off")
-    monkeypatch.setenv("CAUCE_NAMES", "off")
-    monkeypatch.setenv("CAUCE_NOTES", "off")
-    # An independent verifier is one more worker per pass: a test that wants it turns it on.
-    monkeypatch.setenv("CAUCE_VERIFIER", "off")
-    # Sampling the verifier and the probation rung read the record: a test that wants them turns them on.
-    monkeypatch.setenv("CAUCE_TRUST", "off")
-    monkeypatch.setenv("CAUCE_PROBATION", "off")
-    monkeypatch.setenv("CAUCE_EVIDENCE", "off")
-    monkeypatch.setenv("CAUCE_NOTE_TRIALS", "off")
-    monkeypatch.setenv("CAUCE_METHODS", "off")
-    monkeypatch.setenv("CAUCE_RECALL_FUSION", "off")
-    # A race is a second worker on a first try: a test that wants one turns it on.
-    monkeypatch.setenv("CAUCE_RACE", "off")
-    monkeypatch.setenv("CAUCE_ROUTE", "off")
-    monkeypatch.setenv("CAUCE_PRIMER", "off")
-    monkeypatch.setenv("CAUCE_TRUNK", "off")
-    # The verifier beside the check runs it on a thread: a test that wants that turns it on.
-    monkeypatch.setenv("CAUCE_OVERLAP", "off")
-    monkeypatch.setenv("CAUCE_LATE_VERIFIER", "off")
-    # Lean workers read the CLI's `--help`: a test that wants them passes a fake one.
-    monkeypatch.setenv("CAUCE_LEAN", "off")
-    # A role's revision is a Haiku call and a trial: a test that wants them turns them on with a fake `ask`.
-    monkeypatch.setenv("CAUCE_ROLE_TRIALS", "off")
-    monkeypatch.setenv("CAUCE_HABIT_REVIEW", "off")
-    monkeypatch.setenv("CAUCE_HABIT_AUTO", "off")
-    monkeypatch.setenv("CAUCE_ENGRAM", "off")
-    monkeypatch.setenv("CAUCE_ENGRAM_WRITE", "off")
+    # Every adaptive setting is off: a test that wants one turns it on with a fake. Under
+    # `CAUCE_TEST_ALL_ON=1` they stay as a person gets them (on, as their defaults say), with the
+    # fake `claude` first on PATH: the profile where features meet, as they do in real use.
+    if ALL_ON:
+        for name in SWITCHES:
+            monkeypatch.delenv(name, raising=False)
+        # Beside the test's tree, never in it: a test that walks `tmp_path` as a project
+        # would find the fake `claude`, its script or its log among the project's files.
+        fake = tmp_path_factory.mktemp("fake-claude")
+        fake_bin = fake / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "claude").write_text(f"#!/bin/sh\nexec {sys.executable} {FAKE_CLAUDE} \"$@\"\n")
+        (fake_bin / "claude").chmod(0o755)
+        monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
+        monkeypatch.setenv("FAKE_CLAUDE_SCRIPT", str(fake / "script.json"))
+        monkeypatch.setenv("FAKE_CLAUDE_LOG", str(fake / "calls.jsonl"))
+    else:
+        for name in SWITCHES:
+            monkeypatch.setenv(name, "off")
     monkeypatch.delenv("CAUCE_SESSION_ID", raising=False)
     # cauce's own suite may run inside a cauce worker, which refuses to start work.
     monkeypatch.delenv("CAUCE_WORKER_TASK", raising=False)
@@ -126,3 +130,11 @@ def git_repo(tmp_path: Path) -> Path:
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "init")
     return repo
+
+
+@pytest.fixture
+def no_verifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    """For a test that drives a run with a fixed list of worker results and is about something
+    else: the independent check (and its forms, beside the check and after the ending) is one
+    more worker per pass, which the list does not script."""
+    monkeypatch.setenv("CAUCE_VERIFIER", "off")

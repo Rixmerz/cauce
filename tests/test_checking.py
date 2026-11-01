@@ -286,7 +286,11 @@ OLD = {"where": "old.py", "what": "was always so", "evidence_class": "determinis
 
 @pytest.fixture
 def verifier_on(monkeypatch):
+    """The independent check as it runs inline: after cauce's own check and before the ending. A
+    test of its form beside the check (`overlap`) or after the ending (`late_verifier`) turns that on."""
     monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("CAUCE_OVERLAP", "off")
+    monkeypatch.setenv("CAUCE_LATE_VERIFIER", "off")
 
 
 def test_a_risky_pass_is_checked_and_its_findings_earn_one_correction(git_repo, store, verifier_on):
@@ -682,7 +686,7 @@ def test_a_running_attempt_s_phase_is_read_from_its_last_calls():
     assert phase.of(1, 1) == "checking" and phase.of(1, None) == "checking" and phase.of(1, 2) is None
     assert phase.kind_of("write:ts") == "implementing" and phase.kind_of("bash:ls") == "exploring"
     # A worker reads again after it writes: the write, out of its last calls, still counts.
-    log([(3, 1, "write:py")] + [(3, 1, "read:py")] * (phase.LAST + 2))
+    log([(3, 1, "write:py")] + [(3, 1, "read:py")] * 8)
     assert phase.of(3, 1) == "implementing"
 
 
@@ -818,6 +822,7 @@ def _ledger_run(git_repo, store, results, monkeypatch):
     return started, seen, {t["workflow_step"]: t for t in store.run_tasks(started["id"])}
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_the_dual_review_fixes_only_what_is_confirmed_and_rechecks_each_row(git_repo, store, monkeypatch):
     from cauce import workflows
 
@@ -904,6 +909,7 @@ def test_what_the_refuter_cannot_decide_goes_to_the_person(git_repo, store, monk
     assert workflows.status(store, started["id"])["state"] == "waits on the orchestrator"
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_rows_still_open_after_two_rounds_go_to_the_person(git_repo, store, monkeypatch):
     results = [_reviewed("a", ("cart.py:10", "total ignores the discount", "deterministic", "introduced")),
                _reviewed("b"), ok("fixed"), _decides("no", F1="not_fixed"), ok("again"),
@@ -1029,6 +1035,7 @@ def test_a_step_a_blind_review_follows_runs_no_verifier_of_its_own(git_repo, sto
     assert orchestrate.Options(reviewed_next=True).stored()["reviewed_next"] is True
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_pass_keeps_the_verdict_it_was_held_to(git_repo, store):
     answered = WorkerResult(True, None, "done", "1 passed", cost_usd=0.1,
                             criteria=({"id": "S1", "met": True, "evidence": "  the   export test passes "},
@@ -1270,3 +1277,25 @@ def test_the_independent_check_is_told_what_the_code_index_says_the_change_reach
     assert report.status == "done"
     verifier = script.specs[1].prompt
     assert "code index says this change reaches" in verifier and "SPEC-7" in verifier
+
+
+def test_what_the_independent_check_writes_in_the_work_it_reads_is_put_back(git_repo, store, verifier_on):
+    """The check reads: its write tools are taken away, but a shell writes too. What it wrote in the
+    worktree is put back as it was before it ran, so the kept branch holds the worker's work alone."""
+    from .conftest import git
+
+    def launcher(spec):
+        if spec.env.get("CAUCE_WORKER_ATTEMPT", "").endswith("-verify"):
+            (spec.target_dir / "app.py").write_text("the check's edit\n")
+            (spec.target_dir / "probe.py").write_text("print('probe')\n")
+            return check("pass")
+        (spec.target_dir / "app.py").write_text("the worker's fix\n")
+        return passing()
+
+    report = run("fix the cart total", git_repo, store, registry={}, launcher=launcher, classifier=kind("implement"))
+    assert report.status == "done"
+    wrote = store.events_of(report.task_id, "verifier_wrote")
+    assert wrote and set(wrote[0]["data"]["files"]) == {"app.py", "probe.py"} and wrote[0]["data"]["left"] == []
+    branch = isolate.branch_for(report.task_id)
+    assert git(git_repo, "show", f"{branch}:app.py") == "the worker's fix"
+    assert "probe.py" not in git(git_repo, "ls-tree", "--name-only", branch)

@@ -120,8 +120,12 @@ MAX_FACT = 1000
 MAX_FACTS = 8
 #: Text in a fact that looks like a secret keeps the fact out: notes are put
 #: in front of models and shown in the UI.
-_SECRET = re.compile(r"(sk-[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{8,}|github_pat_\w{8,}|xox[bap]-[\w-]{8,}|"
-                     r"AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY|\b[0-9a-f]{40,}\b|password\s*[:=]\s*\S+)",
+#: API keys are written with dashes inside (`sk-ant-api03-…`, `sk-proj-…`): a pattern of letters and
+#: digits alone let every Anthropic and OpenAI key through (found by `tests/test_fuzz.py`).
+_SECRET = re.compile(r"(sk-[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|github_pat_\w{8,}|"
+                     r"xox[abposr]-[\w-]{8,}|AKIA[0-9A-Z]{12,}|AIza[0-9A-Za-z_-]{30,}|"
+                     r"-----BEGIN [A-Z ]*PRIVATE KEY|\b[0-9a-f]{40,}\b|password\s*[:=]\s*\S+|"
+                     r"bearer\s+[A-Za-z0-9._~+/-]{20,})",
                      re.IGNORECASE)
 
 _PRIVATE = re.compile(r"<private>.*?</private>", re.IGNORECASE | re.DOTALL)
@@ -379,10 +383,16 @@ def review(store: Store, project: str, repo_dir: Path) -> list[tuple[int, str]]:
     return list(flagged.items())
 
 
+def _head(top: Path) -> str:
+    """The checkout's commit, "" with none yet: `git rev-parse HEAD` then prints `HEAD` itself and fails."""
+    done = _git(top, "rev-parse", "--verify", "--quiet", "HEAD")
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
 def _review_in(store: Store, top: Path, anchors: Sequence[Mapping[str, Any]], flagged: dict[int, str]) -> None:
     if not anchors:
         return
-    head = _git(top, "rev-parse", "HEAD").stdout.strip()
+    head = _head(top)
     if not head:
         return
     now = _blobs(top, head, sorted({a["file"] for a in anchors}))
@@ -416,7 +426,7 @@ def confirm(store: Store, note_id: int, repo_dir: Path | None) -> dict | None:
             pre, top = next(((p, t) for p, t in places if a["path"].startswith(p)), ("", None))
             if top is None:
                 continue
-            head = heads.setdefault(top, _git(top, "rev-parse", "HEAD").stdout.strip())
+            head = heads.setdefault(top, _head(top))
             file = a["path"][len(pre):]
             blob = _blobs(top, head, [file]).get(file) if head else None
             store.update_anchor(a["id"], commit_sha=head if blob else None, blob=blob)

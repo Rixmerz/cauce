@@ -252,6 +252,11 @@ def _value(lines: list[str], i: int, indent: int, rest: str) -> tuple[Any, int]:
     if _BLOCK.match(rest.split(" #")[0].strip()) and rest:
         return _text_block(lines, i + 1, indent)
     if rest and not rest.startswith("#"):
+        # An empty flow collection is the one flow form that says something: no keys, no items
+        # (`db: {}` named a CI service `{}`). Others stay text, as the reader's docstring says.
+        bare = rest.split(" #")[0].strip()
+        if bare in ("{}", "[]"):
+            return ({} if bare == "{}" else []), i + 1
         return _plain(rest), i + 1
     j = _next(lines, i + 1)
     if j < len(lines) and _indent(lines[j]) > indent:

@@ -6,6 +6,8 @@ from __future__ import annotations
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime
 
+import pytest
+
 from cauce import flow, loops, methods, notes, orchestrate
 from cauce.orchestrate import Options, run
 from cauce.store import Store
@@ -241,6 +243,7 @@ def test_the_recall_order_alternates_then_stays_where_it_did_no_worse(store: Sto
     assert notes.recall_trial(store, "r")["ordered"]["passed"] == notes.RECALL_TRIAL
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_brief_whose_code_and_words_found_different_notes_records_its_order(git_repo, store: Store, monkeypatch):
     from cauce import repo
 
@@ -259,6 +262,7 @@ def test_a_brief_whose_code_and_words_found_different_notes_records_its_order(gi
     assert briefed[notes.RECALL_KEY] in notes.RECALL_ARMS and briefed["recall_why"]
 
 
+@pytest.mark.usefixtures("no_verifier")
 def test_a_worker_s_notes_used_are_kept_only_for_notes_its_brief_carried(git_repo, store: Store, monkeypatch):
     from cauce import analysis, launch, repo
 

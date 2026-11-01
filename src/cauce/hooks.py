@@ -602,13 +602,14 @@ def session_start(
     from cauce import flow  # imported here: it pulls in the orchestrator
 
     flow.sweep(store)
-    _revive(store, root, {**os.environ, **env})
     cwd = event.get("cwd")
-    # The branches of this checkout whose work landed since: merged ones go.
+    # The branches of this checkout whose work landed since: merged ones go, before anything
+    # is resumed on its own: a death whose work is already in HEAD is no work to resume.
     top = repo.toplevel(Path(cwd)) if cwd and Path(cwd).is_dir() else None
     if top is not None:
         _landed(store, top, root)
         flow.prune(store, [top])
+    _revive(store, root, {**os.environ, **env})
     key = repo.key(cwd) if cwd else None
     store.touch_session(session_id, cwd, key)
     blocks: list[str] = []
@@ -735,15 +736,12 @@ def keep_notes(event: Mapping[str, Any], root: Path, env: Mapping[str, str], *,
 STOPPED_FOR_A_PERSON = ("blocked", "needs_approval")
 
 
-def _endings(store: Store, session_id: str, *, via: str, mark: bool = True) -> str | None:
+def _endings(store: Store, session_id: str, *, via: str) -> str | None:
     """Work this session sent that ended since it last heard, each with what to do
     next, marked as reported: a queued task finishes while nobody waits on it,
-    and the session that sent it would otherwise never learn it should act.
-    `mark=False` reads them without taking them: a display, not a delivery. A loop
+    and the session that sent it would otherwise never learn it should act. A loop
     this session started that stopped is told here too, once (`cauce.loops`)."""
-    told = endings(store, session_id, claim=via if mark else None)[0]
-    if not mark:
-        return told
+    told = endings(store, session_id, claim=via)[0]
     try:
         from cauce import loops
 

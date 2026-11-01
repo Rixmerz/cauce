@@ -67,6 +67,8 @@ FIXED_IN = {
     "turns-under-the-wall": "0.40.0",
     "pickup-nobody-saw": "0.45.0",
     "died-after-a-pass": "0.63.0",
+    "resumed-after-it-landed": "0.66.0",
+    "swept-before-its-pid": "0.66.0",
 }
 #: An attempt that ran this long per turn it counted kept a count the CLI restarted.
 WALL_PER_TURN_S = 300
@@ -633,11 +635,17 @@ SPECS_SHOWN = 5
 def _checkouts(store: Store, since: str | None, livespec: Any) -> list[Path]:
     """The repositories recent runs were in, each once: the checkout a run's folder is in, or each
     repository inside a folder of them (`Livespec.roots`, never the folder)."""
-    found: dict[Path, None] = {}
+    folders: dict[str, None] = {}
     for event in store.events_of_kinds(["planned"], since=since):
         task = store.get_task(event["task_id"])
-        where = Path(task["cwd"]) if task and task.get("cwd") else None
-        if where is not None and where.is_dir():
+        if task and task.get("cwd"):
+            folders[str(task["cwd"])] = None
+    # Each folder once: a store of months holds thousands of runs in a handful of folders, and each
+    # folder's repositories are read with git (`cauce doctor` took 33 s on 3000 runs, one process each).
+    found: dict[Path, None] = {}
+    for folder in folders:
+        where = Path(folder)
+        if where.is_dir():
             found.update(dict.fromkeys(livespec.roots(where)))
     return list(found)
 
@@ -707,14 +715,66 @@ def died_after_a_pass(store: Store, *, since: str | None, **_) -> Iterable[Findi
         yield _history("died-after-a-pass", sorted(set(before)), None)
 
 
+def resumed_after_it_landed(store: Store, *, since: str | None, **_) -> Iterable[Finding]:
+    """A task whose kept work had landed that was resumed on its own anyway: SessionStart resumed a
+    death (`dispatch.recover`) before it read what landed (`stops.landed`), so a worker ran on work
+    already in the checkout's branch while the task was dismissed as landed."""
+    before: list[int] = []
+    for event in store.events_of_kinds(["finished"], since=since):
+        data = event["data"]
+        if (data.get("stop") or {}).get("cause") != "landed":
+            continue
+        earlier = [e["id"] for e in store.events_of(event["task_id"], "finished") if e["id"] < event["id"]]
+        after_death = max(earlier, default=0)
+        resumed = [e for e in store.events_of(event["task_id"], "auto_resumed")
+                   if after_death < e["id"] < event["id"]]
+        if not resumed:
+            continue
+        task = store.get_task(event["task_id"]) or {}
+        if _fixed("resumed-after-it-landed", data.get("version")):
+            before.append(event["task_id"])
+            continue
+        yield Finding("resumed-after-it-landed", SUSPECT,
+                      f"#{event['task_id']} was resumed on its own after its work had landed: a worker ran on work "
+                      "already merged", "nothing to undo; say it if it happens again on this release",
+                      event["task_id"], task.get("repo"))
+    if before:
+        yield _history("resumed-after-it-landed", sorted(set(before)), None)
+
+
+def swept_before_its_pid(store: Store, *, since: str | None, **_) -> Iterable[Finding]:
+    """A cauce run stopped as dead while it had no pid: a run was marked running and given its pid in
+    two writes, and a sweep between them read it as dead (`no sign of life`, no process named). The run
+    went on unseen; a resume that started so died with nobody noticing."""
+    before: list[int] = []
+    for event in store.events_of_kinds(["finished"], since=since):
+        stop = event["data"].get("stop") or {}
+        if stop.get("cause") != "died" or not str(stop.get("reason") or "").startswith("no sign of life"):
+            continue
+        if "its process (" in str(stop.get("reason")):
+            continue
+        task = store.get_task(event["task_id"]) or {}
+        if task.get("source") != "cauce":
+            continue
+        if _fixed("swept-before-its-pid", event["data"].get("version")):
+            before.append(event["task_id"])
+            continue
+        yield Finding("swept-before-its-pid", SUSPECT,
+                      f"#{event['task_id']} was stopped as dead with no process on record: a run between its "
+                      "start and its pid", f"`cauce resume {event['task_id']} --unattended` if it should go on",
+                      event["task_id"], task.get("repo"))
+    if before:
+        yield _history("swept-before-its-pid", sorted(set(before)), None)
+
+
 RULES: tuple[Callable[..., Iterable[Finding]], ...] = (
     lanes_paused_on_ended, running_with_no_process, queued_with_no_dispatcher, held_behind_gone, wait_judged_on_gone,
     resumes_that_never_ran,
     parts_that_lost_their_mark, joins_short_of_their_parts, attempts_with_no_session, turns_under_the_kind,
     format_failures_that_climbed, fix_rounds_off_their_base, candidates_on_trial_at_once, revisions_judged_twice,
     trials_never_sampled, notes_proven_unbriefed, preexisting_that_was_not, problems_open_after_pass,
-    flake_fixes_checked_once, turns_under_the_wall, pickups_nobody_saw, died_after_a_pass, indexes_not_ready,
-    specs_with_no_code,
+    flake_fixes_checked_once, turns_under_the_wall, pickups_nobody_saw, died_after_a_pass, resumed_after_it_landed,
+    swept_before_its_pid, indexes_not_ready, specs_with_no_code,
 )
 
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cauce"
-version = "0.65.0"
+version = "0.66.0"
 description = "One core for Claude Code: route each task to the right model, effort and capabilities, escalate on evidence, and remember what failed across repositories"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -46,7 +46,11 @@ ignore = ["S101", "S603", "S607", "RUF001", "RUF002", "RUF003"]
 [tool.coverage.run]
 source = ["cauce"]
 branch = true
+# The scenarios and the hooks run cauce as real processes (`bin/cauce`, `python -m cauce`):
+# measured too, so the fast path and the dispatcher count.
+patch = ["subprocess"]
+parallel = true
 
 [tool.coverage.report]
-fail_under = 95
+fail_under = 99
 show_missing = true

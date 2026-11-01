@@ -283,6 +283,7 @@ def test_the_token_is_only_for_the_page_and_every_write_needs_it(ui):
 
 
 def test_cancel_unpause_and_start(ui, git_repo, monkeypatch):
+    monkeypatch.setenv("CAUCE_AUTOWORK", "off")  # what follows reads its absence, then turns it on
     key = {"X-Cauce-Token": token(ui)}
     store = Store(ui.root / "cauce.db")
     queued = store.enqueue("x", repo="r", cwd=str(git_repo))

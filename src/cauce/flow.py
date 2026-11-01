@@ -41,13 +41,18 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-from cauce import after, capacity, classify, config, dispatch, isolate, launch, stops, surfaces
+from cauce import after, capacity, classify, config, dispatch, isolate, launch, lazy, stops, surfaces
 from cauce.matrix import READ_ONLY_KINDS, Cell
-from cauce.orchestrate import Options, Report, declares_read_only
 from cauce.store import Store, home
 from cauce.text import clip
+
+if TYPE_CHECKING:
+    from cauce.orchestrate import Options, Report
+
+#: The run loop: read by the dispatcher's runs, never by a board or a sweep (`cauce.lazy`).
+orchestrate = lazy.module("cauce.orchestrate")
 
 #: How long a session prompt may sit in `running` with no update before it is
 #: taken for abandoned. Claude Code fires no Stop for an interrupted turn.
@@ -66,7 +71,7 @@ DISK_WAITS_S = (5, 15, 30, 60, 120, 300)
 #: (`dispatch.revive`).
 DISK_GIVE_UP_S = 3600
 
-Runner = Callable[..., Report]
+Runner = Callable[..., "Report"]
 
 
 def disk_full(exc: BaseException) -> bool:
@@ -237,7 +242,7 @@ def queued_options(task: dict, defaults: Options) -> Options:
     """The options a queued or resumed task runs with. Keys an older cauce stored
     and nothing reads any more (a dollar `budget_usd`) are left where they are."""
     raw = json.loads(task.get("options") or "{}")
-    return Options(
+    return orchestrate.Options(
         max_attempts=int(raw.get("max_attempts", defaults.max_attempts)),
         verify=raw.get("verify", defaults.verify),
         kind=raw.get("kind", defaults.kind),
@@ -344,7 +349,7 @@ def reads_only(task: dict) -> bool:
         chosen = task.get("kind")
     text = task.get("body") or task.get("title") or ""
     kind = chosen or classify.classify(text, use_model=False).kind
-    return kind in READ_ONLY_KINDS or declares_read_only(kind, text)
+    return kind in READ_ONLY_KINDS or orchestrate.declares_read_only(kind, text)
 
 
 def _judged(store: Store, task: dict, ahead: list[dict], decide: Decide,
@@ -715,7 +720,7 @@ def work(
     with its work out and its lock held, tries the pass again, and once the store takes
     writes the level halves for it (`capacity.disk_filled`); after `DISK_GIVE_UP_S` it stops.
     """
-    defaults = defaults or Options()
+    defaults = defaults or orchestrate.Options()
     parallel = config.enabled("parallel", os.environ) if parallel is None else parallel
     decide = decide or (lambda task, ahead: dispatch.decide(task, ahead, cwd=home()))
     pause = pause or (lambda: time.sleep(POLL_S))

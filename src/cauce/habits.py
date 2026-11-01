@@ -543,13 +543,15 @@ def recipes(store: Store, kind: str, *, repo: str | None, limit: int = 2) -> lis
     counts: Counter[tuple[str, ...]] = Counter()
     for run in runs.values():
         sigs = [e["sig"] for e in run if not e["sig"].startswith("read:")]
-        seen = set()
+        # In the order found, longest first: a set's order changes with each process's string hashing,
+        # and the recipes of tied sequences (and which one hides inside another) changed with it.
+        seen: dict[tuple[str, ...], None] = {}
         for length in (3, 2):
             for i in range(len(sigs) - length + 1):
                 steps = tuple(sigs[i:i + length])
                 if len(set(steps)) > 1 and steps not in seen and not any(_DESTRUCTIVE.match(s) for s in steps):
-                    seen.add(steps)
-        counts.update(seen)
+                    seen[steps] = None
+        counts.update(list(seen))
     common = [steps for steps, n in counts.most_common() if n >= MIN_OCCURRENCES]
     out: list[str] = []
     for steps in common:

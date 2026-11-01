@@ -13,6 +13,7 @@ file says so.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import contextlib
 import dataclasses
 import hashlib
@@ -579,12 +580,22 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     catalog = roles.load()
     team, members, team_notes = _team(options, repo.key(repo_dir), catalog)
     covered = roles.kinds_of(members)
-    if options.kind:
-        classification = narrow(_caller_kind(options, text), covered)
-    elif classifier is not None:
-        classification = narrow(classifier(text), covered)
-    else:
-        classification = classify(text, use_model=options.use_model_classifier, cwd=home(), kinds=covered)
+
+    def classified() -> Classification:
+        if options.kind:
+            return narrow(_caller_kind(options, text), covered)
+        if classifier is not None:
+            return narrow(classifier(text), covered)
+        return classify(text, use_model=options.use_model_classifier, cwd=home(), kinds=covered)
+
+    # The kind and the neighbours' indexes are found side by side: neither needs the other, and each
+    # waits on a process (Haiku's answer, ~4 s; an index built or refreshed, up to `livespec_wait`).
+    # A real plan took 13.7 s doing them one after the other.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(classified)
+        brought = [(adapter, *_bring_current(adapter, adapter.inspect(repo_dir), repo_dir, options, say))
+                   for adapter in adopted(options, adapters)]
+        classification = pending.result()
     kind = classification.kind
 
     neighbour_notes: list[str] = []
@@ -594,8 +605,7 @@ def plan(text: str, repo_dir: Path, store: Store, options: Options, registry: Ma
     raise_rungs, critical = 0, False
     # The symbols the request reaches, when an index could say: None when none could.
     reached: int | None = None
-    for adapter in adopted(options, adapters):
-        status, index_notes = _bring_current(adapter, adapter.inspect(repo_dir), repo_dir, options, say)
+    for adapter, status, index_notes in brought:
         neighbour_notes += index_notes
         statuses.append(status)
         if not status.present:
@@ -1165,17 +1175,18 @@ def run(
         before = store.get_task(task_id)
         if before["status"] == "queued" and not store.last_event(task_id, "finished"):
             queued_s = _seconds_since(before["created_at"])
-        store.update_task(task_id, status="running", source="cauce",
+        # Running and whose process it is, in one write: between two, a sweep read a running task with
+        # no pid as dead and stopped a resume that had just started (it then died unseen).
+        store.update_task(task_id, status="running", source="cauce", pid=os.getpid(),
                           cost_usd=float(before["cost_usd"] or 0) + c.cost_usd, **fields)
         task = store.get_task(task_id)
     else:
         # Run from a session's own Bash (`CAUCE_SESSION_ID` set), the text is the main
         # session's, not something a person typed.
-        task = store.create_task(text, status="running", source="cauce", cost_usd=c.cost_usd,
+        task = store.create_task(text, status="running", source="cauce", cost_usd=c.cost_usd, pid=os.getpid(),
                                  author="orchestrator" if session_id else "person",
                                  session_id=session_id, options=json.dumps(options.stored()), **fields)
     report = Report(task["id"], "running", the_plan, cost_usd=c.cost_usd)
-    store.update_task(task["id"], pid=os.getpid())
     say = progress or (lambda line: None)
     # Said as it happens: a run in a background shell is otherwise silent until
     # its report, and silence reads as a run that never started.
@@ -1733,6 +1744,8 @@ def run(
                         "check runs after its ending")
                 elif needed:
                     store.add_event(task["id"], "stage", seq=nth, stage="verifier")
+                    # The check reads: what it writes in the work it reads is put back (`_read_only`).
+                    read_from = isolate.snapshot(workspace.path) if workspace is not None else None
                     result, review_stop, ledger, corrections, open_blockers = _independent_check(
                         result, text=text, kind=the_plan.kind, cell=cell, spec=spec, workdir=workdir,
                         base=base_commit, changed=so_far, risk=the_plan.risk, ledger=ledger,
@@ -1744,6 +1757,8 @@ def run(
                         index=_index_servers(the_plan, repo_dir, workdir), snapshots=workspace is not None,
                         sampled=sampled.why if sampled is not None else "")
                     ahead = None
+                    if workspace is not None and read_from is not None:
+                        _read_only(workspace.path, read_from, store, task["id"], nth, say)
             if ahead is not None:
                 # cauce's check failed (or the change needs no check now): what ran beside it is dropped.
                 stopped = ahead.stop()
@@ -1825,7 +1840,9 @@ def run(
                 store.set_move(task["id"], seq, "race", f"raced {raced.other_cell.label} beside it")
                 _record_raced(store, task["id"], raced, turns, selection.names, report, first=False)
                 if not result.passed:
-                    attempts.append(_raced_attempt(raced, turns))
+                    # Kept in the history before the start's, which goes on: the move is read from
+                    # the last attempt, and the rung's (only the environment stopped it) is not it.
+                    attempts.insert(len(attempts) - 1, _raced_attempt(raced, turns))
             subject = result.commit or subject
             if result.report is not None:
                 store.add_event(task["id"], "report", seq=seq, passed=result.passed, report=result.report)
@@ -3335,6 +3352,24 @@ def _check_spec(*, text: str, kind: str, cell: Cell, spec: launch.LaunchSpec, wo
                             if not r.startswith("mcp__") or r.removeprefix("mcp__") in measuring)
         + tuple(f"mcp__{name}" for name in [*touched.servers, *(index or {})]))
     return check, vcell
+
+
+def _read_only(path: Path, read_from: str, store: Store, task_id: int, nth: int,
+               say: Callable[[str], None]) -> list[str]:
+    """What the independent check wrote in the worktree it read, put back as it was before it ran:
+    its write tools are taken away, but a shell writes too, and what it wrote would be committed as
+    the work. Said and kept as a `verifier_wrote` event; never a verdict. Never fails a run."""
+    try:
+        wrote = isolate.changed_since(path, read_from) or []
+        if not wrote:
+            return []
+        left = isolate.put_back(path, read_from, wrote)
+    except Exception:  # a guard never costs the run it guards
+        return []
+    store.add_event(task_id, "verifier_wrote", seq=nth, files=wrote[:200], n=len(wrote), left=left[:50])
+    say(f"cauce: #{task_id} the independent check wrote {len(wrote)} file(s) in the work it read; put back"
+        + (f", {len(left)} could not be" if left else ""))
+    return wrote
 
 
 def _verifier_env(env: Mapping[str, str]) -> dict[str, str]:

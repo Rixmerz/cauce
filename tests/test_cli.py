@@ -271,6 +271,8 @@ def test_sigterm_becomes_a_cancel():
 
 
 def test_queue_lanes_and_work(capsys, git_repo, monkeypatch):
+    # With autowork, `queue add` starts a real dispatcher, which would hold the lock `work` asks for.
+    monkeypatch.setenv("CAUCE_AUTOWORK", "off")
     assert cli.main(["queue", "add", "write docs", "--repo", str(git_repo), "--verify", "true",
                      "--kind", "docs"]) == 0
     assert "queued #1" in capsys.readouterr().out
@@ -1211,6 +1213,7 @@ def test_resuming_the_task_a_lane_paused_on_opens_the_lane_and_a_pause_on_anothe
 
 def test_the_end_of_a_resume_starts_the_dispatcher_when_work_waits_behind_it(git_repo, monkeypatch):
     """After a restart no `cauce work` existed: the task queued behind a resumed one stayed queued."""
+    monkeypatch.setenv("CAUCE_AUTOWORK", "off")  # what follows reads its absence, then turns it on
     _stub_run(monkeypatch)
     started = []
     monkeypatch.setattr(dispatch, "start", lambda repo_dir, root, scope: started.append((repo_dir, scope)) or True)
@@ -1263,6 +1266,7 @@ def test_a_resume_that_reopens_a_paused_lane_starts_its_dispatcher_before_its_ow
 
 
 def test_unpausing_a_lane_with_queued_work_starts_its_dispatcher(git_repo, monkeypatch, capsys):
+    monkeypatch.setenv("CAUCE_AUTOWORK", "off")  # what follows reads its absence, then turns it on
     key = str(git_repo.resolve())
     store = Store.open()
     store.enqueue("write the docs", repo=key, cwd=str(git_repo))

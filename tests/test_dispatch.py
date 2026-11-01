@@ -230,6 +230,8 @@ def test_start_launches_a_detached_dispatcher_without_the_session_s_identity(tmp
 
 
 def test_double_plus_starts_the_dispatcher_when_autowork_is_on(store: Store, git_repo, monkeypatch):
+    monkeypatch.setenv("CAUCE_AUTOWORK", "off")  # what follows reads its absence, then turns it on
+    monkeypatch.setenv("CAUCE_PARALLEL", "off")  # and the same of running beside the work ahead
     calls = []
     monkeypatch.setattr(dispatch, "start", lambda repo_dir, root, scope: calls.append(repo_dir) or True)
     event = {"session_id": "s", "prompt_id": "1", "cwd": str(git_repo), "prompt": "++ write the changelog"}
@@ -325,7 +327,7 @@ def test_the_process_handle_starts_run_queued(store: Store, tmp_path, monkeypatc
             started.update(argv=argv, **kw)
 
     monkeypatch.setattr(flow.subprocess, "Popen", Proc)
-    flow._Process(store.get_task(task["id"]), tmp_path, store, flow.Options(use_model_classifier=False))
+    flow._Process(store.get_task(task["id"]), tmp_path, store, flow.orchestrate.Options(use_model_classifier=False))
     assert started["argv"][1:] == ["-m", "cauce", "run-queued", str(task["id"]), "--no-model"]
     assert started["cwd"] == str(tmp_path)
 
@@ -385,10 +387,11 @@ def test_work_queued_while_the_dispatcher_was_leaving_gets_a_fresh_one(git_repo,
 
 
 def test_a_run_or_queue_typed_in_a_session_is_that_session_s(git_repo, monkeypatch, capsys):
+    monkeypatch.setenv("CAUCE_AUTOWORK", "off")
     monkeypatch.setenv("CAUCE_SESSION_ID", "sess-1")
     assert cli.main(["queue", "add", "write the docs", "--repo", str(git_repo), "--json"]) == 0
     queued = json.loads(capsys.readouterr().out)
-    assert queued["then"] == "`cauce work` runs the queue."  # autowork is off in tests
+    assert queued["then"] == "`cauce work` runs the queue."  # autowork is off here
     store = Store.open()
     assert store.get_task(queued["id"])["session_id"] == "sess-1"
     store.close()
@@ -484,6 +487,7 @@ def test_a_death_that_repeats_its_crash_is_never_resumed_on_its_own(store: Store
 
 def test_no_resume_without_autowork_for_an_old_death_or_one_that_cannot_start(store: Store, tmp_path,
                                                                                 monkeypatch):
+    monkeypatch.setenv("CAUCE_AUTOWORK", "off")  # what follows reads its absence, then turns it on
     from cauce import stops
 
     task = store.create_task("x", status="interrupted", source="cauce", cwd=str(tmp_path))

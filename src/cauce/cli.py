@@ -17,15 +17,11 @@ from pathlib import Path
 
 from cauce import (
     __version__,
-    after,
     capabilities,
     capacity,
     config,
     dispatch,
-    flow,
-    habits,
-    hooks,
-    orchestrate,
+    lazy,
     orchestrator,
     progress,
     project,
@@ -39,6 +35,13 @@ from cauce.escalate import Attempt, Failure
 from cauce.matrix import EFFORTS, KINDS, LADDERS, MODEL_ORDER, Cell
 from cauce.store import FIX_OUTCOMES, Store, home
 from cauce.text import clip, title_of
+
+# The run loop and what only some commands need, loaded when a command first reads them.
+flow = lazy.module("cauce.flow")
+orchestrate = lazy.module("cauce.orchestrate")
+hooks = lazy.module("cauce.hooks")
+habits = lazy.module("cauce.habits")
+after = lazy.module("cauce.after")
 
 
 def _service(value: str) -> str:
@@ -1722,7 +1725,7 @@ def cmd_work(args: argparse.Namespace) -> int:
             return 0
         store = Store.open()
         try:
-            report = flow.work(store, repo=key, max_tasks=args.max,
+            report = flow.work(store, repo=key, max_tasks=flow.DEFAULT_MAX_TASKS if args.max is None else args.max,
                                defaults=orchestrate.Options(use_model_classifier=not args.no_model))
         finally:
             store.close()
@@ -2249,6 +2252,13 @@ def cmd_habits(args: argparse.Namespace) -> int:
     store = Store.open()
     try:
         if args.habits_command == "install":
+            where = Path(args.repo or os.getcwd())
+            if not where.is_dir():
+                # A habit writes the folder's own settings: a folder that is not there is a typo,
+                # never one to make (it wrote `.claude/settings.local.json` into a new directory).
+                print(f"cauce: {where} is not a directory; install a habit in an existing repository",
+                      file=sys.stderr)
+                return 2
             # What `list` showed here, or a habit of several repositories offered to this one.
             found = {c.id: c for c in _candidates(store, args.days)}
             key = _habit_repo(args.repo)
@@ -2751,7 +2761,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("work", help="run queued tasks in workers, lane by lane")
     p.add_argument("--repo")
     p.add_argument("--all", action="store_true", help="every repository's lane")
-    p.add_argument("--max", type=int, default=flow.DEFAULT_MAX_TASKS, help="stop after this many tasks")
+    p.add_argument("--max", type=int, default=None, help="stop after this many tasks (default: the dispatcher's)")
     p.add_argument("--no-model", action="store_true")
     p.add_argument("--detached", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_work)

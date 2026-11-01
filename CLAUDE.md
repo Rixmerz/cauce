@@ -108,10 +108,19 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 ```bash
 .venv/bin/python -m ruff check .
 .venv/bin/python -m coverage run -m pytest
+.venv/bin/python -m coverage combine
 .venv/bin/python -m coverage report
+CAUCE_TEST_ALL_ON=1 .venv/bin/python -m pytest
 claude plugin validate .
 claude plugin test .
 ```
+
+Coverage measures the processes the tests start too (`patch = ["subprocess"]`): `combine` gathers them.
+`CAUCE_TEST_ALL_ON=1` is the profile where every adaptive setting stays as a person gets it, with the
+fake `claude` on PATH (it answers Haiku's questions from their schema): the unit tests turn each
+setting on alone, and the bugs live where they meet. A new setting goes in `conftest.SWITCHES`, and a test
+that relies on one being off says so itself (`monkeypatch.setenv`, or the `no_verifier` fixture): both
+profiles pass whole.
 
 `claude plugin validate .` also reads the mod. In the hooks module, `$` stays
 in the file: helpers that take it are declared at its top level, and imported
@@ -427,7 +436,9 @@ yields the default kind, not a guess.
   a worktree is told what the correction changed since the snapshot the round before read (`isolate.snapshot`,
   `read_at` on its `verified` event, `orchestrate._read_before`, the event's `delta`) and to read that first, the
   rest of the change being read already; after a new model, outside a worktree or with no snapshot it reads the
-  whole change. A correction round is earned by a blocker that
+  whole change. It reads and never writes: what it wrote in the worktree (a shell writes with no write tool) is put
+  back as a snapshot taken before it ran held it (`orchestrate._read_only`, a `verifier_wrote` event). A correction
+  round is earned by a blocker that
   persists or by progress (every blocker of the round before fixed and a new
   one a probe shows), at most `MAX_CORRECTIONS`; a new finding after progress
   that is only read from the code goes with the pass, recorded, never a

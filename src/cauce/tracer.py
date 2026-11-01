@@ -162,8 +162,6 @@ def brief_lines(repo_dir: Path, text: str) -> list[str]:
         more = len(index) - len(fits)
         lines.append("Not shown above, by section (read the lines you need):\n" + "\n".join(f"- {e}" for e in fits)
                      + (f"\n{more} more section(s) in `{FOLDER.as_posix()}/`." if more else ""))
-    elif left:
-        lines.append(f"{left} more of the method's files did not fit here: read them in `{FOLDER.as_posix()}/`.")
     if not flows_for(repo_dir, text) and (repo_dir / FOLDER / "flows").is_dir():
         lines.append(f"No critical flow under `{FOLDER.as_posix()}/flows/` is named by this request: read the "
                      "ones your change reaches.")

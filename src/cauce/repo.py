@@ -26,9 +26,39 @@ def _git(directory: Path, *args: str) -> str | None:
     return proc.stdout.strip() if proc.returncode == 0 else None
 
 
+#: What `git` said of a directory's checkout and of a checkout's key, kept for this process: a hook
+#: asked it a dozen times per directory, one process each. Each answer is checked before it is used
+#: again (`_still_top`, `_stamp`), with a few `stat` calls instead of a process.
+_TOPS: dict[str, Path] = {}
+_KEYS: dict[str, tuple[int, str]] = {}
+
+
+def _still_top(directory: Path, top: Path) -> bool:
+    """Whether `top` is still the checkout `directory` is in: both there, and no `.git` between
+    them (a repository made inside since, a worktree)."""
+    if not top.is_dir() or not (top / ".git").exists():
+        return False
+    here = directory
+    while here != top:
+        if (here / ".git").exists():
+            return False
+        if here.parent == here:
+            return False
+        here = here.parent
+    return True
+
+
 def toplevel(directory: Path) -> Path | None:
+    directory = Path(directory)
+    where = str(directory.absolute())
+    if (seen := _TOPS.get(where)) is not None and _still_top(directory.absolute(), seen):
+        return seen
     out = _git(directory, "rev-parse", "--show-toplevel")
-    return Path(out) if out else None
+    if not out:
+        _TOPS.pop(where, None)
+        return None
+    _TOPS[where] = Path(out)
+    return Path(out)
 
 
 def normalize_remote(url: str) -> str:
@@ -51,9 +81,22 @@ def normalize_remote(url: str) -> str:
     return f"{host}/{path}"
 
 
+def _stamp(top: Path) -> int:
+    """When the checkout's `.git` last changed: git rewrites its config by renaming into it."""
+    try:
+        return (top / ".git").stat().st_mtime_ns
+    except OSError:
+        return -1
+
+
 def _top_key(top: Path) -> str:
+    stamp = _stamp(top)
+    if (seen := _KEYS.get(str(top))) is not None and seen[0] == stamp and stamp != -1:
+        return seen[1]
     remote = _git(top, "remote", "get-url", "origin")
-    return normalize_remote(remote) if remote else str(top.resolve())
+    found = normalize_remote(remote) if remote else str(top.resolve())
+    _KEYS[str(top)] = (stamp, found)
+    return found
 
 
 def own_key(directory: Path | str | None) -> str | None:

@@ -2,6 +2,77 @@
 
 ## [Unreleased]
 
+## [0.66.0] - 2026-11-01
+
+### Fixed
+
+- **A sweep could stop a run that had just started.** A run was marked running and given its pid
+  in two writes, and a sweep between them (a turn's end, the dispatcher) read a running task with no
+  pid as dead. An automatic resume stopped so went on unseen and, when it died for real, nobody
+  noticed: the task stayed interrupted with no crash named. Running and the pid are now one write.
+  New doctor rule: `swept-before-its-pid`. Found by the all-on CI run.
+- **The independent check could write into the work it read.** Its write tools are taken away,
+  but a shell writes too, and what it wrote was committed on the kept branch as the work. Its
+  worktree is now snapshotted before it runs, and anything it changed is put back afterwards
+  (`orchestrate._read_only`, a `verifier_wrote` event), leaving the worker's own uncommitted work
+  untouched.
+- **SessionStart resumed a dead task whose work had already landed.** It ran the automatic resume
+  before reading what landed, so a worker ran on merged work while the task was dismissed. It now
+  reads what landed first, as the Stop hook already did. New doctor rule: `resumed-after-it-landed`.
+- **`cauce ui` did not prune for its first hour after a machine booted.** Its first prune waited
+  until `time.monotonic()` passed `PRUNE_EVERY_S`, and that clock counts from the boot. The first
+  pass now prunes. Found by the new coverage tests on a fresh CI runner.
+- **Work held `--after` a task in another worktree of the same local repository started on the
+  base.** With no `origin`, a checkout's key is its path, so two worktrees of one repository read
+  as two repositories; the work got the other checkout as an `--add-dir` instead of starting on the
+  kept branch. They now count as one when they share a git store (`after._store_of`). Found by the
+  coverage pass.
+- **`cauce habits install --repo` with a folder that does not exist made it**, and wrote
+  `.claude/settings.local.json` inside. A missing folder is a typo: it is now refused.
+- **The recipes a brief carries changed from one process to the next**: tied sequences were
+  ordered by a set, whose order follows each process's hash seed (`habits.recipes`). Found by the
+  coverage pass.
+- **A CI service written `db: {}` was named `{}`**; an empty flow mapping or list is now read as
+  one (`ci.read`).
+- **A checkout with no commit read `HEAD` as its commit** when notes were reviewed (`git rev-parse`
+  prints it and fails); it now has none.
+- **A race whose rung only met the environment was decided by the rung's broken launch.** Its
+  attempt was appended after the start's, and the next move reads the last attempt: the task
+  retried at the rung's cell and stopped as "the environment failed twice" instead of climbing from
+  the start's failure. The rung's attempt now goes before the start's. Found by the coverage pass.
+- **API keys were not masked** (`notes._SECRET`, used for check tails, notes, briefs, the scribe, the
+  survey and compaction digests). Anthropic (`sk-ant-api03-…`) and OpenAI (`sk-proj-…`) keys carry
+  dashes, and the pattern took letters and digits only, so they went through whole. It now also
+  covers GitHub's `gho_`/`ghs_`/`ghu_`/`ghr_` tokens, Google API keys and `Bearer` tokens. Found by
+  the new fuzz tests.
+- **A tool call's signature could hold its argument.** A file tool kept whatever followed the
+  last dot of its path as the file's type, and a shell token whose quotes could not be split showed
+  a secret's shape once cleaned. A type is now a real extension (short, plain) or `other`, and a
+  cleaned shell signature with a secret's shape is `bash:unknown`.
+- **`cauce doctor` took 33 s, and so did SessionStart, on a store of 3000 runs**: two index rules
+  read every run's folder with git, one process per run. Each folder is now read once, about 1 s.
+
+### Changed
+
+- **Commands and hooks start faster.** A command imported the whole run loop before doing anything.
+  The run loop now loads only where a command runs work (`cauce.lazy`), and git's answers about a
+  folder are kept per process, checked with `stat` before reuse. `cauce tasks` went from 251 to
+  ~165 ms; `board`, which the mod runs every 15 s per session, from 236 to ~190 ms; SessionStart
+  went from 25 git processes to 14.
+- **A plan finds a task's kind and brings its neighbours' indexes current side by side.** A real
+  plan took 13.7 s doing Haiku's classification (~4 s) and livespec's index (9 s) one after the
+  other; it now waits for the longer of the two.
+- **livespec pinned at 0.35.0**, checked against a real index of this repository.
+- **Tests:**
+  - `CAUCE_TEST_ALL_ON=1` runs the whole suite with every adaptive setting as a person gets it,
+    with a fake `claude` that also answers Haiku's schema questions; CI runs it on every push.
+    82 tests that silently relied on a setting being off now declare it (the `no_verifier`
+    fixture and single switches); no assertion was weakened.
+  - Coverage now counts the processes tests start.
+  - `tests/test_fuzz.py` feeds every reader of outside text the fragments that broke readers before.
+  - Coverage went from 95% to 99% of lines and branches (every module at 100% but a few lines
+    nothing can reach), with tests that assert behaviour; the floor is now 99.
+
 ## [0.65.0] - 2026-11-01
 
 ### Added

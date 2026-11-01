@@ -22,7 +22,7 @@ without a token and without an MCP call:
 The worker also gets livespec's MCP server, with a hint per kind of work that
 names the calls that kind needs and the ``workspace`` every call requires.
 
-Checked against livespec 0.34.0. Every tool named here exists in that release;
+Checked against livespec 0.35.0. Every tool named here exists in that release;
 `TOOLS` is the pinned list, and a test holds every hint to it.
 """
 from __future__ import annotations
@@ -60,9 +60,9 @@ MINIMUM_VERSION = (0, 32, 0)
 #: the release this adapter was checked against, unless an installed plugin's own manifest names
 #: a newer one (`Livespec.pin`). livespec is part of cauce's base, so having `uv` is enough: there
 #: is no second plugin to install.
-PINNED = "0.34.0"
+PINNED = "0.35.0"
 
-#: The livespec tools cauce names to a worker or calls itself. Verified to exist in 0.34.0.
+#: The livespec tools cauce names to a worker or calls itself. Verified to exist in 0.35.0.
 TOOLS = frozenset({
     "quick_orient", "find_symbol", "who_calls", "who_does_this_call", "analyze_impact",
     "git_diff_impact", "get_symbol_source", "get_spec_implementation", "list_specs",

@@ -280,6 +280,19 @@ def test_a_repository_with_no_livespec_index_is_suspect_and_the_fix_is_the_comma
     assert "needs livespec, or `uv` to run the pinned release" in cannot.fix
 
 
+def test_the_folders_runs_were_in_are_read_once_each_however_many_runs(store: Store, git_repo, tmp_path):
+    """A store of months holds thousands of runs in a handful of folders: each folder's
+    repositories are read with git once, not once per run (`cauce doctor` took 33 s on 3000)."""
+    livespec = _livespec(tmp_path)
+    asked: list = []
+    roots = livespec.roots
+    livespec.roots = lambda where: asked.append(where) or roots(where)
+    for _ in range(30):
+        _ran_in(store, git_repo)
+    assert len(doctor._checkouts(store, None, livespec)) == 1
+    assert asked == [git_repo]
+
+
 def test_an_index_older_than_the_last_commit_or_one_that_cannot_be_read_is_suspect(store: Store, git_repo, tmp_path):
     from .livespec_fixture import build
 
@@ -365,3 +378,20 @@ def test_a_run_that_died_after_its_attempt_passed_is_suspect(store: Store):
     found = rules(store, now=LATER, alive=lambda pid: True)["died-after-a-pass"]
     assert [(f.severity, f.task_id) for f in found] == [(doctor.SUSPECT, task["id"]), (doctor.FIXED, old["id"])]
     assert "died after its attempt 1 passed" in found[0].what
+
+
+def test_a_task_resumed_on_its_own_after_its_work_landed_is_suspect(store: Store):
+    def died_resumed_landed(version: str, *, resumed: bool = True) -> int:
+        task = store.create_task("work", status="dismissed", source="cauce", repo="r")["id"]
+        store.add_event(task, "finished", status="interrupted", version=version, stop={"cause": "died"})
+        if resumed:
+            store.add_event(task, "auto_resumed", after="its process is gone", cause="died")
+        store.add_event(task, "finished", status="dismissed", version=version,
+                        stop={"cause": "landed", "by": "cauce", "reason": "its change is already in main"})
+        return task
+
+    now = died_resumed_landed("0.66.0")
+    died_resumed_landed("0.66.0", resumed=False)
+    old = died_resumed_landed("0.65.0")
+    found = rules(store, now=LATER, alive=lambda pid: True)["resumed-after-it-landed"]
+    assert [(f.severity, f.task_id) for f in found] == [(doctor.SUSPECT, now), (doctor.FIXED, old)]
