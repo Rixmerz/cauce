@@ -440,3 +440,403 @@ def test_a_run_queued_after_another_says_what_it_waits_for(git_repo, monkeypatch
     out = capsys.readouterr().out
     # two runs in full, a blank line between them
     assert out.count("run #") >= 2 and "\n\nrun #" in out
+
+
+# --- workflows: definitions ----------------------------------------------------------------
+
+
+def _refused(defn) -> str:
+    with pytest.raises(workflows.WorkflowError) as err:
+        workflows.normalize(defn)
+    return str(err.value)
+
+
+def test_a_definition_s_every_problem_at_the_top_is_said_at_once():
+    said = _refused({"name": "Bad Name", "version": 0, "description": 3, "inputs": ["Goal"], "steps": [],
+                     "budget": 1})
+    for part in ("unknown keys ['budget']", "'Bad Name' is no workflow name", "version is a whole number from 1",
+                 "description is text", "inputs is a list of names", "steps is a list of at least one step"):
+        assert part in said
+    assert "steps is a list" in _refused({"name": "x", "steps": "do it"})
+    assert "version is a whole number" in _refused({"name": "x", "version": True, "steps": [{"id": "a",
+                                                                                           "prompt": "p"}]})
+
+
+def test_a_step_s_every_problem_is_said_at_once():
+    long = "x" * (workflows.PROMPT_CHARS + 1)
+    said = _refused({"name": "x", "inputs": ["goal"], "steps": [
+        "not a step",
+        {"prompt": "no id"},
+        {"id": "Bad Id", "prompt": "p", "integrate": True},
+        {"id": "long", "prompt": long},
+        {"id": "fan", "prompt": "p", "fanout": 3, "verify": ["pytest"], "needs": "long"},
+        {"id": "q1", "ask": 5, "options": ["yes", "no"]},
+        {"id": "q2", "ask": long, "options": ["yes", "no"]},
+        {"id": "sub", "workflow": "bugfix", "with": ["goal"]},
+    ]})
+    for part in ("step 1 is not an object", "step 2 needs an id", "step 'long''s prompt is over",
+                 "step 'fan': fanout is the id of the plan step", "step 'fan': verify is a command, as text",
+                 "step 'fan': needs is a list of step ids", "step 'q1': ask is the question, as text",
+                 "step 'q2''s question is over", "step 'sub': with maps the inputs"):
+        assert part in said, part
+
+
+def test_an_integrate_step_writes_and_an_empty_memory_is_dropped():
+    said = _refused({"name": "x", "inputs": ["goal"], "steps": [
+        {"id": "plan", "prompt": "plan {goal}", "kind": "plan"},
+        {"id": "build", "prompt": "build", "fanout": "plan"},
+        {"id": "join", "prompt": "join", "integrate": True, "kind": "explore"}]})
+    assert "step 'join': an integrate step merges, so it writes: no ledger and no reading kind" in said
+    defn = workflows.normalize({"name": "x", "steps": [{"id": "a", "prompt": "p", "memory": []}]})
+    assert "memory" not in defn["steps"][0]
+
+
+def test_a_listing_leaves_out_a_file_that_is_no_workflow_name_and_a_file_that_holds_no_object(tmp_path):
+    from cauce.store import home
+
+    folder = home() / "workflows"
+    folder.mkdir(parents=True)
+    (folder / "Not A Name.json").write_text("{}")
+    (folder / "alist.json").write_text("[]")
+    found = {w["name"]: w for w in workflows.listing(tmp_path) if w["scope"] == "user"}
+    assert list(found) == ["alist"] and found["alist"]["error"].endswith("holds no workflow object")
+
+
+def test_a_step_s_memory_says_what_is_no_longer_kept(store: Store):
+    note = store.add_note("p", "conventions", "tabs", "use tabs", author="person", filed_by="person")
+    store.update_note(note, state="dropped")
+    text = workflows.memory_text(store, "p", [f"note:{note}", "problem:999"])
+    assert f"- note #{note}: no longer kept; go on without it" in text
+    assert "- problem #999: no longer kept" in text
+    assert workflows.memory_text(store, "p", []) == ""
+
+
+def test_a_pending_revision_that_cannot_apply_waits_and_a_bundled_scope_is_never_written(git_repo, monkeypatch):
+    path = workflows.save(workflows.skeleton("ship"), git_repo).path
+    waiting = workflows.pending_path(path)
+    waiting.parent.mkdir()
+    waiting.write_text("{broken")
+    assert workflows.promote(path) is False and waiting.exists()  # unreadable: kept for the person
+    with pytest.raises(workflows.WorkflowError, match="project or the user scope, not 'bundled'"):
+        workflows.save(workflows.skeleton("ship"), git_repo, "bundled")
+    waiting.unlink()
+    with pytest.raises(workflows.WorkflowError, match=r"ship \(user\) has no pending change"):
+        workflows.apply_pending("ship", git_repo)
+
+
+def test_a_step_added_in_a_chain_takes_its_place_and_one_named_twice_is_refused():
+    defn = workflows.normalize({"name": "x", "steps": [{"id": "a", "prompt": "p"}, {"id": "b", "prompt": "q"}]})
+    with pytest.raises(workflows.WorkflowError, match="step 'a' exists"):
+        workflows.add_step(defn, {"id": "a", "prompt": "again"})
+    workflows.add_step(defn, {"id": "m", "prompt": "middle"}, after="a")
+    assert [(s["id"], s["needs"]) for s in defn["steps"]] == [("a", []), ("m", ["a"]), ("b", ["m"])]
+    # a follower that waits on something else keeps its needs
+    defn = workflows.normalize({"name": "x", "steps": [{"id": "a", "prompt": "p"},
+                                                       {"id": "b", "prompt": "q", "needs": []}]})
+    workflows.add_step(defn, {"id": "m", "prompt": "middle"}, after="a")
+    assert defn["steps"][2]["needs"] == []
+
+
+def test_a_graph_says_parts_joins_answers_sub_runs_and_its_description():
+    defn = workflows.normalize({"name": "par", "description": "Parts, then a join.", "inputs": ["goal"], "steps": [
+        {"id": "plan", "prompt": "plan {goal}", "kind": "plan"},
+        {"id": "go", "ask": "Go?", "options": ["yes", "no"]},
+        {"id": "build", "prompt": "build", "fanout": "plan", "needs": ["plan", "go"]},
+        {"id": "join", "prompt": "join", "integrate": True},
+        {"id": "more", "workflow": "bugfix", "with": {"goal": "{goal}"}}]})
+    run = {"id": 4, "state": "running", "steps": [{"id": "go", "state": "done", "task": 2, "answer": "yes"},
+                                                  {"id": "more", "state": "running", "task": 9, "subrun": 5}]}
+    text = workflows.render_markdown(defn, run)
+    assert text.startswith("## par — run #4, running\n\nParts, then a join.\n\n```mermaid\n")
+    assert "parts of plan" in text and "joins the parts" in text
+    assert "done #2: yes" in text and "running #9 (run #5)" in text
+
+
+def test_a_check_input_named_by_the_person_is_not_filled_from_the_run_s_check():
+    defn = workflows.normalize({"name": "x", "inputs": ["goal", "cmd"], "steps": [
+        {"id": "a", "prompt": "{goal}", "verify": "{cmd}"}]})
+    assert workflows.fill_checks(defn, {"cmd": "make test"}, "pytest") == {"cmd": "make test"}
+    assert workflows.fill_checks(defn, {}, "pytest") == {"cmd": "pytest"}
+
+
+def test_unreadable_part_options_are_a_whole_step_and_no_entry_stands_for_no_task(store: Store):
+    assert workflows._part({"options": "{oops"}) is None
+    assert workflows._part(None) is None
+    assert workflows._tasks_of(None) == [] and workflows._tasks_of({}) == []
+    assert workflows.outcome(store, None) == {}
+
+
+def test_a_when_on_changed_files_reads_the_step_s_ending(store: Store):
+    wrote = store.create_task("a", status="done", source="queue")
+    store.add_event(wrote["id"], "finished", status="done", changed=["a.py"])
+    kept = store.create_task("b", status="done", source="queue")
+    store.add_event(kept["id"], "finished", status="done", changed=[])
+    step = {"id": "c", "when": {"a": "changed"}}
+    assert workflows._holds(store, step, {"a": wrote}) == (True, "")
+    assert workflows._holds(store, step, {"a": kept}) == (
+        False, "its condition a is 'changed' did not hold: a was 'unchanged'")
+    assert workflows._holds(store, {"id": "c", "when": {"a": "unchanged"}}, {"a": kept}) == (True, "")
+
+
+def test_an_answer_cancel_or_retry_names_the_run_that_is_not_there_or_not_active(store: Store):
+    for call in (lambda: workflows.answer(store, 99, "a", "yes"), lambda: workflows.cancel(store, 99),
+                 lambda: workflows.retry(store, 99, "a")):
+        with pytest.raises(workflows.WorkflowError, match="no workflow run #99"):
+            call()
+    run = store.create_run(name="w", scope="user", source="x", status="cancelled",
+                           definition=json.dumps({"name": "w", "steps": [{"id": "a", "prompt": "p"}]}))
+    with pytest.raises(workflows.WorkflowError, match=f"run #{run['id']} is cancelled"):
+        workflows.answer(store, run["id"], "a", "yes")
+
+
+# --- workflows: runs -----------------------------------------------------------------------
+
+
+def _a_run(store: Store, defn: dict, *, cwd=None, options: dict | None = None, **fields) -> dict:
+    checked = workflows.normalize(defn)
+    return store.create_run(name=checked["name"], scope="user", source="/nowhere.json",
+                            definition=json.dumps(workflows._stored(checked)), inputs=json.dumps({"goal": "g"}),
+                            options=json.dumps(options or {}), repo="r", cwd=str(cwd) if cwd else None, **fields)
+
+
+def _step_task(store: Store, run: dict, step: str, status: str = "done", **fields) -> dict:
+    return store.create_task(f"step {step}", status=status, source="queue", repo="r", cwd=run["cwd"],
+                             workflow_run=run["id"], workflow_step=step, **fields)
+
+
+def test_a_run_started_on_a_detached_head_keeps_where_it_started_and_no_branch(git_repo, store: Store, kicks):
+    workflows.save(workflows.skeleton("ship"), git_repo)
+    git(git_repo, "checkout", "-q", "--detach")
+    started = workflows.start(store, "ship", git_repo, {"goal": "the export"})
+    options = json.loads(started["options"])
+    assert options["origin"] == git(git_repo, "rev-parse", "HEAD") and "origin_branch" not in options
+
+
+def test_a_run_no_longer_active_queues_nothing(store: Store):
+    run = _a_run(store, {"name": "w", "steps": [{"id": "a", "prompt": "p"}]}, status="done")
+    assert workflows._queue_ready(store, run) == []
+    assert store.run_tasks(run["id"]) == []
+
+
+def test_a_sub_workflow_its_run_did_not_freeze_is_refused_with_why(store: Store):
+    run = _a_run(store, {"name": "w", "steps": [{"id": "sub", "workflow": "bugfix", "with": {"goal": "x"}}]})
+    with pytest.raises(workflows.WorkflowError, match=f"step 'sub': bugfix was not frozen with run #{run['id']}"):
+        workflows._queue_ready(store, run)
+
+
+def test_a_sub_workflow_that_kept_no_branch_passes_its_step_changing_nothing(store: Store, tmp_path, kicks):
+    parent = store.create_task("run it", status="queued", source="queue", repo="r",
+                               options=json.dumps({after.KEY: {"run": 1}}))
+    child = _a_run(store, {"name": "look", "steps": [{"id": "read", "prompt": "read", "kind": "explore"}]},
+                   cwd=tmp_path, options={"parent": {"task": parent["id"]}}, status="done")
+    read = _step_task(store, child, "read", cost_usd=0.75)
+    store.add_event(read["id"], "finished", status="done", changed=[])
+    assert workflows._finish_parent(store, child, None) == []
+    done = store.get_task(parent["id"])
+    assert done["status"] == "done" and done["result"] == f"run #{child['id']} of look passed, changing nothing"
+    assert after.KEY not in json.loads(done["options"]) and done["cost_usd"] == 0.75
+    finished = store.final_event(parent["id"])["data"]
+    assert finished["branch"] is None and finished["tip"] is None and finished["subrun"] == child["id"]
+    # one already passed is not passed again
+    assert workflows._finish_parent(store, child, None) == []
+
+
+def test_a_retried_part_after_one_that_passed_starts_from_what_that_one_kept(git_repo, store: Store):
+    run = _a_run(store, {"name": "w", "steps": [{"id": "a", "prompt": "p"}]}, cwd=git_repo)
+    git(git_repo, "branch", "cauce/task-90")
+    tip = git(git_repo, "rev-parse", "cauce/task-90")
+    api = _step_task(store, run, "build")
+    store.add_event(api["id"], "finished", status="done", branch="cauce/task-90")
+    part = {"id": "web", "after": "api"}
+    assert workflows._ordered(store, run, part, {}, {"api": api}) == {"start": tip}
+    stopped = _step_task(store, run, "build", status="blocked")
+    assert workflows._ordered(store, run, part, {}, {"api": stopped}) == {}
+    assert workflows._ordered(store, run, part, {}, {}) == {}
+    assert workflows._ordered(store, run, {"id": "web"}, {}, {}) == {}
+
+
+def test_nothing_changed_is_nothing_generated_and_a_plan_no_dispatcher_took_pauses_no_lane(store: Store):
+    run = _a_run(store, {"name": "w", "steps": [{"id": "a", "prompt": "p"}]})
+    assert workflows._generated(store, run, []) == set()
+    plan = _step_task(store, run, "plan", status="running")
+    workflows._take_back(store, run, plan, "its parts overlap")
+    assert store.get_task(plan["id"])["status"] == "replan"
+    assert stops.of(store, store.get_task(plan["id"])).cause == "parts"
+    assert store.lanes() == []
+
+
+def test_a_brief_leaves_out_a_step_that_said_nothing_and_a_loop_that_is_gone(store: Store):
+    defn = workflows.normalize({"name": "w", "inputs": ["goal"], "steps": [
+        {"id": "a", "prompt": "a {goal}", "kind": "explore"}, {"id": "b", "prompt": "b {goal}"}]})
+    run = _a_run(store, defn)
+    quiet = _step_task(store, run, "a")
+    task = workflows._queue_step(store, run, defn, defn["steps"][1], {"goal": "g"}, {"loop": {"name": "gone"}},
+                                 {"a": quiet})
+    assert task["body"] == "b g"  # nothing the step before said, and no round of a loop that is gone
+    assert json.loads(task["options"])["loop"] == "gone"
+
+
+def test_a_step_with_no_branch_before_it_starts_from_the_run_s_base(store: Store, tmp_path):
+    defn = {"steps": [{"id": "a", "needs": []}, {"id": "fix", "ledger": "fix", "needs": ["a"]}]}
+    run = {"id": 1, "cwd": str(tmp_path / "gone"), "options": json.dumps({"base": "abc123"})}
+    fixed = store.create_task("fix", status="done", source="queue")
+    store.add_event(fixed["id"], "finished", status="done", branch=None)
+    built = store.create_task("a", status="done", source="queue")
+    store.add_event(built["id"], "finished", status="done", branch="cauce/task-1")
+    assert workflows._kept_tip(store, fixed, str(tmp_path)) is None
+    # the fix kept no branch, and the one branch before it is in no checkout here
+    assert workflows._base(store, run, defn, "fix", {"fix": fixed, "a": built}) == "abc123"
+
+
+def test_drift_is_said_only_where_git_can_say_it(git_repo, store: Store):
+    loose = store.create_task("x", status="done", source="queue")
+    assert workflows.drift(store, loose, "HEAD", "end") is None
+    run = _a_run(store, {"name": "w", "steps": [{"id": "a", "prompt": "p"}]}, cwd=git_repo,
+                 options={"origin_branch": "no-such-branch"})
+    task = _step_task(store, run, "a")
+    assert workflows.drift(store, task, "HEAD", "end") is None
+    assert store.last_event(task["id"], "behind_base") is None
+
+
+def test_advance_of_nothing_and_an_ending_with_no_time_queues_nothing(store: Store):
+    assert workflows.advance(store, None) == []
+    task = store.create_task("x", status="done", source="queue")
+    store.add_event(task["id"], "finished", status="done")
+    other = store.create_task("y", status="queued", source="queue")
+    workflows._advanced(store, task, [other["id"]])
+    assert store.last_event(other["id"], "advanced") is None
+
+
+def test_a_recheck_does_not_queue_a_fix_a_later_round_already_queued(store: Store):
+    defn = {"name": "w", "inputs": ["goal"], "steps": [
+        {"id": "review", "prompt": "review {goal}", "kind": "review-routine"},
+        {"id": "fix", "prompt": "fix", "ledger": "fix"},
+        {"id": "recheck", "prompt": "recheck", "ledger": "recheck"}]}
+    run = _a_run(store, defn)
+    _step_task(store, run, "review")
+    recheck = _step_task(store, run, "recheck", options=json.dumps({"ledger": {"role": "recheck"}}))
+    store.add_event(recheck["id"], "finished", status="done", ledger={"survivors": ["F1"], "round": 1})
+    _step_task(store, run, "fix", status="queued")  # newer than the recheck
+    assert workflows._next_round(store, run, recheck) == []
+    # a recheck that waits on no fix has none to queue
+    loose = {**defn, "steps": [*defn["steps"][:2], {**defn["steps"][2], "needs": ["review"]}]}
+    run = _a_run(store, loose)
+    recheck = _step_task(store, run, "recheck", options=json.dumps({"ledger": {"role": "recheck"}}))
+    store.add_event(recheck["id"], "finished", status="done", ledger={"survivors": ["F1"], "round": 1})
+    assert workflows._next_round(store, run, recheck) == []
+
+
+def test_a_running_step_outside_a_worktree_names_no_files(store: Store, tmp_path):
+    run = {"cwd": str(tmp_path)}
+    task = store.create_task("x", status="running", source="queue")
+    found = workflows.progress(store, run, task)
+    assert "files" not in found and "phase" in found
+
+
+def test_a_run_whose_steps_passed_but_one_never_queued_is_stalled(store: Store):
+    run = _a_run(store, {"name": "w", "steps": [{"id": "a", "prompt": "p"}, {"id": "b", "prompt": "q"}]})
+    _step_task(store, run, "a")
+    shown = workflows.status(store, run["id"])
+    assert shown["state"] == "stalled" and [s["state"] for s in shown["steps"]] == ["done", "pending"]
+
+
+def test_a_stopped_step_says_the_branch_it_kept(store: Store):
+    run = _a_run(store, {"name": "w", "steps": [{"id": "a", "prompt": "p"}]})
+    task = _step_task(store, run, "a", status="blocked")
+    stops.record(store, task["id"], stops.Stop("review", "a blocker stands"), result=False)
+    store.add_event(task["id"], "finished", status="blocked", branch="cauce/task-7",
+                    stop=stops.Stop("review", "a blocker stands").data())
+    (step,) = workflows.status(store, run["id"])["steps"]
+    assert step["kept_branch"] == "cauce/task-7" and step["stopped"] == "a blocker stands"
+    # A step an older cauce dismissed kept no account of why: its branch is said, no reason made up.
+    old = _a_run(store, {"name": "w", "steps": [{"id": "a", "prompt": "p"}]})
+    task = _step_task(store, old, "a", status="dismissed")
+    store.add_event(task["id"], "finished", status="dismissed", branch="cauce/task-8")
+    (step,) = workflows.status(store, old["id"])["steps"]
+    assert step["kept_branch"] == "cauce/task-8" and "stopped" not in step
+
+
+def test_cancelling_a_run_asks_its_running_step_to_stop(store: Store, monkeypatch):
+    import os
+    import signal
+
+    run = _a_run(store, {"name": "w", "steps": [{"id": "a", "prompt": "p"}, {"id": "b", "prompt": "q",
+                                                                            "needs": []}]})
+    running = _step_task(store, run, "a", status="running", pid=424242)
+    gone = _step_task(store, run, "b", status="running")
+    killed = []
+
+    def kill(pid, sig):
+        killed.append((pid, sig))
+        raise ProcessLookupError
+
+    monkeypatch.setattr(os, "kill", kill)
+    assert workflows.cancel(store, run["id"]) == [running["id"], gone["id"]]
+    assert killed == [(424242, signal.SIGTERM)]
+    assert store.cancel_requested(running["id"]) and store.cancel_requested(gone["id"])
+    assert store.get_run(run["id"])["status"] == "cancelled"
+
+
+def test_a_step_never_queued_is_queued_by_a_retry_with_nothing_to_supersede(store: Store, kicks):
+    run = _a_run(store, {"name": "w", "steps": [{"id": "a", "prompt": "p"}, {"id": "b", "prompt": "q"}]})
+    _step_task(store, run, "a")
+    task = workflows.retry(store, run["id"], "b")
+    assert task["status"] == "queued" and task["workflow_step"] == "b"
+    assert workflows.status(store, run["id"])["state"] == "running"
+
+
+@pytest.mark.usefixtures("no_verifier")
+def test_a_part_that_changed_nothing_leaves_one_branch_and_one_area_reviewed_whole(git_repo, store: Store, kicks,
+                                                                                    monkeypatch):
+    from cauce import flow
+    from cauce.orchestrate import run as run_task
+
+    from .test_orchestrate import kind, ok
+    from .test_workflows import JOINED, planned
+
+    monkeypatch.setattr(workflows, "AREA_REVIEW_LINES", 1)
+    workflows.save(JOINED, git_repo)
+    seen = []
+
+    def launch(spec):
+        seen.append(spec.prompt)
+        if "Your part: api" in spec.prompt:
+            (spec.target_dir / "api").mkdir()
+            (spec.target_dir / "api" / "api.py").write_text("rows = []\n" * 5)
+        return [planned(), ok("api built"), ok("nothing to do for web"), ok("reads fine")][len(seen) - 1]
+
+    def runner(text, where, store_, options, **kw):
+        return run_task(text, where, store_, options, registry={}, launcher=launch, classifier=kind("implement"),
+                        adapters=[], **kw)
+
+    started = workflows.start(store, "joined", git_repo, {"goal": "the orders view"})
+    flow.work(store, runner=runner)
+    tasks = {t["workflow_step"] + (("/" + json.loads(t["options"])["part"]["id"])
+                                   if json.loads(t["options"]).get("part") else ""): t
+             for t in store.run_tasks(started["id"])}
+    # the web part kept no branch: the join has one, and nothing to join
+    assert tasks["join"]["result"] == "one part kept a branch: nothing to join, and what follows starts from it"
+    # every changed line is in the api part's surfaces: one area, so one review of the whole change
+    assert "review" in tasks and not any(k.startswith("review/") for k in tasks)
+    assert len(seen) == 4 and workflows.status(store, started["id"])["state"] == "done"
+
+
+def test_a_retry_over_a_plan_whose_parts_overlap_takes_the_plan_back_and_says_so(store: Store):
+    defn = {"name": "w", "inputs": ["goal"], "steps": [
+        {"id": "plan", "prompt": "plan {goal}", "kind": "plan"},
+        {"id": "build", "prompt": "build", "fanout": "plan"}]}
+    overlapping = [{"id": "api", "prompt": "a", "surfaces": ["src/**"]},
+                   {"id": "web", "prompt": "w", "surfaces": ["src/web/**"]}]
+    run = _a_run(store, defn)
+    plan = _step_task(store, run, "plan")
+    store.add_event(plan["id"], "finished", status="done", parts=overlapping)
+    part = _step_task(store, run, "build", status="blocked", options=json.dumps({"part": {"id": "web", "n": 2}}))
+    stops.record(store, part["id"], stops.Stop("review", "x"), result=False)
+    with pytest.raises(workflows.WorkflowError, match="step 'build': its parts could not be queued again"):
+        workflows.retry(store, run["id"], "build")
+    assert stops.of(store, store.get_task(plan["id"])).cause == "parts"
+    whole = _a_run(store, defn)
+    plan = _step_task(store, whole, "plan")
+    store.add_event(plan["id"], "finished", status="done", parts=overlapping)
+    with pytest.raises(workflows.WorkflowError, match="the plan it fans out over was taken back; retry the plan"):
+        workflows.retry(store, whole["id"], "build")
