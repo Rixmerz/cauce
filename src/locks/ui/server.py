@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from locks import __version__, config, dispatch, flow, link, stops
+from locks import __version__, config, dispatch, flow, legacy, link, stops
 from locks.store import Store, home
 from locks.ui import api
 
@@ -136,13 +136,13 @@ class UIServer(ThreadingHTTPServer):
     def store(self) -> Store:
         """One connection per thread: sqlite3 objects never cross threads."""
         if getattr(self.local, "store", None) is None:
-            self.local.store = Store(self.root / "locks.db")
+            self.local.store = Store(legacy.database(self.root))
         return self.local.store
 
     def housekeeping(self) -> None:
         """The sweep, in the server, on a timer — never because a page is open.
         And the check for a newer locks, which takes this server's place."""
-        store = Store(self.root / "locks.db")
+        store = Store(legacy.database(self.root))
         # Never pruned yet: the first pass prunes. `time.monotonic()` counts from the machine's boot,
         # so a 0.0 start skipped pruning for the first hour after a boot (a fresh CI runner).
         pruned_at: float | None = None
@@ -220,7 +220,7 @@ class Handler(BaseHTTPRequestHandler):
             expected = token_path(self.server.root).read_text(encoding="utf-8").strip()
         except OSError:
             return False
-        given = self.headers.get("X-Locks-Token", "")
+        given = self.headers.get("X-Locks-Token") or self.headers.get(legacy.UI_HEADER, "")  # an older page
         return bool(expected) and hmac.compare_digest(given.encode(), expected.encode())
 
     def _send(self, status: int, body: bytes, content_type: str) -> None:
@@ -542,7 +542,7 @@ def occupant(port: int) -> dict[str, Any] | None:
         return None
     finally:
         conn.close()
-    if not (res.getheader("Server") or "").startswith("locks"):
+    if not (res.getheader("Server") or "").startswith(("locks", legacy.OLD)):  # an older UI of the old name
         return {"locks": False, "version": None}
     try:
         data = json.loads(body) if res.status == HTTPStatus.OK else {}
@@ -573,7 +573,7 @@ def listener(port: int, run: Callable[..., Any] = subprocess.run) -> int | None:
                       check=False).stdout
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
-    return pid if re.search(r"\blocks\b", command) and re.search(r"\bui\b", command) else None
+    return pid if re.search(rf"\b(?:locks|{legacy.OLD})\b", command) and re.search(r"\bui\b", command) else None
 
 
 def take_over(port: int, *, run: Callable[..., Any] = subprocess.run,
@@ -603,7 +603,8 @@ def claim_tab_there(port: int, session_id: str, root: Path | None = None) -> boo
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
     try:
         conn.request("POST", "/api/tab", body=body, headers={
-            "Host": f"127.0.0.1:{port}", "Content-Type": "application/json", "X-Locks-Token": token})
+            "Host": f"127.0.0.1:{port}", "Content-Type": "application/json", "X-Locks-Token": token,
+            legacy.UI_HEADER: token})  # an older UI on the port reads only its own name
         res = conn.getresponse()
         if res.status != HTTPStatus.OK:
             return None

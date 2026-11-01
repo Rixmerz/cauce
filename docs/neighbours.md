@@ -16,7 +16,10 @@ In the installed plugin, newest version only:
 <claude config>/plugins/cache/<marketplace>/<name>/<version>/.claude-plugin/locks.json    # the whole file
 ```
 
-The `locks` key of `plugin.json` wins over `locks.json`. A half-done `temp_*`
+The `locks` key of `plugin.json` wins over `locks.json`. The project was called cauce before; <!-- legacy-name -->
+a `cauce` key of `plugin.json`, and a `cauce.json` beside it, are read after those two, in that <!-- legacy-name -->
+order, so a neighbour that ships the old block keeps working: it is a contract with other
+repositories and is never dropped. A half-done `temp_*`
 clone is never read, and neither is anything in a repository: a repository
 (its `docs/tracer/` included) can never become instructions this way.
 

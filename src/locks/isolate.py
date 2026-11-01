@@ -35,6 +35,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from locks import legacy
+
 #: Folders a build needs and git does not carry. Linked, not copied: shared with
 #: the checkout, which is why the brief tells the worker not to reinstall them.
 DEPENDENCY_DIRS = frozenset({"node_modules", ".venv", "venv"})
@@ -87,8 +89,45 @@ def branch_for(task_id: int) -> str:
     return f"locks/task-{task_id}"
 
 
+#: Checkouts whose branches and refs of the old name were renamed in this process.
+_ADOPTED: set[str] = set()
+
+
+def adopt_legacy(repo_dir: Path) -> list[tuple[str, str]]:
+    """Rename what a task kept under the old name (its task, foreign and merge branches and its
+    set-aside refs, `legacy.REF_PREFIXES`) to the new one, tips and reflogs kept, once per
+    checkout and process: a resume of a task from before the rename finds its work. A name
+    already taken under the new prefix is left as it is. Never raises."""
+    try:
+        common = _git(repo_dir, "rev-parse", "--path-format=absolute", "--git-common-dir", check=False)
+    except OSError:
+        return []
+    if not common or common in _ADOPTED:
+        return []
+    _ADOPTED.add(common)
+    listing = _git(repo_dir, "for-each-ref", "--format=%(refname)", *(old for old, _ in legacy.REF_PREFIXES),
+                   "refs/heads/locks/", "refs/locks/", check=False)
+    moved = []
+    for old, new in legacy.old_refs(listing):
+        if old.startswith("refs/heads/"):
+            # `branch -m` carries the reflog and a worktree checked out on it.
+            ok = subprocess.run(["git", "branch", "-m", old.removeprefix("refs/heads/"),
+                                 new.removeprefix("refs/heads/")], cwd=str(repo_dir), capture_output=True,
+                                check=False).returncode == 0
+        else:
+            sha = _git(repo_dir, "rev-parse", "--verify", "--quiet", old, check=False)
+            ok = bool(sha) and subprocess.run(["git", "update-ref", new, sha], cwd=str(repo_dir),
+                                              capture_output=True, check=False).returncode == 0
+            ok = ok and subprocess.run(["git", "update-ref", "-d", old, sha], cwd=str(repo_dir),
+                                       capture_output=True, check=False).returncode == 0
+        if ok:
+            moved.append((old, new))
+    return moved
+
+
 def last_commit(repo_dir: Path, branch: str) -> str | None:
     """`<sha> <subject>` of a branch's newest commit, or None when it is gone."""
+    adopt_legacy(repo_dir)
     return _git(repo_dir, "log", "-1", "--format=%h %s", f"refs/heads/{branch}", "--", check=False) or None
 
 
@@ -109,6 +148,7 @@ def _set_aside(top: Path, task_id: int) -> str:
 
 def kept(repo_dir: Path, task_id: int) -> bool:
     """Whether the task's branch exists: work it kept, verified or not."""
+    adopt_legacy(repo_dir)
     return bool(_git(repo_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_for(task_id)}", check=False))
 
 
@@ -117,7 +157,7 @@ def _attached(top: Path, path: Path, branch: str) -> bool:
     listing = _git(top, "worktree", "list", "--porcelain", check=False) or ""
     for block in listing.split("\n\n"):
         lines = block.splitlines()
-        here = f"worktree {path}" in lines or f"worktree {path.resolve()}" in lines
+        here = any(_same_path(line, path) for line in lines)
         if here and f"branch refs/heads/{branch}" in lines:
             return True
     return False
@@ -134,7 +174,21 @@ def _clear(path: Path) -> None:
 def _registered(top: Path, path: Path) -> bool:
     """Whether `path` is a worktree git knows of, on any branch."""
     listing = _git(top, "worktree", "list", "--porcelain", check=False) or ""
-    return any(line in (f"worktree {path}", f"worktree {path.resolve()}") for line in listing.splitlines())
+    return any(_same_path(line, path) for line in listing.splitlines())
+
+
+def _same_path(line: str, path: Path) -> bool:
+    """Whether a `worktree <path>` line of `git worktree list --porcelain` names `path`, read
+    through links: a home moved from the old name leaves git its old path, a link to the new."""
+    if not line.startswith("worktree "):
+        return False
+    listed = line.removeprefix("worktree ")
+    if listed in (str(path), str(path.resolve())):
+        return True
+    try:
+        return Path(listed).resolve() == path.resolve()
+    except (OSError, RuntimeError):  # pragma: no cover - a link loop: not this path
+        return False
 
 
 def _move_stray(top: Path, path: Path) -> Path | None:
@@ -158,6 +212,7 @@ def prepare(repo_dir: Path, task_id: int, root: Path, *, base: str | None = None
     here is another's (a store started over, another locks home), set aside
     (`FOREIGN`) and never built on."""
     top = Path(_git(repo_dir, "rev-parse", "--show-toplevel"))
+    adopt_legacy(top)
     head = _git(top, "rev-parse", "HEAD")
     if base:
         head = _git(top, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}", check=False)
@@ -758,7 +813,8 @@ def keep_left(repo_dir: Path, task_id: int, root: Path, *, message: str) -> str 
 
 
 def _unverified(message: str) -> bool:
-    return UNVERIFIED in message or UNVERIFIED_BEFORE in message.split("\n", 1)[0]
+    return (UNVERIFIED in message or legacy.OLD_UNVERIFIED in message
+            or UNVERIFIED_BEFORE in message.split("\n", 1)[0])
 
 
 #: Words a cut subject must not end on: the thought they open is the part that was cut.
@@ -994,6 +1050,7 @@ def landed(repo_dir: Path, branch: str, paths: Sequence[str] = ()) -> bool:
 
 def kept_branches(repo_dir: Path) -> dict[int, str]:
     """Every `locks/task-<id>` branch in a checkout, by task id, with its tip."""
+    adopt_legacy(repo_dir)
     out = _git(repo_dir, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/locks/", check=False)
     found = {}
     for line in out.splitlines():
@@ -1007,6 +1064,7 @@ def kept_branches(repo_dir: Path) -> dict[int, str]:
 def restore(repo_dir: Path, branch: str, tip: str) -> bool:
     """Point `branch` at `tip` again when the branch is gone and the commit is still in
     the repository: a kept branch something deleted while work still built on it."""
+    adopt_legacy(repo_dir)
     if _git(repo_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False):
         return False
     if not _git(repo_dir, "rev-parse", "--verify", "--quiet", f"{tip}^{{commit}}", check=False):
@@ -1024,7 +1082,8 @@ def prunable(repo_dir: Path, branch: str) -> str | None:
     """Why a kept branch can be deleted with nothing lost, or None. Its commits are
     on another branch (a merge); or HEAD holds every file it changed, as it
     changed them (a squash or a cherry-pick); or all it changed is tool artifacts.
-    A branch checked out anywhere, or only on a remote's `locks/` copy, stays."""
+    A branch checked out anywhere, or only on a remote's `locks/` copy (or its old name's), stays."""
+    adopt_legacy(repo_dir)
     tip = _git(repo_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False)
     if not tip:
         return None
@@ -1032,7 +1091,8 @@ def prunable(repo_dir: Path, branch: str) -> str | None:
         return None
     holders = _git(repo_dir, "for-each-ref", "--contains", tip, "--format=%(refname)", "refs/heads", "refs/remotes",
                    check=False).splitlines()
-    if any("/locks/task-" not in ref and not ref.endswith("/HEAD") for ref in holders):
+    copies = ("/locks/task-", f"/{legacy.OLD}/task-")
+    if any(not any(c in ref for c in copies) and not ref.endswith("/HEAD") for ref in holders):
         return "merged"
     base = _git(repo_dir, "merge-base", "HEAD", tip, check=False)
     if not base:

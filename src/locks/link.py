@@ -12,6 +12,8 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 
+from locks import legacy
+
 MARKER = "# Written by `locks link`."
 SHIM = """#!/usr/bin/env bash
 {marker} It runs the newest locks Claude Code has installed, so a plugin
@@ -30,6 +32,25 @@ if [ -z "$newest" ]; then
 fi
 exec "$newest" "$@"
 """
+
+
+#: What the old name's link command wrote before the rename: a shim that only finds old installs.
+OLD_MARKER = f"# Written by `{legacy.OLD} link`."
+
+
+def write_old(target_dir: Path, launcher: Path) -> Path | None:
+    """The shim the old name's link command wrote, rewritten to run the newest Locks (and say
+    once that it is Locks now), so the old command survives the old plugin's removal. Never a
+    file that command did not write. None when there is none to rewrite."""
+    target = target_dir / legacy.OLD
+    try:
+        if target.is_symlink() or not target.is_file() or OLD_MARKER not in target.read_text(errors="replace"):
+            return None
+        target.write_text(SHIM.format(marker=MARKER, fallback=_quote(launcher)).replace(
+            'exec "$newest"', f'LOCKS_INVOKED_AS={legacy.OLD} exec "$newest"'))
+    except OSError:
+        return None
+    return target
 
 
 def default_dir(env: Mapping[str, str]) -> Path:
@@ -72,12 +93,14 @@ def parse_version(text: str) -> tuple[int, ...] | None:
     return tuple(int(part) for part in match.group(1).split(".")) if match else None
 
 
-def installed(env: Mapping[str, str]) -> list[tuple[tuple[int, ...], Path]]:
-    """Every locks Claude Code has installed, as (version, launcher), oldest first.
-    The version is read from each install's own plugin.json, never its mtime."""
+def installed(env: Mapping[str, str], *, old: bool = False) -> list[tuple[tuple[int, ...], Path]]:
+    """Every locks Claude Code has installed, as (version, launcher), oldest first; with `old`,
+    the installs of its old name (`legacy.PLUGIN`) instead. The version is read from each install's
+    own plugin.json, never its mtime."""
     config = Path(env.get("CLAUDE_CONFIG_DIR") or Path(env.get("HOME") or Path.home()) / ".claude")
+    name = legacy.PLUGIN if old else "locks"
     found = []
-    for launcher in config.glob("plugins/cache/*/locks/*/bin/locks"):
+    for launcher in config.glob(f"plugins/cache/*/{name}/*/bin/{name}"):
         try:
             manifest = json.loads((launcher.parents[1] / ".claude-plugin" / "plugin.json").read_text())
         except (OSError, ValueError):

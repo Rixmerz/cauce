@@ -44,7 +44,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TextIO
 
-from locks import after, config, orchestrator, project, repo, specs, stops
+from locks import after, config, legacy, orchestrator, project, repo, specs, stops
 from locks import findings as findings_mod
 from locks.notes import _SECRET
 from locks.store import OPEN_FOR_A_RELAY, Store, home
@@ -200,8 +200,10 @@ def _older_installs(root: Path, env: Mapping[str, str]) -> str | None:
 
         mine = link.parse_version(__version__)
         found = link.installed(env)
-        older = [(v, launcher.parents[1]) for v, launcher in found if mine and v < mine]
-        if not older or not mine or max(v for v, _ in found) > mine:
+        # An install of the old name is older whatever its version: it is the old plugin, this is Locks.
+        old_name = [(v, launcher.parents[1]) for v, launcher in link.installed(env, old=True)]
+        older = [(v, launcher.parents[1]) for v, launcher in found if mine and v < mine] + old_name
+        if not older or not mine or (found and max(v for v, _ in found) > mine):
             return None  # none, or this one is not the newest: the newer-plugin notice speaks
         key = sorted(str(folder) for _, folder in older)
         path = root / "work" / OLDER_SAID
@@ -215,10 +217,28 @@ def _older_installs(root: Path, env: Mapping[str, str]) -> str | None:
     except Exception:  # the session starts either way
         note_error(root, "older installs")
         return None
-    names = ", ".join(".".join(map(str, v)) for v, _ in older)
-    return (f"locks: older locks installs remain in Claude Code's plugin cache ({names}), beside {__version__}; after "
-            "a compaction a hook can run from one of them, with that version's code and text. Tell the person once; "
-            "removing them is theirs: " + " ".join(f"rm -rf {shlex.quote(f)}" for f in key))
+    names = ", ".join(".".join(map(str, v)) for v, folder in older if folder.parent.name != legacy.PLUGIN)
+    old = ", ".join(".".join(map(str, v)) for v, folder in older if folder.parent.name == legacy.PLUGIN)
+    lines = []
+    if names:
+        lines.append(f"older locks installs remain in Claude Code's plugin cache ({names}), beside {__version__}; "
+                     "after a compaction a hook can run from one of them, with that version's code and text.")
+    if old:
+        lines.append(f"the plugin's old name, {legacy.PLUGIN} ({old}), is still installed beside Locks {__version__}: "
+                     "while it is enabled its hooks run too. Its data is Locks' now, nothing is lost by removing it: "
+                     f"`claude plugin uninstall {legacy.PLUGIN}@rixmerz` (or `/plugin`).")
+    return ("locks: " + " ".join(lines) + " Tell the person once; removing them is theirs: "
+            + " ".join(f"rm -rf {shlex.quote(f)}" for f in key))
+
+
+def _keep_old_command(root: Path) -> None:
+    """The shim the old name's link command wrote runs the newest Locks from now on (`link.write_old`)."""
+    try:
+        from locks import habits, link
+
+        link.write_old(link.default_dir(os.environ), habits.launcher())
+    except Exception:  # the session starts either way
+        note_error(root, "old command")
 
 
 def _record_loaded(root: Path, session_id: str) -> None:
@@ -627,6 +647,7 @@ def session_start(
         blocks.append(registry)
     if older := _older_installs(root, os.environ):
         blocks.append(older)
+    _keep_old_command(root)
     if event.get("source") in ("resume", "compact"):
         # A turn or a subagent whose ending never arrived has nothing to resume: not unfinished work.
         unfinished = [t for t in store.list_tasks(session_id=session_id, status=("running", "interrupted"), limit=30)
@@ -1358,7 +1379,7 @@ def main(event_name: str, stdin: TextIO, stdout: TextIO, env: Mapping[str, str])
         event = json.load(stdin)
         if not isinstance(event, dict):
             return 0
-        store = Store(root / "locks.db")
+        store = Store(legacy.database(root))
         try:
             answer = handle(event_name, event, store, root, env)
         finally:

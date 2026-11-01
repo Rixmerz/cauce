@@ -100,6 +100,8 @@ treat `commands/` and every prompt string in `src/` with the same care as code.
 | `commands/watch.md` | a session that watches every other one: `overview`, the endings as they happen, `SendMessage` to send work |
 | `commands/relay.md` | `/locks:relay`: hand the session's thread to the next session started in the same place (`/clear`), instead of compacting |
 | `bin/locks` | the launcher every hook and command goes through |
+| `src/locks/legacy.py` | the old name, cauce, wherever an install from before the rename holds it: `CAUCE_*` read as `LOCKS_*` at import (and repeated to a worker), the home moved once with a link left (`cauce.db` renamed only while nothing holds it), `.cauce/` read and renamed when work is written, kept `cauce/task-N` branches and `refs/cauce/` renamed before use, the store's rows read into the new name once, and the words other readers accept (blocks, trailers, a neighbour's manifest, the UI's header, the bundled team); stdlib, imported first, never raises | <!-- legacy-name -->
+| `scripts/rename_to_locks.py` | the rename as a script: ordered rules, the paths moved, an allow-list that says why each old name stays; `--check` fails while one is left outside it | <!-- legacy-name -->
 | `src/locks/interpreter.py` | which Python runs locks; imported before the version check, so it must run on any python3 |
 | `src/locks/link.py` | `locks link`: a shim on a terminal's PATH that survives plugin updates; `forward_to`, which sends a typed command from an old install to the newest (never a hook, never a checkout) |
 | `src/locks/acp.py` | `locks acp`: locks as an Agent Client Protocol agent over stdio (Zed's `agent_servers`): JSON-RPC lines, one session per `session/new` and its folder, each prompt a `locks run` (or `locks tasks`/`stats` for `/tasks`/`/stats`) in its own process group, its stderr progress as one tool call, its report as the answer, a cancel ending the turn at once and the task after `CANCEL_WINDOW_S` unless a prompt follows (`locks cancel N` then a kill; `/cancel N` is the explicit one), `session/load` refused with what to do, the request's items and locks' stages as its `plan`, `locks tasks`' line as the tool call's title, the worker's last call, a failed check's output and the worker's files as content, the verdict and next step as the answer's lead; spawning, diffs and look injectable; stdlib |
@@ -164,6 +166,12 @@ The coverage floor lives in one place, `[tool.coverage.report] fail_under` in
 - **Tests use the `LOCKS_HOME` fixture** in `tests/conftest.py`. Never bypass
   it: a test that writes to the real database puts fake dead ends in front of
   real sessions.
+
+- **The old name lives in one place.** Every reader of a name from before the rename (an
+  environment variable, a path, a branch, a block, a trailer, a manifest key, a persisted word)
+  takes it from `locks.legacy`; nothing an existing install holds is dropped or rewritten by
+  guess. `scripts/rename_to_locks.py --check` passes, and a line that must name it says
+  `legacy-name` in a comment, with why.
 
 ## Fail open, fail closed
 

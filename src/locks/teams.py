@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from locks import config, roles
+from locks import config, legacy, roles
 from locks.store import home
 
 BUNDLED = "locks"
@@ -110,7 +110,7 @@ def listing(catalog: roles.Catalog | None = None) -> tuple[list[Team], dict[str,
 
 def get(name: str, catalog: roles.Catalog | None = None) -> Team:
     catalog = catalog or roles.load()
-    if name == BUNDLED:
+    if name in (BUNDLED, legacy.TEAM):  # the bundled team, by its old name too
         return bundled(catalog)
     path = folder() / f"{name}.json"
     if not roles.NAME.match(name) or not path.is_file():
@@ -140,8 +140,8 @@ def create(name: str, role_names: Sequence[str], *, description: str = "", start
     catalog = catalog or roles.load()
     if not roles.NAME.match(name):
         raise TeamError(f"{name!r} is no team name: lowercase letters, digits, - and _")
-    if name == BUNDLED:
-        raise TeamError(f"{BUNDLED!r} is the team locks ships; pick another name")
+    if name in (BUNDLED, legacy.TEAM):
+        raise TeamError(f"{name!r} is the team locks ships; pick another name")
     if (folder() / f"{name}.json").exists():
         raise TeamError(f"there is already a team {name!r}")
     base = get(start_from, catalog).role_names if start_from else ()
@@ -185,7 +185,7 @@ def assignments(env: Mapping[str, str] | None = None) -> dict[str, str]:
 def use(repo: str, name: str | None, env: Mapping[str, str] | None = None) -> None:
     """Give a project a team; None gives it back the bundled one."""
     every = assignments(env)
-    if name is None or name == BUNDLED:
+    if name is None or name in (BUNDLED, legacy.TEAM):
         every.pop(repo, None)
     else:
         get(name)

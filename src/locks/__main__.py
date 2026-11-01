@@ -19,10 +19,12 @@ if sys.version_info < OLD_ENOUGH:
 # Never inherited: a worker's hooks start on the old python3 again and must be
 # free to look for a newer one themselves.
 os.environ.pop("LOCKS_REEXEC", None)
+os.environ.pop("CAUCE_REEXEC", None)  # legacy-name: an older parent's
 
 # A command typed one plugin update later runs the newest install, not the
 # version this session's PATH started with. Once: the newer copy never forwards,
 # and keeps the version it was forwarded from (`link.LOADED`), never in its env.
+os.environ.pop("CAUCE_FORWARDED", None)  # legacy-name: an older install forwards only to its own name
 if _forwarded_from := os.environ.pop("LOCKS_FORWARDED", None):
     from locks import link
 

@@ -561,6 +561,11 @@ claude plugin marketplace add Rixmerz/claude-plugins
 claude plugin install locks@rixmerz
 ```
 
+Locks was called cauce before. An install of the old name keeps its data, its tasks, <!-- legacy-name -->
+their branches and its settings: the first Locks command moves them, and `cauce` still runs <!-- legacy-name -->
+Locks. Uninstall the old plugin once Locks is installed (`claude plugin uninstall cauce@rixmerz`), <!-- legacy-name -->
+or both run their hooks.
+
 To work on a clone, `claude plugin marketplace add /path/to/locks` and
 `claude plugin install locks@locks-dev` install it from the checkout instead.
 

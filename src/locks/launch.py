@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from locks import allow, grants, models, surfaces
+from locks import allow, grants, legacy, models, surfaces
 from locks import criteria as criteria_mod
 from locks import findings as findings_mod
 from locks import ledger as ledger_mod
@@ -55,12 +55,13 @@ RESULT_FENCE = "locks-result"
 #: Where a block opens. Its JSON is decoded straight from there, not cut at the next
 #: ```: evidence that quotes a fenced snippet, or a raw tab in a string, would
 #: otherwise end or break the block and cost the attempt its verdict.
-_OPEN_RE = re.compile(rf"```{RESULT_FENCE}[ \t]*\r?\n", re.IGNORECASE)
+_OPEN_RE = re.compile(rf"```(?:{RESULT_FENCE}|{legacy.OLD_RESULT_FENCE})[ \t]*\r?\n", re.IGNORECASE)
 #: A report a reading worker was asked for, beside its result block: findings too many
 #: and too structured for `summary` and `evidence`. Kept on the task, never a verdict.
 REPORT_FENCE = "locks-report"
-_REPORT_OPEN_RE = re.compile(rf"```{REPORT_FENCE}[ \t]*\r?\n", re.IGNORECASE)
-_REPORT_RE = re.compile(rf"```{REPORT_FENCE}\s*\n(?P<body>.*?)\n```", re.DOTALL | re.IGNORECASE)
+_REPORT_OPEN_RE = re.compile(rf"```(?:{REPORT_FENCE}|{legacy.OLD_REPORT_FENCE})[ \t]*\r?\n", re.IGNORECASE)
+_REPORT_RE = re.compile(rf"```(?:{REPORT_FENCE}|{legacy.OLD_REPORT_FENCE})\s*\n(?P<body>.*?)\n```",
+                        re.DOTALL | re.IGNORECASE)
 #: A JSON decoder that takes control characters (a raw tab) inside strings.
 _DECODER = json.JSONDecoder(strict=False)
 REPORT_CHARS = 60_000
@@ -607,7 +608,7 @@ def run(
             capture_output=True,
             text=True,
             timeout=spec.timeout_s,
-            env={**worker_env(), **spec.env},
+            env=legacy.mirror({**worker_env(), **spec.env}),
             check=False,
         )
     except subprocess.TimeoutExpired:

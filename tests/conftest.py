@@ -8,12 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from locks import plugins, workflows
+from locks import legacy, plugins, workflows
 from locks.store import Store
 
 #: The profile where every adaptive setting is on (`LOCKS_TEST_ALL_ON=1`): read once, before any
 #: test sets the switches below in this process's environment.
-ALL_ON = os.environ.get("LOCKS_TEST_ALL_ON") == "1"
+ALL_ON = (os.environ.get("LOCKS_TEST_ALL_ON")
+          or os.environ.get("CAUCE_TEST_ALL_ON")) == "1"  # legacy-name: the profile's old variable still works
 FAKE_CLAUDE = Path(__file__).parent / "scenarios" / "fake_claude.py"
 #: The settings a test turns on itself when it wants them: each would call a model, start a
 #: process or a second worker, read a record, or change what a worker is told.
@@ -32,6 +33,10 @@ def _isolated_home(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory,
     """Every test gets its own locks home. Never bypass this: a test writing to
     the real database would put fake dead ends in front of real sessions."""
     home = tmp_path / "locks-home"
+    # What the shell running the suite set under the old name (a session of an old install, one
+    # of its workers) would be read again by every process a test starts (`legacy.adopt_env`).
+    for name in [n for n in os.environ if n.startswith(legacy.OLD_ENV)]:
+        monkeypatch.delenv(name)
     monkeypatch.setenv("LOCKS_HOME", str(home))
     monkeypatch.delenv("LOCKS_HOOKS_OFF", raising=False)
     # livespec is on by default in real use. Here it is off unless a test turns

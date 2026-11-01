@@ -105,11 +105,13 @@ NOT_STEPS = frozenset({"StructuredOutput"})
 
 
 def log_dir(env: Mapping[str, str]) -> Path:
-    if env.get("LOCKS_HOME"):
-        base = Path(env["LOCKS_HOME"]).expanduser()
+    from locks import legacy
+
+    if given := legacy.getenv(env, "LOCKS_HOME"):
+        base = Path(given).expanduser()
     else:
         xdg = env.get("XDG_DATA_HOME", "")
-        base = (Path(xdg) if xdg.startswith("/") else Path.home() / ".local" / "share") / "locks"
+        base = legacy.home(Path(xdg) if xdg.startswith("/") else Path.home() / ".local" / "share")
     return base / "tool-events"
 
 

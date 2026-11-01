@@ -34,6 +34,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from locks import legacy
+
 FOLDER = ".locks"
 NAMES = "sessions.json"
 #: Prompts a session takes before Haiku looks at its name again.
@@ -95,8 +97,8 @@ def own(cwd: str | Path | None) -> Path | None:
     if not cwd:
         return None
     for d in _scope(cwd):
-        if (d / FOLDER).is_dir():
-            return d / FOLDER
+        if (found := legacy.project_folder(d)) is not None:
+            return found
     return None
 
 
@@ -107,10 +109,10 @@ def find(cwd: str | Path | None) -> Path | None:
     if not cwd:
         return None
     if (folder := _workspace(cwd)) is not None:
-        return folder / FOLDER if (folder / FOLDER).is_dir() else None
+        return legacy.project_folder(folder)
     for d in _scope(cwd):
-        if (d / FOLDER).is_dir():
-            return d / FOLDER
+        if (found := legacy.project_folder(d)) is not None:
+            return found
     return None
 
 
@@ -119,6 +121,10 @@ def enroll(cwd: str | Path) -> Path:
     `cwd` when it is no checkout), unless one is already found. Returns it.
     Raises `NotAProject` for the home directory or `/`."""
     found = find(cwd)
+    if found is not None and found.name == legacy.OLD_FOLDER:
+        # The old name's folder, read where it was until now: work is written here, so it
+        # becomes `.locks/` (never two folders).
+        found = legacy.rename_project_folder(found.parent) or found
     if found is not None:
         return found
     scope = _scope(cwd)

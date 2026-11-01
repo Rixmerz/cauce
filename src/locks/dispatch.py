@@ -31,7 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from locks import after, config
+from locks import after, config, legacy
 from locks.classify import ask_haiku
 from locks.isolate import PATHLIKE
 from locks.store import Store, home
@@ -319,7 +319,7 @@ def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
     # Nor a worker's: a process started from inside one (its mod asks for endings) is locks'.
     out.pop("LOCKS_WORKER_TASK", None)
     out.pop("LOCKS_WORKER_ATTEMPT", None)
-    return out
+    return dict(legacy.mirror(out))
 
 
 def kick(cwd: str | Path | None, key: str | None, env: Mapping[str, str]) -> str:

@@ -146,12 +146,15 @@ def livespec(name: str, arguments: Mapping[str, Any]) -> tuple[str | None, dict[
 
 
 def locks_home(env: Mapping[str, str]) -> Path:
-    """locks' home as `locks.store.home` reads it (this module imports nothing of locks)."""
-    if env.get("LOCKS_HOME"):
-        return Path(env["LOCKS_HOME"]).expanduser()
+    """locks' home as `locks.store.home` reads it (this module imports nothing of locks but
+    `locks.legacy`, the old name's stdlib-only reader)."""
+    from locks import legacy
+
+    if given := legacy.getenv(env, "LOCKS_HOME"):
+        return Path(given).expanduser()
     xdg = env.get("XDG_DATA_HOME", "")
     base = Path(xdg) if xdg.startswith("/") else Path(env.get("HOME") or Path.home()) / ".local" / "share"
-    return base / "locks"
+    return legacy.home(base)
 
 
 def outbound(name: str, arguments: Mapping[str, Any], env: Mapping[str, str] | None = None,

@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from locks import legacy
 from locks.notes import _SECRET
 
 #: The most the digest puts back into a session; sections are cut, in order of
@@ -36,7 +37,8 @@ NOT_TYPED = ("<command-", "<local-command", "<system-reminder>", "<task-notifica
 ASKED = "/compact [locks-compaction #"
 #: A prompt a plugin submitted between turns, a bare slash command, or a
 #: compaction locks asked for: in the person's place, not in their words.
-NOT_TYPED_RE = re.compile(r"^(?:The [\w.:@-]+ plugin sent a message|/[\w:-]+$|" + re.escape(ASKED) + ")")
+NOT_TYPED_RE = re.compile(r"^(?:The [\w.:@-]+ plugin sent a message|/[\w:-]+$|" + re.escape(ASKED) + "|"
+                          + re.escape(f"/compact [{legacy.OLD_COMPACTION} #") + ")")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 

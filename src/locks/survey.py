@@ -44,7 +44,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from locks import classify, compact, repo, roles, teams, usage
+from locks import classify, compact, legacy, repo, roles, teams, usage
 from locks import plugins as locks_plugins
 from locks.notes import _PRIVATE
 from locks.store import Store, home
@@ -561,7 +561,7 @@ def branches(top: Path, *, limit: int = DEEP["branches"], unmerged: int = DEEP["
         seen[name] = parts[1]
         rows.append({"branch": parts[0], "sha": parts[1][:7], "date": parts[2],
                      "subject": _clip(parts[3], COMMAND_CHARS)})
-    ours = [r for r in rows if r["branch"].removeprefix("origin/").startswith("locks/task-")]
+    ours = [r for r in rows if r["branch"].removeprefix("origin/").startswith(("locks/task-", f"{legacy.OLD}/task-"))]
     rows = [r for r in rows if r not in ours]
     commits_out: list[dict[str, Any]] = []
     for r in rows[:limit]:

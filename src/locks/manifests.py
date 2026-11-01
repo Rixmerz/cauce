@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from locks import legacy
+
 FORMAT = 1
 KEY = "locks"
 FILE = "locks.json"
@@ -94,16 +96,24 @@ def parse(data: Any, plugin: str, version: str) -> Manifest | None:
 _CACHE: dict[tuple[str, str, tuple[int, ...]], Manifest | None] = {}
 
 
+#: (key in plugin.json, file beside it), in the order they are read: the new name's, then the
+#: old name's, which neighbours already ship (a contract with other repositories, never dropped).
+NAMES = ((KEY, FILE), (legacy.MANIFEST_KEY, legacy.MANIFEST_FILE))
+
+
 def _block(root: Path) -> tuple[Path, Any] | None:
-    """The manifest's `locks` block, else the whole of `locks.json` beside it."""
+    """The manifest's `locks` block, else the whole of `locks.json` beside it; then the same
+    under the old name (`legacy.MANIFEST_KEY`, `legacy.MANIFEST_FILE`)."""
     folder = root / ".claude-plugin"
+    manifest: Any = None
     with contextlib.suppress(OSError, ValueError):
         manifest = json.loads((folder / "plugin.json").read_text(encoding="utf-8"))
-        if isinstance(manifest, dict) and KEY in manifest:
-            return folder / "plugin.json", manifest[KEY]
-    path = folder / FILE
-    with contextlib.suppress(OSError, ValueError):
-        return path, json.loads(path.read_text(encoding="utf-8"))
+    for key, name in NAMES:
+        if isinstance(manifest, dict) and key in manifest:
+            return folder / "plugin.json", manifest[key]
+        path = folder / name
+        with contextlib.suppress(OSError, ValueError):
+            return path, json.loads(path.read_text(encoding="utf-8"))
     return None
 
 
@@ -117,7 +127,7 @@ def read(plugin: str, env: Mapping[str, str] | None = None) -> Manifest | None:
         return None
     root = roots[0]
     stamp = []
-    for name in ("plugin.json", FILE):
+    for name in ("plugin.json", FILE, legacy.MANIFEST_FILE):
         with contextlib.suppress(OSError):
             stamp.append((root / ".claude-plugin" / name).stat().st_mtime_ns)
     key = (str(root), root.name, tuple(stamp))

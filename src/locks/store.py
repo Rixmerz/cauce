@@ -36,7 +36,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from locks import __version__
+from locks import __version__, legacy
 from locks.text import fold, title_of, words
 
 SCHEMA = """
@@ -278,13 +278,13 @@ def _days_ago(days: int) -> str:
 
 def home(env: dict[str, str] | None = None) -> Path:
     env = dict(os.environ) if env is None else env
-    if env.get("LOCKS_HOME"):
-        return Path(env["LOCKS_HOME"]).expanduser()
+    if given := legacy.getenv(env, "LOCKS_HOME"):
+        return Path(given).expanduser()
     xdg = env.get("XDG_DATA_HOME", "")
     # The home of the environment given, not of this process: a caller that
     # passes an environment means all of it.
     base = Path(xdg) if xdg.startswith("/") else Path(env.get("HOME") or Path.home()) / ".local" / "share"
-    return base / "locks"
+    return legacy.home(base)  # moved from the old name's the first time
 
 
 SETUP_RETRIES = 100
@@ -376,10 +376,11 @@ class Store:
                     # and added it first: the column is there, which is the point.
                     if "duplicate column" not in str(exc):
                         raise
+        legacy.upgrade_store(self._conn)
 
     @classmethod
     def open(cls, env: dict[str, str] | None = None) -> Store:
-        return cls(home(env) / "locks.db")
+        return cls(legacy.database(home(env)))
 
     def close(self) -> None:
         self._conn.close()

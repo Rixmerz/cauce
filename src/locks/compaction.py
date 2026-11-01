@@ -57,7 +57,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from locks import compact, config
+from locks import compact, config, legacy
 from locks.store import Store
 
 #: The context is worth compacting from this share of the model's window.
@@ -94,7 +94,7 @@ RECENT_REQUESTS = 4
 TAIL_BYTES = 2 * 1024 * 1024
 #: What a compaction locks asked for carries, with its decision's id.
 MARKER = "[locks-compaction #{id}]"
-MARKER_RE = re.compile(r"\[locks-compaction #(\d+)\]")
+MARKER_RE = re.compile(rf"\[(?:locks|{legacy.OLD})-compaction #(\d+)\]")  # an old one in a transcript too
 #: The most of what the orchestrating session asks the summary to keep, and of its reason.
 KEEP_CHARS = 500
 WHY_CHARS = 200

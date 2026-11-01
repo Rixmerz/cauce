@@ -22,6 +22,7 @@ from locks import (
     config,
     dispatch,
     lazy,
+    legacy,
     orchestrator,
     progress,
     project,
@@ -2089,7 +2090,7 @@ def cmd_workspace(args: argparse.Namespace) -> int:
         folder_state = project.enroll(new)
         for m in entry["members"]:
             # The session names a person wrote in a repository stay theirs in the folder.
-            if (mine := Path(m["path"]) / project.FOLDER).is_dir() and mine != folder_state:
+            if (mine := legacy.project_folder(Path(m["path"]))) is not None and mine != folder_state:
                 project.take_names(mine, folder_state)
     print(f"workspace {new}: " + ", ".join(f"{m['name']} ({m['path']})" for m in entry["members"]))
     print(f"  one project now: {moved['notes']} note(s) and {moved['tasks']} task(s) moved to it"
@@ -2487,6 +2488,8 @@ def cmd_link(args: argparse.Namespace) -> int:
         print(f"locks: {exc}", file=sys.stderr)
         return 1
     print(f"wrote {target}: it runs the newest locks Claude Code has installed")
+    if old := link.write_old(target_dir, launcher):
+        print(f"rewrote {old}: the old command runs the newest locks too")
     if not link.on_path(target_dir, os.environ):
         print(f"{target_dir} is not on PATH; add it to your shell profile: export PATH=\"{target_dir}:$PATH\"")
     return 0
@@ -3274,5 +3277,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"locks: this is a worker of task #{os.environ['LOCKS_WORKER_TASK']}: it does not start locks work. "
               "Say what is left in your result block instead.", file=sys.stderr)
         return 2
+    with contextlib.suppress(OSError):
+        if renamed := legacy.say_renamed(home()):
+            print(renamed, file=sys.stderr)
+    os.environ.pop("LOCKS_INVOKED_AS", None)
     return int(args.func(args))
 

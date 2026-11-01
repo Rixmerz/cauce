@@ -30,7 +30,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from locks import models
+from locks import legacy, models
 from locks.matrix import DEFAULT_KIND, KINDS
 from locks.text import clip, fold, words
 
@@ -381,4 +381,4 @@ def _quiet_env() -> dict[str, str]:
     env = dict(os.environ)
     # A worker or a classifier call must not record itself as a task.
     env["LOCKS_HOOKS_OFF"] = "1"
-    return env
+    return dict(legacy.mirror(env))

@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from locks import legacy
 from locks import signature as sig
 from locks.signature import arg_hash, signature  # noqa: F401 - re-exported for callers and tests
 from locks.store import Store
@@ -316,6 +317,8 @@ def _contains(longer: tuple[str, ...], shorter: tuple[str, ...]) -> bool:
 
 #: The environment variable a habit's command reads the edited file from.
 EDITED_VAR = "LOCKS_EDITED"
+#: Its old name, which habits installed before the rename still read.
+OLD_EDITED_VAR = legacy.OLD_ENV + "EDITED"
 #: Meta key per repository: the candidates a review was already queued for.
 REVIEWED_PREFIX = "habits.reviewed:"
 #: The days of events a review is mined from.
@@ -413,7 +416,7 @@ def queue_review(store: Store, *, repo: str, cwd: str, session_id: str | None,
 #: What a reviewed command may never hold: a second command, a pipe, a redirection, a command
 #: substitution, or a variable other than the edited file. A hook locks installs on its own
 #: runs exactly the habit's program on that file, nothing else.
-_SHELL = re.compile(r"[;&|<>`\n\\]|\$\(|\$(?!\{?LOCKS_EDITED\}?)")
+_SHELL = re.compile(rf"[;&|<>`\n\\]|\$\(|\$(?!\{{?(?:LOCKS|{legacy.OLD_ENV[:-1]})_EDITED\}}?)")
 #: Runners a habit's program may be started through (`uv run pytest`, `npx eslint`).
 _RUNNERS = frozenset({"uv", "npx", "pnpm", "yarn", "bunx", "poetry", "python", "python3", "-m", "run", "exec",
                       "dlx"})
@@ -639,7 +642,7 @@ def run_habit(store: Store, habit_id: int, event: Mapping[str, Any]) -> str | No
         # The file the edit wrote, for a command scoped to it (`ruff check "$LOCKS_EDITED"`).
         proc = subprocess.run(habit["command"], shell=True, cwd=event.get("cwd") or None,  # noqa: S602
                               capture_output=True, text=True, timeout=110, check=False,
-                              env={**os.environ, EDITED_VAR: path})
+                              env={**os.environ, EDITED_VAR: path, OLD_EDITED_VAR: path})
         ok, output = proc.returncode == 0, (proc.stdout + proc.stderr).strip()
         if ok and time.monotonic() - started > SLOW_SECONDS:
             ok, output = False, f"it passed but took over {SLOW_SECONDS} s: too slow to run after every edit"
