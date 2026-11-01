@@ -38,3 +38,24 @@ def test_key_prefers_origin_then_toplevel(git_repo, tmp_path):
     assert repo.key(tmp_path / "missing") is None
     assert repo.key(None) is None
     assert repo.toplevel(plain) is None
+
+
+def test_what_git_said_of_a_folder_is_kept_until_a_stat_shows_it_changed(git_repo, monkeypatch):
+    """`toplevel` and a checkout's key are asked of git once per process (a hook asked a dozen times
+    per folder), and asked again when a repository is made inside, or the remote changes."""
+    import subprocess
+
+    from cauce import repo
+
+    calls = []
+    real = repo._git
+    monkeypatch.setattr(repo, "_git", lambda d, *a: calls.append(a) or real(d, *a))
+    inner = git_repo / "pkg"
+    inner.mkdir()
+    assert repo.toplevel(inner) == git_repo.resolve() and repo.toplevel(inner) == git_repo.resolve()
+    assert repo.key(git_repo) == repo.key(git_repo) == str(git_repo.resolve())
+    assert len(calls) == 3  # a rev-parse for `pkg`, one for the checkout and one remote lookup, each once
+    subprocess.run(["git", "init", "-q", str(inner)], check=True)
+    assert repo.toplevel(inner) == inner.resolve()
+    subprocess.run(["git", "remote", "add", "origin", "git@github.com:o/r.git"], cwd=git_repo, check=True)
+    assert repo.key(git_repo) == "github.com/o/r"

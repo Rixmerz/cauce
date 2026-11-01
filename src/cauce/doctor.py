@@ -633,11 +633,17 @@ SPECS_SHOWN = 5
 def _checkouts(store: Store, since: str | None, livespec: Any) -> list[Path]:
     """The repositories recent runs were in, each once: the checkout a run's folder is in, or each
     repository inside a folder of them (`Livespec.roots`, never the folder)."""
-    found: dict[Path, None] = {}
+    folders: dict[str, None] = {}
     for event in store.events_of_kinds(["planned"], since=since):
         task = store.get_task(event["task_id"])
-        where = Path(task["cwd"]) if task and task.get("cwd") else None
-        if where is not None and where.is_dir():
+        if task and task.get("cwd"):
+            folders[str(task["cwd"])] = None
+    # Each folder once: a store of months holds thousands of runs in a handful of folders, and each
+    # folder's repositories are read with git (`cauce doctor` took 33 s on 3000 runs, one process each).
+    found: dict[Path, None] = {}
+    for folder in folders:
+        where = Path(folder)
+        if where.is_dir():
             found.update(dict.fromkeys(livespec.roots(where)))
     return list(found)
 

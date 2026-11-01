@@ -280,6 +280,19 @@ def test_a_repository_with_no_livespec_index_is_suspect_and_the_fix_is_the_comma
     assert "needs livespec, or `uv` to run the pinned release" in cannot.fix
 
 
+def test_the_folders_runs_were_in_are_read_once_each_however_many_runs(store: Store, git_repo, tmp_path):
+    """A store of months holds thousands of runs in a handful of folders: each folder's
+    repositories are read with git once, not once per run (`cauce doctor` took 33 s on 3000)."""
+    livespec = _livespec(tmp_path)
+    asked: list = []
+    roots = livespec.roots
+    livespec.roots = lambda where: asked.append(where) or roots(where)
+    for _ in range(30):
+        _ran_in(store, git_repo)
+    assert len(doctor._checkouts(store, None, livespec)) == 1
+    assert asked == [git_repo]
+
+
 def test_an_index_older_than_the_last_commit_or_one_that_cannot_be_read_is_suspect(store: Store, git_repo, tmp_path):
     from .livespec_fixture import build
 
