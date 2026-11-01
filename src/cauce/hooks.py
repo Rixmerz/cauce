@@ -736,15 +736,12 @@ def keep_notes(event: Mapping[str, Any], root: Path, env: Mapping[str, str], *,
 STOPPED_FOR_A_PERSON = ("blocked", "needs_approval")
 
 
-def _endings(store: Store, session_id: str, *, via: str, mark: bool = True) -> str | None:
+def _endings(store: Store, session_id: str, *, via: str) -> str | None:
     """Work this session sent that ended since it last heard, each with what to do
     next, marked as reported: a queued task finishes while nobody waits on it,
-    and the session that sent it would otherwise never learn it should act.
-    `mark=False` reads them without taking them: a display, not a delivery. A loop
+    and the session that sent it would otherwise never learn it should act. A loop
     this session started that stopped is told here too, once (`cauce.loops`)."""
-    told = endings(store, session_id, claim=via if mark else None)[0]
-    if not mark:
-        return told
+    told = endings(store, session_id, claim=via)[0]
     try:
         from cauce import loops
 

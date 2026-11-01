@@ -68,6 +68,7 @@ FIXED_IN = {
     "pickup-nobody-saw": "0.45.0",
     "died-after-a-pass": "0.63.0",
     "resumed-after-it-landed": "0.66.0",
+    "swept-before-its-pid": "0.66.0",
 }
 #: An attempt that ran this long per turn it counted kept a count the CLI restarted.
 WALL_PER_TURN_S = 300
@@ -741,6 +742,31 @@ def resumed_after_it_landed(store: Store, *, since: str | None, **_) -> Iterable
         yield _history("resumed-after-it-landed", sorted(set(before)), None)
 
 
+def swept_before_its_pid(store: Store, *, since: str | None, **_) -> Iterable[Finding]:
+    """A cauce run stopped as dead while it had no pid: a run was marked running and given its pid in
+    two writes, and a sweep between them read it as dead (`no sign of life`, no process named). The run
+    went on unseen; a resume that started so died with nobody noticing."""
+    before: list[int] = []
+    for event in store.events_of_kinds(["finished"], since=since):
+        stop = event["data"].get("stop") or {}
+        if stop.get("cause") != "died" or not str(stop.get("reason") or "").startswith("no sign of life"):
+            continue
+        if "its process (" in str(stop.get("reason")):
+            continue
+        task = store.get_task(event["task_id"]) or {}
+        if task.get("source") != "cauce":
+            continue
+        if _fixed("swept-before-its-pid", event["data"].get("version")):
+            before.append(event["task_id"])
+            continue
+        yield Finding("swept-before-its-pid", SUSPECT,
+                      f"#{event['task_id']} was stopped as dead with no process on record: a run between its "
+                      "start and its pid", f"`cauce resume {event['task_id']} --unattended` if it should go on",
+                      event["task_id"], task.get("repo"))
+    if before:
+        yield _history("swept-before-its-pid", sorted(set(before)), None)
+
+
 RULES: tuple[Callable[..., Iterable[Finding]], ...] = (
     lanes_paused_on_ended, running_with_no_process, queued_with_no_dispatcher, held_behind_gone, wait_judged_on_gone,
     resumes_that_never_ran,
@@ -748,7 +774,7 @@ RULES: tuple[Callable[..., Iterable[Finding]], ...] = (
     format_failures_that_climbed, fix_rounds_off_their_base, candidates_on_trial_at_once, revisions_judged_twice,
     trials_never_sampled, notes_proven_unbriefed, preexisting_that_was_not, problems_open_after_pass,
     flake_fixes_checked_once, turns_under_the_wall, pickups_nobody_saw, died_after_a_pass, resumed_after_it_landed,
-    indexes_not_ready, specs_with_no_code,
+    swept_before_its_pid, indexes_not_ready, specs_with_no_code,
 )
 
 

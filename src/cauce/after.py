@@ -241,10 +241,18 @@ def _elsewhere(source: str | None, where: Path | None) -> Path | None:
     theirs, mine = repo.toplevel(Path(source)), repo.toplevel(where)
     if theirs is None or mine is None or theirs == mine:
         return None
-    # A worktree of the same repository is the same repository.
-    if repo.key(theirs) == repo.key(mine):
+    # A worktree of the same repository is the same repository: one git store, with or without a
+    # remote (with none, each checkout's key is its own path).
+    if repo.key(theirs) == repo.key(mine) or _store_of(theirs) == _store_of(mine):
         return None
     return theirs
+
+
+def _store_of(top: Path) -> str:
+    """The git store a checkout keeps its objects in, shared by every worktree of it."""
+    from cauce import repo
+
+    return repo._git(top, "rev-parse", "--path-format=absolute", "--git-common-dir") or str(top)
 
 
 def reads(kept: tuple[str | None, list[str], str, str | None], where: Path | None) -> str | None:
