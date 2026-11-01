@@ -27,6 +27,13 @@
   coverage pass.
 - **`cauce habits install --repo` with a folder that does not exist made it**, and wrote
   `.claude/settings.local.json` inside. A missing folder is a typo: it is now refused.
+- **The recipes a brief carries changed from one process to the next**: tied sequences were
+  ordered by a set, whose order follows each process's hash seed (`habits.recipes`). Found by the
+  coverage pass.
+- **A CI service written `db: {}` was named `{}`**; an empty flow mapping or list is now read as
+  one (`ci.read`).
+- **A checkout with no commit read `HEAD` as its commit** when notes were reviewed (`git rev-parse`
+  prints it and fails); it now has none.
 - **API keys were not masked** (`notes._SECRET`, used for check tails, notes, briefs, the scribe, the
   survey and compaction digests). Anthropic (`sk-ant-api03-…`) and OpenAI (`sk-proj-…`) keys carry
   dashes, and the pattern took letters and digits only, so they went through whole. It now also

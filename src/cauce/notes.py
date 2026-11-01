@@ -383,10 +383,16 @@ def review(store: Store, project: str, repo_dir: Path) -> list[tuple[int, str]]:
     return list(flagged.items())
 
 
+def _head(top: Path) -> str:
+    """The checkout's commit, "" with none yet: `git rev-parse HEAD` then prints `HEAD` itself and fails."""
+    done = _git(top, "rev-parse", "--verify", "--quiet", "HEAD")
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
 def _review_in(store: Store, top: Path, anchors: Sequence[Mapping[str, Any]], flagged: dict[int, str]) -> None:
     if not anchors:
         return
-    head = _git(top, "rev-parse", "HEAD").stdout.strip()
+    head = _head(top)
     if not head:
         return
     now = _blobs(top, head, sorted({a["file"] for a in anchors}))
@@ -420,7 +426,7 @@ def confirm(store: Store, note_id: int, repo_dir: Path | None) -> dict | None:
             pre, top = next(((p, t) for p, t in places if a["path"].startswith(p)), ("", None))
             if top is None:
                 continue
-            head = heads.setdefault(top, _git(top, "rev-parse", "HEAD").stdout.strip())
+            head = heads.setdefault(top, _head(top))
             file = a["path"][len(pre):]
             blob = _blobs(top, head, [file]).get(file) if head else None
             store.update_anchor(a["id"], commit_sha=head if blob else None, blob=blob)
