@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.67.0] - 2026-11-01
+
+### Changed
+
+- **livespec pinned at 0.36.0**, which carries three fixes found from cauce:
+  - an attribute call no longer links to a project function of the same name, so the briefs' code map stops naming false callers (`isolate.join` read 457 callers, now 2);
+  - indexing is 35% faster;
+  - spec impact now sees specs.
+
+  The adapter's reads, brief, reach, impact and `validate_openspec` were checked against a real 0.36.0 index, and every tool cauce names is there.
+
+### Fixed
+
+- **A race neither side won was never counted as one.** Its mark sat on the start's attempt,
+  which the next move then overwrote. The rung's try was not read as the first try of its own
+  that it is, either. The rung's attempt is now marked `raced_beside`: `racing.outcome` reads it
+  as neither, and `standards.samples` reads it as a first try while the start's try goes on.
+
 ## [0.66.0] - 2026-11-01
 
 ### Fixed

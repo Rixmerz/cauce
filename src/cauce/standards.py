@@ -174,6 +174,12 @@ def samples(attempts: Sequence[Mapping[str, Any]]) -> list[tuple[str, bool]]:
     current: list[Any] | None = None
     before = None
     for i, a in enumerate(attempts):
+        if a.get("move") == "raced_beside":
+            # The rung's try of a race neither won: a first try of its own, from the base beside
+            # the start's, which goes on after it (its try and the move it took stay current).
+            said = bool(a["passed"]) or a.get("failure") not in NO_VERDICT
+            out.append([_label(a.get("cell")), bool(a["passed"]), said])
+            continue
         if a.get("move") == "raced_out":
             # Stopped because the other try of its race passed first: it says nothing of its
             # cell, and the try after it started from the base beside it.
