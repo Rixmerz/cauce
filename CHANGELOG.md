@@ -4,11 +4,17 @@
 
 ## [Unreleased]
 
+## [0.69.1] - 2026-11-01
+
 ### Changed
 
 - **The repository is `Rixmerz/locks`.** The plugin manifest points there; GitHub redirects the old
   address. `scripts/rename_to_locks.py` rewrites the repository's name too, so `--check` no longer
   keeps it.
+
+### Fixed
+
+- **A change with nothing to render owes no layout-inspector measurement** ([#115](https://github.com/Rixmerz/locks/issues/115)). A test fixture of type `.tsx`, a coverage report's HTML, an example, documentation or build output matched the UI patterns, so a feature in a repository with no UI was held back and stopped as a decision. Only a path that is rendered UI (`capabilities.renders`) makes the evidence owed now.
 
 ## [0.69.0] - 2026-11-01
 
