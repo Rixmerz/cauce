@@ -923,3 +923,357 @@ def test_isolate_in_place_says_once_who_holds_the_checkout(git_repo, tmp_path, m
         assert lock.read_text() == "42"
     held.close()
     assert said == ["task #41"] and len(checks) == 3
+
+
+# --- orchestrate -------------------------------------------------------------------------------
+
+
+def _orch():
+    from . import test_orchestrate as t
+
+    return t
+
+
+@pytest.mark.usefixtures("no_verifier")
+def test_orchestrate_an_integrate_step_with_no_worktree_stops_for_the_environment(git_repo, store):
+    from cauce.orchestrate import Options, run
+
+    t = _orch()
+    base = t._two_branches(git_repo, conflict=False)
+    report = run("Join the parts", git_repo, store,
+                 Options(kind="implement", base=base, integrate=t.JOIN, isolate=False),
+                 registry={}, launcher=pytest.fail, classifier=t.kind("implement"), adapters=[])
+    assert report.status == "blocked" and report.stop.cause == "environment"
+    assert "in a worktree of its own, and this run has none" in report.stop.reason
+
+
+@pytest.mark.usefixtures("no_verifier")
+def test_orchestrate_a_joined_check_that_cannot_run_blocks_with_no_worker(git_repo, store):
+    from cauce.orchestrate import Options, run
+
+    t = _orch()
+    base = t._two_branches(git_repo, conflict=False)
+    report = run("Join the parts", git_repo, store,
+                 Options(kind="implement", base=base, integrate=t.JOIN, verify="sh -c 'exit 127'"),
+                 registry={}, launcher=pytest.fail, classifier=t.kind("implement"), adapters=[])
+    # a check that cannot start says nothing of the joined work: blocked, never a pass
+    assert report.status == "blocked" and report.stop.cause == "environment"
+    assert "could not run here (exit 127: the shell did not find the command)" in report.stop.reason
+
+
+def test_orchestrate_cannot_run_reads_nothing_into_a_check_that_passed():
+    from cauce import orchestrate
+
+    assert orchestrate.cannot_run(0, "exit 127") is None
+    assert orchestrate.cannot_run(None, "") is None
+    assert orchestrate.cannot_run(1, "1 failed") is None
+
+
+def _repo(where: Path) -> Path:
+    where.mkdir(parents=True)
+    git(where, "init", "-q", "-b", "main")
+    (where / "a.txt").write_text("a\n")
+    git(where, "add", "-A")
+    git(where, "commit", "-q", "-m", "a")
+    return where
+
+
+def test_orchestrate_spans_offers_a_workspace_it_extends_or_a_folder_it_holds(tmp_path, monkeypatch):
+    from cauce import orchestrate, workspaces
+
+    ws = tmp_path / "ws"
+    api, web = _repo(ws / "api"), _repo(ws / "web")
+    workspaces.add(ws)
+    lone = _repo(tmp_path / "apart" / "lone")
+    said = orchestrate._spans(api, [str(lone)])
+    # api's workspace exists: the offer adds the one apart to it
+    assert f"`cauce workspace add {ws.resolve()} --with {lone.resolve()}`" in said
+    assert orchestrate._spans(api, [str(web)]) is None  # the same workspace: one project already
+    # a folder git cannot list: no offer of a folder nobody made
+
+    def refuse(self):
+        raise OSError("no")
+
+    pair = tmp_path / "pair"
+    one, two = _repo(pair / "one"), _repo(pair / "two")
+    monkeypatch.setattr(Path, "iterdir", refuse)
+    said = orchestrate._spans(one, [str(two)])
+    assert "a workspace needs a folder that holds just them" in said
+
+
+def test_orchestrate_refusals_need_a_repository_and_limit_extra_needs_a_reset(store):
+    from cauce import orchestrate, stops
+    from cauce.escalate import Attempt, Failure
+    from cauce.matrix import Cell
+
+    assert orchestrate._refused_here(store, None, (), "auto") == []
+    plain = Attempt(Cell("sonnet", "high"), 30, False, Failure.ENVIRONMENT, limited="usage")
+    assert orchestrate._limit_extra(store, plain) == {}
+    store.set_meta(stops.LIMIT_META, "2999-01-01T00:00:00+00:00")
+    later = Attempt(Cell("sonnet", "high"), 30, False, Failure.ENVIRONMENT, limited="usage", retry_after_s=60)
+    found = orchestrate._limit_extra(store, later)
+    # a later reset already kept is never moved earlier
+    assert "resets_at" in found and store.meta(stops.LIMIT_META) == "2999-01-01T00:00:00+00:00"
+
+
+def _at(store, event_id: int, epoch: float) -> None:
+    from datetime import UTC, datetime
+
+    store._conn.execute("UPDATE events SET ts = ? WHERE id = ?",
+                        (datetime.fromtimestamp(epoch, UTC).isoformat(), event_id))
+
+
+def test_orchestrate_pickup_causes_split_the_wait_by_its_decisions(store):
+    from cauce import orchestrate
+
+    task = store.create_task("x", status="queued", source="queue")
+    assert orchestrate.pickup_causes(store, task["id"], 100.0, 100.0, {}) == {}
+    # held at 110, let start at 130, held again at 150; a decision after the start counts nothing
+    for when, parallel in ((110, False), (130, True), (150, False), (500, False)):
+        _at(store, store.add_event(task["id"], "dispatch_decided", parallel=parallel), when)
+    # a usage limit held the queue from 102 to 105; a wait that names no end counts nothing
+    _at(store, store.add_event(task["id"], "limit_waiting", until=105), 102)
+    _at(store, store.add_event(task["id"], "limit_waiting"), 103)
+    found = orchestrate.pickup_causes(store, task["id"], 100.0, 200.0, {"level": 2, "ceiling": 2})
+    assert found == {"pickup_conflict_s": 70.0, "pickup_limit_s": 3.0, "pickup_ceiling_s": 27.0}
+    assert sum(found.values()) == 100.0
+
+
+def test_orchestrate_gaps_measure_no_pickup_from_a_time_they_cannot_read(store):
+    from cauce import orchestrate
+
+    task = store.create_task("x", status="queued", source="queue")
+    store._conn.execute("UPDATE tasks SET created_at = 'garbage' WHERE id = ?", (task["id"],))
+    store.add_event(task["id"], "dispatched", at=1000.0, level=1)
+    assert orchestrate._gaps(store, task["id"], 1002.5) == {"spawn_s": 2.5}
+    assert orchestrate._epoch("garbage") is None and orchestrate._seconds_since("garbage") is None
+
+
+@pytest.fixture
+def late(monkeypatch):
+    monkeypatch.setenv("CAUCE_VERIFIER", "on")
+    monkeypatch.setenv("CAUCE_OVERLAP", "off")
+    monkeypatch.setenv("CAUCE_LATE_VERIFIER", "on")
+
+
+def test_orchestrate_a_late_check_that_cannot_run_leaves_the_pass_and_says_so(git_repo, store, late):
+    from cauce.orchestrate import Options, run
+
+    from .test_checking import passing
+
+    t = _orch()
+    calls = []
+
+    def launcher(spec):
+        calls.append(spec)
+        if len(calls) == 1:
+            (spec.target_dir / "app.py").write_text("print('fixed')\n")
+            return passing()
+        raise RuntimeError("the check's CLI broke")
+
+    report = run("fix the cart total", git_repo, store, Options(verify="true"), registry={}, launcher=launcher,
+                 classifier=t.kind("implement"))
+    assert report.status == "done" and report.late_check
+    verified = store.last_event(report.task_id, "verified")["data"]
+    assert verified["late"] and verified["passed"] is None
+    assert "the late independent check could not run: RuntimeError" in verified["summary"]
+    assert store.get_task(report.task_id)["status"] == "done"
+
+
+def test_orchestrate_a_late_check_that_fails_without_a_finding_still_reopens_the_task(git_repo, store, late):
+    from cauce.orchestrate import Options, run
+
+    from .test_checking import check, passing
+
+    t = _orch()
+    script = t.Script(passing(), check("fail", (), summary="the total is still wrong"), write="app.py")
+    report = run("fix the cart total", git_repo, store, Options(verify="true"), registry={}, launcher=script,
+                 classifier=t.kind("implement"))
+    assert report.status == "done" and report.late_check
+    verified = store.last_event(report.task_id, "verified")["data"]
+    # a failing verdict with no finding is read as one blocker in its own words, never as a pass
+    assert verified["blocking"] == 1 and verified["passed"] is False
+    assert verified["blockers"][0]["what"] == "the total is still wrong"
+    assert store.final_event(report.task_id)["data"]["stop"]["cause"] == "review"
+
+
+class _Index:
+    """A present neighbour whose index says what each test needs, or breaks."""
+
+    name = "fakeidx"
+
+    def __init__(self, raise_rungs=0, reach=None, assess=None, links=False):
+        self._raise, self._reach, self._assess = raise_rungs, reach, assess
+        if links:
+            self.spec_links_brief = lambda *a: ""
+
+    def inspect(self, repo_dir):
+        from cauce.adapters import PRESENT, Status
+
+        return Status(self.name, PRESENT)
+
+    def server(self):
+        return None
+
+    def brief(self, text, repo_dir, status):
+        from cauce.adapters import Briefing
+
+        return Briefing(raise_rungs=self._raise)
+
+    def reach(self, named, repo_dir, status):
+        if isinstance(self._reach, Exception):
+            raise self._reach
+        return self._reach or ()
+
+    def assess(self, changed, repo_dir, status):
+        if isinstance(self._assess, Exception):
+            raise self._assess
+        return self._assess or ()
+
+    def hint(self, kind, repo_dir, workdir):
+        return ""
+
+
+def _adopt_all(monkeypatch):
+    from cauce import orchestrate
+
+    monkeypatch.setattr(orchestrate, "adopted", lambda options, adapters: list(adapters or ()))
+
+
+def test_orchestrate_an_index_cannot_raise_a_start_past_the_top_of_its_ladder(git_repo, store, monkeypatch):
+    from cauce import orchestrate
+    from cauce.classify import Classification
+    from cauce.matrix import LADDERS
+    from cauce.orchestrate import Options
+
+    _adopt_all(monkeypatch)
+    found = orchestrate.plan("what does the parser do?", git_repo, store, Options(), {},
+                             classifier=lambda text: Classification("chat", "high", "rule", "t"),
+                             adapters=[_Index(raise_rungs=1)])
+    # high complexity already put a reading kind on its top rung: the index finds nowhere higher
+    assert found.start == LADDERS["chat"][-1]
+    assert not any("one rung up for what the code index found" in r for r in found.reasons)
+
+
+def test_orchestrate_what_named_files_reach_is_briefed_only_from_an_index_that_says(git_repo, store, monkeypatch):
+    from cauce import orchestrate
+    from cauce.orchestrate import Options
+
+    _adopt_all(monkeypatch)
+    t = _orch()
+    quiet = _Index(reach=())
+    broken = _Index(reach=RuntimeError("index gone"))
+    found = orchestrate.plan("fix the bug in src/app.py", git_repo, store, Options(), {},
+                             classifier=t.kind("implement"), adapters=[broken, quiet])
+    # an index that breaks or says nothing puts nothing in the brief, and costs the plan nothing
+    assert not any("What the code index says the files" in line for line in found.context)
+    said = _Index(reach=("src/app.py: called by main",))
+    found = orchestrate.plan("fix the bug in src/app.py", git_repo, store, Options(), {},
+                             classifier=t.kind("implement"), adapters=[said])
+    assert any("- src/app.py: called by main" in line for line in found.context)
+
+
+def test_orchestrate_impact_skips_an_index_that_breaks_and_links_fail_open(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cauce import orchestrate, specs
+
+    ok_status, breaking = object(), _Index(assess=RuntimeError("down"))
+    speaking = _Index(assess=("specs/cart.md is touched", "callers could not be read"))
+    plan = SimpleNamespace(active=[(breaking, ok_status), (speaking, ok_status)], seen_risks=("a risk",))
+    # the line that says the index could not read something is dropped; the risk a plan named is kept
+    assert orchestrate._impact(plan, ["a.py"], tmp_path) == ["specs/cart.md is touched", "a risk"]
+
+    def broken(*args, **kwargs):
+        raise OSError("unreadable")
+
+    monkeypatch.setenv("CAUCE_SPECS", "on")
+    monkeypatch.setattr(specs, "unlinked", broken)
+    linked = SimpleNamespace(active=[(_Index(links=True), ok_status)], seen_risks=())
+    assert orchestrate._unlinked(linked, ["a.py"], tmp_path, None) == []
+
+
+def test_orchestrate_later_notes_and_said_today_fail_open_on_a_store_error(store, monkeypatch):
+    import sqlite3
+    from types import SimpleNamespace
+
+    from cauce import notes, orchestrate
+
+    monkeypatch.setenv("CAUCE_NOTES", "on")
+
+    def broken(*args, **kwargs):
+        raise sqlite3.OperationalError("locked")
+
+    monkeypatch.setattr(notes, "anchored_to", broken)
+    assert orchestrate._later_notes(store, "r", SimpleNamespace(notes=(), withheld=()), ["a.py"]) == []
+    monkeypatch.setattr(store, "meta", broken)
+    # a line it cannot mark as heard is said again, never lost
+    assert orchestrate.said_today(store, "r", ["livespec: absent"]) == frozenset()
+
+
+def test_orchestrate_a_plan_for_a_folder_that_is_no_project_has_no_standard(tmp_path, store):
+    from cauce import orchestrate
+    from cauce.matrix import LADDERS
+    from cauce.orchestrate import Options
+
+    t = _orch()
+    found = orchestrate.plan("fix it", tmp_path / "gone", store, Options(), {}, classifier=t.kind("implement"),
+                             adapters=[])
+    assert found.standard is None and found.start == LADDERS["implement"][0]
+    assert not any("standard" in r for r in found.reasons)
+
+
+def test_orchestrate_a_plan_says_recipes_a_bypassed_check_an_old_base_and_notes_on_trial(git_repo, store,
+                                                                                        monkeypatch):
+    from cauce import habits, isolate, notes, orchestrate
+    from cauce.orchestrate import Options
+
+    t = _orch()
+    monkeypatch.setenv("CAUCE_NOTES", "on")
+    monkeypatch.setattr(habits, "recipes", lambda store, kind, repo=None: ["ruff check before the tests"])
+    monkeypatch.setattr(isolate, "behind_trunk", lambda repo_dir: "base: this starts from feature, 12 commits behind")
+    candidate = {"id": 77, "topic": "parser", "kind": "fact", "body": "x"}
+    monkeypatch.setattr(notes, "recall", lambda *a, **kw: [candidate])
+    monkeypatch.setattr(notes, "unmerged", lambda found, repo_dir, base: list(found))
+    monkeypatch.setattr(notes, "arms", lambda store, found: ([], list(found)))
+    (git_repo / "package.json").write_text(json.dumps({"scripts": {"test": "ng test --code-coverage"}}))
+    found = orchestrate.plan("fix the parser", git_repo, store, Options(verify="npx ng test"), {},
+                             classifier=t.kind("implement"), adapters=[])
+    assert any("Steps that came before passing attempts" in c and "ruff check before the tests" in c
+               for c in found.context)
+    assert any("what it adds (--code-coverage) is not checked" in r for r in found.reasons)
+    assert "base: this starts from feature, 12 commits behind" in found.reasons
+    assert "notes: 1 candidate(s) left out on trial (#77)" in found.reasons and found.withheld == (77,)
+
+
+@pytest.mark.usefixtures("no_verifier")
+def test_orchestrate_a_race_whose_rung_only_met_the_environment_goes_on_from_the_start(git_repo, store,
+                                                                                      monkeypatch):
+    from cauce import orchestrate
+    from cauce.escalate import Failure
+    from cauce.launch import WorkerResult
+    from cauce.orchestrate import run
+
+    from .test_race import RUNG, START
+
+    t = _orch()
+    monkeypatch.setattr(orchestrate, "race_cell", lambda *a, **kw: (RUNG, "its first try races (test)"))
+    seen = []
+
+    def launcher(spec):
+        seen.append((spec.cell.label, spec.env.get("CAUCE_WORKER_ATTEMPT", "").endswith("-race"),
+                     (spec.target_dir / "a.py").exists()))
+        if seen[-1][1]:  # the race's lane: its launch broke
+            return WorkerResult(False, Failure.ENVIRONMENT, "the CLI timed out", cost_usd=0.1, transient=True)
+        if len(seen) <= 2:
+            (spec.target_dir / "a.py").write_text("half\n")
+            return t.bad(Failure.CODE_BUG, "missed the empty case")
+        return t.ok("fixed the empty case")
+
+    report = run("add the export", git_repo, store, registry={}, launcher=launcher, classifier=t.kind("implement"))
+    rows = store.attempts(report.task_id)
+    assert [(r["cell"], r["failure"]) for r in rows[:2]] == [(START.label, "code_bug"), (RUNG.label, "environment")]
+    # The start's try went on: its code bug is what the climb reads, more effort on its own work. A launch
+    # that broke in the race's lane is no reason to retry the rung (it read that once, then blocked).
+    assert report.moves[0].startswith("more_effort to sonnet/high")
+    assert report.status == "done" and seen[-1] == ("sonnet/high", False, True)

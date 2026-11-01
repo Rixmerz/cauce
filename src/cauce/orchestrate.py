@@ -1839,7 +1839,9 @@ def run(
                 store.set_move(task["id"], seq, "race", f"raced {raced.other_cell.label} beside it")
                 _record_raced(store, task["id"], raced, turns, selection.names, report, first=False)
                 if not result.passed:
-                    attempts.append(_raced_attempt(raced, turns))
+                    # Kept in the history before the start's, which goes on: the move is read from
+                    # the last attempt, and the rung's (only the environment stopped it) is not it.
+                    attempts.insert(len(attempts) - 1, _raced_attempt(raced, turns))
             subject = result.commit or subject
             if result.report is not None:
                 store.add_event(task["id"], "report", seq=seq, passed=result.passed, report=result.report)
